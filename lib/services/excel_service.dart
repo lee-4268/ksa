@@ -1,9 +1,13 @@
-import 'dart:io';
 import 'package:excel/excel.dart' as excel_pkg;
 import 'package:spreadsheet_decoder/spreadsheet_decoder.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import '../models/radio_station.dart';
+
+// 조건부 import - 플랫폼별 파일 저장/공유
+import 'excel_export_stub.dart'
+    if (dart.library.io) 'excel_export_mobile.dart'
+    if (dart.library.html) 'excel_export_web.dart' as platform_export;
 
 class ExcelImportResult {
   final List<RadioStation> stations;
@@ -28,38 +32,68 @@ class ExcelService {
 
       final file = result.files.first;
       final fileName = file.name.replaceAll(RegExp(r'\.(xlsx|xls)$'), '');
-      List<int>? bytes;
 
-      if (kIsWeb) {
-        bytes = file.bytes;
-      } else {
-        if (file.path != null) {
-          bytes = await File(file.path!).readAsBytes();
-        } else {
-          bytes = file.bytes;
-        }
-      }
+      // withData: true 설정으로 모든 플랫폼에서 file.bytes 사용 가능
+      final bytes = file.bytes;
 
       if (bytes == null) {
         throw Exception('파일을 읽을 수 없습니다.');
       }
 
-      // 1차 시도: excel 패키지로 파싱
+      // 1차 시도: spreadsheet_decoder로 파싱 (numFmtId 오류 우회)
       try {
-        final stations = _parseWithExcelPackage(bytes, fileName);
-        return ExcelImportResult(stations: stations, fileName: fileName);
-      } catch (e) {
-        debugPrint('excel 패키지 파싱 실패: $e');
-        debugPrint('spreadsheet_decoder로 재시도...');
-
-        // 2차 시도: spreadsheet_decoder로 파싱
         final stations = _parseWithSpreadsheetDecoder(bytes, fileName);
         return ExcelImportResult(stations: stations, fileName: fileName);
+      } catch (e) {
+        debugPrint('spreadsheet_decoder 파싱 실패: $e');
+        debugPrint('excel 패키지로 재시도...');
+
+        // 2차 시도: excel 패키지로 파싱
+        try {
+          final stations = _parseWithExcelPackage(bytes, fileName);
+          return ExcelImportResult(stations: stations, fileName: fileName);
+        } catch (e2) {
+          debugPrint('excel 패키지 파싱도 실패: $e2');
+          throw Exception('Excel 파일 파싱 실패. 지원되지 않는 형식이거나 파일이 손상되었습니다.');
+        }
       }
     } catch (e) {
       debugPrint('Excel 파일 import 오류: $e');
       rethrow;
     }
+  }
+
+  /// 대상 시트 찾기 (우선순위: 검사신청내역 > 신청/내역 포함 > 첫 번째 시트)
+  String _findTargetSheet(List<String> sheetNames) {
+    // 1순위: 정확히 '검사신청내역' 시트
+    if (sheetNames.contains('검사신청내역')) {
+      return '검사신청내역';
+    }
+
+    // 2순위: '검사신청내역'과 유사한 이름 (공백, 대소문자 무시)
+    for (final name in sheetNames) {
+      final normalized = name.replaceAll(RegExp(r'\s+'), '').toLowerCase();
+      if (normalized == '검사신청내역') {
+        return name;
+      }
+    }
+
+    // 3순위: '검사'와 '신청' 또는 '내역'이 모두 포함된 시트
+    for (final name in sheetNames) {
+      if (name.contains('검사') && (name.contains('신청') || name.contains('내역'))) {
+        return name;
+      }
+    }
+
+    // 4순위: '신청' 또는 '내역'이 포함된 시트
+    for (final name in sheetNames) {
+      if (name.contains('신청') || name.contains('내역')) {
+        return name;
+      }
+    }
+
+    // 5순위: 첫 번째 시트
+    return sheetNames.first;
   }
 
   /// excel 패키지를 사용한 파싱
@@ -71,17 +105,8 @@ class ExcelService {
       throw Exception('시트가 없습니다.');
     }
 
-    // '검사신청내역' 시트를 우선 찾고, 없으면 첫 번째 시트 사용
-    String sheetName;
-    if (excel.tables.containsKey('검사신청내역')) {
-      sheetName = '검사신청내역';
-    } else {
-      // 시트 이름에 '신청' 또는 '내역'이 포함된 시트 찾기
-      sheetName = excel.tables.keys.firstWhere(
-        (name) => name.contains('신청') || name.contains('내역'),
-        orElse: () => excel.tables.keys.first,
-      );
-    }
+    // 시트 선택 우선순위: 검사신청내역 > 신청/내역 포함 > 첫 번째 시트
+    final sheetName = _findTargetSheet(excel.tables.keys.toList());
     debugPrint('선택된 시트: $sheetName (전체 시트: ${excel.tables.keys.toList()})');
 
     final sheet = excel.tables[sheetName];
@@ -117,17 +142,9 @@ class ExcelService {
       throw Exception('시트가 없습니다.');
     }
 
-    // '검사신청내역' 시트를 우선 찾고, 없으면 첫 번째 시트 사용
-    String sheetName;
-    if (decoder.tables.containsKey('검사신청내역')) {
-      sheetName = '검사신청내역';
-    } else {
-      sheetName = decoder.tables.keys.firstWhere(
-        (name) => name.contains('신청') || name.contains('내역'),
-        orElse: () => decoder.tables.keys.first,
-      );
-    }
-    debugPrint('선택된 시트 (decoder): $sheetName');
+    // 시트 선택 우선순위: 검사신청내역 > 신청/내역 포함 > 첫 번째 시트
+    final sheetName = _findTargetSheet(decoder.tables.keys.toList());
+    debugPrint('선택된 시트 (decoder): $sheetName (전체: ${decoder.tables.keys.toList()})');
 
     final sheet = decoder.tables[sheetName];
 
@@ -409,6 +426,109 @@ class ExcelService {
     } catch (e) {
       debugPrint('행 $rowIndex 파싱 오류 (decoder): $e');
       return null;
+    }
+  }
+
+  /// 무선국 목록을 Excel 파일로 내보내기
+  Future<String?> exportToExcel(List<RadioStation> stations, String categoryName) async {
+    try {
+      final excel = excel_pkg.Excel.createExcel();
+
+      // 시트명 설정 (최대 31자)
+      final sheetName = categoryName.length > 31
+          ? categoryName.substring(0, 31)
+          : categoryName;
+
+      // 새 시트 생성 후 기본 Sheet1 삭제
+      final sheet = excel[sheetName];
+      excel.delete('Sheet1');
+
+      // 헤더 스타일
+      final headerStyle = excel_pkg.CellStyle(
+        bold: true,
+        horizontalAlign: excel_pkg.HorizontalAlign.Center,
+        backgroundColorHex: excel_pkg.ExcelColor.fromHexString('#4472C4'),
+        fontColorHex: excel_pkg.ExcelColor.fromHexString('#FFFFFF'),
+      );
+
+      // 헤더 추가
+      final headers = ['호출명칭', 'ERP국소명', '설치장소(주소)', '허가번호', '특이사항 메모', '검사상태'];
+      for (int col = 0; col < headers.length; col++) {
+        final cell = sheet.cell(excel_pkg.CellIndex.indexByColumnRow(columnIndex: col, rowIndex: 0));
+        cell.value = excel_pkg.TextCellValue(headers[col]);
+        cell.cellStyle = headerStyle;
+      }
+
+      // 데이터 추가
+      for (int i = 0; i < stations.length; i++) {
+        final station = stations[i];
+        final rowIndex = i + 1;
+
+        // 호출명칭
+        sheet.cell(excel_pkg.CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: rowIndex))
+            .value = excel_pkg.TextCellValue(station.callSign ?? '');
+
+        // ERP국소명
+        sheet.cell(excel_pkg.CellIndex.indexByColumnRow(columnIndex: 1, rowIndex: rowIndex))
+            .value = excel_pkg.TextCellValue(station.stationName);
+
+        // 설치장소(주소)
+        sheet.cell(excel_pkg.CellIndex.indexByColumnRow(columnIndex: 2, rowIndex: rowIndex))
+            .value = excel_pkg.TextCellValue(station.address);
+
+        // 허가번호
+        sheet.cell(excel_pkg.CellIndex.indexByColumnRow(columnIndex: 3, rowIndex: rowIndex))
+            .value = excel_pkg.TextCellValue(station.licenseNumber);
+
+        // 특이사항 메모
+        sheet.cell(excel_pkg.CellIndex.indexByColumnRow(columnIndex: 4, rowIndex: rowIndex))
+            .value = excel_pkg.TextCellValue(station.memo ?? '');
+
+        // 검사상태
+        final inspectionStatus = station.isInspected ? '검사완료' : '검사대기';
+        sheet.cell(excel_pkg.CellIndex.indexByColumnRow(columnIndex: 5, rowIndex: rowIndex))
+            .value = excel_pkg.TextCellValue(inspectionStatus);
+      }
+
+      // 컬럼 너비 설정
+      sheet.setColumnWidth(0, 15);  // 호출명칭
+      sheet.setColumnWidth(1, 25);  // ERP국소명
+      sheet.setColumnWidth(2, 40);  // 설치장소(주소)
+      sheet.setColumnWidth(3, 15);  // 허가번호
+      sheet.setColumnWidth(4, 30);  // 특이사항 메모
+      sheet.setColumnWidth(5, 12);  // 검사상태
+
+      // 파일 저장
+      final bytes = excel.encode();
+      if (bytes == null) {
+        throw Exception('Excel 파일 생성 실패');
+      }
+
+      // 파일명: 리스트명_수검완료.xlsx (예: 1월 5주차(2023013020230203)_경인본부_화성_수검완료.xlsx)
+      final sanitizedName = categoryName.replaceAll(RegExp(r'[<>:"/\\|?*]'), '_'); // 파일명에 사용 불가 문자 제거
+      final fileName = '${sanitizedName}_수검완료.xlsx';
+
+      // 플랫폼별 파일 저장 (웹: 다운로드, 모바일: 파일 시스템)
+      final filePath = await platform_export.saveExcelFile(
+        Uint8List.fromList(bytes),
+        fileName,
+      );
+
+      debugPrint('Excel 파일 저장 완료: $filePath');
+      return filePath;
+    } catch (e) {
+      debugPrint('Excel 내보내기 오류: $e');
+      rethrow;
+    }
+  }
+
+  /// Excel 파일 공유
+  Future<void> shareExcelFile(String filePath) async {
+    try {
+      await platform_export.shareExcelFile(filePath);
+    } catch (e) {
+      debugPrint('파일 공유 오류: $e');
+      rethrow;
     }
   }
 }

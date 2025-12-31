@@ -35,6 +35,10 @@ dependencies:
   # URL 런처 (로드뷰)
   url_launcher: ^6.3.1
 
+  # 파일 저장 및 공유
+  path_provider: ^2.1.5
+  share_plus: ^10.1.4
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

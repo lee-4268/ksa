@@ -266,4 +266,31 @@ class StationProvider extends ChangeNotifier {
     _errorMessage = null;
     notifyListeners();
   }
+
+  /// 카테고리별 데이터를 Excel로 내보내기
+  Future<String?> exportCategoryToExcel(String category) async {
+    try {
+      final categoryStations = stationsByCategory[category] ?? [];
+      if (categoryStations.isEmpty) {
+        throw Exception('내보낼 데이터가 없습니다.');
+      }
+
+      final filePath = await _excelService.exportToExcel(categoryStations, category);
+      return filePath;
+    } catch (e) {
+      _errorMessage = 'Excel 내보내기 실패: $e';
+      notifyListeners();
+      return null;
+    }
+  }
+
+  /// Excel 파일 공유
+  Future<void> shareExcelFile(String filePath) async {
+    try {
+      await _excelService.shareExcelFile(filePath);
+    } catch (e) {
+      _errorMessage = '파일 공유 실패: $e';
+      notifyListeners();
+    }
+  }
 }

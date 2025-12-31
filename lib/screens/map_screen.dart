@@ -475,6 +475,15 @@ class _MapScreenState extends State<MapScreen> {
                 ],
               ),
             ),
+            // Excel 내보내기 버튼
+            IconButton(
+              icon: Icon(Icons.file_download_outlined, color: Colors.blue[400], size: 22),
+              onPressed: () => _exportCategoryToExcel(category),
+              tooltip: 'Excel 내보내기',
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(),
+            ),
+            const SizedBox(width: 8),
             // 삭제 버튼
             IconButton(
               icon: Icon(Icons.delete_outline, color: Colors.grey[500], size: 22),
@@ -894,4 +903,48 @@ class _MapScreenState extends State<MapScreen> {
     }
   }
 
+  /// Excel 내보내기
+  Future<void> _exportCategoryToExcel(String category) async {
+    final provider = context.read<StationProvider>();
+
+    // 로딩 표시
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const Center(
+        child: CircularProgressIndicator(),
+      ),
+    );
+
+    try {
+      final filePath = await provider.exportCategoryToExcel(category);
+
+      if (!mounted) return;
+      Navigator.pop(context); // 로딩 다이얼로그 닫기
+
+      if (filePath != null) {
+        // 완료 다이얼로그 표시
+        showDialog(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('Excel 내보내기 완료'),
+            content: Text('$category 검사 결과가 저장되었습니다.'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('확인'),
+              ),
+            ],
+          ),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      Navigator.pop(context); // 로딩 다이얼로그 닫기
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Excel 내보내기 실패: $e')),
+      );
+    }
+  }
 }

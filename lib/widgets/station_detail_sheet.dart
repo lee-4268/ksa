@@ -206,7 +206,7 @@ class _StationDetailSheetState extends State<StationDetailSheet> {
             if (widget.station.frequency != null && widget.station.frequency!.isNotEmpty)
               _buildInfoRow('주파수', widget.station.frequency!),
             if (widget.station.stationType != null && widget.station.stationType!.isNotEmpty)
-              _buildInfoRow('종류', widget.station.stationType!),
+              _buildInfoRow('팀명', widget.station.stationType!),
             if (widget.station.owner != null && widget.station.owner!.isNotEmpty)
               _buildInfoRow('소유자', widget.station.owner!),
             if (widget.station.hasCoordinates)
