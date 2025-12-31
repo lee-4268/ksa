@@ -1,0 +1,46 @@
+name: ksa
+description: "무선국 검사 관리 시스템"
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.10.4
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  cupertino_icons: ^1.0.8
+
+  # 카카오맵
+  kakao_map_plugin: ^0.3.7
+
+  # Excel 파일 처리
+  excel: ^4.0.3
+  spreadsheet_decoder: ^2.2.0
+  file_picker: ^8.1.6
+
+  # 상태 관리
+  provider: ^6.1.2
+
+  # 로컬 저장소
+  shared_preferences: ^2.3.4
+  hive: ^2.2.3
+  hive_flutter: ^1.1.0
+
+  # HTTP 요청 (지오코딩)
+  http: ^1.2.2
+
+  # URL 런처 (로드뷰)
+  url_launcher: ^6.3.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  hive_generator: ^2.0.1
+  build_runner: ^2.4.13
+
+flutter:
+  uses-material-design: true

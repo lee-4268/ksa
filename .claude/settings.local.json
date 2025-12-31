@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(where:*)",
+      "Bash(dir \"C:\\\\Program Files\\\\Android\\\\Android Studio\\\\jbr\\\\bin\\\\keytool.exe\")",
+      "Bash(dir \"C:\\\\Program Files\\\\Java\\\\*\\\\bin\\\\keytool.exe\")",
+      "Bash(dir \"%JAVA_HOME%\\\\bin\\\\keytool.exe\")",
+      "Bash(\"C:\\\\Program Files\\\\Android\\\\Android Studio\\\\jbr\\\\bin\\\\keytool.exe\" -exportcert -alias androiddebugkey -keystore \"%USERPROFILE%\\\\.android\\\\debug.keystore\" -storepass android)",
+      "Bash(certutil -encode:*)",
+      "Bash(del tmp.b64)",
+      "Bash(\"C:\\\\Program Files\\\\Android\\\\Android Studio\\\\jbr\\\\bin\\\\keytool.exe\" -exportcert -alias androiddebugkey -keystore \"%USERPROFILE%\\\\.android\\\\debug.keystore\" -storepass android -file \"%TEMP%\\\\debug_cert.der\")",
+      "Bash(certutil -hashfile \"%TEMP%\\\\debug_cert.der\" SHA1)",
+      "Bash(\"C:\\\\Program Files\\\\Android\\\\Android Studio\\\\jbr\\\\bin\\\\keytool.exe\" -exportcert -alias androiddebugkey -keystore \"C:\\\\Users\\\\user\\\\.android\\\\debug.keystore\" -storepass android -file \"C:\\\\Users\\\\user\\\\debug_cert.der\")",
+      "Bash(dir \"C:\\\\Users\\\\user\\\\.android\\\\debug.keystore\")",
+      "Bash(flutter pub get:*)",
+      "Bash(flutter run:*)",
+      "Bash(Get-Content \"C:\\\\Users\\\\user\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-user-Desktop-year-26-ATDT-Flutter-ksa-ksa\\\\tasks\\\\b0435e1.output\")",
+      "Bash(flutter pub run build_runner build:*)",
+      "Bash(flutter analyze:*)",
+      "Bash(powershell:*)",
+      "Bash(timeout:*)"
+    ]
+  }
+}
