@@ -1,4 +1,8 @@
+import 'dart:io';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 import '../models/radio_station.dart';
 import '../providers/station_provider.dart';
@@ -20,11 +24,16 @@ class StationDetailSheet extends StatefulWidget {
 class _StationDetailSheetState extends State<StationDetailSheet> {
   late TextEditingController _memoController;
   bool _isEditing = false;
+  final ImagePicker _imagePicker = ImagePicker();
+  List<String> _photoPaths = [];
+  String _currentMemo = ''; // 현재 저장된 메모 (실시간 반영용)
 
   @override
   void initState() {
     super.initState();
     _memoController = TextEditingController(text: widget.station.memo ?? '');
+    _photoPaths = List<String>.from(widget.station.photoPaths ?? []);
+    _currentMemo = widget.station.memo ?? '';
   }
 
   @override
@@ -148,6 +157,10 @@ class _StationDetailSheetState extends State<StationDetailSheet> {
 
                   // 메모 섹션
                   _buildMemoSection(context),
+                  const SizedBox(height: 24),
+
+                  // 사진 섹션
+                  _buildPhotoSection(context),
                   const SizedBox(height: 24),
 
                   // 액션 버튼
@@ -300,11 +313,11 @@ class _StationDetailSheetState extends State<StationDetailSheet> {
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Text(
-                  widget.station.memo?.isNotEmpty == true
-                      ? widget.station.memo!
+                  _currentMemo.isNotEmpty
+                      ? _currentMemo
                       : '메모가 없습니다.',
                   style: TextStyle(
-                    color: widget.station.memo?.isNotEmpty == true
+                    color: _currentMemo.isNotEmpty
                         ? Colors.black87
                         : Colors.grey,
                   ),
@@ -314,6 +327,253 @@ class _StationDetailSheetState extends State<StationDetailSheet> {
         ),
       ),
     );
+  }
+
+  Widget _buildPhotoSection(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  '특이사항 사진',
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                Row(
+                  children: [
+                    if (!kIsWeb)
+                      IconButton(
+                        icon: const Icon(Icons.camera_alt),
+                        tooltip: '카메라로 촬영',
+                        onPressed: () => _takePhoto(ImageSource.camera),
+                      ),
+                    IconButton(
+                      icon: const Icon(Icons.photo_library),
+                      tooltip: kIsWeb ? 'PC에서 파일 선택' : '갤러리에서 선택',
+                      onPressed: () => _takePhoto(ImageSource.gallery),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+            const Divider(),
+            if (_photoPaths.isEmpty)
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(24),
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade100,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Column(
+                  children: [
+                    Icon(Icons.photo_camera, size: 48, color: Colors.grey[400]),
+                    const SizedBox(height: 8),
+                    Text(
+                      '등록된 사진이 없습니다.',
+                      style: TextStyle(color: Colors.grey[600]),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      kIsWeb
+                          ? '갤러리 버튼을 눌러 PC에서 사진을 선택하세요.'
+                          : '카메라 또는 갤러리 버튼을 눌러 사진을 추가하세요.',
+                      style: TextStyle(color: Colors.grey[400], fontSize: 12),
+                    ),
+                  ],
+                ),
+              )
+            else
+              GridView.builder(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: 3,
+                  crossAxisSpacing: 8,
+                  mainAxisSpacing: 8,
+                ),
+                itemCount: _photoPaths.length,
+                itemBuilder: (context, index) {
+                  return _buildPhotoThumbnail(index);
+                },
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPhotoThumbnail(int index) {
+    final photoPath = _photoPaths[index];
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        GestureDetector(
+          onTap: () => _showPhotoViewer(index),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(8),
+            child: kIsWeb
+                ? Image.network(
+                    photoPath,
+                    fit: BoxFit.cover,
+                    errorBuilder: (context, error, stackTrace) {
+                      return Container(
+                        color: Colors.grey[300],
+                        child: const Icon(Icons.broken_image, color: Colors.grey),
+                      );
+                    },
+                  )
+                : Image.file(
+                    File(photoPath),
+                    fit: BoxFit.cover,
+                    errorBuilder: (context, error, stackTrace) {
+                      return Container(
+                        color: Colors.grey[300],
+                        child: const Icon(Icons.broken_image, color: Colors.grey),
+                      );
+                    },
+                  ),
+          ),
+        ),
+        Positioned(
+          top: 4,
+          right: 4,
+          child: GestureDetector(
+            onTap: () => _deletePhoto(index),
+            child: Container(
+              padding: const EdgeInsets.all(4),
+              decoration: const BoxDecoration(
+                color: Colors.red,
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(Icons.close, color: Colors.white, size: 16),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _takePhoto(ImageSource source) async {
+    try {
+      final XFile? pickedFile = await _imagePicker.pickImage(
+        source: source,
+        maxWidth: 1920,
+        maxHeight: 1920,
+        imageQuality: 85,
+      );
+
+      if (pickedFile == null) return;
+
+      String savedPath;
+
+      if (kIsWeb) {
+        // 웹에서는 파일 경로 대신 XFile의 path를 그대로 사용 (blob URL)
+        // 웹에서는 로컬 파일 시스템 접근이 불가능하므로 경로만 저장
+        savedPath = pickedFile.path;
+      } else {
+        // 모바일에서는 앱 내부 저장소에 사진 복사
+        final appDir = await getApplicationDocumentsDirectory();
+        final photoDir = Directory('${appDir.path}/photos/${widget.station.id}');
+        if (!await photoDir.exists()) {
+          await photoDir.create(recursive: true);
+        }
+
+        final timestamp = DateTime.now().millisecondsSinceEpoch;
+        final fileName = 'photo_$timestamp.jpg';
+        savedPath = '${photoDir.path}/$fileName';
+
+        await File(pickedFile.path).copy(savedPath);
+      }
+
+      setState(() {
+        _photoPaths.add(savedPath);
+      });
+
+      // 저장소에 업데이트
+      _savePhotos();
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('사진이 추가되었습니다.')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('사진 추가 실패: $e')),
+        );
+      }
+    }
+  }
+
+  void _deletePhoto(int index) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('사진 삭제'),
+        content: const Text('이 사진을 삭제하시겠습니까?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('취소'),
+          ),
+          TextButton(
+            onPressed: () async {
+              Navigator.pop(ctx);
+
+              // 파일 삭제
+              try {
+                final file = File(_photoPaths[index]);
+                if (await file.exists()) {
+                  await file.delete();
+                }
+              } catch (e) {
+                debugPrint('파일 삭제 오류: $e');
+              }
+
+              setState(() {
+                _photoPaths.removeAt(index);
+              });
+
+              _savePhotos();
+
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('사진이 삭제되었습니다.')),
+                );
+              }
+            },
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: const Text('삭제'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showPhotoViewer(int initialIndex) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => _PhotoViewerPage(
+          photoPaths: _photoPaths,
+          initialIndex: initialIndex,
+          stationName: widget.station.displayName,
+        ),
+      ),
+    );
+  }
+
+  void _savePhotos() {
+    final provider = context.read<StationProvider>();
+    provider.updatePhotoPaths(widget.station.id, _photoPaths);
   }
 
   Widget _buildActionButtons(BuildContext context) {
@@ -353,7 +613,14 @@ class _StationDetailSheetState extends State<StationDetailSheet> {
 
   void _saveMemo() {
     final provider = context.read<StationProvider>();
-    provider.updateMemo(widget.station.id, _memoController.text);
+    final newMemo = _memoController.text;
+    provider.updateMemo(widget.station.id, newMemo);
+
+    // 로컬 상태도 업데이트하여 실시간 반영
+    setState(() {
+      _currentMemo = newMemo;
+    });
+
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('메모가 저장되었습니다.')),
     );
@@ -408,5 +675,107 @@ class _StationDetailSheetState extends State<StationDetailSheet> {
 
   String _formatDate(DateTime date) {
     return '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+  }
+}
+
+/// 사진 전체 화면 뷰어
+class _PhotoViewerPage extends StatefulWidget {
+  final List<String> photoPaths;
+  final int initialIndex;
+  final String stationName;
+
+  const _PhotoViewerPage({
+    required this.photoPaths,
+    required this.initialIndex,
+    required this.stationName,
+  });
+
+  @override
+  State<_PhotoViewerPage> createState() => _PhotoViewerPageState();
+}
+
+class _PhotoViewerPageState extends State<_PhotoViewerPage> {
+  late PageController _pageController;
+  late int _currentIndex;
+
+  @override
+  void initState() {
+    super.initState();
+    _currentIndex = widget.initialIndex;
+    _pageController = PageController(initialPage: widget.initialIndex);
+  }
+
+  @override
+  void dispose() {
+    _pageController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        backgroundColor: Colors.black,
+        foregroundColor: Colors.white,
+        title: Text(
+          '${widget.stationName} (${_currentIndex + 1}/${widget.photoPaths.length})',
+          style: const TextStyle(fontSize: 16),
+        ),
+      ),
+      body: PageView.builder(
+        controller: _pageController,
+        itemCount: widget.photoPaths.length,
+        onPageChanged: (index) {
+          setState(() {
+            _currentIndex = index;
+          });
+        },
+        itemBuilder: (context, index) {
+          final photoPath = widget.photoPaths[index];
+          return InteractiveViewer(
+            minScale: 0.5,
+            maxScale: 4.0,
+            child: Center(
+              child: kIsWeb
+                  ? Image.network(
+                      photoPath,
+                      fit: BoxFit.contain,
+                      errorBuilder: (context, error, stackTrace) {
+                        return const Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(Icons.broken_image, color: Colors.grey, size: 64),
+                            SizedBox(height: 16),
+                            Text(
+                              '이미지를 불러올 수 없습니다.',
+                              style: TextStyle(color: Colors.grey),
+                            ),
+                          ],
+                        );
+                      },
+                    )
+                  : Image.file(
+                      File(photoPath),
+                      fit: BoxFit.contain,
+                      errorBuilder: (context, error, stackTrace) {
+                        return const Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(Icons.broken_image, color: Colors.grey, size: 64),
+                            SizedBox(height: 16),
+                            Text(
+                              '이미지를 불러올 수 없습니다.',
+                              style: TextStyle(color: Colors.grey),
+                            ),
+                          ],
+                        );
+                      },
+                    ),
+            ),
+          );
+        },
+      ),
+    );
   }
 }

@@ -61,6 +61,9 @@ class RadioStation extends HiveObject {
   @HiveField(18)
   String? categoryName; // 카테고리 (파일명)
 
+  @HiveField(19)
+  List<String>? photoPaths; // 특이사항 사진 경로 목록
+
   RadioStation({
     required this.id,
     required this.stationName,
@@ -81,6 +84,7 @@ class RadioStation extends HiveObject {
     this.antennaCount,
     this.remarks,
     this.categoryName,
+    this.photoPaths,
   })  : createdAt = createdAt ?? DateTime.now(),
         updatedAt = updatedAt ?? DateTime.now();
 
@@ -104,6 +108,7 @@ class RadioStation extends HiveObject {
     String? antennaCount,
     String? remarks,
     String? categoryName,
+    List<String>? photoPaths,
   }) {
     return RadioStation(
       id: id ?? this.id,
@@ -125,6 +130,7 @@ class RadioStation extends HiveObject {
       antennaCount: antennaCount ?? this.antennaCount,
       remarks: remarks ?? this.remarks,
       categoryName: categoryName ?? this.categoryName,
+      photoPaths: photoPaths ?? this.photoPaths,
     );
   }
 
@@ -149,6 +155,7 @@ class RadioStation extends HiveObject {
       'antennaCount': antennaCount,
       'remarks': remarks,
       'categoryName': categoryName,
+      'photoPaths': photoPaths,
     };
   }
 
@@ -179,6 +186,7 @@ class RadioStation extends HiveObject {
       antennaCount: json['antennaCount'] as String?,
       remarks: json['remarks'] as String?,
       categoryName: json['categoryName'] as String?,
+      photoPaths: (json['photoPaths'] as List<dynamic>?)?.cast<String>(),
     );
   }
 

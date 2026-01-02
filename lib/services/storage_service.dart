@@ -65,4 +65,14 @@ class StorageService {
       await station.save();
     }
   }
+
+  /// 사진 경로 업데이트
+  Future<void> updatePhotoPaths(String id, List<String> photoPaths) async {
+    final station = _box.get(id);
+    if (station != null) {
+      station.photoPaths = photoPaths;
+      station.updatedAt = DateTime.now();
+      await station.save();
+    }
+  }
 }

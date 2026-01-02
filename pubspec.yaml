@@ -17,8 +17,10 @@ dependencies:
   kakao_maps_flutter: ^0.1.2
 
   # Excel 파일 처리
-  excel: ^4.0.3
-  spreadsheet_decoder: ^2.2.0
+  excel: ^4.0.6
+
+  # ZIP 압축 (사진 포함 내보내기) - excel 패키지와 호환되는 버전
+  archive: ^3.6.1
   file_picker: ^8.1.6
 
   # 상태 관리
@@ -39,6 +41,13 @@ dependencies:
   path_provider: ^2.1.5
   share_plus: ^10.1.4
 
+  # 디바이스 정보 (에뮬레이터 감지용)
+  device_info_plus: ^11.0.0
+
+  # 카메라/갤러리 이미지 선택
+  image_picker: ^1.1.2
+
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -48,3 +57,6 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+
+  assets:
+    - image/

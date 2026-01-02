@@ -1,5 +1,5 @@
+import 'dart:io';
 import 'package:excel/excel.dart' as excel_pkg;
-import 'package:spreadsheet_decoder/spreadsheet_decoder.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import '../models/radio_station.dart';
@@ -40,22 +40,13 @@ class ExcelService {
         throw Exception('파일을 읽을 수 없습니다.');
       }
 
-      // 1차 시도: spreadsheet_decoder로 파싱 (numFmtId 오류 우회)
+      // excel 패키지로 파싱
       try {
-        final stations = _parseWithSpreadsheetDecoder(bytes, fileName);
+        final stations = _parseWithExcelPackage(bytes, fileName);
         return ExcelImportResult(stations: stations, fileName: fileName);
       } catch (e) {
-        debugPrint('spreadsheet_decoder 파싱 실패: $e');
-        debugPrint('excel 패키지로 재시도...');
-
-        // 2차 시도: excel 패키지로 파싱
-        try {
-          final stations = _parseWithExcelPackage(bytes, fileName);
-          return ExcelImportResult(stations: stations, fileName: fileName);
-        } catch (e2) {
-          debugPrint('excel 패키지 파싱도 실패: $e2');
-          throw Exception('Excel 파일 파싱 실패. 지원되지 않는 형식이거나 파일이 손상되었습니다.');
-        }
+        debugPrint('excel 패키지 파싱 실패: $e');
+        throw Exception('Excel 파일 파싱 실패. 지원되지 않는 형식이거나 파일이 손상되었습니다.');
       }
     } catch (e) {
       debugPrint('Excel 파일 import 오류: $e');
@@ -133,43 +124,6 @@ class ExcelService {
     return stations;
   }
 
-  /// spreadsheet_decoder 패키지를 사용한 파싱 (대체 방법)
-  List<RadioStation> _parseWithSpreadsheetDecoder(List<int> bytes, String categoryName) {
-    final decoder = SpreadsheetDecoder.decodeBytes(bytes);
-    final List<RadioStation> stations = [];
-
-    if (decoder.tables.isEmpty) {
-      throw Exception('시트가 없습니다.');
-    }
-
-    // 시트 선택 우선순위: 검사신청내역 > 신청/내역 포함 > 첫 번째 시트
-    final sheetName = _findTargetSheet(decoder.tables.keys.toList());
-    debugPrint('선택된 시트 (decoder): $sheetName (전체: ${decoder.tables.keys.toList()})');
-
-    final sheet = decoder.tables[sheetName];
-
-    if (sheet == null || sheet.rows.isEmpty) {
-      throw Exception('시트가 비어있습니다.');
-    }
-
-    final headerRow = sheet.rows.first;
-    final columnMap = _mapColumnsDecoder(headerRow);
-
-    if (!columnMap.containsKey('address')) {
-      _autoMapColumns(headerRow.length, columnMap);
-    }
-
-    for (int i = 1; i < sheet.rows.length; i++) {
-      final row = sheet.rows[i];
-      final station = _parseRowDecoder(row, columnMap, i, categoryName);
-      if (station != null) {
-        stations.add(station);
-      }
-    }
-
-    return stations;
-  }
-
   /// excel 패키지용 헤더 매핑
   Map<String, int> _mapColumnsExcel(List<excel_pkg.Data?> headerRow) {
     final Map<String, int> columnMap = {};
@@ -179,21 +133,6 @@ class ExcelService {
       if (cell == null || cell.value == null) continue;
 
       final value = _getCellStringValueExcel(cell).toLowerCase();
-      _mapColumnByValue(value, i, columnMap);
-    }
-
-    return columnMap;
-  }
-
-  /// spreadsheet_decoder용 헤더 매핑
-  Map<String, int> _mapColumnsDecoder(List<dynamic> headerRow) {
-    final Map<String, int> columnMap = {};
-
-    for (int i = 0; i < headerRow.length; i++) {
-      final cell = headerRow[i];
-      if (cell == null) continue;
-
-      final value = cell.toString().trim().toLowerCase();
       _mapColumnByValue(value, i, columnMap);
     }
 
@@ -375,62 +314,14 @@ class ExcelService {
     }
   }
 
-  /// spreadsheet_decoder용 행 파싱
-  RadioStation? _parseRowDecoder(List<dynamic> row, Map<String, int> columnMap, int rowIndex, String categoryName) {
-    try {
-      String getCellValue(String key) {
-        final index = columnMap[key];
-        if (index == null || index >= row.length) return '';
-        final cell = row[index];
-        if (cell == null) return '';
-        return cell.toString().trim();
-      }
-
-      double? getCellDouble(String key) {
-        final value = getCellValue(key);
-        if (value.isEmpty) return null;
-        final numStr = value.replaceAll(RegExp(r'[^\d.-]'), '');
-        return double.tryParse(numStr);
-      }
-
-      final stationName = getCellValue('stationName');
-      final licenseNumber = getCellValue('licenseNumber');
-      final address = getCellValue('address');
-      final callSign = getCellValue('callSign');
-      final gain = getCellValue('gain');
-      final antennaCount = getCellValue('antennaCount');
-      final remarks = getCellValue('remarks');
-
-      if (address.isEmpty && stationName.isEmpty) {
-        return null;
-      }
-
-      final finalAddress = address.isNotEmpty ? address : stationName;
-
-      return RadioStation(
-        id: 'station_${categoryName}_${rowIndex}_${DateTime.now().millisecondsSinceEpoch}',
-        stationName: stationName.isNotEmpty ? stationName : '무선국 $rowIndex',
-        licenseNumber: licenseNumber.isNotEmpty ? licenseNumber : '-',
-        address: finalAddress,
-        latitude: getCellDouble('latitude'),
-        longitude: getCellDouble('longitude'),
-        frequency: getCellValue('frequency'),
-        stationType: getCellValue('stationType'),
-        owner: getCellValue('owner'),
-        callSign: callSign.isNotEmpty ? callSign : null,
-        gain: gain.isNotEmpty ? gain : null,
-        antennaCount: antennaCount.isNotEmpty ? antennaCount : null,
-        remarks: remarks.isNotEmpty ? remarks : null,
-        categoryName: categoryName,
-      );
-    } catch (e) {
-      debugPrint('행 $rowIndex 파싱 오류 (decoder): $e');
-      return null;
-    }
+  /// 국소명을 안전한 파일명으로 변환
+  String _sanitizeFileName(String name) {
+    return name.replaceAll(RegExp(r'[<>:"/\\|?*\s]'), '_');
   }
 
-  /// 무선국 목록을 Excel 파일로 내보내기
-  Future<String?> exportToExcel(List<RadioStation> stations, String categoryName) async {
+  /// 무선국 목록을 Excel 파일로 내보내기 (사진 포함 ZIP)
+  /// saveOnly: true면 저장만, false면 저장 후 반환 (공유용)
+  Future<String?> exportToExcel(List<RadioStation> stations, String categoryName, {bool saveOnly = false}) async {
     try {
       final excel = excel_pkg.Excel.createExcel();
 
@@ -451,13 +342,16 @@ class ExcelService {
         fontColorHex: excel_pkg.ExcelColor.fromHexString('#FFFFFF'),
       );
 
-      // 헤더 추가
+      // 헤더 추가 (사진 열 제거)
       final headers = ['호출명칭', 'ERP국소명', '설치장소(주소)', '허가번호', '특이사항 메모', '검사상태'];
       for (int col = 0; col < headers.length; col++) {
         final cell = sheet.cell(excel_pkg.CellIndex.indexByColumnRow(columnIndex: col, rowIndex: 0));
         cell.value = excel_pkg.TextCellValue(headers[col]);
         cell.cellStyle = headerStyle;
       }
+
+      // 사진 파일 정보 수집 (국소명별 폴더로 구성)
+      final List<Map<String, dynamic>> photoInfoList = [];
 
       // 데이터 추가
       for (int i = 0; i < stations.length; i++) {
@@ -488,6 +382,27 @@ class ExcelService {
         final inspectionStatus = station.isInspected ? '검사완료' : '검사대기';
         sheet.cell(excel_pkg.CellIndex.indexByColumnRow(columnIndex: 5, rowIndex: rowIndex))
             .value = excel_pkg.TextCellValue(inspectionStatus);
+
+        // 사진 파일 정보 수집 (국소명 폴더/파일명 구조)
+        if (station.photoPaths != null && station.photoPaths!.isNotEmpty) {
+          final sanitizedStationName = _sanitizeFileName(station.stationName);
+
+          for (int j = 0; j < station.photoPaths!.length; j++) {
+            final photoPath = station.photoPaths![j];
+            final extension = photoPath.split('.').last.toLowerCase();
+            // 파일명: 사진1.jpg, 사진2.jpg 형식
+            final photoFileName = station.photoPaths!.length == 1
+                ? '사진.$extension'
+                : '사진${j + 1}.$extension';
+
+            // 사진 정보 저장 (ZIP 생성용) - 국소명 폴더 포함
+            photoInfoList.add({
+              'originalPath': photoPath,
+              'folderName': sanitizedStationName,
+              'fileName': photoFileName,
+            });
+          }
+        }
       }
 
       // 컬럼 너비 설정
@@ -504,18 +419,33 @@ class ExcelService {
         throw Exception('Excel 파일 생성 실패');
       }
 
-      // 파일명: 리스트명_수검완료.xlsx (예: 1월 5주차(2023013020230203)_경인본부_화성_수검완료.xlsx)
-      final sanitizedName = categoryName.replaceAll(RegExp(r'[<>:"/\\|?*]'), '_'); // 파일명에 사용 불가 문자 제거
-      final fileName = '${sanitizedName}_수검완료.xlsx';
+      // 파일명: 리스트명_수검완료.xlsx
+      final sanitizedName = categoryName.replaceAll(RegExp(r'[<>:"/\\|?*]'), '_');
 
-      // 플랫폼별 파일 저장 (웹: 다운로드, 모바일: 파일 시스템)
-      final filePath = await platform_export.saveExcelFile(
-        Uint8List.fromList(bytes),
-        fileName,
-      );
-
-      debugPrint('Excel 파일 저장 완료: $filePath');
-      return filePath;
+      // 사진이 있으면 ZIP 파일로 내보내기, 없으면 Excel만 내보내기
+      if (photoInfoList.isNotEmpty) {
+        // ZIP 파일 생성 (Excel + 사진) - 웹/모바일 모두 지원
+        final zipFileName = '${sanitizedName}_수검완료.zip';
+        final filePath = await platform_export.saveExcelWithPhotosAsZip(
+          Uint8List.fromList(bytes),
+          '${sanitizedName}_수검완료.xlsx',
+          photoInfoList,
+          zipFileName,
+          saveOnly: saveOnly,
+        );
+        debugPrint('ZIP 파일 저장 완료: $filePath');
+        return filePath;
+      } else {
+        // Excel만 저장
+        final fileName = '${sanitizedName}_수검완료.xlsx';
+        final filePath = await platform_export.saveExcelFile(
+          Uint8List.fromList(bytes),
+          fileName,
+          saveOnly: saveOnly,
+        );
+        debugPrint('Excel 파일 저장 완료: $filePath');
+        return filePath;
+      }
     } catch (e) {
       debugPrint('Excel 내보내기 오류: $e');
       rethrow;

@@ -36,7 +36,28 @@
       "Bash(powershell -Command:*)",
       "Bash(dir \"C:\\\\Users\\\\user\\\\AppData\\\\Local\\\\Pub\\\\Cache\\\\hosted\\\\pub.dev\")",
       "Bash(flutter create:*)",
-      "Bash(flutter clean:*)"
+      "Bash(flutter clean:*)",
+      "Bash(flutter --version:*)",
+      "Bash(cat:*)",
+      "Bash(flutter emulators:*)",
+      "Bash(ping:*)",
+      "Bash(adb -s emulator-5554 shell pm:*)",
+      "Bash(adb:*)",
+      "Bash(\"C:\\\\Users\\\\user\\\\AppData\\\\Local\\\\Android\\\\sdk\\\\platform-tools\\\\adb.exe\" devices)",
+      "Bash(\"C:\\\\Users\\\\user\\\\AppData\\\\Local\\\\Android\\\\sdk\\\\platform-tools\\\\adb.exe\" -s emulator-5554 uninstall com.example.ksa)",
+      "Bash(\"C:\\\\Users\\\\user\\\\AppData\\\\Local\\\\Android\\\\sdk\\\\platform-tools\\\\adb.exe\" -s emulator-5554 reboot)",
+      "Bash(flutter pub:*)",
+      "Bash(where /r \"C:\\\\Users\\\\user\\\\AppData\\\\Local\\\\Pub\\\\Cache\" kakao_maps_flutter.dart)",
+      "Bash(dir \"C:\\\\Users\\\\user\\\\AppData\\\\Local\\\\Pub\\\\Cache\\\\hosted\\\\pub.dev\" /b)",
+      "Bash(dir:*)",
+      "Bash(\"C:\\\\Users\\\\user\\\\AppData\\\\Local\\\\Android\\\\sdk\\\\platform-tools\\\\adb.exe\" -s RFCY709L89F install -r \"c:\\\\Users\\\\user\\\\Desktop\\\\year_26\\\\ATDT\\\\Flutter\\\\ksa\\\\ksa\\\\build\\\\app\\\\outputs\\\\flutter-apk\\\\app-release.apk\")",
+      "Bash(\"C:\\\\Users\\\\user\\\\AppData\\\\Local\\\\Android\\\\sdk\\\\platform-tools\\\\adb.exe\" -s RFCY709L89F logcat -c)",
+      "Bash(\"C:\\\\Users\\\\user\\\\AppData\\\\Local\\\\Android\\\\sdk\\\\platform-tools\\\\adb.exe\" -s RFCY709L89F shell am start -n com.example.ksa/.MainActivity)",
+      "Bash(\"C:\\\\Users\\\\user\\\\AppData\\\\Local\\\\Android\\\\sdk\\\\platform-tools\\\\adb.exe\" -s RFCY709L89F logcat -d *:E)",
+      "Bash(\"C:\\\\Users\\\\user\\\\AppData\\\\Local\\\\Android\\\\sdk\\\\platform-tools\\\\adb.exe\" -s RFCY709L89F shell am force-stop com.example.ksa)",
+      "Bash(\"C:\\\\Users\\\\user\\\\AppData\\\\Local\\\\Android\\\\sdk\\\\platform-tools\\\\adb.exe\" -s RFCY709L89F shell pm list packages)",
+      "Bash(\"C:\\\\Users\\\\user\\\\AppData\\\\Local\\\\Android\\\\sdk\\\\platform-tools\\\\adb.exe\" -s RFCY709L89F logcat -d)",
+      "Bash(dart run build_runner:*)"
     ]
   }
 }

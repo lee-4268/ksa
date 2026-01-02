@@ -207,6 +207,24 @@ class StationProvider extends ChangeNotifier {
     }
   }
 
+  /// 사진 경로 업데이트
+  Future<void> updatePhotoPaths(String id, List<String> photoPaths) async {
+    try {
+      await _storageService.updatePhotoPaths(id, photoPaths);
+      final index = _stations.indexWhere((s) => s.id == id);
+      if (index != -1) {
+        _stations[index] = _stations[index].copyWith(photoPaths: photoPaths);
+        if (_selectedStation?.id == id) {
+          _selectedStation = _stations[index];
+        }
+        notifyListeners();
+      }
+    } catch (e) {
+      _errorMessage = '사진 저장 실패: $e';
+      notifyListeners();
+    }
+  }
+
   /// 무선국 삭제
   Future<void> deleteStation(String id) async {
     try {
@@ -268,14 +286,15 @@ class StationProvider extends ChangeNotifier {
   }
 
   /// 카테고리별 데이터를 Excel로 내보내기
-  Future<String?> exportCategoryToExcel(String category) async {
+  /// saveOnly: true면 저장만, false면 공유 다이얼로그도 표시
+  Future<String?> exportCategoryToExcel(String category, {bool saveOnly = false}) async {
     try {
       final categoryStations = stationsByCategory[category] ?? [];
       if (categoryStations.isEmpty) {
         throw Exception('내보낼 데이터가 없습니다.');
       }
 
-      final filePath = await _excelService.exportToExcel(categoryStations, category);
+      final filePath = await _excelService.exportToExcel(categoryStations, category, saveOnly: saveOnly);
       return filePath;
     } catch (e) {
       _errorMessage = 'Excel 내보내기 실패: $e';

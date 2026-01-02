@@ -25,10 +25,10 @@ class PlatformMapWidget extends StatefulWidget {
   });
 
   @override
-  State<PlatformMapWidget> createState() => _PlatformMapWidgetState();
+  State<PlatformMapWidget> createState() => PlatformMapWidgetState();
 }
 
-class _PlatformMapWidgetState extends State<PlatformMapWidget> {
+class PlatformMapWidgetState extends State<PlatformMapWidget> {
   late String _viewId;
   late String _containerId;
   bool _isMapReady = false;
@@ -41,6 +41,38 @@ class _PlatformMapWidgetState extends State<PlatformMapWidget> {
 
   /// 마커가 맵에 존재하는지 추적
   final Set<String> _existingMarkerIds = {};
+
+  /// 특정 스테이션 위치로 카메라 이동 (외부에서 호출 가능)
+  void moveToStation(RadioStation station) {
+    if (!station.hasCoordinates || !_isMapReady) return;
+    setCenter(station.latitude!, station.longitude!);
+    setLevel(3);
+  }
+
+  /// 특정 스테이션 위치로 카메라 이동 (줌 레벨 지정 가능)
+  void moveToStationWithLevel(RadioStation station, int zoomLevel) {
+    if (!station.hasCoordinates || !_isMapReady) return;
+    setCenter(station.latitude!, station.longitude!);
+    // 카카오맵 웹 레벨: 1=가장 확대, 14=가장 축소
+    // Flutter에서 12는 구/시 단위이므로 웹에서는 약 6-7 정도
+    final webLevel = (14 - zoomLevel).clamp(1, 14);
+    setLevel(webLevel);
+  }
+
+  /// 여러 스테이션을 한눈에 볼 수 있도록 지도 범위 조정
+  void fitToStations(List<RadioStation> stations) {
+    if (!_isMapReady || stations.isEmpty) return;
+
+    final validStations = stations.where((s) => s.hasCoordinates).toList();
+    if (validStations.isEmpty) return;
+
+    if (validStations.length == 1) {
+      moveToStation(validStations.first);
+      return;
+    }
+
+    _fitBounds(validStations);
+  }
 
   @override
   void initState() {
@@ -234,9 +266,10 @@ class _PlatformMapWidgetState extends State<PlatformMapWidget> {
           return;
         }
 
+        // 서울역 좌표로 초기화 (빠른 로딩 - 확대된 상태)
         var options = {
-          center: new kakao.maps.LatLng(36.5, 127.5),
-          level: 13
+          center: new kakao.maps.LatLng(37.5546, 126.9706),
+          level: 3
         };
 
         var map = new kakao.maps.Map(container, options);
@@ -337,31 +370,43 @@ class _PlatformMapWidgetState extends State<PlatformMapWidget> {
     }
   }
 
-  /// 단일 마커 제거
+  /// 단일 마커 제거 (라벨 포함)
   void _removeSingleMarker(String stationId) {
     final escapedId = _escapeJs(stationId);
     final removeJs = '''
       (function() {
         if (typeof kakao === 'undefined') return;
         var markersMap = window['kakaoMapMarkersMap_$_containerId'] || {};
+        var labelsMap = window['kakaoMapLabelsMap_$_containerId'] || {};
+
+        // 마커 제거
         var marker = markersMap['$escapedId'];
         if (marker) {
           marker.setMap(null);
           delete markersMap['$escapedId'];
-          console.log('Marker removed: $escapedId');
         }
+
+        // 라벨 제거
+        var label = labelsMap['$escapedId'];
+        if (label) {
+          label.setMap(null);
+          delete labelsMap['$escapedId'];
+        }
+
+        console.log('Marker and label removed: $escapedId');
       })();
     ''';
     html.document.body?.append(html.ScriptElement()..text = removeJs);
   }
 
-  /// 단일 마커 추가
+  /// 단일 마커 추가 (라벨 포함)
   void _addSingleMarker(RadioStation station) {
     final escapedName = _escapeJs(station.displayName);
     final escapedAddress = _escapeJs(station.address);
     final escapedId = _escapeJs(station.id);
     final isInspected = station.isInspected;
     final markerImagePath = isInspected ? _inspectedMarkerPath : _pendingMarkerPath;
+    final labelColor = isInspected ? '#FF0000' : '#0066CC';
 
     final addMarkerJs = '''
       (function() {
@@ -375,6 +420,12 @@ class _PlatformMapWidgetState extends State<PlatformMapWidget> {
           window['kakaoMapMarkersMap_$_containerId'] = {};
         }
         var markersMap = window['kakaoMapMarkersMap_$_containerId'];
+
+        // 라벨 오버레이 맵 초기화
+        if (!window['kakaoMapLabelsMap_$_containerId']) {
+          window['kakaoMapLabelsMap_$_containerId'] = {};
+        }
+        var labelsMap = window['kakaoMapLabelsMap_$_containerId'];
 
         var position = new kakao.maps.LatLng(${station.latitude}, ${station.longitude});
 
@@ -390,8 +441,34 @@ class _PlatformMapWidgetState extends State<PlatformMapWidget> {
           title: '$escapedName'
         });
 
+        // 마커 아래에 라벨 추가 (CustomOverlay 사용)
+        var labelContent = '<div style="' +
+          'padding: 3px 8px;' +
+          'background: white;' +
+          'border: 1px solid $labelColor;' +
+          'border-radius: 4px;' +
+          'font-size: 11px;' +
+          'font-weight: bold;' +
+          'color: $labelColor;' +
+          'white-space: nowrap;' +
+          'box-shadow: 0 1px 3px rgba(0,0,0,0.2);' +
+          'text-align: center;' +
+          'max-width: 120px;' +
+          'overflow: hidden;' +
+          'text-overflow: ellipsis;' +
+          '">' + '$escapedName' + '</div>';
+
+        var labelOverlay = new kakao.maps.CustomOverlay({
+          position: position,
+          content: labelContent,
+          yAnchor: -0.3,
+          zIndex: 1
+        });
+        labelOverlay.setMap(map);
+
         // 마커 맵에 저장
         markersMap['$escapedId'] = marker;
+        labelsMap['$escapedId'] = labelOverlay;
 
         // 마커 배열에도 추가 (bounds 계산용)
         if (!window['kakaoMapMarkers_$_containerId']) {
@@ -418,7 +495,7 @@ class _PlatformMapWidgetState extends State<PlatformMapWidget> {
           }, '*');
         });
 
-        console.log('Marker added: $escapedName (inspected: $isInspected)');
+        console.log('Marker added with label: $escapedName (inspected: $isInspected)');
       })();
     ''';
     html.document.body?.append(html.ScriptElement()..text = addMarkerJs);

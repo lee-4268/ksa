@@ -36,13 +36,14 @@ class RadioStationAdapter extends TypeAdapter<RadioStation> {
       antennaCount: fields[16] as String?,
       remarks: fields[17] as String?,
       categoryName: fields[18] as String?,
+      photoPaths: (fields[19] as List?)?.cast<String>(),
     );
   }
 
   @override
   void write(BinaryWriter writer, RadioStation obj) {
     writer
-      ..writeByte(19)
+      ..writeByte(20)
       ..writeByte(0)
       ..write(obj.id)
       ..writeByte(1)
@@ -80,7 +81,9 @@ class RadioStationAdapter extends TypeAdapter<RadioStation> {
       ..writeByte(17)
       ..write(obj.remarks)
       ..writeByte(18)
-      ..write(obj.categoryName);
+      ..write(obj.categoryName)
+      ..writeByte(19)
+      ..write(obj.photoPaths);
   }
 
   @override
