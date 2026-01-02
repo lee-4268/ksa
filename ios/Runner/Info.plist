@@ -57,6 +57,11 @@
 	<key>LSApplicationQueriesSchemes</key>
 	<array>
 		<string>kakaomap</string>
+		<string>kakaokompassauth</string>
+		<string>kakaolink</string>
 	</array>
+	<!-- 카카오맵 네이티브 SDK API 키 -->
+	<key>KAKAO_APP_KEY</key>
+	<string>354385a1b62e3388a040c5d2c13e64d0</string>
 </dict>
 </plist>

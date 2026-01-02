@@ -18,7 +18,25 @@
       "Bash(flutter pub run build_runner build:*)",
       "Bash(flutter analyze:*)",
       "Bash(powershell:*)",
-      "Bash(timeout:*)"
+      "Bash(timeout:*)",
+      "Bash(flutter build:*)",
+      "Bash(keytool -exportcert:*)",
+      "Bash(openssl sha1:*)",
+      "Bash(openssl base64:*)",
+      "Bash(dir /b \"C:\\\\Program Files\\\\Java\")",
+      "Bash(dir /b \"C:\\\\Program Files\\\\Android\\\\Android Studio\\\\jbr\\\\bin\\\\keytool.exe\")",
+      "Bash(dir /s /b \"C:\\\\Program Files\\\\Android\\\\Android Studio\\\\jbr\\\\bin\\\\keytool.exe\")",
+      "Bash(dir /s /b \"C:\\\\Program Files\\\\Android\\\\Android Studio\\\\jre\\\\bin\\\\keytool.exe\")",
+      "Bash(\"C:\\\\Program Files\\\\Android\\\\Android Studio\\\\jbr\\\\bin\\\\keytool.exe\" -exportcert -alias androiddebugkey -keystore \"C:\\\\Users\\\\user\\\\.android\\\\debug.keystore\" -storepass android)",
+      "Bash(\"C:\\\\Program Files\\\\Android\\\\Android Studio\\\\jbr\\\\bin\\\\keytool.exe\" -list -v -alias androiddebugkey -keystore \"C:\\\\Users\\\\user\\\\.android\\\\debug.keystore\" -storepass android)",
+      "Bash(findstr:*)",
+      "Bash(python:*)",
+      "Bash(flutter devices:*)",
+      "Bash(dir /s /b \"%LOCALAPPDATA%\\\\Pub\\\\Cache\\\\hosted\\\\pub.dev\\\\kakao_maps_flutter*\")",
+      "Bash(powershell -Command:*)",
+      "Bash(dir \"C:\\\\Users\\\\user\\\\AppData\\\\Local\\\\Pub\\\\Cache\\\\hosted\\\\pub.dev\")",
+      "Bash(flutter create:*)",
+      "Bash(flutter clean:*)"
     ]
   }
 }

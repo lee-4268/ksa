@@ -12,7 +12,7 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   // 모바일에서만 카카오맵 SDK 초기화
-  platform_init.initializeKakaoSdk();
+  await platform_init.initializeKakaoSdk();
 
   // Hive 초기화
   final storageService = StorageService();

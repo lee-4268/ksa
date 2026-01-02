@@ -20,8 +20,17 @@
   <title>무선국 검사 관리</title>
   <link rel="manifest" href="manifest.json">
 
-  <!-- 카카오맵 API (웹용) - YOUR_KAKAO_JAVASCRIPT_KEY를 실제 키로 교체하세요 -->
-  <script type="text/javascript" src="https://dapi.kakao.com/v2/maps/sdk.js?appkey=6f4fbe76fbb53a0ba573d755b1a3adde"></script>
+  <!-- 카카오맵 API (웹용) - 비동기 로딩으로 성능 개선 -->
+  <script type="text/javascript" src="https://dapi.kakao.com/v2/maps/sdk.js?appkey=6f4fbe76fbb53a0ba573d755b1a3adde&autoload=false"></script>
+  <script>
+    // 카카오맵 SDK 수동 로드 (비동기)
+    if (typeof kakao !== 'undefined' && kakao.maps) {
+      kakao.maps.load(function() {
+        console.log('카카오맵 SDK 로드 완료');
+        window.kakaoMapsLoaded = true;
+      });
+    }
+  </script>
 </head>
 <body>
   <script src="flutter_bootstrap.js" async></script>

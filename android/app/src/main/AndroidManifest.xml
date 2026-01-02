@@ -35,6 +35,10 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
+        <!-- 카카오맵 네이티브 SDK API 키 (kakao_maps_flutter 용) -->
+        <meta-data
+            android:name="com.kakao.vectormap.KAKAO_MAP_KEY"
+            android:value="354385a1b62e3388a040c5d2c13e64d0" />
     </application>
     <queries>
         <intent>

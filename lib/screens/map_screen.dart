@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../models/radio_station.dart';
@@ -23,6 +24,9 @@ class _MapScreenState extends State<MapScreen> {
 
   String? _selectedCategory; // 선택된 카테고리
   double _sheetSize = 0.4; // 하단 시트 크기 비율
+  String _sortOrder = '최신순'; // 정렬 순서
+  bool _isEditMode = false; // 편집 모드
+  final Set<String> _selectedStationIds = {}; // 선택된 스테이션 ID들
 
   @override
   void initState() {
@@ -71,6 +75,44 @@ class _MapScreenState extends State<MapScreen> {
 
   /// 카테고리 목록 화면 (sample.png의 '내 장소', '안테나사진' 등)
   Widget _buildCategoryListView(StationProvider provider) {
+    // 웹에서는 좌우 레이아웃, 모바일에서는 상하 레이아웃
+    if (kIsWeb) {
+      return Column(
+        children: [
+          // 상단 SafeArea + 검색바
+          Container(
+            color: Colors.white,
+            child: SafeArea(
+              bottom: false,
+              child: _buildSearchBar(provider),
+            ),
+          ),
+          // 좌우 분할: 지도(왼쪽) + 리스트(오른쪽)
+          Expanded(
+            child: Row(
+              children: [
+                // 지도 (왼쪽 70%)
+                Expanded(
+                  flex: 7,
+                  child: platform_map.PlatformMapWidget(
+                    key: _mapKey,
+                    stations: provider.stationsWithCoordinates,
+                    onMarkerTap: _showStationDetail,
+                  ),
+                ),
+                // 카테고리 리스트 (오른쪽 30%)
+                SizedBox(
+                  width: 360,
+                  child: _buildCategorySheet(provider, isWebLayout: true),
+                ),
+              ],
+            ),
+          ),
+        ],
+      );
+    }
+
+    // 모바일: 기존 상하 레이아웃
     return Column(
       children: [
         // 상단 SafeArea + 검색바
@@ -106,6 +148,76 @@ class _MapScreenState extends State<MapScreen> {
     final categoryStations = provider.stationsByCategory[_selectedCategory] ?? [];
     final stationsWithCoords = categoryStations.where((s) => s.hasCoordinates).toList();
 
+    // flex 값 계산 (소수점을 정수로 변환하여 부드러운 전환)
+    final mapFlex = ((1 - _sheetSize) * 100).round().clamp(20, 80);
+    final sheetFlex = (_sheetSize * 100).round().clamp(20, 80);
+
+    // 웹에서는 좌우 레이아웃
+    if (kIsWeb) {
+      return Column(
+        children: [
+          // 상단 SafeArea + 뒤로가기 + 카테고리명
+          Container(
+            color: Colors.white,
+            child: SafeArea(
+              bottom: false,
+              child: _buildDetailHeader(provider),
+            ),
+          ),
+          // 좌우 분할: 지도(왼쪽) + 리스트(오른쪽)
+          Expanded(
+            child: Row(
+              children: [
+                // 지도 영역 (왼쪽)
+                Expanded(
+                  flex: 7,
+                  child: Stack(
+                    children: [
+                      platform_map.PlatformMapWidget(
+                        stations: stationsWithCoords,
+                        onMarkerTap: _showStationDetail,
+                      ),
+                      // X 버튼 (닫기)
+                      Positioned(
+                        top: 8,
+                        right: 16,
+                        child: Container(
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            shape: BoxShape.circle,
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withValues(alpha: 0.1),
+                                blurRadius: 4,
+                              ),
+                            ],
+                          ),
+                          child: IconButton(
+                            icon: const Icon(Icons.close),
+                            onPressed: () {
+                              setState(() {
+                                _selectedCategory = null;
+                              });
+                            },
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                // 상세 리스트 (오른쪽)
+                SizedBox(
+                  width: 400,
+                  child: _buildDetailList(provider, categoryStations, isWebLayout: true),
+                ),
+              ],
+            ),
+          ),
+        ],
+      );
+    }
+
+    // 모바일: 기존 상하 레이아웃
     return Column(
       children: [
         // 상단 SafeArea + 뒤로가기 + 카테고리명
@@ -119,7 +231,7 @@ class _MapScreenState extends State<MapScreen> {
 
         // 지도 영역
         Expanded(
-          flex: (10 * (1 - _sheetSize)).round(),
+          flex: mapFlex,
           child: Stack(
             children: [
               // 지도 - 선택된 카테고리의 마커만 표시
@@ -159,7 +271,7 @@ class _MapScreenState extends State<MapScreen> {
 
         // 하단 상세 리스트
         Expanded(
-          flex: (10 * _sheetSize).round(),
+          flex: sheetFlex,
           child: _buildDetailList(provider, categoryStations),
         ),
       ],
@@ -257,16 +369,18 @@ class _MapScreenState extends State<MapScreen> {
   }
 
   /// 카테고리 목록 시트 (sample.png 스타일)
-  Widget _buildCategorySheet(StationProvider provider) {
+  Widget _buildCategorySheet(StationProvider provider, {bool isWebLayout = false}) {
     return Container(
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+        borderRadius: isWebLayout
+            ? BorderRadius.zero
+            : const BorderRadius.vertical(top: Radius.circular(16)),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.1),
             blurRadius: 10,
-            offset: const Offset(0, -2),
+            offset: isWebLayout ? const Offset(-2, 0) : const Offset(0, -2),
           ),
         ],
       ),
@@ -282,20 +396,6 @@ class _MapScreenState extends State<MapScreen> {
               borderRadius: BorderRadius.circular(2),
             ),
           ),
-
-          // 탭 (장소 / 경로)
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Row(
-              children: [
-                _buildTab('장소', Icons.location_on, true),
-                const SizedBox(width: 24),
-                _buildTab('경로', Icons.route, false),
-              ],
-            ),
-          ),
-
-          const Divider(height: 24),
 
           // 전체 리스트 헤더
           Padding(
@@ -381,27 +481,6 @@ class _MapScreenState extends State<MapScreen> {
           ),
         ],
       ),
-    );
-  }
-
-  Widget _buildTab(String label, IconData icon, bool isSelected) {
-    return Row(
-      children: [
-        Icon(
-          icon,
-          size: 20,
-          color: isSelected ? Colors.red[400] : Colors.grey[500],
-        ),
-        const SizedBox(width: 4),
-        Text(
-          label,
-          style: TextStyle(
-            fontSize: 14,
-            fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
-            color: isSelected ? Colors.grey[900] : Colors.grey[500],
-          ),
-        ),
-      ],
     );
   }
 
@@ -501,89 +580,166 @@ class _MapScreenState extends State<MapScreen> {
     );
   }
 
+  /// 정렬된 스테이션 목록 반환
+  List<RadioStation> _getSortedStations(List<RadioStation> stations) {
+    final sorted = List<RadioStation>.from(stations);
+
+    switch (_sortOrder) {
+      case '주소순':
+        sorted.sort((a, b) => a.address.compareTo(b.address));
+        break;
+      case '최신순':
+      default:
+        // 기본 순서 유지 (가져온 순서)
+        break;
+    }
+
+    return sorted;
+  }
+
   /// 상세 리스트 (deep.png 스타일)
-  Widget _buildDetailList(StationProvider provider, List<RadioStation> stations) {
+  Widget _buildDetailList(StationProvider provider, List<RadioStation> stations, {bool isWebLayout = false}) {
+    final sortedStations = _getSortedStations(stations);
+
     return Container(
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+        borderRadius: isWebLayout
+            ? BorderRadius.zero
+            : const BorderRadius.vertical(top: Radius.circular(16)),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.1),
             blurRadius: 10,
-            offset: const Offset(0, -2),
+            offset: isWebLayout ? const Offset(-2, 0) : const Offset(0, -2),
           ),
         ],
       ),
       child: Column(
         children: [
-          // 드래그 핸들
+          // 드래그 가능한 헤더 영역 전체
           GestureDetector(
             onVerticalDragUpdate: (details) {
+              final delta = details.delta.dy / MediaQuery.of(context).size.height;
+              final newSize = (_sheetSize - delta).clamp(0.2, 0.7);
+              if ((newSize - _sheetSize).abs() > 0.005) {
+                setState(() {
+                  _sheetSize = newSize;
+                });
+              }
+            },
+            onVerticalDragEnd: (details) {
               setState(() {
-                _sheetSize -= details.delta.dy / MediaQuery.of(context).size.height;
-                _sheetSize = _sheetSize.clamp(0.2, 0.7);
+                if (_sheetSize < 0.35) {
+                  _sheetSize = 0.2;
+                } else if (_sheetSize > 0.55) {
+                  _sheetSize = 0.7;
+                } else {
+                  _sheetSize = 0.4;
+                }
               });
             },
-            child: Container(
-              width: double.infinity,
-              padding: const EdgeInsets.symmetric(vertical: 12),
-              color: Colors.transparent,
-              child: Center(
-                child: Container(
-                  width: 40,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: Colors.grey[300],
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
-              ),
-            ),
-          ),
-
-          // 카테고리 정보 헤더
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            child: Row(
+            behavior: HitTestBehavior.opaque,
+            child: Column(
               children: [
+                // 드래그 핸들
                 Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: Colors.amber.shade50,
-                    borderRadius: BorderRadius.circular(8),
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  child: Center(
+                    child: Container(
+                      width: 40,
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: Colors.grey[300],
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
                   ),
-                  child: Icon(Icons.star, color: Colors.amber, size: 24),
                 ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+
+                // 카테고리 정보 헤더
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  child: Row(
                     children: [
-                      Text(
-                        _selectedCategory ?? '',
-                        style: const TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
+                      Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: Colors.amber.shade50,
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Icon(Icons.star, color: Colors.amber, size: 24),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              _selectedCategory ?? '',
+                              style: const TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            Text(
+                              _isEditMode
+                                  ? '${_selectedStationIds.length}개 선택됨'
+                                  : '비공개 · ${sortedStations.length}개',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: _isEditMode ? Colors.red : Colors.grey[600],
+                              ),
+                            ),
+                          ],
                         ),
                       ),
-                      Text(
-                        '비공개 · ${stations.length}개',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: Colors.grey[600],
+                      if (_isEditMode) ...[
+                        // 편집 모드: 삭제 버튼
+                        TextButton(
+                          onPressed: _selectedStationIds.isEmpty
+                              ? null
+                              : () => _deleteSelectedStations(provider),
+                          child: Text(
+                            '삭제',
+                            style: TextStyle(
+                              color: _selectedStationIds.isEmpty ? Colors.grey : Colors.red,
+                              fontSize: 12,
+                            ),
+                          ),
                         ),
-                      ),
+                        // 완료 버튼
+                        OutlinedButton(
+                          onPressed: () {
+                            setState(() {
+                              _isEditMode = false;
+                              _selectedStationIds.clear();
+                            });
+                          },
+                          style: OutlinedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                            side: BorderSide(color: Colors.blue),
+                          ),
+                          child: const Text('완료', style: TextStyle(fontSize: 12, color: Colors.blue)),
+                        ),
+                      ] else
+                        // 일반 모드: 편집 버튼
+                        OutlinedButton(
+                          onPressed: () {
+                            setState(() {
+                              _isEditMode = true;
+                              _selectedStationIds.clear();
+                            });
+                          },
+                          style: OutlinedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                            side: BorderSide(color: Colors.grey[300]!),
+                          ),
+                          child: const Text('편집', style: TextStyle(fontSize: 12)),
+                        ),
                     ],
                   ),
-                ),
-                OutlinedButton(
-                  onPressed: () {},
-                  style: OutlinedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                    side: BorderSide(color: Colors.grey[300]!),
-                  ),
-                  child: const Text('편집', style: TextStyle(fontSize: 12)),
                 ),
               ],
             ),
@@ -591,24 +747,86 @@ class _MapScreenState extends State<MapScreen> {
 
           const Divider(height: 1),
 
-          // 필터 탭
-          Container(
-            height: 40,
-            padding: const EdgeInsets.symmetric(horizontal: 8),
-            child: ListView(
-              scrollDirection: Axis.horizontal,
-              children: [
-                _buildFilterChip('최신순', true),
-                _buildFilterChip('전체', false),
-                _buildFilterChip('주소/위치', false),
-                _buildFilterChip('음식점', false),
-                _buildFilterChip('BAR', false),
-              ],
+          // 편집 모드일 때 전체 선택/해제 옵션
+          if (_isEditMode)
+            Container(
+              height: 40,
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Row(
+                children: [
+                  GestureDetector(
+                    onTap: () {
+                      setState(() {
+                        if (_selectedStationIds.length == sortedStations.length) {
+                          _selectedStationIds.clear();
+                        } else {
+                          _selectedStationIds.clear();
+                          _selectedStationIds.addAll(sortedStations.map((s) => s.id));
+                        }
+                      });
+                    },
+                    child: Row(
+                      children: [
+                        Icon(
+                          _selectedStationIds.length == sortedStations.length
+                              ? Icons.check_box
+                              : Icons.check_box_outline_blank,
+                          size: 20,
+                          color: Colors.blue,
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          '전체 선택',
+                          style: TextStyle(fontSize: 13, color: Colors.grey[700]),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const Spacer(),
+                  Text(
+                    '${_selectedStationIds.length}/${sortedStations.length}',
+                    style: TextStyle(fontSize: 13, color: Colors.grey[600]),
+                  ),
+                ],
+              ),
+            )
+          else
+            // 필터 탭 (전체만)
+            Container(
+              height: 40,
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              child: Row(
+                children: [
+                  _buildFilterChip('전체', true),
+                  const Spacer(),
+                  // 정렬 드롭다운
+                  PopupMenuButton<String>(
+                    onSelected: (value) {
+                      setState(() {
+                        _sortOrder = value;
+                      });
+                    },
+                    itemBuilder: (context) => [
+                      PopupMenuItem(value: '최신순', child: Text('최신순')),
+                      PopupMenuItem(value: '주소순', child: Text('주소순')),
+                    ],
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          _sortOrder,
+                          style: TextStyle(fontSize: 13, color: Colors.grey[600]),
+                        ),
+                        Icon(Icons.keyboard_arrow_down, size: 18, color: Colors.grey[600]),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
             ),
-          ),
 
           // 정보 없는 장소 알림
-          if (stations.any((s) => !s.hasCoordinates))
+          if (!_isEditMode && sortedStations.any((s) => !s.hasCoordinates))
             Container(
               margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               padding: const EdgeInsets.all(12),
@@ -621,7 +839,7 @@ class _MapScreenState extends State<MapScreen> {
                   Icon(Icons.info_outline, color: Colors.blue[700], size: 18),
                   const SizedBox(width: 8),
                   Text(
-                    '정보가 없거나 위치가 변경된 장소 ${stations.where((s) => !s.hasCoordinates).length}',
+                    '정보가 없거나 위치가 변경된 장소 ${sortedStations.where((s) => !s.hasCoordinates).length}',
                     style: TextStyle(
                       fontSize: 13,
                       color: Colors.blue[700],
@@ -637,13 +855,46 @@ class _MapScreenState extends State<MapScreen> {
           Expanded(
             child: ListView.separated(
               padding: EdgeInsets.zero,
-              itemCount: stations.length,
-              separatorBuilder: (_, __) => const Divider(height: 1, indent: 16, endIndent: 16),
+              itemCount: sortedStations.length,
+              separatorBuilder: (_, __) => Divider(height: 1, indent: _isEditMode ? 56 : 16, endIndent: 16),
               itemBuilder: (context, index) {
-                final station = stations[index];
+                final station = sortedStations[index];
                 return _buildStationListItem(station);
               },
             ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 선택된 스테이션들 삭제
+  void _deleteSelectedStations(StationProvider provider) {
+    if (_selectedStationIds.isEmpty) return;
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('선택 항목 삭제'),
+        content: Text('${_selectedStationIds.length}개의 항목을 삭제하시겠습니까?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('취소'),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              for (final id in _selectedStationIds) {
+                provider.deleteStation(id);
+              }
+              setState(() {
+                _selectedStationIds.clear();
+                _isEditMode = false;
+              });
+            },
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: const Text('삭제'),
           ),
         ],
       ),
@@ -656,7 +907,7 @@ class _MapScreenState extends State<MapScreen> {
       child: FilterChip(
         label: Text(label),
         selected: isSelected,
-        onSelected: (_) {},
+        onSelected: null,
         selectedColor: Colors.green.shade100,
         checkmarkColor: Colors.green,
         labelStyle: TextStyle(
@@ -670,13 +921,40 @@ class _MapScreenState extends State<MapScreen> {
   }
 
   Widget _buildStationListItem(RadioStation station) {
+    final isSelected = _selectedStationIds.contains(station.id);
+
     return InkWell(
-      onTap: () => _showStationDetail(station),
+      onTap: () {
+        if (_isEditMode) {
+          // 편집 모드에서는 체크박스 토글
+          setState(() {
+            if (isSelected) {
+              _selectedStationIds.remove(station.id);
+            } else {
+              _selectedStationIds.add(station.id);
+            }
+          });
+        } else {
+          _showStationDetail(station);
+        }
+      },
       child: Container(
         padding: const EdgeInsets.all(16),
+        color: isSelected ? Colors.blue.shade50 : null,
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // 편집 모드일 때 체크박스
+            if (_isEditMode) ...[
+              Padding(
+                padding: const EdgeInsets.only(right: 12, top: 16),
+                child: Icon(
+                  isSelected ? Icons.check_box : Icons.check_box_outline_blank,
+                  color: isSelected ? Colors.blue : Colors.grey[400],
+                  size: 24,
+                ),
+              ),
+            ],
             // 썸네일 또는 아이콘
             Container(
               width: 60,
@@ -734,11 +1012,12 @@ class _MapScreenState extends State<MapScreen> {
                 ],
               ),
             ),
-            // 더보기 버튼
-            IconButton(
-              icon: Icon(Icons.more_vert, color: Colors.grey[400]),
-              onPressed: () => _showStationOptions(station),
-            ),
+            // 더보기 버튼 (편집 모드가 아닐 때만)
+            if (!_isEditMode)
+              IconButton(
+                icon: Icon(Icons.more_vert, color: Colors.grey[400]),
+                onPressed: () => _showStationOptions(station),
+              ),
           ],
         ),
       ),

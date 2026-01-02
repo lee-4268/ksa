@@ -35,7 +35,12 @@ class _PlatformMapWidgetState extends State<PlatformMapWidget> {
   bool _isKakaoLoaded = false;
   Timer? _kakaoCheckTimer;
   String? _errorMessage;
-  String _lastStationsHash = ''; // 이전 상태 해시 저장용
+
+  /// 마커 상태 캐시: stationId -> isInspected (증분 업데이트용)
+  final Map<String, bool> _markerStateCache = {};
+
+  /// 마커가 맵에 존재하는지 추적
+  final Set<String> _existingMarkerIds = {};
 
   @override
   void initState() {
@@ -57,6 +62,9 @@ class _PlatformMapWidgetState extends State<PlatformMapWidget> {
     int checkCount = 0;
     const maxChecks = 50;
 
+    // 먼저 kakao.maps.load() 호출 시도 (autoload=false 모드)
+    _tryLoadKakaoMaps();
+
     _kakaoCheckTimer = Timer.periodic(const Duration(milliseconds: 200), (timer) {
       checkCount++;
 
@@ -77,12 +85,30 @@ class _PlatformMapWidgetState extends State<PlatformMapWidget> {
     });
   }
 
+  /// autoload=false 모드에서 kakao.maps.load() 호출
+  void _tryLoadKakaoMaps() {
+    final loadScript = '''
+      (function() {
+        if (typeof kakao !== 'undefined' && kakao.maps && typeof kakao.maps.load === 'function') {
+          kakao.maps.load(function() {
+            console.log('카카오맵 SDK 수동 로드 완료');
+            window.kakaoMapsLoaded = true;
+          });
+        }
+      })();
+    ''';
+    html.document.body?.append(html.ScriptElement()..text = loadScript);
+  }
+
   bool _checkKakaoGlobal() {
     try {
       final kakao = js.context['kakao'];
       if (kakao == null) return false;
       final maps = kakao['maps'];
-      return maps != null;
+      if (maps == null) return false;
+      // LatLng 클래스가 있는지 확인 (load 완료 여부)
+      final latLng = maps['LatLng'];
+      return latLng != null;
     } catch (e) {
       debugPrint('카카오 SDK 체크 오류: $e');
       return false;
@@ -230,9 +256,8 @@ class _PlatformMapWidgetState extends State<PlatformMapWidget> {
 
     Future.delayed(const Duration(milliseconds: 500), () {
       if (mounted) {
-        // 초기 해시 저장
-        _lastStationsHash = _getStationsHash(widget.stations);
-        _updateMarkers();
+        // 초기 마커 로딩
+        _initializeMarkers();
         setState(() {
           _isMapReady = true;
         });
@@ -240,145 +265,176 @@ class _PlatformMapWidgetState extends State<PlatformMapWidget> {
     });
   }
 
-  /// 상태 변경 감지를 위한 해시 생성 (ID + isInspected 조합)
-  String _getStationsHash(List<RadioStation> stations) {
-    return stations.map((s) => '${s.id}:${s.isInspected}').join(',');
-  }
-
   @override
   void didUpdateWidget(PlatformMapWidget oldWidget) {
     super.didUpdateWidget(oldWidget);
-    // stations 리스트가 변경되었을 때 마커 업데이트
+    // stations 리스트가 변경되었을 때 증분 마커 업데이트
     if (_isMapReady) {
-      final newHash = _getStationsHash(widget.stations);
-
-      // 이전에 저장된 해시와 비교 (oldWidget 비교 대신)
-      if (_lastStationsHash != newHash) {
-        debugPrint('Stations hash changed: $_lastStationsHash -> $newHash');
-        _lastStationsHash = newHash;
-        _updateMarkers();
-      }
+      _updateMarkersIncrementally();
     }
   }
 
-  void _updateMarkers() {
-    if (!_isKakaoLoaded) {
-      debugPrint('Kakao not loaded, skipping marker update');
-      return;
+  /// 초기 마커 로딩 (첫 로드 시에만 사용)
+  void _initializeMarkers() {
+    if (!_isKakaoLoaded) return;
+
+    _markerStateCache.clear();
+    _existingMarkerIds.clear();
+
+    for (final station in widget.stations) {
+      if (!station.hasCoordinates) continue;
+      _addSingleMarker(station);
+      _markerStateCache[station.id] = station.isInspected;
+      _existingMarkerIds.add(station.id);
     }
 
-    debugPrint('Updating markers for ${widget.stations.length} stations');
+    _adjustMapBounds();
+  }
 
-    // 기존 마커 및 오버레이 제거
-    final clearJs = '''
+  /// 증분 마커 업데이트 - 변경된 마커만 처리
+  void _updateMarkersIncrementally() {
+    if (!_isKakaoLoaded) return;
+
+    final currentStationIds = <String>{};
+    bool hasChanges = false;
+
+    for (final station in widget.stations) {
+      if (!station.hasCoordinates) continue;
+
+      currentStationIds.add(station.id);
+      final cachedState = _markerStateCache[station.id];
+      final currentState = station.isInspected;
+
+      if (cachedState == null) {
+        // 새로운 마커 추가
+        _addSingleMarker(station);
+        _markerStateCache[station.id] = currentState;
+        _existingMarkerIds.add(station.id);
+        hasChanges = true;
+        debugPrint('마커 추가: ${station.displayName}');
+      } else if (cachedState != currentState) {
+        // 상태가 변경된 마커만 업데이트 (삭제 후 재추가)
+        _removeSingleMarker(station.id);
+        _addSingleMarker(station);
+        _markerStateCache[station.id] = currentState;
+        hasChanges = true;
+        debugPrint('마커 업데이트: ${station.displayName} (${cachedState ? "완료→대기" : "대기→완료"})');
+      }
+    }
+
+    // 삭제된 마커 처리
+    final removedIds = _existingMarkerIds.difference(currentStationIds);
+    for (final removedId in removedIds) {
+      _removeSingleMarker(removedId);
+      _markerStateCache.remove(removedId);
+      _existingMarkerIds.remove(removedId);
+      hasChanges = true;
+      debugPrint('마커 삭제: $removedId');
+    }
+
+    if (hasChanges) {
+      debugPrint('증분 업데이트 완료');
+    }
+  }
+
+  /// 단일 마커 제거
+  void _removeSingleMarker(String stationId) {
+    final escapedId = _escapeJs(stationId);
+    final removeJs = '''
       (function() {
         if (typeof kakao === 'undefined') return;
-        var markers = window['kakaoMapMarkers_$_containerId'] || [];
-        var overlays = window['kakaoMapOverlays_$_containerId'] || [];
-        console.log('Clearing ' + markers.length + ' markers and ' + overlays.length + ' overlays');
-        markers.forEach(function(marker) {
+        var markersMap = window['kakaoMapMarkersMap_$_containerId'] || {};
+        var marker = markersMap['$escapedId'];
+        if (marker) {
           marker.setMap(null);
-        });
-        overlays.forEach(function(overlay) {
-          overlay.setMap(null);
-        });
-        window['kakaoMapMarkers_$_containerId'] = [];
-        window['kakaoMapOverlays_$_containerId'] = [];
+          delete markersMap['$escapedId'];
+          console.log('Marker removed: $escapedId');
+        }
       })();
     ''';
-    html.document.body?.append(html.ScriptElement()..text = clearJs);
+    html.document.body?.append(html.ScriptElement()..text = removeJs);
+  }
 
-    // 새 마커 추가
-    for (final station in widget.stations) {
-      if (!station.hasCoordinates) {
-        debugPrint('Station ${station.id} has no coordinates');
-        continue;
-      }
+  /// 단일 마커 추가
+  void _addSingleMarker(RadioStation station) {
+    final escapedName = _escapeJs(station.displayName);
+    final escapedAddress = _escapeJs(station.address);
+    final escapedId = _escapeJs(station.id);
+    final isInspected = station.isInspected;
+    final markerImagePath = isInspected ? _inspectedMarkerPath : _pendingMarkerPath;
 
-      final escapedName = _escapeJs(station.displayName);
-      final escapedAddress = _escapeJs(station.address);
-      final stationId = station.id;
+    final addMarkerJs = '''
+      (function() {
+        if (typeof kakao === 'undefined') return;
+        var map = window['kakaoMapInstance_$_containerId'];
+        var infowindow = window['kakaoInfoWindow_$_containerId'];
+        if (!map) return;
 
-      debugPrint('Adding marker for ${station.displayName} at ${station.latitude}, ${station.longitude}');
-
-      // 검사완료 여부에 따른 마커 색상 결정
-      final isInspected = station.isInspected;
-
-      // SVG 마커 이미지 경로 (검사대기: 파란색, 검사완료: 빨간색)
-      final markerImagePath = isInspected
-          ? _inspectedMarkerPath
-          : _pendingMarkerPath;
-
-      final addMarkerJs = '''
-        (function() {
-          if (typeof kakao === 'undefined') {
-            console.error('kakao not defined');
-            return;
-          }
-          var map = window['kakaoMapInstance_$_containerId'];
-          var infowindow = window['kakaoInfoWindow_$_containerId'];
-          if (!map) {
-            console.error('Map not found: $_containerId');
-            return;
-          }
-
-          var position = new kakao.maps.LatLng(${station.latitude}, ${station.longitude});
-
-          // 원본 SVG 파일 경로 사용
-          var imageSrc = "$markerImagePath";
-          var imageSize = new kakao.maps.Size(30, 30);
-          var imageOption = {offset: new kakao.maps.Point(15, 30)};
-          var markerImage = new kakao.maps.MarkerImage(imageSrc, imageSize, imageOption);
-
-          var marker = new kakao.maps.Marker({
-            position: position,
-            map: map,
-            image: markerImage,
-            title: '$escapedName'
-          });
-
-          window['kakaoMapMarkers_$_containerId'].push(marker);
-
-          console.log('Marker added: $escapedName (inspected: $isInspected)');
-
-          // 마커에 표시할 인포윈도우 내용
-          var isInspectedFlag = ${isInspected ? 'true' : 'false'};
-          var iwContent = '<div style="padding:12px 16px;width:250px;font-size:13px;box-sizing:border-box;">' +
-            '<div style="color:#333;font-weight:bold;margin-bottom:8px;word-break:keep-all;line-height:1.4;">$escapedName</div>' +
-            '<div style="color:#666;font-size:12px;line-height:1.5;word-wrap:break-word;white-space:pre-wrap;">$escapedAddress</div>' +
-            (isInspectedFlag ? '<div style="color:#FF0000;font-size:11px;font-weight:bold;margin-top:8px;">✓ 검사완료</div>' : '') +
-            '</div>';
-
-          kakao.maps.event.addListener(marker, 'click', function() {
-            infowindow.setContent(iwContent);
-            infowindow.open(map, marker);
-
-            window.postMessage({
-              type: 'markerClick',
-              stationId: '$stationId',
-              lat: ${station.latitude},
-              lng: ${station.longitude}
-            }, '*');
-          });
-        })();
-      ''';
-      html.document.body?.append(html.ScriptElement()..text = addMarkerJs);
-    }
-
-    // 마커가 있으면 첫 번째 마커로 중심 이동 및 줌 레벨 조정
-    if (widget.stations.isNotEmpty) {
-      final stationsWithCoords = widget.stations.where((s) => s.hasCoordinates).toList();
-      if (stationsWithCoords.isNotEmpty) {
-        // 마커가 여러 개면 모든 마커가 보이도록 bounds 설정
-        if (stationsWithCoords.length > 1) {
-          _fitBounds(stationsWithCoords);
-        } else {
-          // 마커가 1개면 해당 위치로 이동
-          final first = stationsWithCoords.first;
-          setCenter(first.latitude!, first.longitude!);
-          setLevel(3);
+        // 마커 맵 초기화
+        if (!window['kakaoMapMarkersMap_$_containerId']) {
+          window['kakaoMapMarkersMap_$_containerId'] = {};
         }
-      }
+        var markersMap = window['kakaoMapMarkersMap_$_containerId'];
+
+        var position = new kakao.maps.LatLng(${station.latitude}, ${station.longitude});
+
+        var imageSrc = "$markerImagePath";
+        var imageSize = new kakao.maps.Size(30, 30);
+        var imageOption = {offset: new kakao.maps.Point(15, 30)};
+        var markerImage = new kakao.maps.MarkerImage(imageSrc, imageSize, imageOption);
+
+        var marker = new kakao.maps.Marker({
+          position: position,
+          map: map,
+          image: markerImage,
+          title: '$escapedName'
+        });
+
+        // 마커 맵에 저장
+        markersMap['$escapedId'] = marker;
+
+        // 마커 배열에도 추가 (bounds 계산용)
+        if (!window['kakaoMapMarkers_$_containerId']) {
+          window['kakaoMapMarkers_$_containerId'] = [];
+        }
+        window['kakaoMapMarkers_$_containerId'].push(marker);
+
+        var isInspectedFlag = ${isInspected ? 'true' : 'false'};
+        var iwContent = '<div style="padding:12px 16px;width:250px;font-size:13px;box-sizing:border-box;">' +
+          '<div style="color:#333;font-weight:bold;margin-bottom:8px;word-break:keep-all;line-height:1.4;">$escapedName</div>' +
+          '<div style="color:#666;font-size:12px;line-height:1.5;word-wrap:break-word;white-space:pre-wrap;">$escapedAddress</div>' +
+          (isInspectedFlag ? '<div style="color:#FF0000;font-size:11px;font-weight:bold;margin-top:8px;">✓ 검사완료</div>' : '') +
+          '</div>';
+
+        kakao.maps.event.addListener(marker, 'click', function() {
+          infowindow.setContent(iwContent);
+          infowindow.open(map, marker);
+
+          window.postMessage({
+            type: 'markerClick',
+            stationId: '$escapedId',
+            lat: ${station.latitude},
+            lng: ${station.longitude}
+          }, '*');
+        });
+
+        console.log('Marker added: $escapedName (inspected: $isInspected)');
+      })();
+    ''';
+    html.document.body?.append(html.ScriptElement()..text = addMarkerJs);
+  }
+
+  /// 맵 bounds 조정
+  void _adjustMapBounds() {
+    final stationsWithCoords = widget.stations.where((s) => s.hasCoordinates).toList();
+    if (stationsWithCoords.isEmpty) return;
+
+    if (stationsWithCoords.length > 1) {
+      _fitBounds(stationsWithCoords);
+    } else {
+      final first = stationsWithCoords.first;
+      setCenter(first.latitude!, first.longitude!);
+      setLevel(3);
     }
   }
 

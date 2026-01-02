@@ -376,14 +376,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "4.9.0"
-  kakao_map_plugin:
+  kakao_maps_flutter:
     dependency: "direct main"
     description:
-      name: kakao_map_plugin
-      sha256: "45ade447fd8423aab32476ff1a482cd33c51273afde3a7fd8a97eeb91735192c"
+      name: kakao_maps_flutter
+      sha256: "1bf40b9f439394cc0c46a39b79f21c4fa17d70be769052f0c17d687a78aac168"
       url: "https://pub.dev"
     source: hosted
-    version: "0.3.7"
+    version: "0.1.2"
   leak_tracker:
     dependency: transitive
     description:

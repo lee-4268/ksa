@@ -13,8 +13,8 @@ dependencies:
 
   cupertino_icons: ^1.0.8
 
-  # 카카오맵
-  kakao_map_plugin: ^0.3.7
+  # 카카오맵 (모바일: 네이티브 SDK, 웹: 기존 JavaScript SDK 유지)
+  kakao_maps_flutter: ^0.1.2
 
   # Excel 파일 처리
   excel: ^4.0.3
