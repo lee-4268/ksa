@@ -207,6 +207,8 @@ class _StationDetailSheetState extends State<StationDetailSheet> {
             ),
             const Divider(),
             _buildInfoRow('허가번호', widget.station.licenseNumber),
+            if (widget.station.typeApprovalNumber != null && widget.station.typeApprovalNumber!.isNotEmpty)
+              _buildInfoRow('형식검정번호', widget.station.typeApprovalNumber!),
             _buildInfoRow('설치장소', widget.station.address),
             if (widget.station.callSign != null && widget.station.callSign!.isNotEmpty)
               _buildInfoRow('호출명칭', widget.station.callSign!),
@@ -216,12 +218,8 @@ class _StationDetailSheetState extends State<StationDetailSheet> {
               _buildInfoRow('기수', widget.station.antennaCount!),
             if (widget.station.remarks != null && widget.station.remarks!.isNotEmpty)
               _buildInfoRow('비고', widget.station.remarks!),
-            if (widget.station.frequency != null && widget.station.frequency!.isNotEmpty)
-              _buildInfoRow('주파수', widget.station.frequency!),
             if (widget.station.stationType != null && widget.station.stationType!.isNotEmpty)
               _buildInfoRow('팀명', widget.station.stationType!),
-            if (widget.station.owner != null && widget.station.owner!.isNotEmpty)
-              _buildInfoRow('소유자', widget.station.owner!),
             if (widget.station.hasCoordinates)
               _buildInfoRow(
                 '좌표',

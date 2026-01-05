@@ -26,15 +26,14 @@ class _MapScreenState extends State<MapScreen>
   bool get wantKeepAlive => true;
   final GlobalKey<platform_map.PlatformMapWidgetState> _mapKey = GlobalKey<platform_map.PlatformMapWidgetState>();
   final GlobalKey<platform_map.PlatformMapWidgetState> _detailMapKey = GlobalKey<platform_map.PlatformMapWidgetState>();
-  final TextEditingController _searchController = TextEditingController();
   final TextEditingController _detailSearchController = TextEditingController();
-  final FocusNode _searchFocusNode = FocusNode();
   final FocusNode _detailSearchFocusNode = FocusNode();
-  bool _showSearchSuggestions = false; // 검색 제안 표시 여부
-  bool _showDetailSearchSuggestions = false; // 상세 화면 검색 제안 표시 여부
 
   String? _selectedCategory; // 선택된 카테고리
   String? _lastFittedCategory; // 마지막으로 fitToStations 호출된 카테고리
+  RadioStation? _targetStationOnCategoryEnter; // 카테고리 진입 시 이동할 스테이션 (검색에서 선택한 경우)
+  RadioStation? _initialMapStation; // 맵 초기 위치 스테이션
+  int? _initialMapZoomLevel; // 맵 초기 줌 레벨
   String _sortOrder = '최신순'; // 정렬 순서
   bool _isEditMode = false; // 편집 모드
   bool _isSearchMode = false; // 상세 화면 검색 모드
@@ -56,9 +55,7 @@ class _MapScreenState extends State<MapScreen>
 
   @override
   void dispose() {
-    _searchController.dispose();
     _detailSearchController.dispose();
-    _searchFocusNode.dispose();
     _detailSearchFocusNode.dispose();
     super.dispose();
   }
@@ -106,12 +103,28 @@ class _MapScreenState extends State<MapScreen>
     if (kIsWeb) {
       return Column(
         children: [
-          // 상단 SafeArea + 검색바
+          // 상단 SafeArea + 검색바 (별도 StatefulWidget으로 분리하여 맵 리빌드 방지)
           Container(
             color: Colors.white,
             child: SafeArea(
               bottom: false,
-              child: _buildSearchBar(provider),
+              child: _SearchBarWidget(
+                stations: provider.stations,
+                mapKey: _mapKey,
+                onStationSelected: (station) {
+                  _showStationDetail(station);
+                },
+                onCategorySelected: (category, targetStation) {
+                  setState(() {
+                    _selectedCategory = category;
+                    _targetStationOnCategoryEnter = targetStation;
+                    // 카테고리 진입 시 이전 초기 위치 정보 초기화 (새로 계산되도록)
+                    _lastFittedCategory = null;
+                    _initialMapStation = null;
+                    _initialMapZoomLevel = null;
+                  });
+                },
+              ),
             ),
           ),
           // 좌우 분할: 지도(왼쪽) + 리스트(오른쪽)
@@ -152,12 +165,29 @@ class _MapScreenState extends State<MapScreen>
             Positioned.fill(
               child: Column(
                 children: [
-                  // 상단 SafeArea + 검색바
+                  // 상단 SafeArea + 검색바 (별도 StatefulWidget으로 분리하여 맵 리빌드 방지)
                   Container(
                     color: Colors.white,
                     child: SafeArea(
                       bottom: false,
-                      child: _buildSearchBar(provider),
+                      child: _SearchBarWidget(
+                        stations: provider.stations,
+                        mapKey: _mapKey,
+                        onStationSelected: (station) {
+                          _showStationDetail(station);
+                        },
+                        onCategorySelected: (category, targetStation) {
+                          setState(() {
+                            _selectedCategory = category;
+                            _targetStationOnCategoryEnter = targetStation;
+                            // 카테고리 진입 시 이전 초기 위치 정보 초기화 (새로 계산되도록)
+                            _lastFittedCategory = null;
+                            _initialMapStation = null;
+                            _initialMapZoomLevel = null;
+                          });
+                          // 맵 이동은 _buildMapDetailView에서 통합 처리
+                        },
+                      ),
                     ),
                   ),
                   // 지도 - 남은 공간 전체 사용
@@ -232,18 +262,50 @@ class _MapScreenState extends State<MapScreen>
     final categoryStations = provider.stationsByCategory[_selectedCategory] ?? [];
     final stationsWithCoords = categoryStations.where((s) => s.hasCoordinates).toList();
 
-    // 카테고리 선택 시 첫 번째 스테이션 위치로 맵 이동 (구/시 레벨)
+    // 카테고리 변경 시 맵 이동 처리
     if (_lastFittedCategory != _selectedCategory) {
       _lastFittedCategory = _selectedCategory;
-      // 맵이 준비된 후 지연 호출하여 첫 번째 스테이션으로 이동
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        Future.delayed(const Duration(milliseconds: 500), () {
-          if (mounted && stationsWithCoords.isNotEmpty) {
-            // 첫 번째 스테이션 위치로 이동 (구/시 레벨 = zoomLevel 12)
-            _moveToFirstStation(stationsWithCoords.first);
-          }
+
+      // 이동할 스테이션 결정 (검색에서 선택한 스테이션 우선, 없으면 첫 번째 스테이션)
+      RadioStation? targetStation;
+      int zoomLevel = 12;
+
+      if (_targetStationOnCategoryEnter != null && _targetStationOnCategoryEnter!.hasCoordinates) {
+        // 검색 드롭다운에서 스테이션을 선택한 경우 - 해당 스테이션으로 이동
+        targetStation = _targetStationOnCategoryEnter;
+        zoomLevel = 15; // 상세 줌 레벨
+        debugPrint('검색에서 선택한 스테이션으로 이동: ${targetStation!.stationName}');
+      } else if (stationsWithCoords.isNotEmpty) {
+        // 단순 카테고리 선택 - 첫 번째 스테이션으로 이동
+        targetStation = stationsWithCoords.first;
+        zoomLevel = 12; // 구/시 레벨
+        debugPrint('첫 번째 스테이션으로 이동: ${targetStation.stationName}');
+      }
+
+      _initialMapStation = targetStation;
+      _initialMapZoomLevel = zoomLevel;
+      _targetStationOnCategoryEnter = null; // 사용 후 초기화
+
+      // 맵이 준비된 후 해당 위치로 이동 (백업용 - initialStation이 적용되지 않을 경우)
+      // 웹에서는 맵 초기화에 약 800ms 소요 (300ms + 500ms), 모바일에서는 더 빠름
+      if (targetStation != null && targetStation.hasCoordinates) {
+        final stationToMove = targetStation; // 클로저 캡처용 로컬 변수
+        final levelToUse = zoomLevel;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          Future.delayed(const Duration(milliseconds: 1000), () {
+            if (!mounted) return;
+            final mapState = _detailMapKey.currentState;
+            if (mapState != null) {
+              debugPrint('백업 moveToStation 호출: ${stationToMove.stationName}');
+              if (levelToUse == 15) {
+                mapState.moveToStation(stationToMove);
+              } else {
+                mapState.moveToStationWithLevel(stationToMove, levelToUse);
+              }
+            }
+          });
         });
-      });
+      }
     }
 
     // 웹에서는 좌우 레이아웃 (반응형)
@@ -275,6 +337,8 @@ class _MapScreenState extends State<MapScreen>
                             key: _detailMapKey,
                             stations: stationsWithCoords,
                             onMarkerTap: _showStationDetail,
+                            initialStation: _initialMapStation,
+                            initialZoomLevel: _initialMapZoomLevel,
                           ),
                           // X 버튼 (닫기)
                           Positioned(
@@ -296,6 +360,10 @@ class _MapScreenState extends State<MapScreen>
                                 onPressed: () {
                                   setState(() {
                                     _selectedCategory = null;
+                                    // 카테고리 목록으로 돌아갈 때 초기 위치 정보 초기화
+                                    _lastFittedCategory = null;
+                                    _initialMapStation = null;
+                                    _initialMapZoomLevel = null;
                                   });
                                 },
                               ),
@@ -344,11 +412,13 @@ class _MapScreenState extends State<MapScreen>
                       color: const Color(0xFFF0F0F0),
                       child: Stack(
                         children: [
-                          // 지도 - 선택된 카테고리의 마커만 표시
+                          // 지도 - 선택된 카테고리의 마커만 표시 (초기 위치 설정)
                           platform_map.PlatformMapWidget(
                             key: _detailMapKey,
                             stations: stationsWithCoords,
                             onMarkerTap: _showStationDetail,
+                            initialStation: _initialMapStation,
+                            initialZoomLevel: _initialMapZoomLevel,
                           ),
                           // X 버튼 (닫기)
                           Positioned(
@@ -370,6 +440,10 @@ class _MapScreenState extends State<MapScreen>
                                 onPressed: () {
                                   setState(() {
                                     _selectedCategory = null;
+                                    // 카테고리 목록으로 돌아갈 때 초기 위치 정보 초기화
+                                    _lastFittedCategory = null;
+                                    _initialMapStation = null;
+                                    _initialMapZoomLevel = null;
                                   });
                                 },
                               ),
@@ -435,324 +509,24 @@ class _MapScreenState extends State<MapScreen>
     );
   }
 
-  /// 첫 번째 스테이션 위치로 맵 이동 (구/시 레벨)
-  void _moveToFirstStation(RadioStation station) {
-    if (!station.hasCoordinates) return;
-    _detailMapKey.currentState?.moveToStationWithLevel(station, 12);
-  }
-
-  Widget _buildSearchBar(StationProvider provider) {
-    // 검색어에 맞는 제안 목록 생성
-    final query = _searchController.text.toLowerCase();
-    final suggestions = query.isEmpty
-        ? <RadioStation>[]
-        : provider.stations.where((station) {
-            return station.stationName.toLowerCase().contains(query) ||
-                station.address.toLowerCase().contains(query) ||
-                (station.callSign?.toLowerCase().contains(query) ?? false) ||
-                station.licenseNumber.toLowerCase().contains(query);
-          }).take(8).toList(); // 최대 8개
-
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Container(
-          margin: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(8),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.1),
-                blurRadius: 8,
-                offset: const Offset(0, 2),
-              ),
-            ],
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: _searchController,
-                focusNode: _searchFocusNode,
-                onChanged: (value) {
-                  provider.setSearchQuery(value);
-                  setState(() {
-                    _showSearchSuggestions = value.isNotEmpty;
-                  });
-                },
-                onTap: () {
-                  setState(() {
-                    _showSearchSuggestions = _searchController.text.isNotEmpty;
-                  });
-                },
-                decoration: InputDecoration(
-                  hintText: '주소, 국소명 검색',
-                  hintStyle: TextStyle(color: Colors.grey[500], fontSize: 15),
-                  prefixIcon: Icon(Icons.search, color: Colors.grey[600]),
-                  suffixIcon: _searchController.text.isNotEmpty
-                      ? IconButton(
-                          icon: Icon(Icons.clear, color: Colors.grey[600]),
-                          onPressed: () {
-                            _searchController.clear();
-                            provider.setSearchQuery('');
-                            setState(() {
-                              _showSearchSuggestions = false;
-                            });
-                          },
-                        )
-                      : null,
-                  border: InputBorder.none,
-                  contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 14,
-                  ),
-                ),
-              ),
-              // 검색 제안 드롭다운
-              if (_showSearchSuggestions && suggestions.isNotEmpty)
-                Container(
-                  constraints: const BoxConstraints(maxHeight: 250),
-                  decoration: BoxDecoration(
-                    border: Border(
-                      top: BorderSide(color: Colors.grey[300]!),
-                    ),
-                  ),
-                  child: ListView.builder(
-                    shrinkWrap: true,
-                    padding: EdgeInsets.zero,
-                    itemCount: suggestions.length,
-                    itemBuilder: (context, index) {
-                      final station = suggestions[index];
-                      return InkWell(
-                        onTap: () {
-                          // 검색어 설정 및 해당 스테이션 상세 표시
-                          _searchController.text = station.stationName;
-                          provider.setSearchQuery(station.stationName);
-                          setState(() {
-                            _showSearchSuggestions = false;
-                          });
-                          _searchFocusNode.unfocus();
-                          // 해당 스테이션의 카테고리로 이동
-                          if (station.categoryName != null) {
-                            setState(() {
-                              _selectedCategory = station.categoryName;
-                            });
-                          }
-                        
-                          _showStationDetail(station);
-                        },
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                          child: Row(
-                            children: [
-                              Icon(
-                                station.isInspected ? Icons.check_circle : Icons.radio_button_unchecked,
-                                size: 18,
-                                color: station.isInspected ? Colors.red : Colors.blue,
-                              ),
-                              const SizedBox(width: 12),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      station.stationName,
-                                      style: const TextStyle(
-                                        fontWeight: FontWeight.w500,
-                                        fontSize: 14,
-                                      ),
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                    const SizedBox(height: 2),
-                                    Text(
-                                      station.address,
-                                      style: TextStyle(
-                                        color: Colors.grey[600],
-                                        fontSize: 12,
-                                      ),
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              if (station.categoryName != null)
-                                Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                                  decoration: BoxDecoration(
-                                    color: Colors.grey[200],
-                                    borderRadius: BorderRadius.circular(4),
-                                  ),
-                                  child: Text(
-                                    station.categoryName!,
-                                    style: TextStyle(
-                                      fontSize: 10,
-                                      color: Colors.grey[700],
-                                    ),
-                                  ),
-                                ),
-                            ],
-                          ),
-                        ),
-                      );
-                    },
-                  ),
-                ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-
   Widget _buildDetailHeader(StationProvider provider) {
     final categoryStations = provider.stationsByCategory[_selectedCategory] ?? [];
 
-    // 검색 모드일 때
+    // 검색 모드일 때 - 오버레이 드롭다운 위젯 사용
     if (_isSearchMode) {
-      // 검색어에 맞는 제안 목록 생성 (현재 카테고리 내에서만)
-      final query = _detailSearchController.text.toLowerCase();
-      final suggestions = query.isEmpty
-          ? <RadioStation>[]
-          : categoryStations.where((station) {
-              return station.stationName.toLowerCase().contains(query) ||
-                  station.address.toLowerCase().contains(query) ||
-                  (station.callSign?.toLowerCase().contains(query) ?? false);
-            }).take(8).toList();
-
-      return Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-            child: Row(
-              children: [
-                IconButton(
-                  icon: const Icon(Icons.arrow_back),
-                  onPressed: () {
-                    setState(() {
-                      _isSearchMode = false;
-                      _detailSearchQuery = '';
-                      _detailSearchController.clear();
-                      _showDetailSearchSuggestions = false;
-                    });
-                  },
-                ),
-                Expanded(
-                  child: TextField(
-                    controller: _detailSearchController,
-                    focusNode: _detailSearchFocusNode,
-                    autofocus: true,
-                    onChanged: (value) {
-                      setState(() {
-                        _detailSearchQuery = value;
-                        _showDetailSearchSuggestions = value.isNotEmpty;
-                      });
-                    },
-                    onTap: () {
-                      setState(() {
-                        _showDetailSearchSuggestions = _detailSearchController.text.isNotEmpty;
-                      });
-                    },
-                    decoration: InputDecoration(
-                      hintText: '국소명, 주소 검색',
-                      hintStyle: TextStyle(color: Colors.grey[500], fontSize: 15),
-                      border: InputBorder.none,
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
-                    ),
-                  ),
-                ),
-                if (_detailSearchController.text.isNotEmpty)
-                  IconButton(
-                    icon: Icon(Icons.clear, color: Colors.grey[600]),
-                    onPressed: () {
-                      setState(() {
-                        _detailSearchController.clear();
-                        _detailSearchQuery = '';
-                        _showDetailSearchSuggestions = false;
-                      });
-                    },
-                  ),
-              ],
-            ),
-          ),
-          // 검색 제안 드롭다운
-          if (_showDetailSearchSuggestions && suggestions.isNotEmpty)
-            Container(
-              constraints: const BoxConstraints(maxHeight: 200),
-              margin: const EdgeInsets.symmetric(horizontal: 8),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(8),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.1),
-                    blurRadius: 4,
-                  ),
-                ],
-              ),
-              child: ListView.builder(
-                shrinkWrap: true,
-                padding: EdgeInsets.zero,
-                itemCount: suggestions.length,
-                itemBuilder: (context, index) {
-                  final station = suggestions[index];
-                  return InkWell(
-                    onTap: () {
-                      setState(() {
-                        _showDetailSearchSuggestions = false;
-                        _detailSearchQuery = station.stationName;
-                        _detailSearchController.text = station.stationName;
-                      });
-                      _detailSearchFocusNode.unfocus();
-                      
-                      _showStationDetail(station);
-                    },
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                      child: Row(
-                        children: [
-                          Icon(
-                            station.isInspected ? Icons.check_circle : Icons.radio_button_unchecked,
-                            size: 16,
-                            color: station.isInspected ? Colors.red : Colors.blue,
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  station.stationName,
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.w500,
-                                    fontSize: 13,
-                                  ),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                                Text(
-                                  station.address,
-                                  style: TextStyle(
-                                    color: Colors.grey[600],
-                                    fontSize: 11,
-                                  ),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  );
-                },
-              ),
-            ),
-        ],
+      return _DetailSearchHeaderWidget(
+        categoryStations: categoryStations,
+        detailMapKey: _detailMapKey,
+        onStationSelected: (station) {
+          _showStationDetail(station);
+        },
+        onBackPressed: () {
+          setState(() {
+            _isSearchMode = false;
+            _detailSearchQuery = '';
+            _detailSearchController.clear();
+          });
+        },
       );
     }
 
@@ -768,6 +542,10 @@ class _MapScreenState extends State<MapScreen>
                 _selectedCategory = null;
                 _isSearchMode = false;
                 _detailSearchQuery = '';
+                // 카테고리 목록으로 돌아갈 때 초기 위치 정보 초기화
+                _lastFittedCategory = null;
+                _initialMapStation = null;
+                _initialMapZoomLevel = null;
               });
             },
           ),
@@ -921,8 +699,16 @@ class _MapScreenState extends State<MapScreen>
                     itemCount: provider.categories.length,
                     itemBuilder: (context, index) {
                       final category = provider.categories[index];
-                      final count = provider.stationsByCategory[category]?.length ?? 0;
-                      return _buildCategoryItem(category, count);
+                      final stations = provider.stationsByCategory[category] ?? [];
+                      final count = stations.length;
+                      final completedCount = stations.where((s) => s.isInspected).length;
+                      final pendingCount = count - completedCount;
+                      return _buildCategoryItem(
+                        category,
+                        count,
+                        pendingCount: pendingCount,
+                        completedCount: completedCount,
+                      );
                     },
                   ),
           ),
@@ -931,7 +717,7 @@ class _MapScreenState extends State<MapScreen>
     );
   }
 
-  Widget _buildCategoryItem(String category, int count) {
+  Widget _buildCategoryItem(String category, int count, {int pendingCount = 0, int completedCount = 0}) {
     // 카테고리별 아이콘/색상
     IconData icon;
     Color iconColor;
@@ -991,12 +777,50 @@ class _MapScreenState extends State<MapScreen>
                     ),
                   ),
                   const SizedBox(height: 2),
-                  Text(
-                    '$count개 장소',
-                    style: TextStyle(
-                      fontSize: 13,
-                      color: Colors.grey[600],
-                    ),
+                  Row(
+                    children: [
+                      Text(
+                        '$count개 장소',
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: Colors.grey[600],
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      // 검사대기 건수 (파란색)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                        decoration: BoxDecoration(
+                          color: Colors.blue.shade50,
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Text(
+                          '대기:$pendingCount',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: Colors.blue[700],
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      // 검사완료 건수 (빨간색)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                        decoration: BoxDecoration(
+                          color: Colors.red.shade50,
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Text(
+                          '완료:$completedCount',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: Colors.red[700],
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),
@@ -1697,5 +1521,436 @@ class _MapScreenState extends State<MapScreen>
         SnackBar(content: Text('Excel 내보내기 실패: $e')),
       );
     }
+  }
+}
+
+/// 검색바 위젯 (별도 StatefulWidget으로 분리하여 맵 리빌드 방지)
+/// 드롭다운은 오버레이로 표시하여 맵 사이즈에 영향 없음
+class _SearchBarWidget extends StatefulWidget {
+  final List<RadioStation> stations;
+  final GlobalKey<platform_map.PlatformMapWidgetState>? mapKey;
+  final Function(RadioStation station) onStationSelected;
+  /// 카테고리 선택 콜백 - 선택한 스테이션도 함께 전달하여 해당 위치로 이동
+  final Function(String? category, RadioStation? targetStation) onCategorySelected;
+
+  const _SearchBarWidget({
+    required this.stations,
+    this.mapKey,
+    required this.onStationSelected,
+    required this.onCategorySelected,
+  });
+
+  @override
+  State<_SearchBarWidget> createState() => _SearchBarWidgetState();
+}
+
+class _SearchBarWidgetState extends State<_SearchBarWidget> {
+  final TextEditingController _searchController = TextEditingController();
+  final FocusNode _searchFocusNode = FocusNode();
+  final LayerLink _layerLink = LayerLink();
+  OverlayEntry? _overlayEntry;
+  bool _showSearchSuggestions = false;
+  String _searchQuery = '';
+
+  @override
+  void dispose() {
+    _removeOverlay();
+    _searchController.dispose();
+    _searchFocusNode.dispose();
+    super.dispose();
+  }
+
+  void _removeOverlay() {
+    _overlayEntry?.remove();
+    _overlayEntry = null;
+  }
+
+  void _updateOverlay() {
+    _removeOverlay();
+
+    final query = _searchQuery.toLowerCase();
+    final suggestions = query.isEmpty
+        ? <RadioStation>[]
+        : widget.stations.where((station) {
+            return station.stationName.toLowerCase().contains(query) ||
+                station.address.toLowerCase().contains(query) ||
+                (station.callSign?.toLowerCase().contains(query) ?? false) ||
+                station.licenseNumber.toLowerCase().contains(query);
+          }).take(8).toList();
+
+    if (!_showSearchSuggestions || suggestions.isEmpty) {
+      return;
+    }
+
+    _overlayEntry = OverlayEntry(
+      builder: (context) => Positioned(
+        width: MediaQuery.of(context).size.width - 24, // margin 12 * 2
+        child: CompositedTransformFollower(
+          link: _layerLink,
+          showWhenUnlinked: false,
+          offset: const Offset(0, 48), // 검색바 높이만큼 아래로
+          child: Material(
+            elevation: 8,
+            borderRadius: BorderRadius.circular(8),
+            child: Container(
+              constraints: const BoxConstraints(maxHeight: 250),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: ListView.builder(
+                shrinkWrap: true,
+                padding: EdgeInsets.zero,
+                itemCount: suggestions.length,
+                itemBuilder: (context, index) {
+                  final station = suggestions[index];
+                  return InkWell(
+                    onTap: () {
+                      _searchController.text = station.stationName;
+                      setState(() {
+                        _searchQuery = station.stationName;
+                        _showSearchSuggestions = false;
+                      });
+                      _removeOverlay();
+                      _searchFocusNode.unfocus();
+
+                      // 맵 중앙을 해당 스테이션 위치로 이동
+                      if (station.hasCoordinates) {
+                        widget.mapKey?.currentState?.moveToStation(station);
+                      }
+
+                      // 해당 스테이션의 카테고리로 이동 (선택한 스테이션 정보도 함께 전달)
+                      if (station.categoryName != null) {
+                        widget.onCategorySelected(station.categoryName, station);
+                      }
+
+                      widget.onStationSelected(station);
+                    },
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                      child: Row(
+                        children: [
+                          Icon(
+                            station.isInspected ? Icons.check_circle : Icons.radio_button_unchecked,
+                            size: 18,
+                            color: station.isInspected ? Colors.red : Colors.blue,
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  station.stationName,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w500,
+                                    fontSize: 14,
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  station.address,
+                                  style: TextStyle(
+                                    color: Colors.grey[600],
+                                    fontSize: 12,
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ],
+                            ),
+                          ),
+                          if (station.categoryName != null)
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: Colors.grey[200],
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: Text(
+                                station.categoryName!,
+                                style: TextStyle(
+                                  fontSize: 10,
+                                  color: Colors.grey[700],
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    Overlay.of(context).insert(_overlayEntry!);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // 검색바만 반환 (고정 높이) - 드롭다운은 오버레이로 별도 표시
+    return CompositedTransformTarget(
+      link: _layerLink,
+      child: Container(
+        margin: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(8),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.1),
+              blurRadius: 8,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        ),
+        child: TextField(
+          controller: _searchController,
+          focusNode: _searchFocusNode,
+          onChanged: (value) {
+            setState(() {
+              _searchQuery = value;
+              _showSearchSuggestions = value.isNotEmpty;
+            });
+            _updateOverlay();
+          },
+          onTap: () {
+            if (_searchController.text.isNotEmpty) {
+              setState(() {
+                _showSearchSuggestions = true;
+              });
+              _updateOverlay();
+            }
+          },
+          decoration: InputDecoration(
+            hintText: '주소, 국소명 검색',
+            hintStyle: TextStyle(color: Colors.grey[500], fontSize: 15),
+            prefixIcon: Icon(Icons.search, color: Colors.grey[600]),
+            suffixIcon: _searchController.text.isNotEmpty
+                ? IconButton(
+                    icon: Icon(Icons.clear, color: Colors.grey[600]),
+                    onPressed: () {
+                      _searchController.clear();
+                      setState(() {
+                        _searchQuery = '';
+                        _showSearchSuggestions = false;
+                      });
+                      _removeOverlay();
+                    },
+                  )
+                : null,
+            border: InputBorder.none,
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 16,
+              vertical: 14,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 상세 페이지 검색 헤더 위젯 (오버레이 드롭다운으로 맵 영향 방지)
+class _DetailSearchHeaderWidget extends StatefulWidget {
+  final List<RadioStation> categoryStations;
+  final GlobalKey<platform_map.PlatformMapWidgetState>? detailMapKey;
+  final Function(RadioStation station) onStationSelected;
+  final VoidCallback onBackPressed;
+
+  const _DetailSearchHeaderWidget({
+    required this.categoryStations,
+    this.detailMapKey,
+    required this.onStationSelected,
+    required this.onBackPressed,
+  });
+
+  @override
+  State<_DetailSearchHeaderWidget> createState() => _DetailSearchHeaderWidgetState();
+}
+
+class _DetailSearchHeaderWidgetState extends State<_DetailSearchHeaderWidget> {
+  final TextEditingController _searchController = TextEditingController();
+  final FocusNode _searchFocusNode = FocusNode();
+  final LayerLink _layerLink = LayerLink();
+  OverlayEntry? _overlayEntry;
+  String _searchQuery = '';
+
+  @override
+  void dispose() {
+    _removeOverlay();
+    _searchController.dispose();
+    _searchFocusNode.dispose();
+    super.dispose();
+  }
+
+  void _removeOverlay() {
+    _overlayEntry?.remove();
+    _overlayEntry = null;
+  }
+
+  void _updateOverlay() {
+    _removeOverlay();
+
+    final query = _searchQuery.toLowerCase();
+    final suggestions = query.isEmpty
+        ? <RadioStation>[]
+        : widget.categoryStations.where((station) {
+            return station.stationName.toLowerCase().contains(query) ||
+                station.address.toLowerCase().contains(query) ||
+                (station.callSign?.toLowerCase().contains(query) ?? false);
+          }).take(8).toList();
+
+    if (suggestions.isEmpty) {
+      return;
+    }
+
+    _overlayEntry = OverlayEntry(
+      builder: (context) => Positioned(
+        width: MediaQuery.of(context).size.width - 16, // margin 8 * 2
+        child: CompositedTransformFollower(
+          link: _layerLink,
+          showWhenUnlinked: false,
+          offset: const Offset(0, 48),
+          child: Material(
+            elevation: 8,
+            borderRadius: BorderRadius.circular(8),
+            child: Container(
+              constraints: const BoxConstraints(maxHeight: 200),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: ListView.builder(
+                shrinkWrap: true,
+                padding: EdgeInsets.zero,
+                itemCount: suggestions.length,
+                itemBuilder: (context, index) {
+                  final station = suggestions[index];
+                  return InkWell(
+                    onTap: () {
+                      _searchController.text = station.stationName;
+                      setState(() {
+                        _searchQuery = station.stationName;
+                      });
+                      _removeOverlay();
+                      _searchFocusNode.unfocus();
+
+                      // 해당 스테이션으로 맵 중앙을 이동
+                      if (station.hasCoordinates) {
+                        widget.detailMapKey?.currentState?.moveToStation(station);
+                      }
+                      widget.onStationSelected(station);
+                    },
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                      child: Row(
+                        children: [
+                          Icon(
+                            station.isInspected ? Icons.check_circle : Icons.radio_button_unchecked,
+                            size: 16,
+                            color: station.isInspected ? Colors.red : Colors.blue,
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  station.stationName,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w500,
+                                    fontSize: 13,
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                Text(
+                                  station.address,
+                                  style: TextStyle(
+                                    color: Colors.grey[600],
+                                    fontSize: 11,
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    Overlay.of(context).insert(_overlayEntry!);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return CompositedTransformTarget(
+      link: _layerLink,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+        child: Row(
+          children: [
+            IconButton(
+              icon: const Icon(Icons.arrow_back),
+              onPressed: () {
+                _removeOverlay();
+                widget.onBackPressed();
+              },
+            ),
+            Expanded(
+              child: TextField(
+                controller: _searchController,
+                focusNode: _searchFocusNode,
+                autofocus: true,
+                onChanged: (value) {
+                  setState(() {
+                    _searchQuery = value;
+                  });
+                  _updateOverlay();
+                },
+                onTap: () {
+                  if (_searchController.text.isNotEmpty) {
+                    _updateOverlay();
+                  }
+                },
+                decoration: InputDecoration(
+                  hintText: '국소명, 주소 검색',
+                  hintStyle: TextStyle(color: Colors.grey[500], fontSize: 15),
+                  border: InputBorder.none,
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+                ),
+              ),
+            ),
+            if (_searchController.text.isNotEmpty)
+              IconButton(
+                icon: Icon(Icons.clear, color: Colors.grey[600]),
+                onPressed: () {
+                  _searchController.clear();
+                  setState(() {
+                    _searchQuery = '';
+                  });
+                  _removeOverlay();
+                },
+              ),
+          ],
+        ),
+      ),
+    );
   }
 }

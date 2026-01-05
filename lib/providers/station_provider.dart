@@ -125,17 +125,32 @@ class StationProvider extends ChangeNotifier {
     notifyListeners();
 
     try {
+      debugPrint('===== Excel Import 시작 =====');
+      debugPrint('기존 스테이션 수: ${_stations.length}');
+
       final result = await _excelService.importExcelFile();
 
       if (result == null) {
+        debugPrint('파일 선택 취소됨');
         _isLoading = false;
         notifyListeners();
         return;
       }
 
       final importedStations = result.stations;
+      debugPrint('파일명: ${result.fileName}');
+      debugPrint('Import된 스테이션 수: ${importedStations.length}');
+
+      if (importedStations.isEmpty) {
+        debugPrint('경고: Import된 스테이션이 0개입니다!');
+        _errorMessage = '파일에서 데이터를 찾을 수 없습니다. 시트 구조를 확인해주세요.';
+        _isLoading = false;
+        notifyListeners();
+        return;
+      }
 
       // 좌표가 없는 무선국에 대해 지오코딩 수행
+      int geocodedCount = 0;
       for (int i = 0; i < importedStations.length; i++) {
         final station = importedStations[i];
         if (!station.hasCoordinates && station.address.isNotEmpty) {
@@ -147,14 +162,22 @@ class StationProvider extends ChangeNotifier {
               latitude: coords['latitude'],
               longitude: coords['longitude'],
             );
+            geocodedCount++;
           }
         }
       }
+      debugPrint('지오코딩 완료: $geocodedCount개');
 
       // 저장 및 목록 업데이트
+      debugPrint('저장 전 Storage 스테이션 수: ${_storageService.getAllStations().length}');
       await _storageService.saveStations(importedStations);
+      debugPrint('저장 후 Storage 스테이션 수: ${_storageService.getAllStations().length}');
+
       _stations = _storageService.getAllStations();
+      debugPrint('최종 _stations 수: ${_stations.length}');
+      debugPrint('===== Excel Import 완료 =====');
     } catch (e) {
+      debugPrint('Excel 가져오기 오류: $e');
       _errorMessage = 'Excel 가져오기 실패: $e';
     } finally {
       _isLoading = false;

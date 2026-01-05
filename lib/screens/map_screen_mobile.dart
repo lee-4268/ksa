@@ -10,11 +10,17 @@ import '../main_init_mobile.dart' show isX86Emulator;
 class PlatformMapWidget extends StatefulWidget {
   final List<RadioStation> stations;
   final Function(RadioStation)? onMarkerTap;
+  /// 맵 초기 위치 (null이면 서울역 좌표 사용)
+  final RadioStation? initialStation;
+  /// 맵 초기 줌 레벨 (null이면 기본값 15 사용)
+  final int? initialZoomLevel;
 
   const PlatformMapWidget({
     super.key,
     required this.stations,
     this.onMarkerTap,
+    this.initialStation,
+    this.initialZoomLevel,
   });
 
   @override
@@ -592,6 +598,11 @@ class PlatformMapWidgetState extends State<PlatformMapWidget>
 
   Widget _buildMap() {
     try {
+      // 초기 위치 결정: initialStation이 있으면 해당 위치, 없으면 서울역 좌표
+      final initialLat = widget.initialStation?.latitude ?? 37.5546;
+      final initialLng = widget.initialStation?.longitude ?? 126.9706;
+      final initialLevel = widget.initialZoomLevel ?? 15;
+
       return KakaoMap(
         onMapCreated: (controller) {
           debugPrint('카카오맵 네이티브 SDK 로드 완료');
@@ -605,13 +616,13 @@ class PlatformMapWidgetState extends State<PlatformMapWidget>
           // 지도가 완전히 준비될 때까지 대기 후 마커 초기화
           _waitForMapReadyAndInitialize();
         },
-        // 서울역 좌표로 초기화 (구/시 수준으로 확대)
+        // 초기 위치 설정 (initialStation이 제공되면 해당 위치, 아니면 서울역)
         // 카카오맵 레벨: 숫자가 높을수록 확대됨 (3=한반도 전체, 15=구/시 수준)
-        initialPosition: const LatLng(
-          latitude: 37.5546,
-          longitude: 126.9706,
+        initialPosition: LatLng(
+          latitude: initialLat,
+          longitude: initialLng,
         ),
-        initialLevel: 15,
+        initialLevel: initialLevel,
       );
     } catch (e) {
       debugPrint('카카오맵 위젯 생성 오류: $e');

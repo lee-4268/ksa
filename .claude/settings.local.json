@@ -57,7 +57,24 @@
       "Bash(\"C:\\\\Users\\\\user\\\\AppData\\\\Local\\\\Android\\\\sdk\\\\platform-tools\\\\adb.exe\" -s RFCY709L89F shell am force-stop com.example.ksa)",
       "Bash(\"C:\\\\Users\\\\user\\\\AppData\\\\Local\\\\Android\\\\sdk\\\\platform-tools\\\\adb.exe\" -s RFCY709L89F shell pm list packages)",
       "Bash(\"C:\\\\Users\\\\user\\\\AppData\\\\Local\\\\Android\\\\sdk\\\\platform-tools\\\\adb.exe\" -s RFCY709L89F logcat -d)",
-      "Bash(dart run build_runner:*)"
+      "Bash(dart run build_runner:*)",
+      "Bash(\"C:\\\\Users\\\\user\\\\AppData\\\\Local\\\\Android\\\\sdk\\\\platform-tools\\\\adb.exe\" -s RFCY709L89F logcat -s flutter)",
+      "Bash(timeout 30 \"C:\\\\Users\\\\user\\\\AppData\\\\Local\\\\Android\\\\sdk\\\\platform-tools\\\\adb.exe\":*)",
+      "Bash(timeout 60 \"C:\\\\Users\\\\user\\\\AppData\\\\Local\\\\Android\\\\sdk\\\\platform-tools\\\\adb.exe\":*)",
+      "Bash(timeout 90:*)",
+      "Bash(flutter pub outdated:*)",
+      "Bash(adb install:*)",
+      "Bash(flutter install:*)",
+      "Bash(flutter logs:*)",
+      "Bash(timeout 30 head:*)",
+      "Bash(timeout 30 \"C:\\\\Users\\\\user\\\\AppData\\\\Local\\\\Android\\\\sdk\\\\platform-tools\\\\adb.exe\" -s RFCY709L89F logcat -s flutter:*)",
+      "Bash(timeout 15 \"C:\\\\Users\\\\user\\\\AppData\\\\Local\\\\Android\\\\sdk\\\\platform-tools\\\\adb.exe\" -s RFCY709L89F logcat -s flutter:*)",
+      "Bash(timeout 20 \"C:\\\\Users\\\\user\\\\AppData\\\\Local\\\\Android\\\\sdk\\\\platform-tools\\\\adb.exe\":*)",
+      "Bash(timeout 25 \"C:\\\\Users\\\\user\\\\AppData\\\\Local\\\\Android\\\\sdk\\\\platform-tools\\\\adb.exe\":*)",
+      "Bash(timeout 30:*)",
+      "Bash(timeout 90 \"C:\\\\Users\\\\user\\\\AppData\\\\Local\\\\Android\\\\sdk\\\\platform-tools\\\\adb.exe\" -s RFCY709L89F logcat -s flutter:*)",
+      "Bash(timeout 120 \"C:\\\\Users\\\\user\\\\AppData\\\\Local\\\\Android\\\\sdk\\\\platform-tools\\\\adb.exe\":*)",
+      "Bash(timeout 90 \"C:\\\\Users\\\\user\\\\AppData\\\\Local\\\\Android\\\\sdk\\\\platform-tools\\\\adb.exe\" -s RFCY709L89F logcat -s flutter:*:*)"
     ]
   }
 }

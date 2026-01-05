@@ -1,4 +1,5 @@
-import 'dart:io';
+import 'dart:convert';
+import 'package:archive/archive.dart';
 import 'package:excel/excel.dart' as excel_pkg;
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
@@ -34,24 +35,185 @@ class ExcelService {
       final fileName = file.name.replaceAll(RegExp(r'\.(xlsx|xls)$'), '');
 
       // withData: true 설정으로 모든 플랫폼에서 file.bytes 사용 가능
-      final bytes = file.bytes;
+      var bytes = file.bytes;
 
       if (bytes == null) {
         throw Exception('파일을 읽을 수 없습니다.');
       }
 
-      // excel 패키지로 파싱
+      // excel 패키지로 파싱 (numFmtId 오류 시 전처리 후 재시도)
       try {
         final stations = _parseWithExcelPackage(bytes, fileName);
         return ExcelImportResult(stations: stations, fileName: fileName);
       } catch (e) {
         debugPrint('excel 패키지 파싱 실패: $e');
+
+        // numFmtId 오류인 경우 전처리 후 재시도
+        if (e.toString().contains('numFmtId')) {
+          debugPrint('numFmtId 오류 감지 - styles.xml 전처리 시도');
+          try {
+            final fixedBytes = _fixNumFmtIdInExcel(bytes);
+            debugPrint('전처리된 바이트 크기: ${fixedBytes.length}');
+            final stations = _parseWithExcelPackage(fixedBytes, fileName);
+            debugPrint('전처리 후 파싱 성공');
+            return ExcelImportResult(stations: stations, fileName: fileName);
+          } catch (e2, stackTrace) {
+            debugPrint('전처리 후에도 파싱 실패: $e2');
+            debugPrint('스택트레이스: $stackTrace');
+
+            // 원본 파일로 다시 시도 (numFmt 무시)
+            debugPrint('원본 파일로 재시도 중...');
+            try {
+              final stations = _parseWithExcelPackageIgnoreNumFmt(bytes, fileName);
+              debugPrint('원본 파일 파싱 성공 (numFmt 무시)');
+              return ExcelImportResult(stations: stations, fileName: fileName);
+            } catch (e3) {
+              debugPrint('원본 파일 파싱도 실패: $e3');
+
+              // 최후의 수단: XML 직접 파싱
+              debugPrint('XML 직접 파싱 시도 중...');
+              try {
+                final stations = _parseXmlDirectly(bytes, fileName);
+                debugPrint('XML 직접 파싱 성공: ${stations.length}개');
+                return ExcelImportResult(stations: stations, fileName: fileName);
+              } catch (e4) {
+                debugPrint('XML 직접 파싱도 실패: $e4');
+                throw Exception('Excel 파일 파싱 실패. 지원되지 않는 형식이거나 파일이 손상되었습니다.');
+              }
+            }
+          }
+        }
+
         throw Exception('Excel 파일 파싱 실패. 지원되지 않는 형식이거나 파일이 손상되었습니다.');
       }
     } catch (e) {
       debugPrint('Excel 파일 import 오류: $e');
       rethrow;
     }
+  }
+
+  /// Excel 파일 내 numFmtId 오류 수정 (한국 원화 등 특수 형식 처리)
+  /// xlsx 파일은 ZIP 압축된 XML 파일들로 구성됨
+  /// styles.xml에서 numFmtId < 164인 커스텀 포맷을 164 이상으로 변경
+  Uint8List _fixNumFmtIdInExcel(Uint8List bytes) {
+    try {
+      // xlsx 파일을 ZIP으로 디코딩
+      final archive = ZipDecoder().decodeBytes(bytes);
+      final newArchive = Archive();
+
+      debugPrint('ZIP 아카이브 파일 수: ${archive.length}');
+      bool stylesFound = false;
+      int copiedFiles = 0;
+      int skippedFiles = 0;
+
+      for (final file in archive) {
+        if (file.isFile) {
+          // 파일 내용이 null인 경우 스킵
+          final fileContent = file.content;
+          if (fileContent == null) {
+            debugPrint('파일 내용이 null: ${file.name}');
+            skippedFiles++;
+            continue;
+          }
+
+          // styles.xml 파일 경로 확인 (대소문자 무시, 경로 변형 대응)
+          final lowerName = file.name.toLowerCase();
+          if (lowerName.contains('styles.xml')) {
+            debugPrint('styles.xml 발견: ${file.name}');
+            try {
+              // styles.xml 수정
+              final content = utf8.decode(fileContent as List<int>);
+              final fixedContent = _fixStylesXmlNumFmtId(content);
+              final fixedBytes = utf8.encode(fixedContent);
+              final newFile = ArchiveFile(file.name, fixedBytes.length, fixedBytes);
+              newFile.compress = true; // 압축 활성화
+              newArchive.addFile(newFile);
+              debugPrint('styles.xml numFmtId 수정 완료');
+              stylesFound = true;
+              copiedFiles++;
+            } catch (e) {
+              debugPrint('styles.xml 수정 실패: $e - 원본 사용');
+              final newFile = ArchiveFile(file.name, fileContent.length, fileContent);
+              newFile.compress = true;
+              newArchive.addFile(newFile);
+              copiedFiles++;
+            }
+          } else {
+            // 다른 파일은 그대로 복사
+            try {
+              final newFile = ArchiveFile(file.name, fileContent.length, fileContent);
+              newFile.compress = true; // 압축 활성화
+              newArchive.addFile(newFile);
+              copiedFiles++;
+            } catch (e) {
+              debugPrint('파일 복사 실패: ${file.name} - $e');
+              skippedFiles++;
+            }
+          }
+        }
+      }
+
+      debugPrint('ZIP 복사 완료: $copiedFiles개 복사, $skippedFiles개 스킵');
+
+      if (!stylesFound) {
+        debugPrint('styles.xml 파일을 찾지 못함 - 원본 반환');
+        return bytes;
+      }
+
+      if (copiedFiles == 0) {
+        debugPrint('복사된 파일이 없음 - 원본 반환');
+        return bytes;
+      }
+
+      // 수정된 ZIP 파일로 재인코딩
+      final fixedZipBytes = ZipEncoder().encode(newArchive);
+      if (fixedZipBytes == null) {
+        debugPrint('ZIP 재인코딩 실패 - 원본 반환');
+        return bytes;
+      }
+
+      debugPrint('ZIP 재인코딩 완료: ${fixedZipBytes.length} 바이트');
+      return Uint8List.fromList(fixedZipBytes);
+    } catch (e) {
+      debugPrint('numFmtId 수정 중 오류: $e - 원본 반환');
+      return bytes; // 오류 시 원본 반환 (재시도 가능)
+    }
+  }
+
+  /// styles.xml에서 numFmtId < 164인 커스텀 포맷을 제거하거나 수정
+  String _fixStylesXmlNumFmtId(String xml) {
+    // numFmt 태그에서 numFmtId가 164 미만인 것들을 찾아서 제거
+    // 패턴: <numFmt numFmtId="42" formatCode="..."/>
+    final numFmtPattern = RegExp(
+      r'<numFmt\s+numFmtId="(\d+)"[^>]*/>',
+      multiLine: true,
+    );
+
+    String fixedXml = xml.replaceAllMapped(numFmtPattern, (match) {
+      final numFmtId = int.tryParse(match.group(1) ?? '0') ?? 0;
+      if (numFmtId > 0 && numFmtId < 164) {
+        debugPrint('numFmtId $numFmtId 제거됨');
+        return ''; // 문제되는 numFmt 태그 제거
+      }
+      return match.group(0)!;
+    });
+
+    // cellXfs에서 numFmtId 참조도 수정 (0으로 변경)
+    final xfPattern = RegExp(
+      r'(<xf[^>]*\s+numFmtId=")(\d+)("[^>]*>)',
+      multiLine: true,
+    );
+
+    fixedXml = fixedXml.replaceAllMapped(xfPattern, (match) {
+      final numFmtId = int.tryParse(match.group(2) ?? '0') ?? 0;
+      if (numFmtId > 0 && numFmtId < 164) {
+        debugPrint('xf numFmtId $numFmtId -> 0 으로 변경');
+        return '${match.group(1)}0${match.group(3)}';
+      }
+      return match.group(0)!;
+    });
+
+    return fixedXml;
   }
 
   /// 대상 시트 찾기 (우선순위: 검사신청내역 > 신청/내역 포함 > 첫 번째 시트)
@@ -87,6 +249,200 @@ class ExcelService {
     return sheetNames.first;
   }
 
+  /// excel 패키지를 사용한 파싱 (numFmt 오류 무시 버전)
+  /// styles.xml을 완전히 제거하고 파싱 시도
+  List<RadioStation> _parseWithExcelPackageIgnoreNumFmt(List<int> bytes, String categoryName) {
+    try {
+      // styles.xml을 완전히 제거한 버전으로 시도
+      final archive = ZipDecoder().decodeBytes(bytes);
+      final newArchive = Archive();
+
+      for (final file in archive) {
+        if (file.isFile) {
+          final lowerName = file.name.toLowerCase();
+          // styles.xml 제외하고 복사
+          if (!lowerName.contains('styles.xml')) {
+            final content = file.content;
+            if (content != null) {
+              final newFile = ArchiveFile(file.name, content.length, content);
+              newFile.compress = true; // 압축 활성화
+              newArchive.addFile(newFile);
+            }
+          }
+        }
+      }
+
+      final modifiedBytes = ZipEncoder().encode(newArchive);
+      if (modifiedBytes == null) {
+        throw Exception('ZIP 인코딩 실패');
+      }
+
+      debugPrint('styles.xml 제거 후 파싱 시도: ${modifiedBytes.length} 바이트');
+      return _parseWithExcelPackage(modifiedBytes, categoryName);
+    } catch (e) {
+      debugPrint('styles.xml 제거 파싱 실패: $e');
+      rethrow;
+    }
+  }
+
+  /// XML 직접 파싱 (excel 패키지 우회)
+  /// xlsx 파일 내 XML 파일들을 직접 파싱하여 데이터 추출
+  List<RadioStation> _parseXmlDirectly(List<int> bytes, String categoryName) {
+    try {
+      final archive = ZipDecoder().decodeBytes(bytes);
+      final List<RadioStation> stations = [];
+
+      // sharedStrings.xml에서 공유 문자열 추출
+      final sharedStrings = <String>[];
+      for (final file in archive) {
+        if (file.isFile && file.name.toLowerCase().contains('sharedstrings.xml')) {
+          final content = file.content;
+          if (content != null) {
+            final xmlStr = utf8.decode(content as List<int>);
+            // <t> 태그 내용 추출
+            final tPattern = RegExp(r'<t[^>]*>([^<]*)</t>', multiLine: true);
+            for (final match in tPattern.allMatches(xmlStr)) {
+              sharedStrings.add(match.group(1) ?? '');
+            }
+          }
+          break;
+        }
+      }
+      debugPrint('공유 문자열 수: ${sharedStrings.length}');
+
+      // 대상 시트 찾기 (검사신청내역 우선)
+      ArchiveFile? targetSheet;
+      for (final file in archive) {
+        if (file.isFile && file.name.toLowerCase().contains('worksheets/sheet')) {
+          targetSheet = file;
+          // sheet1이면 우선 사용, 다른 시트가 있으면 계속 찾기
+          if (file.name.toLowerCase().contains('sheet1.xml')) {
+            break;
+          }
+        }
+      }
+
+      if (targetSheet == null || targetSheet.content == null) {
+        throw Exception('워크시트를 찾을 수 없습니다.');
+      }
+
+      debugPrint('대상 시트: ${targetSheet.name}');
+      final sheetXml = utf8.decode(targetSheet.content as List<int>);
+
+      // 행 추출: <row> 태그
+      final rowPattern = RegExp(r'<row[^>]*>(.*?)</row>', multiLine: true, dotAll: true);
+      final rows = rowPattern.allMatches(sheetXml).toList();
+      debugPrint('총 행 수: ${rows.length}');
+
+      if (rows.isEmpty) {
+        throw Exception('데이터가 없습니다.');
+      }
+
+      // 첫 번째 행을 헤더로 사용
+      final headerRow = rows.first;
+      final headerCells = _extractCellsFromRow(headerRow.group(1) ?? '', sharedStrings);
+      debugPrint('헤더: $headerCells');
+
+      // 헤더 매핑
+      final columnMap = <String, int>{};
+      for (int i = 0; i < headerCells.length; i++) {
+        final value = headerCells[i].toLowerCase();
+        _mapColumnByValue(value, i, columnMap);
+      }
+      debugPrint('컬럼 매핑: $columnMap');
+
+      // 주소 컬럼이 없으면 자동 매핑
+      if (!columnMap.containsKey('address')) {
+        _autoMapColumns(headerCells.length, columnMap);
+      }
+
+      // 데이터 행 파싱
+      for (int i = 1; i < rows.length; i++) {
+        final rowContent = rows[i].group(1) ?? '';
+        final cells = _extractCellsFromRow(rowContent, sharedStrings);
+
+        String getCellValue(String key) {
+          final index = columnMap[key];
+          if (index == null || index >= cells.length) return '';
+          return cells[index];
+        }
+
+        final stationName = getCellValue('stationName');
+        final address = getCellValue('address');
+
+        if (address.isEmpty && stationName.isEmpty) continue;
+
+        final uniqueId = 'station_${categoryName.hashCode.abs()}_${i}_${DateTime.now().microsecondsSinceEpoch}_${i % 10000}';
+
+        stations.add(RadioStation(
+          id: uniqueId,
+          stationName: stationName.isNotEmpty ? stationName : '무선국 $i',
+          licenseNumber: getCellValue('licenseNumber').isNotEmpty ? getCellValue('licenseNumber') : '-',
+          address: address.isNotEmpty ? address : stationName,
+          callSign: getCellValue('callSign').isNotEmpty ? getCellValue('callSign') : null,
+          gain: getCellValue('gain').isNotEmpty ? getCellValue('gain') : null,
+          antennaCount: getCellValue('antennaCount').isNotEmpty ? getCellValue('antennaCount') : null,
+          remarks: getCellValue('remarks').isNotEmpty ? getCellValue('remarks') : null,
+          typeApprovalNumber: getCellValue('typeApprovalNumber').isNotEmpty ? getCellValue('typeApprovalNumber') : null,
+          categoryName: categoryName,
+        ));
+      }
+
+      debugPrint('XML 직접 파싱 완료: ${stations.length}개');
+      return stations;
+    } catch (e) {
+      debugPrint('XML 직접 파싱 오류: $e');
+      rethrow;
+    }
+  }
+
+  /// XML 행에서 셀 값 추출
+  List<String> _extractCellsFromRow(String rowXml, List<String> sharedStrings) {
+    final cells = <String>[];
+
+    // <c> 태그 추출 (셀)
+    final cellPattern = RegExp(r'<c\s+r="([A-Z]+)(\d+)"[^>]*(?:t="([^"]*)")?[^>]*>(?:<v>([^<]*)</v>)?', multiLine: true);
+
+    // 모든 셀 위치를 추적
+    final cellMap = <int, String>{};
+    int maxCol = 0;
+
+    for (final match in cellPattern.allMatches(rowXml)) {
+      final colLetter = match.group(1) ?? 'A';
+      final cellType = match.group(3); // s = shared string, n = number, etc.
+      final cellValue = match.group(4) ?? '';
+
+      // 열 문자를 인덱스로 변환 (A=0, B=1, ..., Z=25, AA=26, ...)
+      int colIndex = 0;
+      for (int i = 0; i < colLetter.length; i++) {
+        colIndex = colIndex * 26 + (colLetter.codeUnitAt(i) - 'A'.codeUnitAt(0) + 1);
+      }
+      colIndex--; // 0-based
+
+      if (colIndex > maxCol) maxCol = colIndex;
+
+      String value = '';
+      if (cellType == 's' && cellValue.isNotEmpty) {
+        // 공유 문자열 참조
+        final idx = int.tryParse(cellValue);
+        if (idx != null && idx < sharedStrings.length) {
+          value = sharedStrings[idx];
+        }
+      } else {
+        value = cellValue;
+      }
+
+      cellMap[colIndex] = value;
+    }
+
+    // 빈 셀도 포함하여 리스트 생성
+    for (int i = 0; i <= maxCol; i++) {
+      cells.add(cellMap[i] ?? '');
+    }
+
+    return cells;
+  }
+
   /// excel 패키지를 사용한 파싱
   List<RadioStation> _parseWithExcelPackage(List<int> bytes, String categoryName) {
     final excel = excel_pkg.Excel.decodeBytes(bytes);
@@ -98,6 +454,7 @@ class ExcelService {
 
     // 시트 선택 우선순위: 검사신청내역 > 신청/내역 포함 > 첫 번째 시트
     final sheetName = _findTargetSheet(excel.tables.keys.toList());
+    debugPrint('===== Excel Import 디버그 =====');
     debugPrint('선택된 시트: $sheetName (전체 시트: ${excel.tables.keys.toList()})');
 
     final sheet = excel.tables[sheetName];
@@ -106,20 +463,83 @@ class ExcelService {
       throw Exception('시트가 비어있습니다.');
     }
 
-    final headerRow = sheet.rows.first;
-    final columnMap = _mapColumnsExcel(headerRow);
+    debugPrint('총 행 수: ${sheet.rows.length}');
 
-    if (!columnMap.containsKey('address')) {
-      _autoMapColumns(headerRow.length, columnMap);
+    final headerRow = sheet.rows.first;
+    debugPrint('헤더 행 셀 수: ${headerRow.length}');
+
+    // 헤더 내용 출력
+    for (int i = 0; i < headerRow.length; i++) {
+      final cell = headerRow[i];
+      final value = _getCellStringValueExcel(cell);
+      debugPrint('헤더[$i]: "$value"');
     }
 
-    for (int i = 1; i < sheet.rows.length; i++) {
+    final columnMap = _mapColumnsExcel(headerRow);
+    debugPrint('컬럼 매핑 결과 (1행): $columnMap');
+
+    // 두 번째 행도 확인하여 병합셀 하위 헤더 처리 (이득, 기수 등)
+    // 두 번째 행이 서브헤더인지 확인 (이득, 기수 등의 키워드 포함 여부)
+    int dataStartRow = 1; // 기본값: 두 번째 행부터 데이터
+    if (sheet.rows.length > 1) {
+      final secondRow = sheet.rows[1];
+      bool isSecondRowHeader = false;
+      debugPrint('두 번째 행 헤더 확인:');
+      for (int i = 0; i < secondRow.length; i++) {
+        final cell = secondRow[i];
+        final value = _getCellStringValueExcel(cell).toLowerCase();
+        if (value.isNotEmpty) {
+          debugPrint('2행[$i]: "$value"');
+          // 이득, 기수 등 서브헤더 키워드 확인
+          if (value.contains('이득') || value.contains('기수') || value.contains('db')) {
+            isSecondRowHeader = true;
+          }
+          // 1행에서 매핑되지 않은 컬럼만 2행에서 매핑
+          _mapColumnByValue(value, i, columnMap);
+        }
+      }
+      debugPrint('컬럼 매핑 결과 (1+2행): $columnMap');
+
+      // 두 번째 행이 서브헤더이면 세 번째 행부터 데이터 시작
+      if (isSecondRowHeader) {
+        dataStartRow = 2;
+        debugPrint('두 번째 행이 서브헤더로 감지됨 - 데이터 시작 행: 3행');
+      }
+    }
+
+    if (!columnMap.containsKey('address')) {
+      debugPrint('주소 컬럼을 찾지 못함 - 자동 매핑 시도');
+      _autoMapColumns(headerRow.length, columnMap);
+      debugPrint('자동 매핑 후: $columnMap');
+    }
+
+    // 첫 번째 데이터 행 샘플 출력
+    if (sheet.rows.length > dataStartRow) {
+      final firstDataRow = sheet.rows[dataStartRow];
+      debugPrint('첫 번째 데이터 행 (${dataStartRow + 1}행) 셀 수: ${firstDataRow.length}');
+      for (int i = 0; i < firstDataRow.length; i++) {
+        final cell = firstDataRow[i];
+        final value = _getCellStringValueExcel(cell);
+        debugPrint('데이터[$dataStartRow][$i]: "$value"');
+      }
+    }
+
+    int parsedCount = 0;
+    int skippedCount = 0;
+
+    for (int i = dataStartRow; i < sheet.rows.length; i++) {
       final row = sheet.rows[i];
       final station = _parseRowExcel(row, columnMap, i, categoryName);
       if (station != null) {
         stations.add(station);
+        parsedCount++;
+      } else {
+        skippedCount++;
       }
     }
+
+    debugPrint('파싱 완료: 성공 $parsedCount개, 스킵 $skippedCount개');
+    debugPrint('===== Excel Import 완료 =====');
 
     return stations;
   }
@@ -139,10 +559,10 @@ class ExcelService {
     return columnMap;
   }
 
-  /// 컬럼 값에 따라 매핑
+  /// 컬럼 값에 따라 매핑 (value는 이미 lowercase 처리됨)
   void _mapColumnByValue(String value, int index, Map<String, int> columnMap) {
-    // ERP국소명
-    if (value.contains('ERP국소명')) {
+    // ERP국소명 (대소문자 무시)
+    if (value.contains('erp국소명') || value.contains('erp 국소명')) {
       columnMap['stationName'] = index;
     } else if (value.contains('국소명') || value.contains('국명') || value.contains('station')) {
       if (!columnMap.containsKey('stationName')) {
@@ -150,28 +570,34 @@ class ExcelService {
       }
     }
     // 호출명칭
-    if (value.contains('호출명칭') || value.contains('호출') && value.contains('명칭')) {
+    if (value.contains('호출명칭') || (value.contains('호출') && value.contains('명칭'))) {
       columnMap['callSign'] = index;
     }
     // 허가번호
     if (value.contains('허가번호') || value.contains('허가') || value.contains('license')) {
       columnMap['licenseNumber'] = index;
     }
-    // 설치장소(주소)
-    if (value.contains('설치장소')) {
-      columnMap['address'] = index;
+    // 설치장소(주소) - 주소, 소재지 등 다양한 이름 지원
+    if (value.contains('설치장소') || value.contains('주소') || value.contains('소재지') || value.contains('address') || value.contains('location')) {
+      if (!columnMap.containsKey('address')) {
+        columnMap['address'] = index;
+      }
     }
     // 이득(dB)
     if (value.contains('이득') || value.contains('gain') || value.contains('db')) {
       columnMap['gain'] = index;
     }
     // 기수
-    if (value.contains('기수') || value.contains('antenna') && value.contains('count')) {
+    if (value.contains('기수') || (value.contains('antenna') && value.contains('count'))) {
       columnMap['antennaCount'] = index;
     }
     // 비고
     if (value.contains('비고') || value.contains('remarks') || value.contains('note')) {
       columnMap['remarks'] = index;
+    }
+    // 형식검정번호
+    if (value.contains('형식검정번호') || value.contains('형식검정') || value.contains('검정번호')) {
+      columnMap['typeApprovalNumber'] = index;
     }
     // 주파수
     if (value.contains('주파수') || value.contains('frequency') || value.contains('freq')) {
@@ -285,6 +711,7 @@ class ExcelService {
       final gain = getCellValue('gain');
       final antennaCount = getCellValue('antennaCount');
       final remarks = getCellValue('remarks');
+      final typeApprovalNumber = getCellValue('typeApprovalNumber');
 
       if (address.isEmpty && stationName.isEmpty) {
         return null;
@@ -292,8 +719,11 @@ class ExcelService {
 
       final finalAddress = address.isNotEmpty ? address : stationName;
 
+      // UUID 대신 고유 ID 생성: 카테고리명 + 행번호 + 타임스탬프(마이크로초) + 랜덤값
+      final uniqueId = 'station_${categoryName.hashCode.abs()}_${rowIndex}_${DateTime.now().microsecondsSinceEpoch}_${DateTime.now().hashCode.abs() % 10000}';
+
       return RadioStation(
-        id: 'station_${categoryName}_${rowIndex}_${DateTime.now().millisecondsSinceEpoch}',
+        id: uniqueId,
         stationName: stationName.isNotEmpty ? stationName : '무선국 $rowIndex',
         licenseNumber: licenseNumber.isNotEmpty ? licenseNumber : '-',
         address: finalAddress,
@@ -306,6 +736,7 @@ class ExcelService {
         gain: gain.isNotEmpty ? gain : null,
         antennaCount: antennaCount.isNotEmpty ? antennaCount : null,
         remarks: remarks.isNotEmpty ? remarks : null,
+        typeApprovalNumber: typeApprovalNumber.isNotEmpty ? typeApprovalNumber : null,
         categoryName: categoryName,
       );
     } catch (e) {

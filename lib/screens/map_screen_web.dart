@@ -17,11 +17,17 @@ const String _inspectedMarkerPath = 'images/marker_inspected.svg';
 class PlatformMapWidget extends StatefulWidget {
   final List<RadioStation> stations;
   final Function(RadioStation)? onMarkerTap;
+  /// 맵 초기 위치 (null이면 서울역 좌표 사용)
+  final RadioStation? initialStation;
+  /// 맵 초기 줌 레벨 (null이면 기본값 사용)
+  final int? initialZoomLevel;
 
   const PlatformMapWidget({
     super.key,
     required this.stations,
     this.onMarkerTap,
+    this.initialStation,
+    this.initialZoomLevel,
   });
 
   @override
@@ -35,6 +41,7 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
   bool _isKakaoLoaded = false;
   Timer? _kakaoCheckTimer;
   String? _errorMessage;
+  StreamSubscription? _messageSubscription; // 메시지 리스너 구독
 
   /// 마커 상태 캐시: stationId -> isInspected (증분 업데이트용)
   final Map<String, bool> _markerStateCache = {};
@@ -87,6 +94,7 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
   @override
   void dispose() {
     _kakaoCheckTimer?.cancel();
+    _messageSubscription?.cancel(); // 메시지 리스너 구독 취소
     super.dispose();
   }
 
@@ -148,7 +156,9 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
   }
 
   void _setupMessageListener() {
-    html.window.onMessage.listen((event) {
+    // 기존 구독이 있으면 취소하고 새로 등록
+    _messageSubscription?.cancel();
+    _messageSubscription = html.window.onMessage.listen((event) {
       if (event.data is Map) {
         final data = event.data as Map;
         if (data['type'] == 'markerClick') {
@@ -321,7 +331,18 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
       _existingMarkerIds.add(station.id);
     }
 
-    _adjustMapBounds();
+    // initialStation이 지정된 경우 해당 위치로 이동 (검색 드롭다운에서 선택한 경우)
+    if (widget.initialStation != null && widget.initialStation!.hasCoordinates) {
+      debugPrint('initialStation으로 이동: ${widget.initialStation!.stationName}');
+      setCenter(widget.initialStation!.latitude!, widget.initialStation!.longitude!);
+      // initialZoomLevel이 지정된 경우 해당 레벨로, 아니면 기본값 3
+      final zoomLevel = widget.initialZoomLevel ?? 15;
+      // 카카오맵 웹 레벨: 1=가장 확대, 14=가장 축소
+      final webLevel = (14 - zoomLevel).clamp(1, 14);
+      setLevel(webLevel);
+    } else {
+      _adjustMapBounds();
+    }
   }
 
   /// 증분 마커 업데이트 - 변경된 마커만 처리
