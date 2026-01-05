@@ -311,10 +311,28 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
   @override
   void didUpdateWidget(PlatformMapWidget oldWidget) {
     super.didUpdateWidget(oldWidget);
-    // stations 리스트가 변경되었을 때 증분 마커 업데이트
+    // stations 리스트가 변경되었을 때만 증분 마커 업데이트
+    // 리스트 내용이 실제로 변경되었는지 확인 (맵 이동 시 불필요한 업데이트 방지)
     if (_isMapReady) {
-      _updateMarkersIncrementally();
+      final oldIds = oldWidget.stations.map((s) => s.id).toSet();
+      final newIds = widget.stations.map((s) => s.id).toSet();
+      final statesChanged = widget.stations.any((s) {
+        final cached = _markerStateCache[s.id];
+        return cached != null && cached != s.isInspected;
+      });
+
+      // ID 집합이 다르거나 상태가 변경된 경우에만 업데이트
+      if (!_setsEqual(oldIds, newIds) || statesChanged) {
+        debugPrint('마커 업데이트 필요: oldIds=${oldIds.length}, newIds=${newIds.length}, statesChanged=$statesChanged');
+        _updateMarkersIncrementally();
+      }
     }
+  }
+
+  /// 두 Set이 동일한지 비교
+  bool _setsEqual<T>(Set<T> a, Set<T> b) {
+    if (a.length != b.length) return false;
+    return a.containsAll(b);
   }
 
   /// 초기 마커 로딩 (첫 로드 시에만 사용)

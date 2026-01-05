@@ -74,7 +74,15 @@
       "Bash(timeout 30:*)",
       "Bash(timeout 90 \"C:\\\\Users\\\\user\\\\AppData\\\\Local\\\\Android\\\\sdk\\\\platform-tools\\\\adb.exe\" -s RFCY709L89F logcat -s flutter:*)",
       "Bash(timeout 120 \"C:\\\\Users\\\\user\\\\AppData\\\\Local\\\\Android\\\\sdk\\\\platform-tools\\\\adb.exe\":*)",
-      "Bash(timeout 90 \"C:\\\\Users\\\\user\\\\AppData\\\\Local\\\\Android\\\\sdk\\\\platform-tools\\\\adb.exe\" -s RFCY709L89F logcat -s flutter:*:*)"
+      "Bash(timeout 90 \"C:\\\\Users\\\\user\\\\AppData\\\\Local\\\\Android\\\\sdk\\\\platform-tools\\\\adb.exe\" -s RFCY709L89F logcat -s flutter:*:*)",
+      "Bash(timeout 60 type:*)",
+      "Bash(netstat:*)",
+      "Bash(taskkill:*)",
+      "Bash(cmd /c \"taskkill /PID 17516 /F\")",
+      "Bash(cmd /c \"start /b python -m http.server 8080 -d build/web\")",
+      "Bash(cmd /c \"python -m http.server 8080 -d build/web\")",
+      "Bash(python -m http.server:*)",
+      "Bash(cmd /c \"netstat -ano | findstr :8080\")"
     ]
   }
 }

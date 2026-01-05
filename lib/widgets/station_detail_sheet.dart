@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
@@ -55,7 +56,8 @@ class _StationDetailSheetState extends State<StationDetailSheet> {
         maxChildSize: 0.9,
         expand: false,
         builder: (context, scrollController) {
-          return SingleChildScrollView(
+          // 스크롤 가능한 콘텐츠
+          final scrollableContent = SingleChildScrollView(
             controller: scrollController,
             child: Padding(
               padding: const EdgeInsets.all(20),
@@ -169,6 +171,28 @@ class _StationDetailSheetState extends State<StationDetailSheet> {
               ),
             ),
           );
+
+          // 웹에서 마우스 휠 이벤트가 맵으로 전파되지 않도록 차단
+          if (kIsWeb) {
+            return Listener(
+              onPointerSignal: (event) {
+                // 마우스 휠 이벤트를 감지하여 스크롤 처리
+                if (event is PointerScrollEvent) {
+                  // 스크롤 델타를 사용하여 ScrollController로 직접 스크롤
+                  final delta = event.scrollDelta.dy;
+                  final currentOffset = scrollController.offset;
+                  final maxOffset = scrollController.position.maxScrollExtent;
+                  final minOffset = scrollController.position.minScrollExtent;
+
+                  // 새 오프셋 계산 (범위 내로 제한)
+                  final newOffset = (currentOffset + delta).clamp(minOffset, maxOffset);
+                  scrollController.jumpTo(newOffset);
+                }
+              },
+              child: scrollableContent,
+            );
+          }
+          return scrollableContent;
         },
       ),
     );

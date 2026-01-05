@@ -73,14 +73,58 @@ class _MapScreenState extends State<MapScreen>
       body: Consumer<StationProvider>(
         builder: (context, provider, child) {
           if (provider.isLoading) {
-            return const Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  CircularProgressIndicator(),
-                  SizedBox(height: 16),
-                  Text('데이터 로딩 중...'),
-                ],
+            return Center(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 40),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    // 진행률 바
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(8),
+                      child: LinearProgressIndicator(
+                        value: provider.loadingProgress > 0 ? provider.loadingProgress : null,
+                        minHeight: 12,
+                        backgroundColor: Colors.grey[200],
+                        valueColor: AlwaysStoppedAnimation<Color>(Colors.blue),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    // 진행률 퍼센트
+                    Text(
+                      '${(provider.loadingProgress * 100).toInt()}%',
+                      style: const TextStyle(
+                        fontSize: 24,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.blue,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    // 상태 메시지
+                    Text(
+                      provider.loadingStatus.isNotEmpty
+                          ? provider.loadingStatus
+                          : '데이터 로딩 중...',
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: Colors.grey[600],
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                    // 처리 항목 수 (지오코딩 중일 때)
+                    if (provider.totalItems > 0)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 8),
+                        child: Text(
+                          '${provider.processedItems} / ${provider.totalItems}',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Colors.grey[500],
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
               ),
             );
           }
@@ -131,12 +175,12 @@ class _MapScreenState extends State<MapScreen>
           Expanded(
             child: Row(
               children: [
-                // 지도 (왼쪽 70%)
+                // 지도 (왼쪽 70%) - 카테고리 목록에서는 마커 없이 표시 (최적화)
                 Expanded(
                   flex: 7,
                   child: platform_map.PlatformMapWidget(
                     key: _mapKey,
-                    stations: provider.stationsWithCoordinates,
+                    stations: const [], // 카테고리 목록에서는 마커 표시 안함
                     onMarkerTap: _showStationDetail,
                   ),
                 ),
@@ -190,13 +234,13 @@ class _MapScreenState extends State<MapScreen>
                       ),
                     ),
                   ),
-                  // 지도 - 남은 공간 전체 사용
+                  // 지도 - 남은 공간 전체 사용 (카테고리 목록에서는 마커 없이 표시)
                   Expanded(
                     child: Container(
                       color: const Color(0xFFF0F0F0),
                       child: platform_map.PlatformMapWidget(
                         key: _mapKey,
-                        stations: provider.stationsWithCoordinates,
+                        stations: const [], // 카테고리 목록에서는 마커 표시 안함 (최적화)
                         onMarkerTap: _showStationDetail,
                       ),
                     ),

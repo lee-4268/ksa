@@ -16,6 +16,12 @@ class StationProvider extends ChangeNotifier {
   String _searchQuery = '';
   Set<String> _selectedCategories = {};
 
+  // 진행률 관련 상태
+  double _loadingProgress = 0.0; // 0.0 ~ 1.0
+  String _loadingStatus = ''; // 현재 작업 상태 메시지
+  int _totalItems = 0;
+  int _processedItems = 0;
+
   StationProvider(this._storageService);
 
   List<RadioStation> get stations => _stations;
@@ -23,6 +29,10 @@ class StationProvider extends ChangeNotifier {
       _filteredStations.where((s) => s.hasCoordinates).toList();
   bool get isLoading => _isLoading;
   String? get errorMessage => _errorMessage;
+  double get loadingProgress => _loadingProgress;
+  String get loadingStatus => _loadingStatus;
+  int get totalItems => _totalItems;
+  int get processedItems => _processedItems;
   RadioStation? get selectedStation => _selectedStation;
   String get searchQuery => _searchQuery;
   Set<String> get selectedCategories => _selectedCategories;
@@ -118,24 +128,48 @@ class StationProvider extends ChangeNotifier {
     }
   }
 
+  /// 진행률 업데이트 헬퍼
+  void _updateProgress(double progress, String status, {int? total, int? processed}) {
+    _loadingProgress = progress;
+    _loadingStatus = status;
+    if (total != null) _totalItems = total;
+    if (processed != null) _processedItems = processed;
+    notifyListeners();
+  }
+
   /// Excel 파일에서 무선국 데이터 가져오기
   Future<void> importFromExcel() async {
     _isLoading = true;
     _errorMessage = null;
+    _loadingProgress = 0.0;
+    _loadingStatus = '파일 선택 중...';
+    _totalItems = 0;
+    _processedItems = 0;
     notifyListeners();
 
     try {
       debugPrint('===== Excel Import 시작 =====');
       debugPrint('기존 스테이션 수: ${_stations.length}');
 
+      // 파일 선택 및 파싱 (10%)
+      _updateProgress(0.05, 'Excel 파일 읽는 중...');
+
+      // UI 업데이트를 위한 짧은 지연 (로딩 인디케이터가 표시되도록)
+      await Future.delayed(const Duration(milliseconds: 50));
+
       final result = await _excelService.importExcelFile();
 
       if (result == null) {
         debugPrint('파일 선택 취소됨');
         _isLoading = false;
+        _loadingProgress = 0.0;
+        _loadingStatus = '';
         notifyListeners();
         return;
       }
+
+      _updateProgress(0.15, 'Excel 데이터 분석 중...');
+      await Future.delayed(const Duration(milliseconds: 50));
 
       final importedStations = result.stations;
       debugPrint('파일명: ${result.fileName}');
@@ -145,11 +179,21 @@ class StationProvider extends ChangeNotifier {
         debugPrint('경고: Import된 스테이션이 0개입니다!');
         _errorMessage = '파일에서 데이터를 찾을 수 없습니다. 시트 구조를 확인해주세요.';
         _isLoading = false;
+        _loadingProgress = 0.0;
+        _loadingStatus = '';
         notifyListeners();
         return;
       }
 
-      // 좌표가 없는 무선국에 대해 지오코딩 수행
+      // 좌표가 없는 무선국 수 계산
+      final stationsNeedingGeocode = importedStations.where((s) => !s.hasCoordinates && s.address.isNotEmpty).toList();
+      final totalToGeocode = stationsNeedingGeocode.length;
+      _totalItems = totalToGeocode;
+      _processedItems = 0;
+
+      _updateProgress(0.20, '지오코딩 준비 중... (0/$totalToGeocode)', total: totalToGeocode, processed: 0);
+
+      // 좌표가 없는 무선국에 대해 지오코딩 수행 (20% ~ 90%)
       int geocodedCount = 0;
       for (int i = 0; i < importedStations.length; i++) {
         final station = importedStations[i];
@@ -164,23 +208,40 @@ class StationProvider extends ChangeNotifier {
             );
             geocodedCount++;
           }
+          _processedItems++;
+
+          // 진행률 업데이트 (20% ~ 90% 구간)
+          final geocodeProgress = 0.20 + (0.70 * _processedItems / totalToGeocode);
+          if (_processedItems % 5 == 0 || _processedItems == totalToGeocode) {
+            _updateProgress(geocodeProgress, '주소 변환 중... ($_processedItems/$totalToGeocode)', processed: _processedItems);
+          }
         }
       }
       debugPrint('지오코딩 완료: $geocodedCount개');
 
-      // 저장 및 목록 업데이트
+      // 저장 (90% ~ 100%)
+      _updateProgress(0.92, '데이터 저장 중...');
+      await Future.delayed(const Duration(milliseconds: 50));
+
       debugPrint('저장 전 Storage 스테이션 수: ${_storageService.getAllStations().length}');
       await _storageService.saveStations(importedStations);
       debugPrint('저장 후 Storage 스테이션 수: ${_storageService.getAllStations().length}');
 
+      _updateProgress(0.98, '완료 중...');
+      await Future.delayed(const Duration(milliseconds: 50));
+
       _stations = _storageService.getAllStations();
       debugPrint('최종 _stations 수: ${_stations.length}');
       debugPrint('===== Excel Import 완료 =====');
+
+      _updateProgress(1.0, '완료!');
     } catch (e) {
       debugPrint('Excel 가져오기 오류: $e');
       _errorMessage = 'Excel 가져오기 실패: $e';
     } finally {
       _isLoading = false;
+      _loadingProgress = 0.0;
+      _loadingStatus = '';
       notifyListeners();
     }
   }

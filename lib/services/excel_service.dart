@@ -41,16 +41,32 @@ class ExcelService {
         throw Exception('파일을 읽을 수 없습니다.');
       }
 
-      // excel 패키지로 파싱 (numFmtId 오류 시 전처리 후 재시도)
+      // excel 패키지로 파싱 (numFmtId 오류 시 XML 직접 파싱으로 fallback)
       try {
         final stations = _parseWithExcelPackage(bytes, fileName);
         return ExcelImportResult(stations: stations, fileName: fileName);
       } catch (e) {
         debugPrint('excel 패키지 파싱 실패: $e');
 
-        // numFmtId 오류인 경우 전처리 후 재시도
+        // numFmtId 오류인 경우 - 웹에서는 바로 XML 직접 파싱으로 진행 (UI 응답성 유지)
         if (e.toString().contains('numFmtId')) {
-          debugPrint('numFmtId 오류 감지 - styles.xml 전처리 시도');
+          debugPrint('numFmtId 오류 감지');
+
+          // 웹 환경에서는 무거운 ZIP 재처리 과정을 건너뛰고 바로 XML 직접 파싱
+          if (kIsWeb) {
+            debugPrint('웹 환경 - XML 직접 파싱으로 바로 진행');
+            try {
+              final stations = await _parseXmlDirectly(bytes, fileName);
+              debugPrint('XML 직접 파싱 성공: ${stations.length}개');
+              return ExcelImportResult(stations: stations, fileName: fileName);
+            } catch (e4) {
+              debugPrint('XML 직접 파싱도 실패: $e4');
+              throw Exception('Excel 파일 파싱 실패. 지원되지 않는 형식이거나 파일이 손상되었습니다.');
+            }
+          }
+
+          // 모바일 환경에서는 기존 로직 유지 (isolate 사용 가능)
+          debugPrint('모바일 환경 - styles.xml 전처리 시도');
           try {
             final fixedBytes = _fixNumFmtIdInExcel(bytes);
             debugPrint('전처리된 바이트 크기: ${fixedBytes.length}');
@@ -70,10 +86,10 @@ class ExcelService {
             } catch (e3) {
               debugPrint('원본 파일 파싱도 실패: $e3');
 
-              // 최후의 수단: XML 직접 파싱
+              // 최후의 수단: XML 직접 파싱 (비동기)
               debugPrint('XML 직접 파싱 시도 중...');
               try {
-                final stations = _parseXmlDirectly(bytes, fileName);
+                final stations = await _parseXmlDirectly(bytes, fileName);
                 debugPrint('XML 직접 파싱 성공: ${stations.length}개');
                 return ExcelImportResult(stations: stations, fileName: fileName);
               } catch (e4) {
@@ -287,9 +303,13 @@ class ExcelService {
 
   /// XML 직접 파싱 (excel 패키지 우회)
   /// xlsx 파일 내 XML 파일들을 직접 파싱하여 데이터 추출
-  List<RadioStation> _parseXmlDirectly(List<int> bytes, String categoryName) {
+  /// 비동기로 처리하여 웹에서 UI 응답성 유지
+  Future<List<RadioStation>> _parseXmlDirectly(List<int> bytes, String categoryName) async {
     try {
+      // ZIP 디코딩 후 UI 응답성을 위해 yield
       final archive = ZipDecoder().decodeBytes(bytes);
+      await Future.delayed(Duration.zero); // UI 응답성 유지
+
       final List<RadioStation> stations = [];
 
       // sharedStrings.xml에서 공유 문자열 추출
@@ -299,6 +319,8 @@ class ExcelService {
           final content = file.content;
           if (content != null) {
             final xmlStr = utf8.decode(content as List<int>);
+            await Future.delayed(Duration.zero); // UI 응답성 유지
+
             // <t> 태그 내용 추출
             final tPattern = RegExp(r'<t[^>]*>([^<]*)</t>', multiLine: true);
             for (final match in tPattern.allMatches(xmlStr)) {
@@ -309,15 +331,86 @@ class ExcelService {
         }
       }
       debugPrint('공유 문자열 수: ${sharedStrings.length}');
+      await Future.delayed(Duration.zero); // UI 응답성 유지
 
-      // 대상 시트 찾기 (검사신청내역 우선)
+      // workbook.xml에서 시트 이름과 ID 매핑 추출
+      final sheetNameToId = <String, String>{};
+      final sheetIdToRId = <String, String>{};
+      for (final file in archive) {
+        if (file.isFile && file.name.toLowerCase().contains('workbook.xml') && !file.name.toLowerCase().contains('.rels')) {
+          final content = file.content;
+          if (content != null) {
+            final xmlStr = utf8.decode(content as List<int>);
+            // <sheet name="시트명" sheetId="1" r:id="rId1"/> 패턴
+            final sheetPattern = RegExp(r'<sheet[^>]*name="([^"]*)"[^>]*sheetId="(\d+)"[^>]*r:id="([^"]*)"', multiLine: true);
+            for (final match in sheetPattern.allMatches(xmlStr)) {
+              final name = match.group(1) ?? '';
+              final sheetId = match.group(2) ?? '';
+              final rId = match.group(3) ?? '';
+              sheetNameToId[name] = sheetId;
+              sheetIdToRId[sheetId] = rId;
+              debugPrint('시트 발견: "$name" (sheetId=$sheetId, rId=$rId)');
+            }
+          }
+          break;
+        }
+      }
+
+      // workbook.xml.rels에서 rId와 실제 파일 경로 매핑
+      final rIdToPath = <String, String>{};
+      for (final file in archive) {
+        if (file.isFile && file.name.toLowerCase().contains('workbook.xml.rels')) {
+          final content = file.content;
+          if (content != null) {
+            final xmlStr = utf8.decode(content as List<int>);
+            // <Relationship Id="rId1" Target="worksheets/sheet1.xml" .../>
+            final relPattern = RegExp(r'<Relationship[^>]*Id="([^"]*)"[^>]*Target="([^"]*)"', multiLine: true);
+            for (final match in relPattern.allMatches(xmlStr)) {
+              final rId = match.group(1) ?? '';
+              final target = match.group(2) ?? '';
+              rIdToPath[rId] = target;
+              debugPrint('관계: $rId -> $target');
+            }
+          }
+          break;
+        }
+      }
+
+      // 대상 시트 이름 결정 (검사신청내역 우선)
+      final targetSheetName = _findTargetSheet(sheetNameToId.keys.toList());
+      debugPrint('선택된 시트 이름: $targetSheetName');
+
+      // 선택된 시트의 파일 경로 찾기
+      String? targetSheetPath;
+      if (sheetNameToId.containsKey(targetSheetName)) {
+        final sheetId = sheetNameToId[targetSheetName]!;
+        final rId = sheetIdToRId[sheetId];
+        if (rId != null && rIdToPath.containsKey(rId)) {
+          targetSheetPath = rIdToPath[rId]!;
+          // 상대 경로를 절대 경로로 변환
+          if (!targetSheetPath.startsWith('xl/')) {
+            targetSheetPath = 'xl/$targetSheetPath';
+          }
+        }
+      }
+      debugPrint('대상 시트 파일 경로: $targetSheetPath');
+
+      // 대상 시트 파일 찾기
       ArchiveFile? targetSheet;
       for (final file in archive) {
         if (file.isFile && file.name.toLowerCase().contains('worksheets/sheet')) {
-          targetSheet = file;
-          // sheet1이면 우선 사용, 다른 시트가 있으면 계속 찾기
-          if (file.name.toLowerCase().contains('sheet1.xml')) {
-            break;
+          // 경로가 지정된 경우 해당 파일만 선택
+          if (targetSheetPath != null) {
+            if (file.name.toLowerCase().endsWith(targetSheetPath.toLowerCase().split('/').last)) {
+              targetSheet = file;
+              break;
+            }
+          } else {
+            // 경로를 찾지 못한 경우 sheet1.xml 사용
+            targetSheet = file;
+            if (file.name.toLowerCase().contains('sheet1.xml')) {
+              break;
+            }
           }
         }
       }
@@ -326,13 +419,15 @@ class ExcelService {
         throw Exception('워크시트를 찾을 수 없습니다.');
       }
 
-      debugPrint('대상 시트: ${targetSheet.name}');
+      debugPrint('대상 시트 파일: ${targetSheet.name}');
       final sheetXml = utf8.decode(targetSheet.content as List<int>);
+      await Future.delayed(Duration.zero); // UI 응답성 유지
 
       // 행 추출: <row> 태그
       final rowPattern = RegExp(r'<row[^>]*>(.*?)</row>', multiLine: true, dotAll: true);
       final rows = rowPattern.allMatches(sheetXml).toList();
       debugPrint('총 행 수: ${rows.length}');
+      await Future.delayed(Duration.zero); // UI 응답성 유지
 
       if (rows.isEmpty) {
         throw Exception('데이터가 없습니다.');
@@ -340,7 +435,12 @@ class ExcelService {
 
       // 첫 번째 행을 헤더로 사용
       final headerRow = rows.first;
-      final headerCells = _extractCellsFromRow(headerRow.group(1) ?? '', sharedStrings);
+      final headerRowContent = headerRow.group(1) ?? '';
+
+      // 디버깅: 첫 번째 행 XML 구조 출력 (처음 500자만)
+      debugPrint('첫 번째 행 XML (처음 500자): ${headerRowContent.length > 500 ? headerRowContent.substring(0, 500) : headerRowContent}');
+
+      final headerCells = _extractCellsFromRow(headerRowContent, sharedStrings);
       debugPrint('헤더: $headerCells');
 
       // 헤더 매핑
@@ -356,7 +456,8 @@ class ExcelService {
         _autoMapColumns(headerCells.length, columnMap);
       }
 
-      // 데이터 행 파싱
+      // 데이터 행 파싱 (청크 단위로 처리하여 UI 응답성 유지)
+      const int chunkSize = 20; // 20개 행마다 이벤트 루프에 제어권 반환
       for (int i = 1; i < rows.length; i++) {
         final rowContent = rows[i].group(1) ?? '';
         final cells = _extractCellsFromRow(rowContent, sharedStrings);
@@ -386,6 +487,11 @@ class ExcelService {
           typeApprovalNumber: getCellValue('typeApprovalNumber').isNotEmpty ? getCellValue('typeApprovalNumber') : null,
           categoryName: categoryName,
         ));
+
+        // 청크 단위로 이벤트 루프에 제어권 반환 (웹 UI 응답성 유지)
+        if (i % chunkSize == 0) {
+          await Future.delayed(Duration.zero);
+        }
       }
 
       debugPrint('XML 직접 파싱 완료: ${stations.length}개');
@@ -400,17 +506,39 @@ class ExcelService {
   List<String> _extractCellsFromRow(String rowXml, List<String> sharedStrings) {
     final cells = <String>[];
 
-    // <c> 태그 추출 (셀)
-    final cellPattern = RegExp(r'<c\s+r="([A-Z]+)(\d+)"[^>]*(?:t="([^"]*)")?[^>]*>(?:<v>([^<]*)</v>)?', multiLine: true);
-
     // 모든 셀 위치를 추적
     final cellMap = <int, String>{};
     int maxCol = 0;
 
-    for (final match in cellPattern.allMatches(rowXml)) {
-      final colLetter = match.group(1) ?? 'A';
-      final cellType = match.group(3); // s = shared string, n = number, etc.
-      final cellValue = match.group(4) ?? '';
+    // 방법 1: <c ... >...</c> 형태 (내용이 있는 셀)
+    // 공백이 있든 없든 매칭되도록 \s* 사용
+    final cellWithContentPattern = RegExp(r'<c\s*([^>]*)>(.*?)</c>', multiLine: true, dotAll: true);
+
+    for (final match in cellWithContentPattern.allMatches(rowXml)) {
+      final attributes = match.group(1) ?? '';
+      final content = match.group(2) ?? '';
+
+      // r 속성에서 셀 위치 추출 (예: r="A1", r="AB123")
+      final rMatch = RegExp(r'r="([A-Z]+)(\d+)"').firstMatch(attributes);
+      if (rMatch == null) continue;
+
+      final colLetter = rMatch.group(1) ?? 'A';
+
+      // t 속성 추출 (셀 타입: s=shared string, n=number, b=boolean, inlineStr 등)
+      final tMatch = RegExp(r't="([^"]*)"').firstMatch(attributes);
+      final cellType = tMatch?.group(1);
+
+      // <v> 태그에서 값 추출
+      final vMatch = RegExp(r'<v>([^<]*)</v>').firstMatch(content);
+      String cellValue = vMatch?.group(1) ?? '';
+
+      // inlineStr 타입의 경우 <is><t>값</t></is> 형태
+      if (cellType == 'inlineStr' || cellValue.isEmpty) {
+        final isMatch = RegExp(r'<is>\s*<t[^>]*>([^<]*)</t>\s*</is>').firstMatch(content);
+        if (isMatch != null) {
+          cellValue = isMatch.group(1) ?? '';
+        }
+      }
 
       // 열 문자를 인덱스로 변환 (A=0, B=1, ..., Z=25, AA=26, ...)
       int colIndex = 0;
@@ -427,8 +555,13 @@ class ExcelService {
         final idx = int.tryParse(cellValue);
         if (idx != null && idx < sharedStrings.length) {
           value = sharedStrings[idx];
+        } else {
+          debugPrint('SharedString 인덱스 오류: idx=$idx, 총 ${sharedStrings.length}개');
         }
-      } else {
+      } else if (cellType == 'inlineStr') {
+        // inline string은 이미 cellValue에 텍스트가 들어있음
+        value = cellValue;
+      } else if (cellValue.isNotEmpty) {
         value = cellValue;
       }
 
