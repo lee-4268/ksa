@@ -4,13 +4,13 @@
     "apiName": "ksa",
     "serviceName": "AppSync",
     "defaultAuthType": {
-      "mode": "API_KEY",
-      "expirationTime": 7
+      "mode": "AMAZON_COGNITO_USER_POOLS",
+      "cognitoUserPoolId": "authksa8482f846"
     },
     "additionalAuthTypes": [
       {
-        "mode": "AMAZON_COGNITO_USER_POOLS",
-        "cognitoUserPoolId": "authksa8482f846"
+        "mode": "API_KEY",
+        "expirationTime": 7
       }
     ]
   }

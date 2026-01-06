@@ -86,7 +86,8 @@
       "Bash(dir /s /b \"c:\\\\Users\\\\user\\\\Desktop\\\\year_26\\\\ATDT\\\\Flutter\\\\ksa\\\\ksa\\\\lib\\\\*.dart\")",
       "Bash(cmd /c \"dir /s /b c:\\\\Users\\\\user\\\\Desktop\\\\year_26\\\\ATDT\\\\Flutter\\\\ksa\\\\ksa\\\\lib\\\\*.dart\")",
       "Bash(amplify status:*)",
-      "Bash(amplify add hosting:*)"
+      "Bash(amplify add hosting:*)",
+      "Bash(amplify push:*)"
     ]
   }
 }
