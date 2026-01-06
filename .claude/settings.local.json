@@ -82,7 +82,11 @@
       "Bash(cmd /c \"start /b python -m http.server 8080 -d build/web\")",
       "Bash(cmd /c \"python -m http.server 8080 -d build/web\")",
       "Bash(python -m http.server:*)",
-      "Bash(cmd /c \"netstat -ano | findstr :8080\")"
+      "Bash(cmd /c \"netstat -ano | findstr :8080\")",
+      "Bash(dir /s /b \"c:\\\\Users\\\\user\\\\Desktop\\\\year_26\\\\ATDT\\\\Flutter\\\\ksa\\\\ksa\\\\lib\\\\*.dart\")",
+      "Bash(cmd /c \"dir /s /b c:\\\\Users\\\\user\\\\Desktop\\\\year_26\\\\ATDT\\\\Flutter\\\\ksa\\\\ksa\\\\lib\\\\*.dart\")",
+      "Bash(amplify status:*)",
+      "Bash(amplify add hosting:*)"
     ]
   }
 }

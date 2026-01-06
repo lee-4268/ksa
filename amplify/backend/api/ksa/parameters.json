@@ -1,0 +1,11 @@
+{
+  "AppSyncApiName": "ksa",
+  "DynamoDBBillingMode": "PAY_PER_REQUEST",
+  "DynamoDBEnableServerSideEncryption": false,
+  "AuthCognitoUserPoolId": {
+    "Fn::GetAtt": [
+      "authksa8482f846",
+      "Outputs.UserPoolId"
+    ]
+  }
+}

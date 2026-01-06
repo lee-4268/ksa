@@ -3,11 +3,13 @@ import '../models/radio_station.dart';
 import '../services/excel_service.dart';
 import '../services/geocoding_service.dart';
 import '../services/storage_service.dart';
+import '../services/cloud_data_service.dart';
 
 class StationProvider extends ChangeNotifier {
   final StorageService _storageService;
   final ExcelService _excelService = ExcelService();
   final GeocodingService _geocodingService = GeocodingService();
+  CloudDataService? _cloudDataService;
 
   List<RadioStation> _stations = [];
   bool _isLoading = false;
@@ -367,6 +369,151 @@ class StationProvider extends ChangeNotifier {
   void clearError() {
     _errorMessage = null;
     notifyListeners();
+  }
+
+  /// CloudDataService 설정
+  void setCloudDataService(CloudDataService service) {
+    _cloudDataService = service;
+  }
+
+  // ==================== 클라우드 동기화 기능 ====================
+
+  /// 카테고리별 데이터를 클라우드로 업로드
+  Future<bool> syncCategoryToCloud(String category) async {
+    if (_cloudDataService == null) {
+      _errorMessage = '클라우드 서비스가 초기화되지 않았습니다.';
+      notifyListeners();
+      return false;
+    }
+
+    _isLoading = true;
+    _loadingStatus = '클라우드 업로드 중...';
+    notifyListeners();
+
+    try {
+      final categoryStations = stationsByCategory[category] ?? [];
+      if (categoryStations.isEmpty) {
+        _errorMessage = '업로드할 데이터가 없습니다.';
+        _isLoading = false;
+        notifyListeners();
+        return false;
+      }
+
+      final success = await _cloudDataService!.syncLocalToCloud(
+        categoryName: category,
+        stations: categoryStations,
+      );
+
+      _isLoading = false;
+      _loadingStatus = '';
+      notifyListeners();
+
+      return success;
+    } catch (e) {
+      _errorMessage = '클라우드 업로드 실패: $e';
+      _isLoading = false;
+      _loadingStatus = '';
+      notifyListeners();
+      return false;
+    }
+  }
+
+  /// 모든 카테고리를 클라우드로 업로드
+  Future<bool> syncAllToCloud() async {
+    if (_cloudDataService == null) {
+      _errorMessage = '클라우드 서비스가 초기화되지 않았습니다.';
+      notifyListeners();
+      return false;
+    }
+
+    _isLoading = true;
+    _loadingStatus = '클라우드 업로드 준비 중...';
+    _totalItems = categories.length;
+    _processedItems = 0;
+    notifyListeners();
+
+    try {
+      bool allSuccess = true;
+
+      for (final category in categories) {
+        _loadingStatus = '$category 업로드 중...';
+        notifyListeners();
+
+        final categoryStations = stationsByCategory[category] ?? [];
+        if (categoryStations.isNotEmpty) {
+          final success = await _cloudDataService!.syncLocalToCloud(
+            categoryName: category,
+            stations: categoryStations,
+          );
+          if (!success) allSuccess = false;
+        }
+
+        _processedItems++;
+        _loadingProgress = _processedItems / _totalItems;
+        notifyListeners();
+      }
+
+      _isLoading = false;
+      _loadingStatus = '';
+      _loadingProgress = 0.0;
+      notifyListeners();
+
+      return allSuccess;
+    } catch (e) {
+      _errorMessage = '클라우드 업로드 실패: $e';
+      _isLoading = false;
+      _loadingStatus = '';
+      _loadingProgress = 0.0;
+      notifyListeners();
+      return false;
+    }
+  }
+
+  /// 클라우드에서 데이터 다운로드
+  Future<bool> syncFromCloud() async {
+    if (_cloudDataService == null) {
+      _errorMessage = '클라우드 서비스가 초기화되지 않았습니다.';
+      notifyListeners();
+      return false;
+    }
+
+    _isLoading = true;
+    _loadingStatus = '클라우드에서 다운로드 중...';
+    notifyListeners();
+
+    try {
+      final cloudData = await _cloudDataService!.syncCloudToLocal();
+
+      if (cloudData.isEmpty) {
+        _isLoading = false;
+        _loadingStatus = '';
+        notifyListeners();
+        return true; // 데이터가 없어도 성공
+      }
+
+      _loadingStatus = '데이터 저장 중...';
+      notifyListeners();
+
+      // 다운로드한 데이터를 로컬에 저장
+      for (final entry in cloudData.entries) {
+        await _storageService.saveStations(entry.value);
+      }
+
+      // 로컬 데이터 다시 로드
+      _stations = _storageService.getAllStations();
+
+      _isLoading = false;
+      _loadingStatus = '';
+      notifyListeners();
+
+      return true;
+    } catch (e) {
+      _errorMessage = '클라우드 다운로드 실패: $e';
+      _isLoading = false;
+      _loadingStatus = '';
+      notifyListeners();
+      return false;
+    }
   }
 
   /// 카테고리별 데이터를 Excel로 내보내기

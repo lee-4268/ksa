@@ -3,8 +3,11 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../models/radio_station.dart';
 import '../providers/station_provider.dart';
+import '../services/auth_service.dart';
+import '../services/cloud_data_service.dart';
 import '../widgets/station_detail_sheet.dart';
 import 'roadview_screen.dart';
+import 'login_screen.dart';
 
 // 조건부 import
 import 'map_screen_web.dart' if (dart.library.io) 'map_screen_mobile.dart'
@@ -665,6 +668,71 @@ class _MapScreenState extends State<MapScreen>
                 ),
               ),
             ),
+
+          // 사용자 정보 및 메뉴 헤더
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                // 사용자 이메일 표시
+                Consumer<AuthService>(
+                  builder: (context, authService, _) {
+                    return Row(
+                      children: [
+                        Icon(Icons.person, size: 18, color: Colors.grey[600]),
+                        const SizedBox(width: 4),
+                        Text(
+                          authService.userEmail ?? '사용자',
+                          style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                        ),
+                      ],
+                    );
+                  },
+                ),
+                // 메뉴 버튼
+                PopupMenuButton<String>(
+                  onSelected: (value) => _handleMenuAction(value),
+                  itemBuilder: (context) => [
+                    const PopupMenuItem(
+                      value: 'sync_upload',
+                      child: Row(
+                        children: [
+                          Icon(Icons.cloud_upload, size: 20),
+                          SizedBox(width: 8),
+                          Text('클라우드 업로드'),
+                        ],
+                      ),
+                    ),
+                    const PopupMenuItem(
+                      value: 'sync_download',
+                      child: Row(
+                        children: [
+                          Icon(Icons.cloud_download, size: 20),
+                          SizedBox(width: 8),
+                          Text('클라우드 다운로드'),
+                        ],
+                      ),
+                    ),
+                    const PopupMenuDivider(),
+                    const PopupMenuItem(
+                      value: 'logout',
+                      child: Row(
+                        children: [
+                          Icon(Icons.logout, size: 20, color: Colors.red),
+                          SizedBox(width: 8),
+                          Text('로그아웃', style: TextStyle(color: Colors.red)),
+                        ],
+                      ),
+                    ),
+                  ],
+                  icon: Icon(Icons.more_vert, color: Colors.grey[600]),
+                ),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 8),
 
           // 전체 리스트 헤더
           Padding(
@@ -1483,6 +1551,147 @@ class _MapScreenState extends State<MapScreen>
         SnackBar(
           content: Text('${provider.stations.length}개의 무선국을 가져왔습니다.'),
         ),
+      );
+    }
+  }
+
+  /// 메뉴 액션 처리
+  Future<void> _handleMenuAction(String action) async {
+    switch (action) {
+      case 'sync_upload':
+        await _syncToCloud();
+        break;
+      case 'sync_download':
+        await _syncFromCloud();
+        break;
+      case 'logout':
+        await _handleLogout();
+        break;
+    }
+  }
+
+  /// 클라우드로 데이터 업로드
+  Future<void> _syncToCloud() async {
+    final provider = context.read<StationProvider>();
+    final cloudService = context.read<CloudDataService>();
+
+    // CloudDataService 연결
+    provider.setCloudDataService(cloudService);
+
+    if (provider.categories.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('업로드할 데이터가 없습니다.')),
+        );
+      }
+      return;
+    }
+
+    // 확인 다이얼로그
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('클라우드 업로드'),
+        content: Text('${provider.categories.length}개의 카테고리를 클라우드에 업로드하시겠습니까?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('취소'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('업로드'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    final success = await provider.syncAllToCloud();
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(success ? '클라우드 업로드가 완료되었습니다.' : '클라우드 업로드에 실패했습니다.'),
+          backgroundColor: success ? Colors.green : Colors.red,
+        ),
+      );
+    }
+  }
+
+  /// 클라우드에서 데이터 다운로드
+  Future<void> _syncFromCloud() async {
+    final provider = context.read<StationProvider>();
+    final cloudService = context.read<CloudDataService>();
+
+    // CloudDataService 연결
+    provider.setCloudDataService(cloudService);
+
+    // 확인 다이얼로그
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('클라우드 다운로드'),
+        content: const Text('클라우드에서 데이터를 다운로드하시겠습니까?\n기존 로컬 데이터와 병합됩니다.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('취소'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('다운로드'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    final success = await provider.syncFromCloud();
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(success ? '클라우드 다운로드가 완료되었습니다.' : '클라우드 다운로드에 실패했습니다.'),
+          backgroundColor: success ? Colors.green : Colors.red,
+        ),
+      );
+    }
+  }
+
+  /// 로그아웃 처리
+  Future<void> _handleLogout() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('로그아웃'),
+        content: const Text('로그아웃 하시겠습니까?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('취소'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: const Text('로그아웃'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    final authService = context.read<AuthService>();
+    await authService.signOut();
+
+    if (mounted) {
+      Navigator.pushAndRemoveUntil(
+        context,
+        MaterialPageRoute(builder: (_) => const LoginScreen()),
+        (route) => false,
       );
     }
   }
