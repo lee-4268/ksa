@@ -52,7 +52,11 @@ class _MapScreenState extends State<MapScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      context.read<StationProvider>().loadStations();
+      // CloudDataService 연결 후 데이터 로드
+      final provider = context.read<StationProvider>();
+      final cloudService = context.read<CloudDataService>();
+      provider.setCloudDataService(cloudService);
+      provider.loadStations();
     });
   }
 

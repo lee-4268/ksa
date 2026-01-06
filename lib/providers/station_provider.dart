@@ -24,6 +24,11 @@ class StationProvider extends ChangeNotifier {
   int _totalItems = 0;
   int _processedItems = 0;
 
+  // 클라우드 ID 매핑 (로컬 ID -> 클라우드 ID)
+  final Map<String, String> _cloudIdMap = {};
+  // 카테고리 클라우드 ID 매핑 (카테고리명 -> 클라우드 카테고리 ID)
+  final Map<String, String> _cloudCategoryIdMap = {};
+
   StationProvider(this._storageService);
 
   List<RadioStation> get stations => _stations;
@@ -114,19 +119,89 @@ class StationProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// 저장된 무선국 데이터 로드
+  /// 저장된 무선국 데이터 로드 (클라우드 우선)
   Future<void> loadStations() async {
     _isLoading = true;
     _errorMessage = null;
     notifyListeners();
 
     try {
+      // 클라우드에서 데이터 로드 시도
+      if (_cloudDataService != null) {
+        _loadingStatus = '클라우드에서 데이터 로드 중...';
+        notifyListeners();
+
+        final cloudSuccess = await _loadFromCloud();
+        if (cloudSuccess) {
+          debugPrint('클라우드에서 데이터 로드 완료: ${_stations.length}개');
+          _isLoading = false;
+          _loadingStatus = '';
+          notifyListeners();
+          return;
+        }
+      }
+
+      // 클라우드 실패 시 로컬에서 로드 (fallback)
+      debugPrint('로컬에서 데이터 로드 시도');
       _stations = _storageService.getAllStations();
+      debugPrint('로컬에서 로드 완료: ${_stations.length}개');
     } catch (e) {
       _errorMessage = '데이터 로드 실패: $e';
+      debugPrint(_errorMessage);
     } finally {
       _isLoading = false;
+      _loadingStatus = '';
       notifyListeners();
+    }
+  }
+
+  /// 클라우드에서 데이터 로드 (내부 함수)
+  Future<bool> _loadFromCloud() async {
+    if (_cloudDataService == null) return false;
+
+    try {
+      final cloudData = await _cloudDataService!.syncCloudToLocal();
+
+      // 클라우드에 데이터가 없으면 로컬 데이터 유지
+      if (cloudData.isEmpty) {
+        debugPrint('클라우드에 데이터 없음, 로컬 데이터 유지');
+        _stations = _storageService.getAllStations();
+        return true;
+      }
+
+      // 클라우드 데이터로 교체
+      await _storageService.clearAllStations();
+      _stations.clear();
+      _cloudIdMap.clear();
+      _cloudCategoryIdMap.clear();
+
+      // 카테고리 목록 조회
+      final categories = await _cloudDataService!.listCategories();
+      for (final cat in categories) {
+        final catName = cat['name'] as String;
+        final catId = cat['id'] as String;
+        _cloudCategoryIdMap[catName] = catId;
+      }
+
+      for (final entry in cloudData.entries) {
+        final categoryName = entry.key;
+        final stations = entry.value;
+
+        // 스테이션 저장 (로컬 캐시)
+        for (final station in stations) {
+          final stationWithCategory = station.copyWith(categoryName: categoryName);
+          await _storageService.saveStation(stationWithCategory);
+          _stations.add(stationWithCategory);
+
+          // 클라우드 ID 매핑
+          _cloudIdMap[stationWithCategory.id] = station.id;
+        }
+      }
+
+      return true;
+    } catch (e) {
+      debugPrint('클라우드에서 데이터 로드 실패: $e');
+      return false;
     }
   }
 
@@ -221,7 +296,69 @@ class StationProvider extends ChangeNotifier {
       }
       debugPrint('지오코딩 완료: $geocodedCount개');
 
-      // 저장 (90% ~ 100%)
+      final categoryName = result.fileName;
+
+      // ==================== 클라우드 업로드 (자동) ====================
+      if (_cloudDataService != null) {
+        _updateProgress(0.60, '클라우드에 업로드 중...');
+        await Future.delayed(const Duration(milliseconds: 50));
+
+        try {
+          // 1. 카테고리 생성 또는 조회
+          String? cloudCategoryId = _cloudCategoryIdMap[categoryName];
+
+          if (cloudCategoryId == null) {
+            // 기존 카테고리 확인
+            final categories = await _cloudDataService!.listCategories();
+            for (final cat in categories) {
+              if (cat['name'] == categoryName) {
+                cloudCategoryId = cat['id'] as String;
+                _cloudCategoryIdMap[categoryName] = cloudCategoryId;
+                break;
+              }
+            }
+
+            // 없으면 새로 생성
+            if (cloudCategoryId == null) {
+              cloudCategoryId = await _cloudDataService!.createCategory(categoryName);
+              if (cloudCategoryId != null) {
+                _cloudCategoryIdMap[categoryName] = cloudCategoryId;
+              }
+            }
+          }
+
+          // 2. 각 무선국 클라우드 업로드
+          if (cloudCategoryId != null) {
+            final totalStations = importedStations.length;
+            int uploadedCount = 0;
+
+            for (int i = 0; i < importedStations.length; i++) {
+              final station = importedStations[i];
+
+              // 클라우드에 업로드
+              final cloudStationId = await _cloudDataService!.createStation(station, cloudCategoryId);
+
+              if (cloudStationId != null) {
+                _cloudIdMap[station.id] = cloudStationId;
+                uploadedCount++;
+              }
+
+              // 진행률 업데이트 (60% ~ 90%)
+              final uploadProgress = 0.60 + (0.30 * (i + 1) / totalStations);
+              if ((i + 1) % 5 == 0 || i == totalStations - 1) {
+                _updateProgress(uploadProgress, '클라우드 업로드 중... (${i + 1}/$totalStations)');
+              }
+            }
+
+            debugPrint('클라우드 업로드 완료: $uploadedCount/$totalStations');
+          }
+        } catch (cloudError) {
+          debugPrint('클라우드 업로드 오류 (로컬만 저장): $cloudError');
+          // 클라우드 오류 시 로컬에만 저장
+        }
+      }
+
+      // 로컬 저장 (캐시)
       _updateProgress(0.92, '데이터 저장 중...');
       await Future.delayed(const Duration(milliseconds: 50));
 
