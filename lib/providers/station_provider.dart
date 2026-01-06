@@ -155,56 +155,6 @@ class StationProvider extends ChangeNotifier {
     }
   }
 
-  /// 클라우드에서 데이터 로드 (내부 함수)
-  Future<bool> _loadFromCloud() async {
-    if (_cloudDataService == null) return false;
-
-    try {
-      final cloudData = await _cloudDataService!.syncCloudToLocal();
-
-      // 클라우드에 데이터가 없으면 로컬 데이터 유지
-      if (cloudData.isEmpty) {
-        debugPrint('클라우드에 데이터 없음, 로컬 데이터 유지');
-        _stations = _storageService.getAllStations();
-        return true;
-      }
-
-      // 클라우드 데이터로 교체
-      await _storageService.clearAllStations();
-      _stations.clear();
-      _cloudIdMap.clear();
-      _cloudCategoryIdMap.clear();
-
-      // 카테고리 목록 조회
-      final categories = await _cloudDataService!.listCategories();
-      for (final cat in categories) {
-        final catName = cat['name'] as String;
-        final catId = cat['id'] as String;
-        _cloudCategoryIdMap[catName] = catId;
-      }
-
-      for (final entry in cloudData.entries) {
-        final categoryName = entry.key;
-        final stations = entry.value;
-
-        // 스테이션 저장 (로컬 캐시)
-        for (final station in stations) {
-          final stationWithCategory = station.copyWith(categoryName: categoryName);
-          await _storageService.saveStation(stationWithCategory);
-          _stations.add(stationWithCategory);
-
-          // 클라우드 ID 매핑
-          _cloudIdMap[stationWithCategory.id] = station.id;
-        }
-      }
-
-      return true;
-    } catch (e) {
-      debugPrint('클라우드에서 데이터 로드 실패: $e');
-      return false;
-    }
-  }
-
   /// 진행률 업데이트 헬퍼
   void _updateProgress(double progress, String status, {int? total, int? processed}) {
     _loadingProgress = progress;
@@ -391,7 +341,7 @@ class StationProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// 메모 업데이트
+  /// 메모 업데이트 (자동 클라우드 동기화)
   Future<void> updateMemo(String id, String memo) async {
     try {
       await _storageService.updateMemo(id, memo);
@@ -402,6 +352,9 @@ class StationProvider extends ChangeNotifier {
           _selectedStation = _stations[index];
         }
         notifyListeners();
+
+        // 클라우드 동기화 (백그라운드)
+        _syncStationToCloud(_stations[index]);
       }
     } catch (e) {
       _errorMessage = '메모 저장 실패: $e';
@@ -409,7 +362,7 @@ class StationProvider extends ChangeNotifier {
     }
   }
 
-  /// 검사 완료 상태 업데이트
+  /// 검사 완료 상태 업데이트 (자동 클라우드 동기화)
   Future<void> updateInspectionStatus(String id, bool isInspected) async {
     try {
       await _storageService.updateInspectionStatus(id, isInspected);
@@ -423,6 +376,9 @@ class StationProvider extends ChangeNotifier {
           _selectedStation = _stations[index];
         }
         notifyListeners();
+
+        // 클라우드 동기화 (백그라운드)
+        _syncStationToCloud(_stations[index]);
       }
     } catch (e) {
       _errorMessage = '상태 업데이트 실패: $e';
@@ -430,7 +386,7 @@ class StationProvider extends ChangeNotifier {
     }
   }
 
-  /// 사진 경로 업데이트
+  /// 사진 경로 업데이트 (자동 클라우드 동기화)
   Future<void> updatePhotoPaths(String id, List<String> photoPaths) async {
     try {
       await _storageService.updatePhotoPaths(id, photoPaths);
@@ -441,6 +397,9 @@ class StationProvider extends ChangeNotifier {
           _selectedStation = _stations[index];
         }
         notifyListeners();
+
+        // 클라우드 동기화 (백그라운드)
+        _syncStationToCloud(_stations[index]);
       }
     } catch (e) {
       _errorMessage = '사진 저장 실패: $e';
@@ -448,9 +407,20 @@ class StationProvider extends ChangeNotifier {
     }
   }
 
-  /// 무선국 삭제
+  /// 무선국 삭제 (자동 클라우드 동기화)
   Future<void> deleteStation(String id) async {
     try {
+      // 클라우드에서 먼저 삭제 시도
+      final cloudId = _cloudIdMap[id];
+      if (_cloudDataService != null && cloudId != null) {
+        try {
+          await _cloudDataService!.deleteStation(cloudId);
+        } catch (e) {
+          debugPrint('클라우드 삭제 실패: $e');
+        }
+        _cloudIdMap.remove(id);
+      }
+
       await _storageService.deleteStation(id);
       _stations.removeWhere((s) => s.id == id);
       if (_selectedStation?.id == id) {
@@ -463,12 +433,58 @@ class StationProvider extends ChangeNotifier {
     }
   }
 
-  /// 카테고리별 데이터 삭제
+  /// 단일 스테이션 클라우드 동기화 (백그라운드)
+  Future<void> _syncStationToCloud(RadioStation station) async {
+    if (_cloudDataService == null) return;
+
+    try {
+      final cloudId = _cloudIdMap[station.id];
+      final categoryName = station.categoryName ?? '기타';
+      final cloudCategoryId = _cloudCategoryIdMap[categoryName];
+
+      if (cloudId != null && cloudCategoryId != null) {
+        // 기존 스테이션 업데이트
+        await _cloudDataService!.updateStation(station, cloudCategoryId);
+        debugPrint('클라우드 동기화 완료: ${station.id}');
+      } else if (cloudCategoryId != null) {
+        // 새 스테이션 생성
+        final newCloudId = await _cloudDataService!.createStation(station, cloudCategoryId);
+        if (newCloudId != null) {
+          _cloudIdMap[station.id] = newCloudId;
+          debugPrint('클라우드에 새 스테이션 생성: ${station.id} -> $newCloudId');
+        }
+      }
+    } catch (e) {
+      debugPrint('클라우드 동기화 오류 (무시됨): $e');
+    }
+  }
+
+  /// 카테고리별 데이터 삭제 (자동 클라우드 동기화)
   Future<void> deleteCategoryData(String category) async {
     try {
       final stationsToDelete = _stations
           .where((s) => (s.categoryName ?? '기타') == category)
           .toList();
+
+      // 클라우드에서 카테고리 삭제
+      final cloudCategoryId = _cloudCategoryIdMap[category];
+      if (_cloudDataService != null && cloudCategoryId != null) {
+        try {
+          // 먼저 해당 카테고리의 모든 스테이션 삭제
+          for (final station in stationsToDelete) {
+            final cloudId = _cloudIdMap[station.id];
+            if (cloudId != null) {
+              await _cloudDataService!.deleteStation(cloudId);
+              _cloudIdMap.remove(station.id);
+            }
+          }
+          // 카테고리 삭제
+          await _cloudDataService!.deleteCategory(cloudCategoryId);
+        } catch (e) {
+          debugPrint('클라우드 카테고리 삭제 실패: $e');
+        }
+        _cloudCategoryIdMap.remove(category);
+      }
 
       for (final station in stationsToDelete) {
         await _storageService.deleteStation(station.id);
@@ -495,6 +511,8 @@ class StationProvider extends ChangeNotifier {
       _stations.clear();
       _selectedStation = null;
       _selectedCategories.clear();
+      _cloudIdMap.clear();
+      _cloudCategoryIdMap.clear();
       notifyListeners();
     } catch (e) {
       _errorMessage = '데이터 삭제 실패: $e';

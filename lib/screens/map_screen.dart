@@ -150,8 +150,11 @@ class _MapScreenState extends State<MapScreen>
 
   /// 카테고리 목록 화면 (sample.png의 '내 장소', '안테나사진' 등)
   Widget _buildCategoryListView(StationProvider provider) {
-    // 웹에서는 좌우 레이아웃, 모바일에서는 상하 레이아웃
-    if (kIsWeb) {
+    // 화면 너비에 따라 레이아웃 결정 (모바일 웹에서도 모바일 레이아웃 적용)
+    final screenWidth = MediaQuery.of(context).size.width;
+    final isWideScreen = screenWidth >= 700; // 700px 이상이면 좌우 분할 레이아웃
+
+    if (kIsWeb && isWideScreen) {
       return Column(
         children: [
           // 상단 SafeArea + 검색바 (별도 StatefulWidget으로 분리하여 맵 리빌드 방지)
@@ -359,8 +362,11 @@ class _MapScreenState extends State<MapScreen>
       }
     }
 
-    // 웹에서는 좌우 레이아웃 (반응형)
-    if (kIsWeb) {
+    // 화면 너비에 따라 레이아웃 결정 (모바일 웹에서도 모바일 레이아웃 적용)
+    final screenWidth = MediaQuery.of(context).size.width;
+    final isWideScreen = screenWidth >= 700;
+
+    if (kIsWeb && isWideScreen) {
       return LayoutBuilder(
         builder: (context, constraints) {
           // 화면 너비에 따라 리스트 너비 조정 (최소 320, 최대 400)
