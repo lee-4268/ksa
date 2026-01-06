@@ -821,7 +821,10 @@ class _MapScreenState extends State<MapScreen>
                     ),
                   ),
                   const SizedBox(height: 2),
-                  Row(
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 4,
+                    crossAxisAlignment: WrapCrossAlignment.center,
                     children: [
                       Text(
                         '$count개 장소',
@@ -830,7 +833,6 @@ class _MapScreenState extends State<MapScreen>
                           color: Colors.grey[600],
                         ),
                       ),
-                      const SizedBox(width: 8),
                       // 검사대기 건수 (파란색)
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
@@ -847,7 +849,6 @@ class _MapScreenState extends State<MapScreen>
                           ),
                         ),
                       ),
-                      const SizedBox(width: 4),
                       // 검사완료 건수 (빨간색)
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
