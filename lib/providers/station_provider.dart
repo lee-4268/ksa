@@ -155,6 +155,56 @@ class StationProvider extends ChangeNotifier {
     }
   }
 
+  /// 클라우드에서 데이터 로드 (내부 함수)
+  Future<bool> _loadFromCloud() async {
+    if (_cloudDataService == null) return false;
+
+    try {
+      final cloudData = await _cloudDataService!.syncCloudToLocal();
+
+      // 클라우드에 데이터가 없으면 로컬 데이터 유지
+      if (cloudData.isEmpty) {
+        debugPrint('클라우드에 데이터 없음, 로컬 데이터 유지');
+        _stations = _storageService.getAllStations();
+        return true;
+      }
+
+      // 클라우드 데이터로 교체
+      await _storageService.clearAllStations();
+      _stations.clear();
+      _cloudIdMap.clear();
+      _cloudCategoryIdMap.clear();
+
+      // 카테고리 목록 조회
+      final categories = await _cloudDataService!.listCategories();
+      for (final cat in categories) {
+        final catName = cat['name'] as String;
+        final catId = cat['id'] as String;
+        _cloudCategoryIdMap[catName] = catId;
+      }
+
+      for (final entry in cloudData.entries) {
+        final categoryName = entry.key;
+        final stations = entry.value;
+
+        // 스테이션 저장 (로컬 캐시)
+        for (final station in stations) {
+          final stationWithCategory = station.copyWith(categoryName: categoryName);
+          await _storageService.saveStation(stationWithCategory);
+          _stations.add(stationWithCategory);
+
+          // 클라우드 ID 매핑
+          _cloudIdMap[stationWithCategory.id] = station.id;
+        }
+      }
+
+      return true;
+    } catch (e) {
+      debugPrint('클라우드에서 데이터 로드 실패: $e');
+      return false;
+    }
+  }
+
   /// 진행률 업데이트 헬퍼
   void _updateProgress(double progress, String status, {int? total, int? processed}) {
     _loadingProgress = progress;

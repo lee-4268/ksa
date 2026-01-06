@@ -51,11 +51,16 @@ class _MapScreenState extends State<MapScreen>
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
       // CloudDataService 연결 후 데이터 로드
       final provider = context.read<StationProvider>();
       final cloudService = context.read<CloudDataService>();
-      provider.setCloudDataService(cloudService);
+      final authService = context.read<AuthService>();
+
+      // 사용자가 로그인되어 있을 때만 CloudDataService 연결
+      if (authService.isSignedIn) {
+        provider.setCloudDataService(cloudService);
+      }
       provider.loadStations();
     });
   }
