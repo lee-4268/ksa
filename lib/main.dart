@@ -36,18 +36,30 @@ void main() async {
 
 Future<void> _configureAmplify() async {
   try {
-    // Amplify 플러그인 추가
+    // Amplify 플러그인 추가 (Auth, API만 - Storage는 설정 시에만)
     final authPlugin = AmplifyAuthCognito();
     final apiPlugin = AmplifyAPI();
-    final storagePlugin = AmplifyStorageS3();
 
-    await Amplify.addPlugins([authPlugin, apiPlugin, storagePlugin]);
+    // S3 Storage 설정이 있는지 확인
+    final hasStorageConfig = amplifyconfig.contains('"awsS3StoragePlugin"') ||
+        amplifyconfig.contains('"S3TransferUtility"');
+
+    if (hasStorageConfig) {
+      final storagePlugin = AmplifyStorageS3();
+      await Amplify.addPlugins([authPlugin, apiPlugin, storagePlugin]);
+      debugPrint('Amplify 초기화: Auth, API, Storage 플러그인 추가');
+    } else {
+      await Amplify.addPlugins([authPlugin, apiPlugin]);
+      debugPrint('Amplify 초기화: Auth, API 플러그인만 추가 (Storage 설정 없음)');
+    }
 
     // Amplify 구성
     await Amplify.configure(amplifyconfig);
 
-    // S3 Storage 설정 확인
-    await PhotoStorageService.checkStorageConfiguration();
+    // S3 Storage 설정 확인 (플러그인이 있을 때만)
+    if (hasStorageConfig) {
+      await PhotoStorageService.checkStorageConfiguration();
+    }
 
     debugPrint('Amplify 초기화 완료');
   } on AmplifyAlreadyConfiguredException {

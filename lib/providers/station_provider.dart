@@ -139,12 +139,17 @@ class StationProvider extends ChangeNotifier {
     notifyListeners();
 
     try {
+      debugPrint('loadStations: CloudDataService 상태 = ${_cloudDataService != null ? "연결됨" : "null"}');
+
       // 클라우드에서 데이터 로드 시도
       if (_cloudDataService != null) {
         _loadingStatus = '클라우드에서 데이터 로드 중...';
         notifyListeners();
 
+        debugPrint('loadStations: 클라우드 로드 시작...');
         final cloudSuccess = await _loadFromCloud();
+        debugPrint('loadStations: 클라우드 로드 결과 = $cloudSuccess');
+
         if (cloudSuccess) {
           debugPrint('클라우드에서 데이터 로드 완료: ${_stations.length}개');
           _isDataLoaded = true;
@@ -155,10 +160,18 @@ class StationProvider extends ChangeNotifier {
         }
       }
 
-      // 클라우드 실패 시 로컬에서 로드 (fallback)
-      debugPrint('로컬에서 데이터 로드 시도');
-      _stations = _storageService.getAllStations();
-      debugPrint('로컬에서 로드 완료: ${_stations.length}개');
+      // 클라우드 실패 시 처리
+      if (_cloudDataService != null) {
+        // 클라우드 서비스가 연결되어 있으면 오류 메시지 표시
+        debugPrint('클라우드 로드 실패! 오류 발생');
+        _errorMessage = '클라우드 연결 오류가 발생했습니다. 네트워크를 확인하세요.';
+        _stations = [];
+      } else {
+        // 클라우드 서비스가 없으면 로컬에서 로드 (오프라인 모드)
+        debugPrint('오프라인 모드: 로컬에서 데이터 로드 시도');
+        _stations = _storageService.getAllStations();
+        debugPrint('로컬에서 로드 완료: ${_stations.length}개');
+      }
       _isDataLoaded = true;
     } catch (e) {
       _errorMessage = '데이터 로드 실패: $e';
@@ -172,15 +185,23 @@ class StationProvider extends ChangeNotifier {
 
   /// 클라우드에서 데이터 로드 (내부 함수) - 최적화됨
   Future<bool> _loadFromCloud() async {
-    if (_cloudDataService == null) return false;
+    if (_cloudDataService == null) {
+      debugPrint('_loadFromCloud: CloudDataService가 null');
+      return false;
+    }
 
     try {
+      debugPrint('_loadFromCloud: 클라우드에서 카테고리 조회 시작...');
+
       // 1. 카테고리 목록 조회 (1회만 호출)
       final categories = await _cloudDataService!.listCategories();
+      debugPrint('_loadFromCloud: 카테고리 ${categories.length}개 조회됨');
 
       if (categories.isEmpty) {
-        debugPrint('클라우드에 카테고리 없음, 로컬 데이터 유지');
-        _stations = _storageService.getAllStations();
+        debugPrint('클라우드에 카테고리 없음, 빈 상태로 시작');
+        // 로컬 캐시도 비우고 빈 상태로 시작 (PC/모바일 간 데이터 불일치 방지)
+        await _storageService.clearAllStations();
+        _stations = [];
         return true;
       }
 
@@ -228,8 +249,12 @@ class StationProvider extends ChangeNotifier {
 
       debugPrint('클라우드에서 ${_stations.length}개 스테이션 로드 완료 (중복 제거됨)');
       return true;
-    } catch (e) {
-      debugPrint('클라우드에서 데이터 로드 실패: $e');
+    } catch (e, stackTrace) {
+      debugPrint('============================================');
+      debugPrint('클라우드에서 데이터 로드 실패!');
+      debugPrint('오류: $e');
+      debugPrint('스택 트레이스: $stackTrace');
+      debugPrint('============================================');
       return false;
     }
   }

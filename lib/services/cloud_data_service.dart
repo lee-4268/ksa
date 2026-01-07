@@ -111,8 +111,9 @@ class CloudDataService extends ChangeNotifier {
         final response = await Amplify.API.query(request: request).response;
 
         if (response.hasErrors) {
-          debugPrint('카테고리 목록 조회 오류: ${response.errors}');
-          break;
+          final errorMsg = response.errors.map((e) => e.message).join(', ');
+          debugPrint('카테고리 목록 조회 오류: $errorMsg');
+          throw Exception('카테고리 목록 조회 실패: $errorMsg');
         }
 
         final data = response.data;
@@ -136,7 +137,7 @@ class CloudDataService extends ChangeNotifier {
       return allCategories;
     } catch (e) {
       debugPrint('카테고리 목록 조회 실패: $e');
-      return [];
+      rethrow; // 오류를 상위로 전파하여 fallback 로직이 작동하도록 함
     }
   }
 
