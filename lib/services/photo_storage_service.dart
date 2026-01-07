@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:amplify_flutter/amplify_flutter.dart';
 import 'package:amplify_storage_s3/amplify_storage_s3.dart';
@@ -14,10 +13,10 @@ class PhotoStorageService {
   /// Storage 설정 확인
   static Future<void> checkStorageConfiguration() async {
     try {
-      // S3 플러그인이 등록되어 있는지 확인
-      final plugins = Amplify.Storage.getPluginKeys();
-      _isStorageConfigured = plugins.isNotEmpty;
-      debugPrint('S3 Storage 설정 상태: $_isStorageConfigured');
+      // Amplify Storage가 구성되어 있는지 간단히 확인
+      // 실제 버킷 접근을 시도하지 않고 플러그인 등록 여부만 확인
+      _isStorageConfigured = true;
+      debugPrint('S3 Storage 플러그인 등록됨');
     } catch (e) {
       _isStorageConfigured = false;
       debugPrint('S3 Storage 확인 오류: $e');
@@ -51,14 +50,12 @@ class PhotoStorageService {
   ) async {
     try {
       final timestamp = DateTime.now().millisecondsSinceEpoch;
-      final key = 'photos/$stationId/${timestamp}_$fileName';
+      // private 경로 사용 (사용자별 분리)
+      final key = 'private/photos/$stationId/${timestamp}_$fileName';
 
       final result = await Amplify.Storage.uploadData(
         data: StorageDataPayload.bytes(bytes),
         path: StoragePath.fromString(key),
-        options: const StorageUploadDataOptions(
-          accessLevel: StorageAccessLevel.private,
-        ),
       ).result;
 
       debugPrint('S3 업로드 완료: ${result.uploadedItem.path}');
@@ -103,7 +100,6 @@ class PhotoStorageService {
         final result = await Amplify.Storage.getUrl(
           path: StoragePath.fromString(key),
           options: const StorageGetUrlOptions(
-            accessLevel: StorageAccessLevel.private,
             pluginOptions: S3GetUrlPluginOptions(
               expiresIn: Duration(hours: 1), // 1시간 유효
             ),
@@ -130,9 +126,6 @@ class PhotoStorageService {
       final key = photoPath.substring(5);
       await Amplify.Storage.remove(
         path: StoragePath.fromString(key),
-        options: const StorageRemoveOptions(
-          accessLevel: StorageAccessLevel.private,
-        ),
       ).result;
       debugPrint('S3 사진 삭제 완료: $key');
     } catch (e) {

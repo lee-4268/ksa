@@ -183,13 +183,18 @@ class PlatformMapWidgetState extends State<PlatformMapWidget>
         orElse: () => widget.stations.first,
       );
 
-      // 같은 좌표에 있는 다른 마커들 찾기 (반경 0.0001도 = 약 11m 이내)
+      // 같은 좌표에 있는 다른 마커들 찾기 (반경 0.0001도 = 약 11m 이내) - ID 중복 제거
       const double threshold = 0.0001;
+      final seenIds = <String>{};
       final overlappingStations = widget.stations.where((s) {
         if (!s.hasCoordinates || !clickedStation.hasCoordinates) return false;
         final latDiff = (s.latitude! - clickedStation.latitude!).abs();
         final lngDiff = (s.longitude! - clickedStation.longitude!).abs();
-        return latDiff < threshold && lngDiff < threshold;
+        if (latDiff >= threshold || lngDiff >= threshold) return false;
+        // ID 중복 체크
+        if (seenIds.contains(s.id)) return false;
+        seenIds.add(s.id);
+        return true;
       }).toList();
 
       // 겹친 마커가 2개 이상이면 선택 다이얼로그 표시

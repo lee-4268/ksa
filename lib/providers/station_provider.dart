@@ -184,13 +184,14 @@ class StationProvider extends ChangeNotifier {
         return true;
       }
 
-      // 2. 로컬 데이터 초기화
+      // 2. 로컬 데이터 및 메모리 완전 초기화 (중복 방지)
       await _storageService.clearAllStations();
-      _stations.clear();
+      _stations = []; // clear() 대신 새 리스트 할당으로 확실히 초기화
       _cloudIdMap.clear();
       _cloudCategoryIdMap.clear();
 
-      // 3. 카테고리별 스테이션 로드 (병렬 처리)
+      // 3. 카테고리별 스테이션 로드 - 중복 방지를 위해 Set 사용
+      final stationIdSet = <String>{}; // 이미 추가된 스테이션 ID 추적
       final allStationsToSave = <RadioStation>[];
 
       for (final cat in categories) {
@@ -203,19 +204,29 @@ class StationProvider extends ChangeNotifier {
 
         for (final station in stations) {
           final cloudId = station.id;
+
+          // 중복 체크: 이미 추가된 스테이션은 스킵
+          if (stationIdSet.contains(cloudId)) {
+            debugPrint('중복 스테이션 스킵: $cloudId');
+            continue;
+          }
+
+          stationIdSet.add(cloudId);
           final stationWithCategory = station.copyWith(categoryName: catName);
           allStationsToSave.add(stationWithCategory);
-          _stations.add(stationWithCategory);
           _cloudIdMap[cloudId] = cloudId;
         }
       }
 
-      // 4. 로컬에 일괄 저장 (배치 처리로 성능 향상)
+      // 4. 메모리에 한 번에 할당 (중복 없이)
+      _stations = List<RadioStation>.from(allStationsToSave);
+
+      // 5. 로컬에 일괄 저장 (배치 처리로 성능 향상)
       if (allStationsToSave.isNotEmpty) {
         await _storageService.saveStations(allStationsToSave);
       }
 
-      debugPrint('클라우드에서 ${_stations.length}개 스테이션 로드 완료');
+      debugPrint('클라우드에서 ${_stations.length}개 스테이션 로드 완료 (중복 제거됨)');
       return true;
     } catch (e) {
       debugPrint('클라우드에서 데이터 로드 실패: $e');

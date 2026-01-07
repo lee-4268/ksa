@@ -30,6 +30,9 @@ class _StationDetailSheetState extends State<StationDetailSheet> {
   List<String> _photoPaths = [];
   String _currentMemo = ''; // 현재 저장된 메모 (실시간 반영용)
 
+  // 테마 색상 (로그인 페이지와 일관성)
+  static const Color _primaryColor = Color(0xFFE53935);
+
   @override
   void initState() {
     super.initState();
@@ -142,12 +145,26 @@ class _StationDetailSheetState extends State<StationDetailSheet> {
                       ),
                       // 로드뷰 버튼
                       ElevatedButton.icon(
-                        onPressed: widget.onRoadviewTap,
-                        icon: const Icon(Icons.streetview),
-                        label: const Text('로드뷰'),
+                        onPressed: widget.station.hasCoordinates
+                            ? widget.onRoadviewTap
+                            : () => _showNoLocationDialog(),
+                        icon: Icon(
+                          widget.station.hasCoordinates
+                              ? Icons.streetview
+                              : Icons.location_off,
+                        ),
+                        label: Text(
+                          widget.station.hasCoordinates ? '로드뷰' : '위치정보 없음',
+                        ),
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: Theme.of(context).colorScheme.primary,
+                          backgroundColor: widget.station.hasCoordinates
+                              ? _primaryColor
+                              : Colors.grey[400],
                           foregroundColor: Colors.white,
+                          elevation: 0,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8),
+                          ),
                         ),
                       ),
                     ],
@@ -228,19 +245,45 @@ class _StationDetailSheetState extends State<StationDetailSheet> {
   }
 
   Widget _buildInfoSection(BuildContext context) {
-    return Card(
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.grey[200]!),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.04),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              '기본 정보',
-              style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                fontWeight: FontWeight.bold,
-              ),
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: _primaryColor.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Icon(Icons.info_outline, color: _primaryColor, size: 20),
+                ),
+                const SizedBox(width: 12),
+                Text(
+                  '기본 정보',
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ],
             ),
-            const Divider(),
+            const SizedBox(height: 12),
+            Divider(color: Colors.grey[200]),
             _buildInfoRow('허가번호', widget.station.licenseNumber),
             if (widget.station.typeApprovalNumber != null && widget.station.typeApprovalNumber!.isNotEmpty)
               _buildInfoRow('형식검정번호', widget.station.typeApprovalNumber!),
@@ -265,6 +308,33 @@ class _StationDetailSheetState extends State<StationDetailSheet> {
                 '검사일',
                 _formatDate(widget.station.inspectionDate!),
               ),
+            // 좌표 정보가 없는 경우 경고 표시
+            if (!widget.station.hasCoordinates) ...[
+              const SizedBox(height: 8),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.orange.shade50,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.orange.shade200),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.warning_amber_rounded, color: Colors.orange.shade700, size: 20),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        '위치 정보가 없어 지도에 표시되지 않습니다.',
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: Colors.orange.shade800,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ],
         ),
       ),
@@ -299,7 +369,19 @@ class _StationDetailSheetState extends State<StationDetailSheet> {
   }
 
   Widget _buildMemoSection(BuildContext context) {
-    return Card(
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.grey[200]!),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.04),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
@@ -308,42 +390,81 @@ class _StationDetailSheetState extends State<StationDetailSheet> {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text(
-                  '특이사항 메모',
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.bold,
-                  ),
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: Colors.blue.shade50,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Icon(Icons.note_alt_outlined, color: Colors.blue.shade600, size: 20),
+                    ),
+                    const SizedBox(width: 12),
+                    Text(
+                      '특이사항 메모',
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
                 ),
-                IconButton(
-                  icon: Icon(_isEditing ? Icons.check : Icons.edit),
-                  onPressed: () {
-                    if (_isEditing) {
-                      _saveMemo();
-                    }
-                    setState(() {
-                      _isEditing = !_isEditing;
-                    });
-                  },
+                Container(
+                  decoration: BoxDecoration(
+                    color: _isEditing ? _primaryColor.withValues(alpha: 0.1) : Colors.grey[100],
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: IconButton(
+                    icon: Icon(
+                      _isEditing ? Icons.check : Icons.edit,
+                      color: _isEditing ? _primaryColor : Colors.grey[600],
+                    ),
+                    onPressed: () {
+                      if (_isEditing) {
+                        _saveMemo();
+                      }
+                      setState(() {
+                        _isEditing = !_isEditing;
+                      });
+                    },
+                  ),
                 ),
               ],
             ),
-            const Divider(),
+            const SizedBox(height: 12),
+            Divider(color: Colors.grey[200]),
             if (_isEditing)
               TextField(
                 controller: _memoController,
                 maxLines: 5,
-                decoration: const InputDecoration(
+                decoration: InputDecoration(
                   hintText: '검사 중 발견한 특이사항을 입력하세요...',
-                  border: OutlineInputBorder(),
+                  hintStyle: TextStyle(color: Colors.grey[400]),
+                  filled: true,
+                  fillColor: Colors.grey[50],
+                  contentPadding: const EdgeInsets.all(14),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    borderSide: BorderSide(color: Colors.grey[300]!),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    borderSide: BorderSide(color: Colors.grey[300]!),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    borderSide: BorderSide(color: _primaryColor, width: 1.5),
+                  ),
                 ),
               )
             else
               Container(
                 width: double.infinity,
-                padding: const EdgeInsets.all(12),
+                padding: const EdgeInsets.all(14),
                 decoration: BoxDecoration(
-                  color: Colors.grey.shade100,
+                  color: Colors.grey[50],
                   borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.grey[200]!),
                 ),
                 child: Text(
                   _currentMemo.isNotEmpty
@@ -352,7 +473,8 @@ class _StationDetailSheetState extends State<StationDetailSheet> {
                   style: TextStyle(
                     color: _currentMemo.isNotEmpty
                         ? Colors.black87
-                        : Colors.grey,
+                        : Colors.grey[400],
+                    height: 1.5,
                   ),
                 ),
               ),
@@ -363,7 +485,19 @@ class _StationDetailSheetState extends State<StationDetailSheet> {
   }
 
   Widget _buildPhotoSection(BuildContext context) {
-    return Card(
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.grey[200]!),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.04),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
@@ -372,52 +506,91 @@ class _StationDetailSheetState extends State<StationDetailSheet> {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text(
-                  '특이사항 사진',
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.bold,
-                  ),
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: Colors.green.shade50,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Icon(Icons.photo_camera_outlined, color: Colors.green.shade600, size: 20),
+                    ),
+                    const SizedBox(width: 12),
+                    Text(
+                      '특이사항 사진',
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
                 ),
                 Row(
                   children: [
                     if (!kIsWeb)
-                      IconButton(
-                        icon: const Icon(Icons.camera_alt),
-                        tooltip: '카메라로 촬영',
-                        onPressed: () => _takePhoto(ImageSource.camera),
+                      Container(
+                        margin: const EdgeInsets.only(right: 4),
+                        decoration: BoxDecoration(
+                          color: Colors.grey[100],
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: IconButton(
+                          icon: Icon(Icons.camera_alt, color: Colors.grey[600]),
+                          tooltip: '카메라로 촬영',
+                          onPressed: () => _takePhoto(ImageSource.camera),
+                        ),
                       ),
-                    IconButton(
-                      icon: const Icon(Icons.photo_library),
-                      tooltip: kIsWeb ? 'PC에서 파일 선택' : '갤러리에서 선택',
-                      onPressed: () => _takePhoto(ImageSource.gallery),
+                    Container(
+                      decoration: BoxDecoration(
+                        color: Colors.grey[100],
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: IconButton(
+                        icon: Icon(Icons.photo_library, color: Colors.grey[600]),
+                        tooltip: kIsWeb ? 'PC에서 파일 선택' : '갤러리에서 선택',
+                        onPressed: () => _takePhoto(ImageSource.gallery),
+                      ),
                     ),
                   ],
                 ),
               ],
             ),
-            const Divider(),
+            const SizedBox(height: 12),
+            Divider(color: Colors.grey[200]),
             if (_photoPaths.isEmpty)
               Container(
                 width: double.infinity,
                 padding: const EdgeInsets.all(24),
                 decoration: BoxDecoration(
-                  color: Colors.grey.shade100,
+                  color: Colors.grey[50],
                   borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.grey[200]!),
                 ),
                 child: Column(
                   children: [
-                    Icon(Icons.photo_camera, size: 48, color: Colors.grey[400]),
-                    const SizedBox(height: 8),
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.grey[100],
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(Icons.photo_camera, size: 32, color: Colors.grey[400]),
+                    ),
+                    const SizedBox(height: 12),
                     Text(
                       '등록된 사진이 없습니다.',
-                      style: TextStyle(color: Colors.grey[600]),
+                      style: TextStyle(
+                        color: Colors.grey[600],
+                        fontWeight: FontWeight.w500,
+                      ),
                     ),
-                    const SizedBox(height: 8),
+                    const SizedBox(height: 4),
                     Text(
                       kIsWeb
                           ? '갤러리 버튼을 눌러 PC에서 사진을 선택하세요.'
                           : '카메라 또는 갤러리 버튼을 눌러 사진을 추가하세요.',
                       style: TextStyle(color: Colors.grey[400], fontSize: 12),
+                      textAlign: TextAlign.center,
                     ),
                   ],
                 ),
@@ -723,18 +896,28 @@ class _StationDetailSheetState extends State<StationDetailSheet> {
     return Row(
       children: [
         Expanded(
-          child: OutlinedButton.icon(
+          child: ElevatedButton.icon(
             onPressed: () => _toggleInspectionStatus(context),
             icon: Icon(
               widget.station.isInspected
-                  ? Icons.cancel
-                  : Icons.check_circle,
+                  ? Icons.cancel_outlined
+                  : Icons.check_circle_outline,
             ),
             label: Text(
               widget.station.isInspected ? '검사 취소' : '검사 완료',
             ),
-            style: OutlinedButton.styleFrom(
-              padding: const EdgeInsets.symmetric(vertical: 12),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: widget.station.isInspected
+                  ? Colors.grey[200]
+                  : Colors.green,
+              foregroundColor: widget.station.isInspected
+                  ? Colors.grey[700]
+                  : Colors.white,
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              elevation: 0,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
             ),
           ),
         ),
@@ -742,11 +925,14 @@ class _StationDetailSheetState extends State<StationDetailSheet> {
         Expanded(
           child: OutlinedButton.icon(
             onPressed: () => _deleteStation(context),
-            icon: const Icon(Icons.delete, color: Colors.red),
-            label: const Text('삭제', style: TextStyle(color: Colors.red)),
+            icon: Icon(Icons.delete_outline, color: _primaryColor),
+            label: Text('삭제', style: TextStyle(color: _primaryColor)),
             style: OutlinedButton.styleFrom(
-              padding: const EdgeInsets.symmetric(vertical: 12),
-              side: const BorderSide(color: Colors.red),
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              side: BorderSide(color: _primaryColor),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
             ),
           ),
         ),
@@ -818,6 +1004,170 @@ class _StationDetailSheetState extends State<StationDetailSheet> {
 
   String _formatDate(DateTime date) {
     return '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+  }
+
+  /// 위치 정보 없음 안내 다이얼로그
+  void _showNoLocationDialog() {
+    showDialog(
+      context: context,
+      builder: (ctx) => Dialog(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: Container(
+          padding: const EdgeInsets.all(24),
+          constraints: const BoxConstraints(maxWidth: 400),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // 아이콘
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.orange.shade50,
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(
+                  Icons.location_off,
+                  size: 48,
+                  color: Colors.orange.shade600,
+                ),
+              ),
+              const SizedBox(height: 20),
+              // 타이틀
+              const Text(
+                '위치 정보 없음',
+                style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 16),
+              // 설명
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade50,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '이 장소는 다음 이유 중 하나로 인해 지도에서 정확한 위치를 표시할 수 없습니다:',
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: Colors.grey[700],
+                        height: 1.5,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    _buildReasonItem(
+                      Icons.edit_location_alt,
+                      '주소 정보가 정확하지 않음',
+                      '등록된 주소로 좌표를 찾을 수 없습니다.',
+                    ),
+                    const SizedBox(height: 8),
+                    _buildReasonItem(
+                      Icons.wrong_location,
+                      '위치가 변경된 장소',
+                      '기존 위치에서 이전되었거나 폐쇄된 장소일 수 있습니다.',
+                    ),
+                    const SizedBox(height: 8),
+                    _buildReasonItem(
+                      Icons.help_outline,
+                      '신규 등록 장소',
+                      '아직 좌표 정보가 입력되지 않은 새로운 장소입니다.',
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 20),
+              // 안내 메시지
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: _primaryColor.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.info_outline, size: 18, color: _primaryColor),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        '현장 방문 시 실제 주소를 확인해 주세요.',
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: _primaryColor,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 20),
+              // 닫기 버튼
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: _primaryColor,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    elevation: 0,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                  ),
+                  child: const Text(
+                    '확인',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 위치 없음 이유 항목 위젯
+  Widget _buildReasonItem(IconData icon, String title, String description) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, size: 20, color: Colors.orange.shade600),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              Text(
+                description,
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Colors.grey[600],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
   }
 }
 

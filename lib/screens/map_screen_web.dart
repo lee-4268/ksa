@@ -314,12 +314,17 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
           final lng = data['lng'] as num?;
 
           if (lat != null && lng != null && widget.onMarkerTap != null) {
-            // 같은 좌표에 있는 모든 스테이션 찾기
-            final stationsAtLocation = widget.stations.where((s) =>
-              s.hasCoordinates &&
-              s.latitude == lat.toDouble() &&
-              s.longitude == lng.toDouble()
-            ).toList();
+            // 같은 좌표에 있는 모든 스테이션 찾기 (ID 기준 중복 제거)
+            final seenIds = <String>{};
+            final stationsAtLocation = widget.stations.where((s) {
+              if (!s.hasCoordinates) return false;
+              if (s.latitude != lat.toDouble()) return false;
+              if (s.longitude != lng.toDouble()) return false;
+              // ID 중복 체크
+              if (seenIds.contains(s.id)) return false;
+              seenIds.add(s.id);
+              return true;
+            }).toList();
 
             if (stationsAtLocation.length > 1) {
               // 여러 개면 선택 다이얼로그 표시
