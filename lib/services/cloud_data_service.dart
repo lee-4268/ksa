@@ -186,7 +186,7 @@ class CloudDataService extends ChangeNotifier {
             typeApprovalNumber
             frequency
             stationType
-            owner
+            stationOwner
             isInspected
             inspectionDate
             memo
@@ -214,7 +214,7 @@ class CloudDataService extends ChangeNotifier {
             'typeApprovalNumber': station.typeApprovalNumber,
             'frequency': station.frequency,
             'stationType': station.stationType,
-            'owner': station.owner,
+            'stationOwner': station.owner,
             'isInspected': station.isInspected,
             'inspectionDate': station.inspectionDate?.toUtc().toIso8601String(),
             'memo': station.memo,
@@ -277,7 +277,7 @@ class CloudDataService extends ChangeNotifier {
               typeApprovalNumber
               frequency
               stationType
-              owner
+              stationOwner
               isInspected
               inspectionDate
               memo
@@ -343,7 +343,7 @@ class CloudDataService extends ChangeNotifier {
               typeApprovalNumber
               frequency
               stationType
-              owner
+              stationOwner
               isInspected
               inspectionDate
               memo
@@ -415,7 +415,7 @@ class CloudDataService extends ChangeNotifier {
             'typeApprovalNumber': station.typeApprovalNumber,
             'frequency': station.frequency,
             'stationType': station.stationType,
-            'owner': station.owner,
+            'stationOwner': station.owner,
             'isInspected': station.isInspected,
             'inspectionDate': station.inspectionDate?.toUtc().toIso8601String(),
             'memo': station.memo,
@@ -618,7 +618,7 @@ class CloudDataService extends ChangeNotifier {
       typeApprovalNumber: data['typeApprovalNumber'] as String?,
       frequency: data['frequency'] as String?,
       stationType: data['stationType'] as String?,
-      owner: data['owner'] as String?,
+      owner: data['stationOwner'] as String?,
       isInspected: data['isInspected'] as bool? ?? false,
       inspectionDate: data['inspectionDate'] != null
           ? DateTime.tryParse(data['inspectionDate'] as String)

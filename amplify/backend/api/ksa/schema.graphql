@@ -1,9 +1,7 @@
-# This "input" configures a global authorization rule to enable public access to
-# all models in this schema. Learn more about authorization rules here: https://docs.amplify.aws/cli/graphql/authorization-rules
-input AMPLIFY { globalAuthRule: AuthRule = { allow: public } } # FOR TESTING ONLY!
-
-# 카테고리 (Excel 파일 단위)
-type Category @model @auth(rules: [{ allow: owner }]) {
+# 카테고리 (Excel 파일 단위) - 소유자만 접근 가능
+type Category @model @auth(rules: [
+  { allow: owner, operations: [create, read, update, delete] }
+]) {
   id: ID!
   name: String!
   stations: [Station] @hasMany(indexName: "byCategory", fields: ["id"])
@@ -11,18 +9,20 @@ type Category @model @auth(rules: [{ allow: owner }]) {
   updatedAt: AWSDateTime
 }
 
-# 무선국 데이터
-type Station @model @auth(rules: [{ allow: owner }]) {
+# 무선국 데이터 - 소유자만 접근 가능
+type Station @model @auth(rules: [
+  { allow: owner, operations: [create, read, update, delete] }
+]) {
   id: ID!
   categoryId: ID! @index(name: "byCategory", sortKeyFields: ["createdAt"])
-  
+
   # 기본 정보
   stationName: String!
   licenseNumber: String
   address: String!
   latitude: Float
   longitude: Float
-  
+
   # 상세 정보
   callSign: String
   gain: String
@@ -31,16 +31,16 @@ type Station @model @auth(rules: [{ allow: owner }]) {
   typeApprovalNumber: String
   frequency: String
   stationType: String
-  owner: String
-  
+  stationOwner: String
+
   # 검사 정보
   isInspected: Boolean @default(value: "false")
   inspectionDate: AWSDateTime
   memo: String
-  
+
   # 사진 (S3 키 목록)
   photoKeys: [String]
-  
+
   createdAt: AWSDateTime
   updatedAt: AWSDateTime
 }

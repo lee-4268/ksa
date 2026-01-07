@@ -32,11 +32,21 @@ class AuthService extends ChangeNotifier {
     if (_isInitialized) return;
 
     try {
-      final session = await Amplify.Auth.fetchAuthSession();
+      // Identity Pool 자격 증명 요청을 건너뛰고 User Pool 토큰만 확인
+      // forceRefresh: false로 설정하여 불필요한 네트워크 요청 방지
+      final session = await Amplify.Auth.fetchAuthSession(
+        options: const FetchAuthSessionOptions(forceRefresh: false),
+      );
+
       if (session.isSignedIn) {
         _currentUser = await Amplify.Auth.getCurrentUser();
         debugPrint('로그인 상태: ${_currentUser?.userId}');
+      } else {
+        debugPrint('로그인 필요');
       }
+    } on AuthException catch (e) {
+      // 로그인되지 않은 상태에서는 정상적인 오류 - 무시
+      debugPrint('Auth 세션 확인: ${e.message}');
     } catch (e) {
       debugPrint('Auth 초기화 오류: $e');
     }

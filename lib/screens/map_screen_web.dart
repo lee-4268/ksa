@@ -100,7 +100,7 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
 
   void _checkKakaoSdkLoaded() {
     int checkCount = 0;
-    const maxChecks = 50;
+    const maxChecks = 150; // 30초로 늘림 (150 * 200ms)
 
     // 먼저 kakao.maps.load() 호출 시도 (autoload=false 모드)
     _tryLoadKakaoMaps();
@@ -108,21 +108,32 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
     _kakaoCheckTimer = Timer.periodic(const Duration(milliseconds: 200), (timer) {
       checkCount++;
 
-      if (_checkKakaoGlobal()) {
+      // window.kakaoMapsLoaded 플래그 또는 직접 체크
+      if (_checkKakaoMapsLoaded() || _checkKakaoGlobal()) {
         timer.cancel();
-        debugPrint('카카오맵 SDK 로드 완료');
+        debugPrint('카카오맵 SDK 로드 완료 (체크 횟수: $checkCount)');
         setState(() {
           _isKakaoLoaded = true;
         });
         _registerView();
       } else if (checkCount >= maxChecks) {
         timer.cancel();
-        debugPrint('카카오맵 SDK 로드 시간 초과');
+        debugPrint('카카오맵 SDK 로드 시간 초과 (30초)');
         setState(() {
-          _errorMessage = '카카오맵 SDK를 로드할 수 없습니다.\n카카오 개발자 콘솔에서 localhost 도메인이 등록되어 있는지 확인하세요.';
+          _errorMessage = '카카오맵 SDK를 로드할 수 없습니다.\n네트워크 연결을 확인하거나 페이지를 새로고침해주세요.\n\n카카오 개발자 콘솔에서 현재 도메인이 등록되어 있는지 확인하세요.';
         });
       }
     });
+  }
+
+  /// window.kakaoMapsLoaded 플래그 확인
+  bool _checkKakaoMapsLoaded() {
+    try {
+      final loaded = js.context['kakaoMapsLoaded'];
+      return loaded == true;
+    } catch (e) {
+      return false;
+    }
   }
 
   /// autoload=false 모드에서 kakao.maps.load() 호출

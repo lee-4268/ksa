@@ -23,13 +23,25 @@
   <!-- 카카오맵 API (웹용) - 비동기 로딩으로 성능 개선 -->
   <script type="text/javascript" src="https://dapi.kakao.com/v2/maps/sdk.js?appkey=6f4fbe76fbb53a0ba573d755b1a3adde&autoload=false"></script>
   <script>
-    // 카카오맵 SDK 수동 로드 (비동기)
-    if (typeof kakao !== 'undefined' && kakao.maps) {
-      kakao.maps.load(function() {
-        console.log('카카오맵 SDK 로드 완료');
-        window.kakaoMapsLoaded = true;
-      });
+    // 카카오맵 SDK 수동 로드 (비동기) - 로드 완료 후 콜백
+    window.kakaoMapsLoaded = false;
+    window.kakaoMapsLoadError = null;
+
+    function initKakaoMaps() {
+      if (typeof kakao !== 'undefined' && kakao.maps && typeof kakao.maps.load === 'function') {
+        kakao.maps.load(function() {
+          console.log('카카오맵 SDK 로드 완료');
+          window.kakaoMapsLoaded = true;
+        });
+      } else {
+        // SDK 스크립트가 아직 로드되지 않은 경우 재시도
+        console.log('카카오맵 SDK 대기 중...');
+        setTimeout(initKakaoMaps, 100);
+      }
     }
+
+    // 스크립트 로드 후 초기화
+    initKakaoMaps();
   </script>
 </head>
 <body>
