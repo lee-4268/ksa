@@ -1,10 +1,12 @@
 // 웹 플랫폼용 Excel 내보내기
 // ignore_for_file: avoid_web_libraries_in_flutter
 
+import 'dart:convert';
 import 'dart:html' as html;
 import 'package:archive/archive.dart';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import 'photo_storage_service.dart';
 
 /// 웹에서 Excel 파일 저장 (다운로드)
 Future<String?> saveExcelFile(Uint8List bytes, String fileName, {bool saveOnly = false}) async {
@@ -51,27 +53,88 @@ Future<String?> saveExcelWithPhotosAsZip(
     // Excel 파일 추가
     archive.addFile(ArchiveFile(excelFileName, excelBytes.length, excelBytes));
 
-    // 사진 파일들 추가 (웹에서는 blob URL에서 가져오기)
+    // 사진 파일들 추가
+    int addedCount = 0;
     for (final photoInfo in photoInfoList) {
       final originalPath = photoInfo['originalPath'] as String;
       final folderName = photoInfo['folderName'] as String;
       final fileName = photoInfo['fileName'] as String;
 
       try {
-        // 웹에서는 blob: URL이므로 HTTP로 가져오기
-        if (originalPath.startsWith('blob:')) {
-          final response = await http.get(Uri.parse(originalPath));
-          if (response.statusCode == 200) {
-            final photoBytes = response.bodyBytes;
-            // photos/국소명/사진.jpg 구조로 저장
-            archive.addFile(ArchiveFile('photos/$folderName/$fileName', photoBytes.length, photoBytes));
-            debugPrint('웹 사진 추가: photos/$folderName/$fileName');
+        Uint8List? photoBytes;
+
+        // 1. S3 URL인 경우 - presigned URL을 가져와서 다운로드
+        if (originalPath.startsWith('s3://')) {
+          debugPrint('S3 사진 처리 중: $originalPath');
+          try {
+            final presignedUrl = await PhotoStorageService.getPhotoUrl(originalPath);
+            debugPrint('Presigned URL 획득: ${presignedUrl.substring(0, 50)}...');
+            final response = await http.get(Uri.parse(presignedUrl));
+            if (response.statusCode == 200) {
+              photoBytes = response.bodyBytes;
+              debugPrint('S3 사진 다운로드 완료: ${photoBytes.length} bytes');
+            } else {
+              debugPrint('S3 사진 다운로드 실패: HTTP ${response.statusCode}');
+            }
+          } catch (e) {
+            debugPrint('S3 사진 처리 오류: $e');
           }
+        }
+        // 2. base64 data URL인 경우 - 디코딩
+        else if (originalPath.startsWith('data:')) {
+          debugPrint('Base64 사진 처리 중');
+          try {
+            // data:image/jpeg;base64,/9j/4AAQSkZJRgABA... 형식에서 base64 부분 추출
+            final base64Start = originalPath.indexOf(',');
+            if (base64Start != -1) {
+              final base64String = originalPath.substring(base64Start + 1);
+              photoBytes = base64Decode(base64String);
+              debugPrint('Base64 사진 디코딩 완료: ${photoBytes.length} bytes');
+            }
+          } catch (e) {
+            debugPrint('Base64 사진 디코딩 오류: $e');
+          }
+        }
+        // 3. HTTP/HTTPS URL인 경우 - 직접 다운로드
+        else if (originalPath.startsWith('http://') || originalPath.startsWith('https://')) {
+          debugPrint('HTTP 사진 다운로드 중: $originalPath');
+          try {
+            final response = await http.get(Uri.parse(originalPath));
+            if (response.statusCode == 200) {
+              photoBytes = response.bodyBytes;
+              debugPrint('HTTP 사진 다운로드 완료: ${photoBytes.length} bytes');
+            }
+          } catch (e) {
+            debugPrint('HTTP 사진 다운로드 오류: $e');
+          }
+        }
+        // 4. blob: URL인 경우 (세션 만료로 대부분 실패)
+        else if (originalPath.startsWith('blob:')) {
+          debugPrint('Blob URL 사진 시도 (세션 만료 가능): $originalPath');
+          try {
+            final response = await http.get(Uri.parse(originalPath));
+            if (response.statusCode == 200) {
+              photoBytes = response.bodyBytes;
+            }
+          } catch (e) {
+            debugPrint('Blob URL 접근 실패 (세션 만료): $e');
+          }
+        }
+
+        // 사진 바이트가 있으면 ZIP에 추가
+        if (photoBytes != null && photoBytes.isNotEmpty) {
+          archive.addFile(ArchiveFile('photos/$folderName/$fileName', photoBytes.length, photoBytes));
+          addedCount++;
+          debugPrint('사진 추가 완료: photos/$folderName/$fileName');
+        } else {
+          debugPrint('사진 추가 실패 (바이트 없음): $originalPath');
         }
       } catch (e) {
         debugPrint('웹 사진 파일 읽기 오류: $originalPath - $e');
       }
     }
+
+    debugPrint('총 ${photoInfoList.length}개 중 $addedCount개 사진 추가됨');
 
     // ZIP 파일 인코딩
     final zipBytes = ZipEncoder().encode(archive);
@@ -95,7 +158,7 @@ Future<String?> saveExcelWithPhotosAsZip(
     html.document.body?.children.remove(anchor);
     html.Url.revokeObjectUrl(url);
 
-    debugPrint('웹 ZIP 파일 다운로드 완료: $zipFileName');
+    debugPrint('웹 ZIP 파일 다운로드 완료: $zipFileName (사진 $addedCount개 포함)');
     return zipFileName;
   } catch (e) {
     debugPrint('웹 ZIP 파일 생성 오류: $e');
