@@ -13,14 +13,6 @@ const amplifyconfig = '''{
             }
         }
     },
-    "storage": {
-        "plugins": {
-            "awsS3StoragePlugin": {
-                "bucket": "your-bucket-name",
-                "region": "ap-northeast-2"
-            }
-        }
-    },
     "auth": {
         "plugins": {
             "awsCognitoAuthPlugin": {
@@ -73,13 +65,6 @@ const amplifyconfig = '''{
                         "Region": "ap-northeast-2",
                         "AuthMode": "AMAZON_COGNITO_USER_POOLS",
                         "ClientDatabasePrefix": "ksa_AMAZON_COGNITO_USER_POOLS"
-                    },
-                    "ksa_API_KEY": {
-                        "ApiUrl": "https://mtokcw2pmffyjdhl3uhfihwj7m.appsync-api.ap-northeast-2.amazonaws.com/graphql",
-                        "Region": "ap-northeast-2",
-                        "AuthMode": "API_KEY",
-                        "ApiKey": "da2-wqwtwwlq2ngspjer72ic2vuybu",
-                        "ClientDatabasePrefix": "ksa_API_KEY"
                     }
                 }
             }
