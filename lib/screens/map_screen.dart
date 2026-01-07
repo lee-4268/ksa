@@ -1325,19 +1325,41 @@ class _MapScreenState extends State<MapScreen>
                 ),
               ),
             ],
-            // 썸네일 또는 아이콘
-            Container(
-              width: 60,
-              height: 60,
-              decoration: BoxDecoration(
-                color: station.hasCoordinates ? Colors.blue.shade50 : Colors.grey.shade100,
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Icon(
-                station.hasCoordinates ? Icons.location_on : Icons.location_off,
-                color: station.hasCoordinates ? Colors.blue : Colors.grey,
-                size: 28,
-              ),
+            // 썸네일 또는 아이콘 (검사 상태에 따라 색상 변경)
+            Stack(
+              children: [
+                Container(
+                  width: 60,
+                  height: 60,
+                  decoration: BoxDecoration(
+                    color: station.isInspected
+                        ? Colors.green.shade50
+                        : (station.hasCoordinates ? Colors.blue.shade50 : Colors.grey.shade100),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Icon(
+                    station.hasCoordinates ? Icons.location_on : Icons.location_off,
+                    color: station.isInspected
+                        ? Colors.green
+                        : (station.hasCoordinates ? Colors.blue : Colors.grey),
+                    size: 28,
+                  ),
+                ),
+                // 검사 완료 표시
+                if (station.isInspected)
+                  Positioned(
+                    right: 0,
+                    bottom: 0,
+                    child: Container(
+                      padding: const EdgeInsets.all(2),
+                      decoration: BoxDecoration(
+                        color: Colors.green,
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: const Icon(Icons.check, color: Colors.white, size: 12),
+                    ),
+                  ),
+              ],
             ),
             const SizedBox(width: 12),
             // 정보
@@ -1369,8 +1391,26 @@ class _MapScreenState extends State<MapScreen>
                     ),
                   const SizedBox(height: 4),
                   // 태그
-                  Row(
+                  Wrap(
+                    spacing: 4,
+                    runSpacing: 4,
                     children: [
+                      // 검사 상태 태그
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: station.isInspected ? Colors.green.shade50 : Colors.orange.shade50,
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Text(
+                          station.isInspected ? '검사완료' : '검사대기',
+                          style: TextStyle(
+                            fontSize: 10,
+                            color: station.isInspected ? Colors.green[700] : Colors.orange[700],
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ),
                       if (station.gain != null && station.gain!.isNotEmpty)
                         _buildSmallTag('${station.gain}dB'),
                       if (station.antennaCount != null && station.antennaCount!.isNotEmpty)
@@ -1743,6 +1783,11 @@ class _MapScreenState extends State<MapScreen>
   /// 로그아웃 처리 (팝업 없이 바로 로그아웃)
   Future<void> _handleLogout() async {
     final authService = context.read<AuthService>();
+    final stationProvider = context.read<StationProvider>();
+
+    // StationProvider 상태 초기화 (중복 로드 방지)
+    stationProvider.resetForLogout();
+
     await authService.signOut();
 
     if (mounted) {
@@ -1754,30 +1799,105 @@ class _MapScreenState extends State<MapScreen>
     }
   }
 
-  /// Excel 내보내기 - 저장/공유 선택 팝업
+  // 테마 색상 (로그인 페이지와 동일)
+  static const Color _dialogPrimaryColor = Color(0xFFE53935);
+
+  /// Excel 내보내기 - 저장/공유 선택 팝업 (일관된 디자인)
   Future<void> _exportCategoryToExcel(String category) async {
     // 저장/공유 선택 다이얼로그 표시
     final choice = await showDialog<String>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Excel 내보내기'),
-        content: const Text('파일을 어떻게 처리하시겠습니까?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, 'cancel'),
-            child: const Text('취소'),
+      builder: (context) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        child: Container(
+          padding: const EdgeInsets.all(24),
+          constraints: const BoxConstraints(maxWidth: 340),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // 헤더 아이콘
+              Container(
+                width: 56,
+                height: 56,
+                decoration: BoxDecoration(
+                  color: _dialogPrimaryColor.withValues(alpha: 0.1),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(
+                  Icons.file_download_outlined,
+                  color: _dialogPrimaryColor,
+                  size: 28,
+                ),
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                'Excel 내보내기',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                '파일을 어떻게 처리하시겠습니까?',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 14,
+                  color: Colors.grey[600],
+                ),
+              ),
+              const SizedBox(height: 24),
+              // 버튼들
+              Row(
+                children: [
+                  // 기기에 저장 버튼
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: () => Navigator.pop(context, 'save'),
+                      icon: const Icon(Icons.save_alt, size: 18),
+                      label: const Text('기기에 저장'),
+                      style: OutlinedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        side: BorderSide(color: Colors.grey[300]!),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        foregroundColor: Colors.grey[700],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  // 외부로 공유 버튼
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      onPressed: () => Navigator.pop(context, 'share'),
+                      icon: const Icon(Icons.share, size: 18),
+                      label: const Text('공유'),
+                      style: ElevatedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        backgroundColor: _dialogPrimaryColor,
+                        foregroundColor: Colors.white,
+                        elevation: 0,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              // 취소 버튼
+              TextButton(
+                onPressed: () => Navigator.pop(context, 'cancel'),
+                style: TextButton.styleFrom(
+                  foregroundColor: Colors.grey[600],
+                ),
+                child: const Text('취소'),
+              ),
+            ],
           ),
-          TextButton.icon(
-            onPressed: () => Navigator.pop(context, 'save'),
-            icon: const Icon(Icons.save_alt),
-            label: const Text('기기에 저장'),
-          ),
-          TextButton.icon(
-            onPressed: () => Navigator.pop(context, 'share'),
-            icon: const Icon(Icons.share),
-            label: const Text('외부로 공유'),
-          ),
-        ],
+        ),
       ),
     );
 
@@ -1786,13 +1906,30 @@ class _MapScreenState extends State<MapScreen>
 
     final provider = context.read<StationProvider>();
 
-    // 로딩 표시
+    // 로딩 표시 (일관된 디자인)
     if (!mounted) return;
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (context) => const Center(
-        child: CircularProgressIndicator(),
+      builder: (context) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        child: Container(
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              CircularProgressIndicator(color: _dialogPrimaryColor),
+              const SizedBox(height: 20),
+              const Text(
+                'Excel 파일 생성 중...',
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
 
@@ -1806,19 +1943,101 @@ class _MapScreenState extends State<MapScreen>
 
       if (filePath != null) {
         if (choice == 'save') {
-          // 기기에 저장 완료 다이얼로그 표시
+          // 기기에 저장 완료 다이얼로그 표시 (일관된 디자인)
           if (mounted) {
             showDialog(
               context: context,
-              builder: (context) => AlertDialog(
-                title: const Text('저장 완료'),
-                content: Text('$category 검사 결과가 저장되었습니다.\n\n저장 위치: $filePath'),
-                actions: [
-                  TextButton(
-                    onPressed: () => Navigator.pop(context),
-                    child: const Text('확인'),
+              builder: (context) => Dialog(
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                child: Container(
+                  padding: const EdgeInsets.all(24),
+                  constraints: const BoxConstraints(maxWidth: 340),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // 성공 아이콘
+                      Container(
+                        width: 56,
+                        height: 56,
+                        decoration: BoxDecoration(
+                          color: Colors.green.withValues(alpha: 0.1),
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(
+                          Icons.check_circle_outline,
+                          color: Colors.green,
+                          size: 28,
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      const Text(
+                        '저장 완료',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      Text(
+                        '$category 검사 결과가\n저장되었습니다.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: Colors.grey[600],
+                          height: 1.5,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.grey[100],
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(Icons.folder_outlined, size: 20, color: Colors.grey[600]),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                filePath,
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.grey[700],
+                                ),
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 20),
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton(
+                          onPressed: () => Navigator.pop(context),
+                          style: ElevatedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                            backgroundColor: _dialogPrimaryColor,
+                            foregroundColor: Colors.white,
+                            elevation: 0,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                          ),
+                          child: const Text(
+                            '확인',
+                            style: TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
-                ],
+                ),
               ),
             );
           }
@@ -1830,20 +2049,28 @@ class _MapScreenState extends State<MapScreen>
       Navigator.pop(context); // 로딩 다이얼로그 닫기
 
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Excel 내보내기 실패: $e')),
+        SnackBar(
+          content: Text('Excel 내보내기 실패: $e'),
+          backgroundColor: Colors.red,
+        ),
       );
     }
   }
 }
 
 /// 환영 헤더 위젯 (검색창 대신 환영 문구와 로그아웃 버튼 표시)
-class _WelcomeHeaderWidget extends StatelessWidget {
+class _WelcomeHeaderWidget extends StatefulWidget {
   final VoidCallback onLogout;
 
   const _WelcomeHeaderWidget({
     required this.onLogout,
   });
 
+  @override
+  State<_WelcomeHeaderWidget> createState() => _WelcomeHeaderWidgetState();
+}
+
+class _WelcomeHeaderWidgetState extends State<_WelcomeHeaderWidget> {
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -1860,38 +2087,97 @@ class _WelcomeHeaderWidget extends StatelessWidget {
           ),
         ],
       ),
-      child: Row(
-        children: [
-          // 환영 문구
-          Expanded(
-            child: Consumer<AuthService>(
-              builder: (context, authService, _) {
-                final userName = authService.userName;
-                final displayName = userName != null && userName.isNotEmpty
-                    ? userName
-                    : (authService.userEmail?.split('@').first ?? '사용자');
-                return Text(
-                  '$displayName님, 어서오세요.',
-                  style: const TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                  ),
-                );
-              },
-            ),
-          ),
-          // 로그아웃 버튼
-          TextButton.icon(
-            onPressed: onLogout,
-            icon: const Icon(Icons.logout, size: 18, color: Colors.red),
-            label: const Text('로그아웃', style: TextStyle(color: Colors.red, fontSize: 13)),
-            style: TextButton.styleFrom(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              minimumSize: Size.zero,
-              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-            ),
-          ),
-        ],
+      child: Consumer<AuthService>(
+        builder: (context, authService, _) {
+          final userName = authService.userName;
+          final displayName = userName != null && userName.isNotEmpty
+              ? userName
+              : (authService.userEmail?.split('@').first ?? '사용자');
+          final remainingMinutes = authService.remainingSessionMinutes;
+          final hours = remainingMinutes ~/ 60;
+          final minutes = remainingMinutes % 60;
+          final timeText = hours > 0 ? '$hours시간 $minutes분' : '$minutes분';
+
+          return Row(
+            children: [
+              // 환영 문구 + 남은 시간
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      '$displayName님, 어서오세요.',
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Row(
+                      children: [
+                        Icon(
+                          Icons.timer_outlined,
+                          size: 14,
+                          color: remainingMinutes <= 30 ? Colors.orange : Colors.grey[500],
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          '남은 시간: $timeText',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: remainingMinutes <= 30 ? Colors.orange : Colors.grey[600],
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        // 세션 연장 버튼
+                        GestureDetector(
+                          onTap: () {
+                            authService.extendSession();
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text('세션이 2시간 연장되었습니다.'),
+                                duration: Duration(seconds: 2),
+                                backgroundColor: Colors.green,
+                              ),
+                            );
+                          },
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: Colors.blue.shade50,
+                              borderRadius: BorderRadius.circular(4),
+                              border: Border.all(color: Colors.blue.shade200),
+                            ),
+                            child: Text(
+                              '연장',
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: Colors.blue[700],
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              // 로그아웃 버튼
+              TextButton.icon(
+                onPressed: widget.onLogout,
+                icon: const Icon(Icons.logout, size: 18, color: Colors.red),
+                label: const Text('로그아웃', style: TextStyle(color: Colors.red, fontSize: 13)),
+                style: TextButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+              ),
+            ],
+          );
+        },
       ),
     );
   }

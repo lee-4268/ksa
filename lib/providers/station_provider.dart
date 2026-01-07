@@ -18,6 +18,9 @@ class StationProvider extends ChangeNotifier {
   String _searchQuery = '';
   Set<String> _selectedCategories = {};
 
+  /// 데이터 로드 완료 여부 (중복 로드 방지)
+  bool _isDataLoaded = false;
+
   // 진행률 관련 상태
   double _loadingProgress = 0.0; // 0.0 ~ 1.0
   String _loadingStatus = ''; // 현재 작업 상태 메시지
@@ -120,7 +123,17 @@ class StationProvider extends ChangeNotifier {
   }
 
   /// 저장된 무선국 데이터 로드 (클라우드 우선)
-  Future<void> loadStations() async {
+  Future<void> loadStations({bool forceReload = false}) async {
+    // 중복 로드 방지: 이미 로딩 중이거나 데이터가 로드된 경우 스킵
+    if (_isLoading) {
+      debugPrint('loadStations: 이미 로딩 중, 스킵');
+      return;
+    }
+    if (_isDataLoaded && !forceReload) {
+      debugPrint('loadStations: 이미 데이터 로드됨, 스킵 (현재 ${_stations.length}개)');
+      return;
+    }
+
     _isLoading = true;
     _errorMessage = null;
     notifyListeners();
@@ -134,6 +147,7 @@ class StationProvider extends ChangeNotifier {
         final cloudSuccess = await _loadFromCloud();
         if (cloudSuccess) {
           debugPrint('클라우드에서 데이터 로드 완료: ${_stations.length}개');
+          _isDataLoaded = true;
           _isLoading = false;
           _loadingStatus = '';
           notifyListeners();
@@ -145,6 +159,7 @@ class StationProvider extends ChangeNotifier {
       debugPrint('로컬에서 데이터 로드 시도');
       _stations = _storageService.getAllStations();
       debugPrint('로컬에서 로드 완료: ${_stations.length}개');
+      _isDataLoaded = true;
     } catch (e) {
       _errorMessage = '데이터 로드 실패: $e';
       debugPrint(_errorMessage);
@@ -611,11 +626,24 @@ class StationProvider extends ChangeNotifier {
       _selectedCategories.clear();
       _cloudIdMap.clear();
       _cloudCategoryIdMap.clear();
+      _isDataLoaded = false; // 데이터 로드 상태 초기화
       notifyListeners();
     } catch (e) {
       _errorMessage = '데이터 삭제 실패: $e';
       notifyListeners();
     }
+  }
+
+  /// 로그아웃 시 상태 초기화
+  void resetForLogout() {
+    _stations.clear();
+    _selectedStation = null;
+    _selectedCategories.clear();
+    _cloudIdMap.clear();
+    _cloudCategoryIdMap.clear();
+    _isDataLoaded = false;
+    _cloudDataService = null;
+    notifyListeners();
   }
 
   /// 에러 메시지 초기화

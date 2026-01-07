@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:amplify_flutter/amplify_flutter.dart';
 import 'package:amplify_auth_cognito/amplify_auth_cognito.dart';
 import 'package:flutter/foundation.dart';
@@ -8,6 +9,19 @@ class AuthService extends ChangeNotifier {
   bool _isLoading = false;
   String? _errorMessage;
   bool _isInitialized = false;
+
+  /// 세션 타임아웃 (2시간 = 7200초)
+  static const Duration sessionTimeout = Duration(hours: 2);
+
+  /// 세션 타이머
+  Timer? _sessionTimer;
+
+  /// 마지막 활동 시간
+  DateTime? _lastActivityTime;
+
+  /// 세션 만료 여부
+  bool _isSessionExpired = false;
+  bool get isSessionExpired => _isSessionExpired;
 
   AuthUser? get currentUser => _currentUser;
   bool get isLoading => _isLoading;
@@ -31,7 +45,11 @@ class AuthService extends ChangeNotifier {
   String? _userName;
   String? get userName => _userName;
 
-  /// 사용자 속성 조회 (이름 등)
+  /// 현재 사용자 연락처 (phone_number attribute)
+  String? _userPhoneNumber;
+  String? get userPhoneNumber => _userPhoneNumber;
+
+  /// 사용자 속성 조회 (이름, 연락처 등)
   Future<void> fetchUserAttributes() async {
     if (!isSignedIn) return;
 
@@ -40,7 +58,8 @@ class AuthService extends ChangeNotifier {
       for (final attr in attributes) {
         if (attr.userAttributeKey == AuthUserAttributeKey.name) {
           _userName = attr.value;
-          break;
+        } else if (attr.userAttributeKey == AuthUserAttributeKey.phoneNumber) {
+          _userPhoneNumber = attr.value;
         }
       }
       notifyListeners();
@@ -65,6 +84,8 @@ class AuthService extends ChangeNotifier {
         debugPrint('로그인 상태: ${_currentUser?.userId}');
         // 사용자 속성(이름 등) 조회 - 백그라운드에서 비동기 처리 (로그인 속도 개선)
         fetchUserAttributes();
+        // 기존 세션에도 타이머 시작
+        _startSessionTimer();
       } else {
         debugPrint('로그인 필요');
       }
@@ -84,6 +105,7 @@ class AuthService extends ChangeNotifier {
     required String email,
     required String password,
     String? name,
+    String? phoneNumber,
   }) async {
     _isLoading = true;
     _errorMessage = null;
@@ -95,6 +117,19 @@ class AuthService extends ChangeNotifier {
       };
       if (name != null && name.isNotEmpty) {
         userAttributes[AuthUserAttributeKey.name] = name;
+      }
+      // 연락처 저장 (하이픈 없이 숫자만, +82 형식으로 저장)
+      if (phoneNumber != null && phoneNumber.isNotEmpty) {
+        // 숫자만 추출
+        final digitsOnly = phoneNumber.replaceAll(RegExp(r'[^0-9]'), '');
+        // 한국 번호 형식으로 변환 (+82로 시작하게)
+        String formattedPhone = digitsOnly;
+        if (digitsOnly.startsWith('0')) {
+          formattedPhone = '+82${digitsOnly.substring(1)}';
+        } else if (!digitsOnly.startsWith('+')) {
+          formattedPhone = '+82$digitsOnly';
+        }
+        userAttributes[AuthUserAttributeKey.phoneNumber] = formattedPhone;
       }
 
       final result = await Amplify.Auth.signUp(
@@ -178,6 +213,8 @@ class AuthService extends ChangeNotifier {
         debugPrint('로그인 성공: ${_currentUser?.userId}');
         // 사용자 속성(이름 등) 조회 - 백그라운드에서 비동기 처리 (로그인 속도 개선)
         fetchUserAttributes();
+        // 세션 타이머 시작 (2시간 비활성 시 자동 로그아웃)
+        _startSessionTimer();
       }
 
       _isLoading = false;
@@ -213,9 +250,13 @@ class AuthService extends ChangeNotifier {
     _isLoading = true;
     notifyListeners();
 
+    // 세션 타이머 중지
+    _stopSessionTimer();
+
     try {
       await Amplify.Auth.signOut();
       _currentUser = null;
+      _isSessionExpired = false;
       debugPrint('로그아웃 완료');
     } catch (e) {
       debugPrint('로그아웃 오류: $e');
@@ -275,6 +316,75 @@ class AuthService extends ChangeNotifier {
   void clearError() {
     _errorMessage = null;
     notifyListeners();
+  }
+
+  /// 세션 타이머 시작 (로그인 후 호출)
+  void _startSessionTimer() {
+    _stopSessionTimer();
+    _lastActivityTime = DateTime.now();
+    _isSessionExpired = false;
+
+    // 1분마다 세션 만료 체크
+    _sessionTimer = Timer.periodic(const Duration(minutes: 1), (_) {
+      _checkSessionTimeout();
+    });
+
+    debugPrint('세션 타이머 시작: ${sessionTimeout.inHours}시간 후 자동 로그아웃');
+  }
+
+  /// 세션 타이머 중지
+  void _stopSessionTimer() {
+    _sessionTimer?.cancel();
+    _sessionTimer = null;
+  }
+
+  /// 세션 타임아웃 체크
+  void _checkSessionTimeout() {
+    if (_lastActivityTime == null || _currentUser == null) return;
+
+    final elapsed = DateTime.now().difference(_lastActivityTime!);
+    if (elapsed >= sessionTimeout) {
+      debugPrint('세션 타임아웃: ${elapsed.inMinutes}분 경과');
+      _handleSessionExpired();
+    }
+  }
+
+  /// 세션 만료 처리
+  Future<void> _handleSessionExpired() async {
+    _stopSessionTimer();
+    _isSessionExpired = true;
+
+    try {
+      await Amplify.Auth.signOut();
+      _currentUser = null;
+      debugPrint('세션 만료로 자동 로그아웃');
+    } catch (e) {
+      debugPrint('자동 로그아웃 오류: $e');
+    }
+
+    notifyListeners();
+  }
+
+  /// 사용자 활동 갱신 (화면 터치, 데이터 조작 시 호출)
+  void updateActivity() {
+    if (_currentUser == null) return;
+    _lastActivityTime = DateTime.now();
+  }
+
+  /// 세션 연장 (버튼 클릭 시 호출)
+  void extendSession() {
+    if (_currentUser == null) return;
+    _lastActivityTime = DateTime.now();
+    debugPrint('세션 연장: 2시간 추가');
+    notifyListeners();
+  }
+
+  /// 남은 세션 시간 (분)
+  int get remainingSessionMinutes {
+    if (_lastActivityTime == null) return 0;
+    final elapsed = DateTime.now().difference(_lastActivityTime!);
+    final remaining = sessionTimeout - elapsed;
+    return remaining.inMinutes.clamp(0, sessionTimeout.inMinutes);
   }
 
   /// 에러 메시지 매핑

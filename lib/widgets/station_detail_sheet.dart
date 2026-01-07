@@ -7,6 +7,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 import '../models/radio_station.dart';
 import '../providers/station_provider.dart';
+import '../services/photo_storage_service.dart';
 
 class StationDetailSheet extends StatefulWidget {
   final RadioStation station;
@@ -443,24 +444,30 @@ class _StationDetailSheetState extends State<StationDetailSheet> {
 
   Widget _buildPhotoThumbnail(int index) {
     final photoPath = _photoPaths[index];
+
+    // PhotoStorageService를 사용하여 유효한 URL인지 체크
+    final isValidUrl = PhotoStorageService.isValidPhotoUrl(photoPath);
+
     return Stack(
       fit: StackFit.expand,
       children: [
         GestureDetector(
-          onTap: () => _showPhotoViewer(index),
+          onTap: () {
+            if (!isValidUrl) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('이 사진은 세션이 만료되어 더 이상 표시할 수 없습니다.'),
+                  backgroundColor: Colors.orange,
+                ),
+              );
+            } else {
+              _showPhotoViewer(index);
+            }
+          },
           child: ClipRRect(
             borderRadius: BorderRadius.circular(8),
             child: kIsWeb
-                ? Image.network(
-                    photoPath,
-                    fit: BoxFit.cover,
-                    errorBuilder: (context, error, stackTrace) {
-                      return Container(
-                        color: Colors.grey[300],
-                        child: const Icon(Icons.broken_image, color: Colors.grey),
-                      );
-                    },
-                  )
+                ? _buildWebImage(photoPath)
                 : Image.file(
                     File(photoPath),
                     fit: BoxFit.cover,
@@ -492,6 +499,101 @@ class _StationDetailSheetState extends State<StationDetailSheet> {
     );
   }
 
+  /// 웹용 이미지 위젯 (S3 URL인 경우 presigned URL 변환)
+  Widget _buildWebImage(String photoPath) {
+    // S3 키인 경우 FutureBuilder로 URL 가져오기
+    if (photoPath.startsWith('s3://')) {
+      return FutureBuilder<String>(
+        future: PhotoStorageService.getPhotoUrl(photoPath),
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return Container(
+              color: Colors.grey[200],
+              child: const Center(
+                child: SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+              ),
+            );
+          }
+          if (snapshot.hasError || !snapshot.hasData) {
+            return Container(
+              color: Colors.grey[200],
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.image_not_supported, color: Colors.grey[400], size: 24),
+                  const SizedBox(height: 4),
+                  Text(
+                    '로드 실패',
+                    style: TextStyle(fontSize: 10, color: Colors.grey[500]),
+                  ),
+                ],
+              ),
+            );
+          }
+          return Image.network(
+            snapshot.data!,
+            fit: BoxFit.cover,
+            errorBuilder: (context, error, stackTrace) {
+              return Container(
+                color: Colors.grey[200],
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.image_not_supported, color: Colors.grey[400], size: 24),
+                    const SizedBox(height: 4),
+                    Text(
+                      '만료됨',
+                      style: TextStyle(fontSize: 10, color: Colors.grey[500]),
+                    ),
+                  ],
+                ),
+              );
+            },
+          );
+        },
+      );
+    }
+
+    // 일반 URL 또는 base64
+    return Image.network(
+      photoPath,
+      fit: BoxFit.cover,
+      loadingBuilder: (context, child, loadingProgress) {
+        if (loadingProgress == null) return child;
+        return Container(
+          color: Colors.grey[200],
+          child: const Center(
+            child: SizedBox(
+              width: 20,
+              height: 20,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+          ),
+        );
+      },
+      errorBuilder: (context, error, stackTrace) {
+        return Container(
+          color: Colors.grey[200],
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.image_not_supported, color: Colors.grey[400], size: 24),
+              const SizedBox(height: 4),
+              Text(
+                '만료됨',
+                style: TextStyle(fontSize: 10, color: Colors.grey[500]),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
   Future<void> _takePhoto(ImageSource source) async {
     try {
       final XFile? pickedFile = await _imagePicker.pickImage(
@@ -506,9 +608,18 @@ class _StationDetailSheetState extends State<StationDetailSheet> {
       String savedPath;
 
       if (kIsWeb) {
-        // 웹에서는 파일 경로 대신 XFile의 path를 그대로 사용 (blob URL)
-        // 웹에서는 로컬 파일 시스템 접근이 불가능하므로 경로만 저장
-        savedPath = pickedFile.path;
+        // 웹에서는 PhotoStorageService를 사용하여 S3 또는 base64로 저장
+        final bytes = await pickedFile.readAsBytes();
+        final result = await PhotoStorageService.uploadPhoto(
+          bytes: bytes,
+          fileName: pickedFile.name,
+          stationId: widget.station.id,
+        );
+
+        if (result == null) {
+          throw Exception('사진 업로드 실패');
+        }
+        savedPath = result;
       } else {
         // 모바일에서는 앱 내부 저장소에 사진 복사
         final appDir = await getApplicationDocumentsDirectory();
@@ -773,15 +884,41 @@ class _PhotoViewerPageState extends State<_PhotoViewerPage> {
                   ? Image.network(
                       photoPath,
                       fit: BoxFit.contain,
+                      loadingBuilder: (context, child, loadingProgress) {
+                        if (loadingProgress == null) return child;
+                        return Center(
+                          child: CircularProgressIndicator(
+                            value: loadingProgress.expectedTotalBytes != null
+                                ? loadingProgress.cumulativeBytesLoaded /
+                                    loadingProgress.expectedTotalBytes!
+                                : null,
+                            color: Colors.white,
+                          ),
+                        );
+                      },
                       errorBuilder: (context, error, stackTrace) {
-                        return const Column(
+                        return Column(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
-                            Icon(Icons.broken_image, color: Colors.grey, size: 64),
-                            SizedBox(height: 16),
-                            Text(
+                            const Icon(Icons.image_not_supported, color: Colors.grey, size: 64),
+                            const SizedBox(height: 16),
+                            const Text(
                               '이미지를 불러올 수 없습니다.',
                               style: TextStyle(color: Colors.grey),
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              '세션이 만료되었거나 이미지가 삭제되었습니다.',
+                              style: TextStyle(color: Colors.grey[600], fontSize: 12),
+                            ),
+                            const SizedBox(height: 16),
+                            OutlinedButton.icon(
+                              onPressed: () => Navigator.pop(context),
+                              icon: const Icon(Icons.arrow_back, color: Colors.white),
+                              label: const Text('돌아가기', style: TextStyle(color: Colors.white)),
+                              style: OutlinedButton.styleFrom(
+                                side: const BorderSide(color: Colors.white),
+                              ),
                             ),
                           ],
                         );

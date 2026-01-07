@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/auth_service.dart';
 
+/// 회원가입 화면 - 로그인 페이지와 일관된 디자인
 class RegisterScreen extends StatefulWidget {
   const RegisterScreen({super.key});
 
@@ -15,6 +16,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
   final _passwordController = TextEditingController();
   final _confirmPasswordController = TextEditingController();
   final _nameController = TextEditingController();
+  final _phoneController = TextEditingController();
   final _codeController = TextEditingController();
 
   bool _obscurePassword = true;
@@ -22,12 +24,16 @@ class _RegisterScreenState extends State<RegisterScreen> {
   bool _isVerificationStep = false;
   String? _pendingEmail;
 
+  // 테마 색상 (로그인 페이지와 동일)
+  static const Color _primaryColor = Color(0xFFE53935);
+
   @override
   void dispose() {
     _emailController.dispose();
     _passwordController.dispose();
     _confirmPasswordController.dispose();
     _nameController.dispose();
+    _phoneController.dispose();
     _codeController.dispose();
     super.dispose();
   }
@@ -40,11 +46,11 @@ class _RegisterScreenState extends State<RegisterScreen> {
       email: _emailController.text.trim(),
       password: _passwordController.text,
       name: _nameController.text.trim(),
+      phoneNumber: _phoneController.text.trim(),
     );
 
     if (result != null && mounted) {
       if (result.isSignUpComplete) {
-        // 이메일 인증 없이 바로 가입 완료
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('회원가입이 완료되었습니다. 로그인하세요.'),
@@ -53,7 +59,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
         );
         Navigator.pop(context);
       } else {
-        // 이메일 인증 필요
         setState(() {
           _isVerificationStep = true;
           _pendingEmail = _emailController.text.trim();
@@ -62,7 +67,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
               content: Text('인증 코드가 이메일로 발송되었습니다.'),
-              backgroundColor: Colors.blue,
+              backgroundColor: Colors.green,
             ),
           );
         }
@@ -82,7 +87,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('인증 코드를 입력하세요.'),
-          backgroundColor: Colors.orange,
+          backgroundColor: Colors.red,
         ),
       );
       return;
@@ -116,10 +121,11 @@ class _RegisterScreenState extends State<RegisterScreen> {
     if (_pendingEmail == null) return;
 
     final authService = context.read<AuthService>();
+    final scaffoldMessenger = ScaffoldMessenger.of(context);
     final success = await authService.resendSignUpCode(_pendingEmail!);
 
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
+      scaffoldMessenger.showSnackBar(
         SnackBar(
           content: Text(success ? '인증 코드가 재발송되었습니다.' : (authService.errorMessage ?? '재발송 실패')),
           backgroundColor: success ? Colors.green : Colors.red,
@@ -128,11 +134,62 @@ class _RegisterScreenState extends State<RegisterScreen> {
     }
   }
 
+  /// 입력 필드 데코레이션 빌더
+  InputDecoration _buildInputDecoration({
+    required String label,
+    required String hint,
+    Widget? suffixIcon,
+  }) {
+    return InputDecoration(
+      hintText: hint,
+      hintStyle: TextStyle(color: Colors.grey[400]),
+      filled: true,
+      fillColor: Colors.grey[50],
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(8),
+        borderSide: BorderSide(color: Colors.grey[300]!),
+      ),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(8),
+        borderSide: BorderSide(color: Colors.grey[300]!),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(8),
+        borderSide: const BorderSide(color: _primaryColor, width: 1.5),
+      ),
+      errorBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(8),
+        borderSide: const BorderSide(color: Colors.red),
+      ),
+      focusedErrorBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(8),
+        borderSide: const BorderSide(color: Colors.red, width: 1.5),
+      ),
+      suffixIcon: suffixIcon,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: const Color(0xFFF5F5F5),
       appBar: AppBar(
-        title: Text(_isVerificationStep ? '이메일 인증' : '회원가입'),
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back, color: Colors.black87),
+          onPressed: () => Navigator.pop(context),
+        ),
+        title: Text(
+          _isVerificationStep ? '이메일 인증' : '회원가입',
+          style: const TextStyle(
+            color: Colors.black87,
+            fontSize: 18,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        centerTitle: true,
       ),
       body: SafeArea(
         child: Center(
@@ -140,9 +197,23 @@ class _RegisterScreenState extends State<RegisterScreen> {
             padding: const EdgeInsets.all(24),
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 400),
-              child: _isVerificationStep
-                  ? _buildVerificationForm()
-                  : _buildSignUpForm(),
+              child: Container(
+                padding: const EdgeInsets.all(32),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(16),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.08),
+                      blurRadius: 20,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
+                ),
+                child: _isVerificationStep
+                    ? _buildVerificationForm()
+                    : _buildSignUpForm(),
+              ),
             ),
           ),
         ),
@@ -154,47 +225,75 @@ class _RegisterScreenState extends State<RegisterScreen> {
     return Form(
       key: _formKey,
       child: Column(
+        mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // 안내 문구
-          const Text(
-            '계정을 생성하세요',
-            style: TextStyle(
-              fontSize: 24,
-              fontWeight: FontWeight.bold,
-            ),
+          // 헤더
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.person_add_outlined, size: 32, color: _primaryColor),
+              const SizedBox(width: 8),
+              Text(
+                '회원가입',
+                style: TextStyle(
+                  fontSize: 24,
+                  fontWeight: FontWeight.bold,
+                  color: _primaryColor,
+                ),
+              ),
+            ],
           ),
           const SizedBox(height: 8),
           Text(
-            '아래 정보를 입력하여 회원가입을 진행하세요.',
+            '계정을 생성하여 서비스를 이용하세요',
+            textAlign: TextAlign.center,
             style: TextStyle(
-              fontSize: 14,
+              fontSize: 13,
               color: Colors.grey[600],
             ),
           ),
           const SizedBox(height: 32),
 
           // 이름 입력
+          Text(
+            '이름 (선택)',
+            style: TextStyle(
+              fontSize: 13,
+              color: Colors.grey[700],
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          const SizedBox(height: 8),
           TextFormField(
             controller: _nameController,
             textInputAction: TextInputAction.next,
-            decoration: const InputDecoration(
-              labelText: '이름 (선택)',
-              prefixIcon: Icon(Icons.person_outlined),
-              border: OutlineInputBorder(),
+            style: const TextStyle(fontSize: 15),
+            decoration: _buildInputDecoration(
+              label: '이름',
+              hint: '이름 입력 (선택사항)',
             ),
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 20),
 
           // 이메일 입력
+          Text(
+            '이메일',
+            style: TextStyle(
+              fontSize: 13,
+              color: Colors.grey[700],
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          const SizedBox(height: 8),
           TextFormField(
             controller: _emailController,
             keyboardType: TextInputType.emailAddress,
             textInputAction: TextInputAction.next,
-            decoration: const InputDecoration(
-              labelText: '이메일',
-              prefixIcon: Icon(Icons.email_outlined),
-              border: OutlineInputBorder(),
+            style: const TextStyle(fontSize: 15),
+            decoration: _buildInputDecoration(
+              label: '이메일',
+              hint: '이메일 주소 입력',
             ),
             validator: (value) {
               if (value == null || value.isEmpty) {
@@ -206,21 +305,65 @@ class _RegisterScreenState extends State<RegisterScreen> {
               return null;
             },
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 20),
+
+          // 연락처 입력
+          Text(
+            '연락처 (선택)',
+            style: TextStyle(
+              fontSize: 13,
+              color: Colors.grey[700],
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          const SizedBox(height: 8),
+          TextFormField(
+            controller: _phoneController,
+            keyboardType: TextInputType.phone,
+            textInputAction: TextInputAction.next,
+            style: const TextStyle(fontSize: 15),
+            decoration: _buildInputDecoration(
+              label: '연락처',
+              hint: '하이픈(-) 없이 숫자만 입력',
+            ),
+            validator: (value) {
+              if (value != null && value.isNotEmpty) {
+                // 숫자만 추출
+                final digitsOnly = value.replaceAll(RegExp(r'[^0-9]'), '');
+                if (digitsOnly.length < 10 || digitsOnly.length > 11) {
+                  return '올바른 연락처 형식이 아닙니다';
+                }
+              }
+              return null;
+            },
+          ),
+          const SizedBox(height: 20),
 
           // 비밀번호 입력
+          Text(
+            '비밀번호',
+            style: TextStyle(
+              fontSize: 13,
+              color: Colors.grey[700],
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          const SizedBox(height: 8),
           TextFormField(
             controller: _passwordController,
             obscureText: _obscurePassword,
             textInputAction: TextInputAction.next,
-            decoration: InputDecoration(
-              labelText: '비밀번호',
-              prefixIcon: const Icon(Icons.lock_outlined),
-              border: const OutlineInputBorder(),
-              helperText: '8자 이상 입력하세요',
+            style: const TextStyle(fontSize: 15),
+            decoration: _buildInputDecoration(
+              label: '비밀번호',
+              hint: '8자 이상 입력',
               suffixIcon: IconButton(
                 icon: Icon(
-                  _obscurePassword ? Icons.visibility_off : Icons.visibility,
+                  _obscurePassword
+                      ? Icons.visibility_off_outlined
+                      : Icons.visibility_outlined,
+                  color: Colors.grey[500],
+                  size: 20,
                 ),
                 onPressed: () {
                   setState(() {
@@ -239,21 +382,34 @@ class _RegisterScreenState extends State<RegisterScreen> {
               return null;
             },
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 20),
 
           // 비밀번호 확인
+          Text(
+            '비밀번호 확인',
+            style: TextStyle(
+              fontSize: 13,
+              color: Colors.grey[700],
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          const SizedBox(height: 8),
           TextFormField(
             controller: _confirmPasswordController,
             obscureText: _obscureConfirmPassword,
             textInputAction: TextInputAction.done,
             onFieldSubmitted: (_) => _handleSignUp(),
-            decoration: InputDecoration(
-              labelText: '비밀번호 확인',
-              prefixIcon: const Icon(Icons.lock_outlined),
-              border: const OutlineInputBorder(),
+            style: const TextStyle(fontSize: 15),
+            decoration: _buildInputDecoration(
+              label: '비밀번호 확인',
+              hint: '비밀번호 재입력',
               suffixIcon: IconButton(
                 icon: Icon(
-                  _obscureConfirmPassword ? Icons.visibility_off : Icons.visibility,
+                  _obscureConfirmPassword
+                      ? Icons.visibility_off_outlined
+                      : Icons.visibility_outlined,
+                  color: Colors.grey[500],
+                  size: 20,
                 ),
                 onPressed: () {
                   setState(() {
@@ -272,7 +428,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
               return null;
             },
           ),
-          const SizedBox(height: 24),
+          const SizedBox(height: 32),
 
           // 회원가입 버튼
           Consumer<AuthService>(
@@ -281,8 +437,13 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 onPressed: auth.isLoading ? null : _handleSignUp,
                 style: ElevatedButton.styleFrom(
                   padding: const EdgeInsets.symmetric(vertical: 16),
-                  backgroundColor: Colors.blue,
+                  backgroundColor: _primaryColor,
                   foregroundColor: Colors.white,
+                  disabledBackgroundColor: _primaryColor.withValues(alpha: 0.6),
+                  elevation: 0,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
                 ),
                 child: auth.isLoading
                     ? const SizedBox(
@@ -295,7 +456,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
                       )
                     : const Text(
                         '회원가입',
-                        style: TextStyle(fontSize: 16),
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
               );
             },
@@ -303,9 +467,33 @@ class _RegisterScreenState extends State<RegisterScreen> {
           const SizedBox(height: 16),
 
           // 로그인 링크
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('이미 계정이 있으신가요? 로그인'),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(
+                '이미 계정이 있으신가요?',
+                style: TextStyle(
+                  fontSize: 13,
+                  color: Colors.grey[600],
+                ),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                style: TextButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                child: Text(
+                  '로그인',
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: _primaryColor,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
           ),
         ],
       ),
@@ -314,19 +502,21 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
   Widget _buildVerificationForm() {
     return Column(
+      mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const Icon(
+        // 헤더 아이콘
+        Icon(
           Icons.mark_email_read_outlined,
-          size: 64,
-          color: Colors.blue,
+          size: 48,
+          color: _primaryColor,
         ),
-        const SizedBox(height: 24),
+        const SizedBox(height: 16),
         const Text(
           '이메일 인증',
           textAlign: TextAlign.center,
           style: TextStyle(
-            fontSize: 24,
+            fontSize: 20,
             fontWeight: FontWeight.bold,
           ),
         ),
@@ -335,13 +525,23 @@ class _RegisterScreenState extends State<RegisterScreen> {
           '$_pendingEmail로\n인증 코드가 발송되었습니다.',
           textAlign: TextAlign.center,
           style: TextStyle(
-            fontSize: 14,
+            fontSize: 13,
             color: Colors.grey[600],
+            height: 1.5,
           ),
         ),
         const SizedBox(height: 32),
 
         // 인증 코드 입력
+        Text(
+          '인증 코드',
+          style: TextStyle(
+            fontSize: 13,
+            color: Colors.grey[700],
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+        const SizedBox(height: 8),
         TextField(
           controller: _codeController,
           keyboardType: TextInputType.number,
@@ -349,14 +549,14 @@ class _RegisterScreenState extends State<RegisterScreen> {
           style: const TextStyle(
             fontSize: 24,
             letterSpacing: 8,
+            fontWeight: FontWeight.w600,
           ),
-          decoration: const InputDecoration(
-            labelText: '인증 코드',
-            border: OutlineInputBorder(),
-            hintText: '000000',
+          decoration: _buildInputDecoration(
+            label: '인증 코드',
+            hint: '000000',
           ),
         ),
-        const SizedBox(height: 24),
+        const SizedBox(height: 32),
 
         // 인증 버튼
         Consumer<AuthService>(
@@ -365,8 +565,13 @@ class _RegisterScreenState extends State<RegisterScreen> {
               onPressed: auth.isLoading ? null : _handleVerification,
               style: ElevatedButton.styleFrom(
                 padding: const EdgeInsets.symmetric(vertical: 16),
-                backgroundColor: Colors.blue,
+                backgroundColor: _primaryColor,
                 foregroundColor: Colors.white,
+                disabledBackgroundColor: _primaryColor.withValues(alpha: 0.6),
+                elevation: 0,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
               ),
               child: auth.isLoading
                   ? const SizedBox(
@@ -379,7 +584,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
                     )
                   : const Text(
                       '인증 완료',
-                      style: TextStyle(fontSize: 16),
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
             );
           },
@@ -391,12 +599,18 @@ class _RegisterScreenState extends State<RegisterScreen> {
           builder: (context, auth, child) {
             return TextButton(
               onPressed: auth.isLoading ? null : _resendCode,
-              child: const Text('인증 코드 재발송'),
+              child: Text(
+                '인증 코드 재발송',
+                style: TextStyle(
+                  color: Colors.grey[600],
+                  decoration: TextDecoration.underline,
+                ),
+              ),
             );
           },
         ),
 
-        // 뒤로가기
+        // 이메일 변경
         TextButton(
           onPressed: () {
             setState(() {
@@ -405,7 +619,13 @@ class _RegisterScreenState extends State<RegisterScreen> {
               _codeController.clear();
             });
           },
-          child: const Text('이메일 변경'),
+          child: Text(
+            '이메일 변경',
+            style: TextStyle(
+              color: _primaryColor,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
         ),
       ],
     );

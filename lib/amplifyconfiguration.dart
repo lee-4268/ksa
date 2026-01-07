@@ -13,6 +13,14 @@ const amplifyconfig = '''{
             }
         }
     },
+    "storage": {
+        "plugins": {
+            "awsS3StoragePlugin": {
+                "bucket": "your-bucket-name",
+                "region": "ap-northeast-2"
+            }
+        }
+    },
     "auth": {
         "plugins": {
             "awsCognitoAuthPlugin": {

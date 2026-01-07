@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import 'package:amplify_flutter/amplify_flutter.dart';
 import 'package:amplify_auth_cognito/amplify_auth_cognito.dart';
 import 'package:amplify_api/amplify_api.dart';
+import 'package:amplify_storage_s3/amplify_storage_s3.dart';
 
 import 'amplifyconfiguration.dart';
 import 'providers/station_provider.dart';
@@ -11,6 +12,7 @@ import 'screens/login_screen.dart';
 import 'services/storage_service.dart';
 import 'services/auth_service.dart';
 import 'services/cloud_data_service.dart';
+import 'services/photo_storage_service.dart';
 
 // 모바일용 조건부 import
 import 'main_init_stub.dart' if (dart.library.io) 'main_init_mobile.dart'
@@ -37,11 +39,15 @@ Future<void> _configureAmplify() async {
     // Amplify 플러그인 추가
     final authPlugin = AmplifyAuthCognito();
     final apiPlugin = AmplifyAPI();
+    final storagePlugin = AmplifyStorageS3();
 
-    await Amplify.addPlugins([authPlugin, apiPlugin]);
+    await Amplify.addPlugins([authPlugin, apiPlugin, storagePlugin]);
 
     // Amplify 구성
     await Amplify.configure(amplifyconfig);
+
+    // S3 Storage 설정 확인
+    await PhotoStorageService.checkStorageConfiguration();
 
     debugPrint('Amplify 초기화 완료');
   } on AmplifyAlreadyConfiguredException {
@@ -124,6 +130,19 @@ class _AuthWrapperState extends State<AuthWrapper> {
               ),
             ),
           );
+        }
+
+        // 세션 만료 시 메시지 표시
+        if (authService.isSessionExpired) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('세션이 만료되어 자동 로그아웃되었습니다.'),
+                backgroundColor: Colors.orange,
+                duration: Duration(seconds: 3),
+              ),
+            );
+          });
         }
 
         // 로그인 상태에 따라 화면 분기
