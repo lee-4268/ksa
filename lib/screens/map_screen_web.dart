@@ -49,6 +49,140 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
   /// 마커가 맵에 존재하는지 추적
   final Set<String> _existingMarkerIds = {};
 
+  /// 맵 드래그 활성화 상태 (외부에서 제어 가능)
+  bool _mapDraggable = true;
+
+  /// 맵 드래그 비활성화 (리스트 오버레이 드래그 시 호출)
+  void setMapDraggable(bool draggable) {
+    if (_mapDraggable == draggable) return;
+    _mapDraggable = draggable;
+    _updateMapDraggable(draggable);
+  }
+
+  void _updateMapDraggable(bool draggable) {
+    if (!_isMapReady) return;
+    final jsCode = '''
+      (function() {
+        var map = window['kakaoMapInstance_$_containerId'];
+        if (map) {
+          map.setDraggable($draggable);
+          map.setZoomable($draggable);
+          console.log('Map draggable set to: $draggable');
+        }
+      })();
+    ''';
+    html.document.body?.append(html.ScriptElement()..text = jsCode);
+  }
+
+  /// GPS 현재 위치 가져오기 및 맵 중앙 이동
+  void moveToCurrentLocation({Function(double lat, double lng)? onSuccess, Function(String error)? onError}) {
+    final jsCode = '''
+      (function() {
+        if (!navigator.geolocation) {
+          window.postMessage({type: 'geolocationError', error: 'GPS가 지원되지 않습니다.'}, '*');
+          return;
+        }
+
+        navigator.geolocation.getCurrentPosition(
+          function(position) {
+            var lat = position.coords.latitude;
+            var lng = position.coords.longitude;
+
+            var map = window['kakaoMapInstance_$_containerId'];
+            if (map) {
+              var moveLatLon = new kakao.maps.LatLng(lat, lng);
+              map.setCenter(moveLatLon);
+              map.setLevel(3);
+              console.log('Moved to current location: ' + lat + ', ' + lng);
+            }
+
+            // 현재 위치 마커 업데이트
+            window.postMessage({type: 'currentLocation', lat: lat, lng: lng}, '*');
+          },
+          function(error) {
+            var errorMsg = '';
+            switch(error.code) {
+              case error.PERMISSION_DENIED:
+                errorMsg = '위치 권한이 거부되었습니다.';
+                break;
+              case error.POSITION_UNAVAILABLE:
+                errorMsg = '위치 정보를 사용할 수 없습니다.';
+                break;
+              case error.TIMEOUT:
+                errorMsg = '위치 요청 시간이 초과되었습니다.';
+                break;
+              default:
+                errorMsg = '알 수 없는 오류가 발생했습니다.';
+            }
+            window.postMessage({type: 'geolocationError', error: errorMsg}, '*');
+          },
+          {enableHighAccuracy: true, timeout: 10000, maximumAge: 0}
+        );
+      })();
+    ''';
+    html.document.body?.append(html.ScriptElement()..text = jsCode);
+  }
+
+  /// 현재 위치 마커 표시/업데이트
+  void _showCurrentLocationMarker(double lat, double lng) {
+    final jsCode = '''
+      (function() {
+        if (typeof kakao === 'undefined') return;
+        var map = window['kakaoMapInstance_$_containerId'];
+        if (!map) return;
+
+        // 기존 현재 위치 마커 제거
+        var existingMarker = window['kakaoCurrentLocationMarker_$_containerId'];
+        var existingCircle = window['kakaoCurrentLocationCircle_$_containerId'];
+        if (existingMarker) {
+          existingMarker.setMap(null);
+        }
+        if (existingCircle) {
+          existingCircle.setMap(null);
+        }
+
+        var position = new kakao.maps.LatLng($lat, $lng);
+
+        // 현재 위치 원 (정확도 표시)
+        var circle = new kakao.maps.Circle({
+          center: position,
+          radius: 30,
+          strokeWeight: 1,
+          strokeColor: '#4285F4',
+          strokeOpacity: 0.8,
+          strokeStyle: 'solid',
+          fillColor: '#4285F4',
+          fillOpacity: 0.15
+        });
+        circle.setMap(map);
+        window['kakaoCurrentLocationCircle_$_containerId'] = circle;
+
+        // 현재 위치 마커 (파란 점)
+        var markerContent = '<div style="' +
+          'width: 20px;' +
+          'height: 20px;' +
+          'background: #4285F4;' +
+          'border: 3px solid white;' +
+          'border-radius: 50%;' +
+          'box-shadow: 0 2px 6px rgba(0,0,0,0.3);' +
+          '"></div>';
+
+        var customOverlay = new kakao.maps.CustomOverlay({
+          position: position,
+          content: markerContent,
+          yAnchor: 0.5,
+          xAnchor: 0.5,
+          zIndex: 10
+        });
+        customOverlay.setMap(map);
+        window['kakaoCurrentLocationMarker_$_containerId'] = customOverlay;
+
+        console.log('Current location marker shown at: $lat, $lng');
+      })();
+    ''';
+    html.document.body?.append(html.ScriptElement()..text = jsCode);
+  }
+
   /// 특정 스테이션 위치로 카메라 이동 (외부에서 호출 가능)
   void moveToStation(RadioStation station) {
     if (!station.hasCoordinates || !_isMapReady) return;
@@ -166,6 +300,9 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
     }
   }
 
+  /// 위치 오류 콜백 (외부에서 설정 가능)
+  Function(String error)? onGeolocationError;
+
   void _setupMessageListener() {
     // 기존 구독이 있으면 취소하고 새로 등록
     _messageSubscription?.cancel();
@@ -191,6 +328,19 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
               // 1개면 바로 콜백 호출
               widget.onMarkerTap!(stationsAtLocation.first);
             }
+          }
+        } else if (data['type'] == 'currentLocation') {
+          // 현재 위치 수신 - 마커 표시
+          final lat = data['lat'] as num?;
+          final lng = data['lng'] as num?;
+          if (lat != null && lng != null) {
+            _showCurrentLocationMarker(lat.toDouble(), lng.toDouble());
+          }
+        } else if (data['type'] == 'geolocationError') {
+          // 위치 오류 처리
+          final error = data['error'] as String?;
+          if (error != null && onGeolocationError != null) {
+            onGeolocationError!(error);
           }
         }
       }

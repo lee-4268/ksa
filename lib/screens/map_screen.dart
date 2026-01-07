@@ -44,9 +44,9 @@ class _MapScreenState extends State<MapScreen>
   final Set<String> _selectedStationIds = {}; // 선택된 스테이션 ID들
 
   // 드래그 관련 상태 (맵 리사이즈 없이 리스트만 드래그)
-  double _listHeightRatio = 0.35; // 리스트 높이 비율 (0.25 ~ 0.6) - 기본값 낮춤
-  static const double _minListRatio = 0.25;
-  static const double _maxListRatio = 0.6;
+  double _listHeightRatio = 0.35; // 리스트 높이 비율 (0.15 ~ 0.85) - 기본값 낮춤
+  static const double _minListRatio = 0.15; // 최소 15%로 줄여서 맵이 더 많이 보이도록
+  static const double _maxListRatio = 0.85; // 최대 85%로 늘려서 리스트를 더 크게 볼 수 있도록
 
   @override
   void initState() {
@@ -179,10 +179,20 @@ class _MapScreenState extends State<MapScreen>
                 // 지도 (왼쪽 70%) - 카테고리 목록에서는 마커 없이 표시 (최적화)
                 Expanded(
                   flex: 7,
-                  child: platform_map.PlatformMapWidget(
-                    key: _mapKey,
-                    stations: const [], // 카테고리 목록에서는 마커 표시 안함
-                    onMarkerTap: _showStationDetail,
+                  child: Stack(
+                    children: [
+                      platform_map.PlatformMapWidget(
+                        key: _mapKey,
+                        stations: const [], // 카테고리 목록에서는 마커 표시 안함
+                        onMarkerTap: _showStationDetail,
+                      ),
+                      // 내 위치 버튼
+                      Positioned(
+                        right: 16,
+                        bottom: 16,
+                        child: _buildMyLocationButton(_mapKey),
+                      ),
+                    ],
                   ),
                 ),
                 // 카테고리 리스트 (오른쪽 30%)
@@ -224,10 +234,20 @@ class _MapScreenState extends State<MapScreen>
                   Expanded(
                     child: Container(
                       color: const Color(0xFFF0F0F0),
-                      child: platform_map.PlatformMapWidget(
-                        key: _mapKey,
-                        stations: const [], // 카테고리 목록에서는 마커 표시 안함 (최적화)
-                        onMarkerTap: _showStationDetail,
+                      child: Stack(
+                        children: [
+                          platform_map.PlatformMapWidget(
+                            key: _mapKey,
+                            stations: const [], // 카테고리 목록에서는 마커 표시 안함 (최적화)
+                            onMarkerTap: _showStationDetail,
+                          ),
+                          // 내 위치 버튼
+                          Positioned(
+                            right: 16,
+                            bottom: _listHeightRatio * MediaQuery.of(context).size.height + 16,
+                            child: _buildMyLocationButton(_mapKey),
+                          ),
+                        ],
                       ),
                     ),
                   ),
@@ -236,50 +256,69 @@ class _MapScreenState extends State<MapScreen>
             ),
 
             // 리스트 오버레이 - 드래그로 높이 조절
-            // behavior: HitTestBehavior.opaque로 맵에 이벤트 전달 방지
+            // 맵 드래그 비활성화 API 사용 (웹에서 HtmlElementView 이벤트 문제 해결)
             Positioned(
               left: 0,
               right: 0,
               bottom: 0,
               height: listHeight,
-              child: GestureDetector(
+              child: Listener(
                 behavior: HitTestBehavior.opaque, // 맵으로 이벤트 전달 방지
-                onVerticalDragUpdate: (details) {
-                  setState(() {
-                    _listHeightRatio = (_listHeightRatio - details.delta.dy / screenHeight)
-                        .clamp(_minListRatio, _maxListRatio);
-                  });
+                onPointerDown: (_) {
+                  // 리스트 터치 시 맵 드래그 비활성화
+                  _mapKey.currentState?.setMapDraggable(false);
                 },
-                onHorizontalDragUpdate: (_) {}, // 수평 드래그도 소비하여 맵에 전달 방지
-                child: Container(
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.1),
-                        blurRadius: 10,
-                        offset: const Offset(0, -2),
-                      ),
-                    ],
-                  ),
-                  child: Column(
-                    children: [
-                      // 드래그 핸들
-                      Center(
-                        child: Container(
-                          margin: const EdgeInsets.symmetric(vertical: 12),
-                          width: 40,
-                          height: 4,
-                          decoration: BoxDecoration(
-                            color: Colors.grey[400],
-                            borderRadius: BorderRadius.circular(2),
+                onPointerUp: (_) {
+                  // 터치 종료 시 맵 드래그 활성화
+                  _mapKey.currentState?.setMapDraggable(true);
+                },
+                onPointerCancel: (_) {
+                  // 터치 취소 시 맵 드래그 활성화
+                  _mapKey.currentState?.setMapDraggable(true);
+                },
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onVerticalDragUpdate: (details) {
+                    setState(() {
+                      _listHeightRatio = (_listHeightRatio - details.delta.dy / screenHeight)
+                          .clamp(_minListRatio, _maxListRatio);
+                    });
+                  },
+                  onVerticalDragEnd: (_) {
+                    // 드래그 종료 시 맵 드래그 활성화
+                    _mapKey.currentState?.setMapDraggable(true);
+                  },
+                  onHorizontalDragUpdate: (_) {}, // 수평 드래그도 소비
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.1),
+                          blurRadius: 10,
+                          offset: const Offset(0, -2),
+                        ),
+                      ],
+                    ),
+                    child: Column(
+                      children: [
+                        // 드래그 핸들
+                        Center(
+                          child: Container(
+                            margin: const EdgeInsets.symmetric(vertical: 12),
+                            width: 40,
+                            height: 4,
+                            decoration: BoxDecoration(
+                              color: Colors.grey[400],
+                              borderRadius: BorderRadius.circular(2),
+                            ),
                           ),
                         ),
-                      ),
-                      // 콘텐츠
-                      Expanded(child: _buildCategorySheet(provider)),
-                    ],
+                        // 콘텐츠
+                        Expanded(child: _buildCategorySheet(provider)),
+                      ],
+                    ),
                   ),
                 ),
               ),
@@ -405,6 +444,12 @@ class _MapScreenState extends State<MapScreen>
                               ),
                             ),
                           ),
+                          // 내 위치 버튼
+                          Positioned(
+                            right: 16,
+                            bottom: 16,
+                            child: _buildMyLocationButton(_detailMapKey),
+                          ),
                         ],
                       ),
                     ),
@@ -485,6 +530,12 @@ class _MapScreenState extends State<MapScreen>
                               ),
                             ),
                           ),
+                          // 내 위치 버튼
+                          Positioned(
+                            right: 16,
+                            bottom: _listHeightRatio * MediaQuery.of(context).size.height + 16,
+                            child: _buildMyLocationButton(_detailMapKey),
+                          ),
                         ],
                       ),
                     ),
@@ -494,50 +545,69 @@ class _MapScreenState extends State<MapScreen>
             ),
 
             // 리스트 오버레이 - 드래그로 높이 조절
-            // behavior: HitTestBehavior.opaque로 맵에 이벤트 전달 방지
+            // 맵 드래그 비활성화 API 사용 (웹에서 HtmlElementView 이벤트 문제 해결)
             Positioned(
               left: 0,
               right: 0,
               bottom: 0,
               height: listHeight,
-              child: GestureDetector(
+              child: Listener(
                 behavior: HitTestBehavior.opaque, // 맵으로 이벤트 전달 방지
-                onVerticalDragUpdate: (details) {
-                  setState(() {
-                    _listHeightRatio = (_listHeightRatio - details.delta.dy / screenHeight)
-                        .clamp(_minListRatio, _maxListRatio);
-                  });
+                onPointerDown: (_) {
+                  // 리스트 터치 시 맵 드래그 비활성화
+                  _detailMapKey.currentState?.setMapDraggable(false);
                 },
-                onHorizontalDragUpdate: (_) {}, // 수평 드래그도 소비하여 맵에 전달 방지
-                child: Container(
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.1),
-                        blurRadius: 10,
-                        offset: const Offset(0, -2),
-                      ),
-                    ],
-                  ),
-                  child: Column(
-                    children: [
-                      // 드래그 핸들
-                      Center(
-                        child: Container(
-                          margin: const EdgeInsets.symmetric(vertical: 12),
-                          width: 40,
-                          height: 4,
-                          decoration: BoxDecoration(
-                            color: Colors.grey[400],
-                            borderRadius: BorderRadius.circular(2),
+                onPointerUp: (_) {
+                  // 터치 종료 시 맵 드래그 활성화
+                  _detailMapKey.currentState?.setMapDraggable(true);
+                },
+                onPointerCancel: (_) {
+                  // 터치 취소 시 맵 드래그 활성화
+                  _detailMapKey.currentState?.setMapDraggable(true);
+                },
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onVerticalDragUpdate: (details) {
+                    setState(() {
+                      _listHeightRatio = (_listHeightRatio - details.delta.dy / screenHeight)
+                          .clamp(_minListRatio, _maxListRatio);
+                    });
+                  },
+                  onVerticalDragEnd: (_) {
+                    // 드래그 종료 시 맵 드래그 활성화
+                    _detailMapKey.currentState?.setMapDraggable(true);
+                  },
+                  onHorizontalDragUpdate: (_) {}, // 수평 드래그도 소비
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.1),
+                          blurRadius: 10,
+                          offset: const Offset(0, -2),
+                        ),
+                      ],
+                    ),
+                    child: Column(
+                      children: [
+                        // 드래그 핸들
+                        Center(
+                          child: Container(
+                            margin: const EdgeInsets.symmetric(vertical: 12),
+                            width: 40,
+                            height: 4,
+                            decoration: BoxDecoration(
+                              color: Colors.grey[400],
+                              borderRadius: BorderRadius.circular(2),
+                            ),
                           ),
                         ),
-                      ),
-                      // 콘텐츠
-                      Expanded(child: _buildDetailList(provider, categoryStations)),
-                    ],
+                        // 콘텐츠
+                        Expanded(child: _buildDetailList(provider, categoryStations)),
+                      ],
+                    ),
                   ),
                 ),
               ),
@@ -1610,6 +1680,53 @@ class _MapScreenState extends State<MapScreen>
     );
   }
 
+  /// 내 위치 버튼 빌드
+  Widget _buildMyLocationButton(GlobalKey<platform_map.PlatformMapWidgetState> mapKey) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        shape: BoxShape.circle,
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.2),
+            blurRadius: 6,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Material(
+        color: Colors.transparent,
+        shape: const CircleBorder(),
+        child: InkWell(
+          customBorder: const CircleBorder(),
+          onTap: () {
+            // GPS 오류 콜백 설정
+            mapKey.currentState?.onGeolocationError = (error) {
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(error),
+                    backgroundColor: Colors.red,
+                  ),
+                );
+              }
+            };
+            // 현재 위치로 이동
+            mapKey.currentState?.moveToCurrentLocation();
+          },
+          child: const Padding(
+            padding: EdgeInsets.all(12),
+            child: Icon(
+              Icons.my_location,
+              color: Colors.black87,
+              size: 24,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Future<void> _importExcel() async {
     final provider = context.read<StationProvider>();
     await provider.importFromExcel();
@@ -1623,29 +1740,8 @@ class _MapScreenState extends State<MapScreen>
     }
   }
 
-  /// 로그아웃 처리
+  /// 로그아웃 처리 (팝업 없이 바로 로그아웃)
   Future<void> _handleLogout() async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('로그아웃'),
-        content: const Text('로그아웃 하시겠습니까?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('취소'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, true),
-            style: TextButton.styleFrom(foregroundColor: Colors.red),
-            child: const Text('로그아웃'),
-          ),
-        ],
-      ),
-    );
-
-    if (confirmed != true || !mounted) return;
-
     final authService = context.read<AuthService>();
     await authService.signOut();
 
