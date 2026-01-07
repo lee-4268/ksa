@@ -883,6 +883,69 @@ class ExcelService {
     return name.replaceAll(RegExp(r'[<>:"/\\|?*\s]'), '_');
   }
 
+  /// 사진 경로에서 확장자 추출 (URL 형식에 따라 다르게 처리)
+  String _extractPhotoExtension(String photoPath) {
+    // 1. base64 data URL인 경우: data:image/png;base64,... 또는 data:image/jpeg;base64,...
+    if (photoPath.startsWith('data:image/')) {
+      // data:image/png;base64,... 에서 'png' 추출
+      final mimeEnd = photoPath.indexOf(';');
+      if (mimeEnd > 11) {
+        final mimeType = photoPath.substring(11, mimeEnd); // 'png', 'jpeg', 'gif' 등
+        // jpeg -> jpg 변환
+        if (mimeType == 'jpeg') return 'jpg';
+        return mimeType;
+      }
+      return 'jpg'; // 기본값
+    }
+
+    // 2. S3 URL인 경우: s3://private/photos/stationId/1234567890_photo.jpg
+    if (photoPath.startsWith('s3://')) {
+      final lastDot = photoPath.lastIndexOf('.');
+      final lastSlash = photoPath.lastIndexOf('/');
+      if (lastDot > lastSlash && lastDot < photoPath.length - 1) {
+        final ext = photoPath.substring(lastDot + 1).toLowerCase();
+        // 유효한 이미지 확장자인지 확인
+        if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'].contains(ext)) {
+          return ext == 'jpeg' ? 'jpg' : ext;
+        }
+      }
+      return 'jpg'; // 기본값
+    }
+
+    // 3. HTTP/HTTPS URL인 경우
+    if (photoPath.startsWith('http://') || photoPath.startsWith('https://')) {
+      // 쿼리 스트링 제거
+      var cleanPath = photoPath.split('?').first;
+      final lastDot = cleanPath.lastIndexOf('.');
+      if (lastDot > 0 && lastDot < cleanPath.length - 1) {
+        final ext = cleanPath.substring(lastDot + 1).toLowerCase();
+        // 유효한 이미지 확장자인지 확인
+        if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'].contains(ext)) {
+          return ext == 'jpeg' ? 'jpg' : ext;
+        }
+      }
+      return 'jpg'; // 기본값
+    }
+
+    // 4. blob URL인 경우 (확장자 정보 없음)
+    if (photoPath.startsWith('blob:')) {
+      return 'jpg'; // 기본값
+    }
+
+    // 5. 일반 파일 경로인 경우
+    final lastDot = photoPath.lastIndexOf('.');
+    if (lastDot > 0 && lastDot < photoPath.length - 1) {
+      final ext = photoPath.substring(lastDot + 1).toLowerCase();
+      // 유효한 이미지 확장자인지 확인 (최대 4자)
+      if (ext.length <= 4 && ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'].contains(ext)) {
+        return ext == 'jpeg' ? 'jpg' : ext;
+      }
+    }
+
+    // 기본값
+    return 'jpg';
+  }
+
   /// 무선국 목록을 Excel 파일로 내보내기 (사진 포함 ZIP)
   /// saveOnly: true면 저장만, false면 저장 후 반환 (공유용)
   Future<String?> exportToExcel(List<RadioStation> stations, String categoryName, {bool saveOnly = false}) async {
@@ -953,7 +1016,8 @@ class ExcelService {
 
           for (int j = 0; j < station.photoPaths!.length; j++) {
             final photoPath = station.photoPaths![j];
-            final extension = photoPath.split('.').last.toLowerCase();
+            // 확장자 추출 (URL 형식에 따라 다르게 처리)
+            final extension = _extractPhotoExtension(photoPath);
             // 파일명: 사진1.jpg, 사진2.jpg 형식
             final photoFileName = station.photoPaths!.length == 1
                 ? '사진.$extension'
