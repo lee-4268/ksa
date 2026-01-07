@@ -27,6 +27,28 @@ class AuthService extends ChangeNotifier {
     return null;
   }
 
+  /// 현재 사용자 이름 (name attribute)
+  String? _userName;
+  String? get userName => _userName;
+
+  /// 사용자 속성 조회 (이름 등)
+  Future<void> fetchUserAttributes() async {
+    if (!isSignedIn) return;
+
+    try {
+      final attributes = await Amplify.Auth.fetchUserAttributes();
+      for (final attr in attributes) {
+        if (attr.userAttributeKey == AuthUserAttributeKey.name) {
+          _userName = attr.value;
+          break;
+        }
+      }
+      notifyListeners();
+    } catch (e) {
+      debugPrint('사용자 속성 조회 오류: $e');
+    }
+  }
+
   /// 초기화 - 현재 로그인 상태 확인
   Future<void> init() async {
     if (_isInitialized) return;
@@ -41,6 +63,8 @@ class AuthService extends ChangeNotifier {
       if (session.isSignedIn) {
         _currentUser = await Amplify.Auth.getCurrentUser();
         debugPrint('로그인 상태: ${_currentUser?.userId}');
+        // 사용자 속성(이름 등) 조회 - 백그라운드에서 비동기 처리 (로그인 속도 개선)
+        fetchUserAttributes();
       } else {
         debugPrint('로그인 필요');
       }
@@ -141,25 +165,41 @@ class AuthService extends ChangeNotifier {
     notifyListeners();
 
     try {
-      // 기존 세션이 있으면 로그아웃
-      try {
-        await Amplify.Auth.signOut();
-      } catch (_) {}
-
+      // 로그인 시도 (기존 세션 로그아웃 제거 - 불필요한 네트워크 요청)
       final result = await Amplify.Auth.signIn(
         username: email,
         password: password,
       );
 
       if (result.isSignedIn) {
+        // getCurrentUser 호출을 병렬로 처리하지 않고 필수이므로 await
+        // 하지만 fetchUserAttributes는 백그라운드에서 처리
         _currentUser = await Amplify.Auth.getCurrentUser();
         debugPrint('로그인 성공: ${_currentUser?.userId}');
+        // 사용자 속성(이름 등) 조회 - 백그라운드에서 비동기 처리 (로그인 속도 개선)
+        fetchUserAttributes();
       }
 
       _isLoading = false;
       notifyListeners();
       return result.isSignedIn;
     } on AuthException catch (e) {
+      // 이미 로그인된 상태에서 다시 로그인 시도하는 경우
+      if (e.message.toLowerCase().contains('already') ||
+          e.message.toLowerCase().contains('signed in')) {
+        // 기존 세션 로그아웃 후 재시도
+        try {
+          await Amplify.Auth.signOut();
+          // 재귀 호출로 다시 로그인 시도
+          return signIn(email, password);
+        } catch (_) {
+          _errorMessage = _mapAuthError(e);
+          _isLoading = false;
+          notifyListeners();
+          return false;
+        }
+      }
+
       _errorMessage = _mapAuthError(e);
       debugPrint('로그인 오류: $_errorMessage');
       _isLoading = false;

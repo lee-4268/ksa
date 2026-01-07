@@ -162,27 +162,13 @@ class _MapScreenState extends State<MapScreen>
     if (kIsWeb && isWideScreen) {
       return Column(
         children: [
-          // 상단 SafeArea + 검색바 (별도 StatefulWidget으로 분리하여 맵 리빌드 방지)
+          // 상단 SafeArea + 환영 헤더 (검색창 대신 환영 문구와 로그아웃 버튼)
           Container(
             color: Colors.white,
             child: SafeArea(
               bottom: false,
-              child: _SearchBarWidget(
-                stations: provider.stations,
-                mapKey: _mapKey,
-                onStationSelected: (station) {
-                  _showStationDetail(station);
-                },
-                onCategorySelected: (category, targetStation) {
-                  setState(() {
-                    _selectedCategory = category;
-                    _targetStationOnCategoryEnter = targetStation;
-                    // 카테고리 진입 시 이전 초기 위치 정보 초기화 (새로 계산되도록)
-                    _lastFittedCategory = null;
-                    _initialMapStation = null;
-                    _initialMapZoomLevel = null;
-                  });
-                },
+              child: _WelcomeHeaderWidget(
+                onLogout: _handleLogout,
               ),
             ),
           ),
@@ -224,28 +210,13 @@ class _MapScreenState extends State<MapScreen>
             Positioned.fill(
               child: Column(
                 children: [
-                  // 상단 SafeArea + 검색바 (별도 StatefulWidget으로 분리하여 맵 리빌드 방지)
+                  // 상단 SafeArea + 환영 헤더 (검색창 대신 환영 문구와 로그아웃 버튼)
                   Container(
                     color: Colors.white,
                     child: SafeArea(
                       bottom: false,
-                      child: _SearchBarWidget(
-                        stations: provider.stations,
-                        mapKey: _mapKey,
-                        onStationSelected: (station) {
-                          _showStationDetail(station);
-                        },
-                        onCategorySelected: (category, targetStation) {
-                          setState(() {
-                            _selectedCategory = category;
-                            _targetStationOnCategoryEnter = targetStation;
-                            // 카테고리 진입 시 이전 초기 위치 정보 초기화 (새로 계산되도록)
-                            _lastFittedCategory = null;
-                            _initialMapStation = null;
-                            _initialMapZoomLevel = null;
-                          });
-                          // 맵 이동은 _buildMapDetailView에서 통합 처리
-                        },
+                      child: _WelcomeHeaderWidget(
+                        onLogout: _handleLogout,
                       ),
                     ),
                   ),
@@ -265,18 +236,21 @@ class _MapScreenState extends State<MapScreen>
             ),
 
             // 리스트 오버레이 - 드래그로 높이 조절
+            // behavior: HitTestBehavior.opaque로 맵에 이벤트 전달 방지
             Positioned(
               left: 0,
               right: 0,
               bottom: 0,
               height: listHeight,
               child: GestureDetector(
+                behavior: HitTestBehavior.opaque, // 맵으로 이벤트 전달 방지
                 onVerticalDragUpdate: (details) {
                   setState(() {
                     _listHeightRatio = (_listHeightRatio - details.delta.dy / screenHeight)
                         .clamp(_minListRatio, _maxListRatio);
                   });
                 },
+                onHorizontalDragUpdate: (_) {}, // 수평 드래그도 소비하여 맵에 전달 방지
                 child: Container(
                   decoration: BoxDecoration(
                     color: Colors.white,
@@ -520,18 +494,21 @@ class _MapScreenState extends State<MapScreen>
             ),
 
             // 리스트 오버레이 - 드래그로 높이 조절
+            // behavior: HitTestBehavior.opaque로 맵에 이벤트 전달 방지
             Positioned(
               left: 0,
               right: 0,
               bottom: 0,
               height: listHeight,
               child: GestureDetector(
+                behavior: HitTestBehavior.opaque, // 맵으로 이벤트 전달 방지
                 onVerticalDragUpdate: (details) {
                   setState(() {
                     _listHeightRatio = (_listHeightRatio - details.delta.dy / screenHeight)
                         .clamp(_minListRatio, _maxListRatio);
                   });
                 },
+                onHorizontalDragUpdate: (_) {}, // 수평 드래그도 소비하여 맵에 전달 방지
                 child: Container(
                   decoration: BoxDecoration(
                     color: Colors.white,
@@ -683,71 +660,6 @@ class _MapScreenState extends State<MapScreen>
                 ),
               ),
             ),
-
-          // 사용자 정보 및 메뉴 헤더
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                // 사용자 이메일 표시
-                Consumer<AuthService>(
-                  builder: (context, authService, _) {
-                    return Row(
-                      children: [
-                        Icon(Icons.person, size: 18, color: Colors.grey[600]),
-                        const SizedBox(width: 4),
-                        Text(
-                          authService.userEmail ?? '사용자',
-                          style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                        ),
-                      ],
-                    );
-                  },
-                ),
-                // 메뉴 버튼
-                PopupMenuButton<String>(
-                  onSelected: (value) => _handleMenuAction(value),
-                  itemBuilder: (context) => [
-                    const PopupMenuItem(
-                      value: 'sync_upload',
-                      child: Row(
-                        children: [
-                          Icon(Icons.cloud_upload, size: 20),
-                          SizedBox(width: 8),
-                          Text('클라우드 업로드'),
-                        ],
-                      ),
-                    ),
-                    const PopupMenuItem(
-                      value: 'sync_download',
-                      child: Row(
-                        children: [
-                          Icon(Icons.cloud_download, size: 20),
-                          SizedBox(width: 8),
-                          Text('클라우드 다운로드'),
-                        ],
-                      ),
-                    ),
-                    const PopupMenuDivider(),
-                    const PopupMenuItem(
-                      value: 'logout',
-                      child: Row(
-                        children: [
-                          Icon(Icons.logout, size: 20, color: Colors.red),
-                          SizedBox(width: 8),
-                          Text('로그아웃', style: TextStyle(color: Colors.red)),
-                        ],
-                      ),
-                    ),
-                  ],
-                  icon: Icon(Icons.more_vert, color: Colors.grey[600]),
-                ),
-              ],
-            ),
-          ),
-
-          const SizedBox(height: 8),
 
           // 전체 리스트 헤더
           Padding(
@@ -1514,20 +1426,23 @@ class _MapScreenState extends State<MapScreen>
   }
 
   void _confirmDeleteCategory(String category) {
+    final provider = context.read<StationProvider>();
+    final stationCount = provider.stationsByCategory[category]?.length ?? 0;
+
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (dialogContext) => AlertDialog(
         title: const Text('카테고리 삭제'),
-        content: Text('$category의 모든 데이터를 삭제하시겠습니까?'),
+        content: Text('$category의 모든 데이터($stationCount개)를 삭제하시겠습니까?'),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
+            onPressed: () => Navigator.pop(dialogContext),
             child: const Text('취소'),
           ),
           TextButton(
             onPressed: () {
-              Navigator.pop(context);
-              context.read<StationProvider>().deleteCategoryData(category);
+              Navigator.pop(dialogContext);
+              _deleteCategoryWithProgress(category, stationCount);
             },
             style: TextButton.styleFrom(foregroundColor: Colors.red),
             child: const Text('삭제'),
@@ -1535,6 +1450,144 @@ class _MapScreenState extends State<MapScreen>
         ],
       ),
     );
+  }
+
+  /// 카테고리 삭제 시 진행률 표시 (import 스타일 - 전체 화면 오버레이)
+  Future<void> _deleteCategoryWithProgress(String category, int totalCount) async {
+    // 진행률 상태 관리
+    final progressNotifier = ValueNotifier<double>(0.0);
+    final statusNotifier = ValueNotifier<String>('$category 삭제 준비 중...');
+
+    // 전체 화면 진행률 오버레이 표시
+    final overlayEntry = OverlayEntry(
+      builder: (context) => Material(
+        color: Colors.white,
+        child: SafeArea(
+          child: Center(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 40),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  // 진행률 바
+                  ValueListenableBuilder<double>(
+                    valueListenable: progressNotifier,
+                    builder: (context, progress, _) {
+                      return ClipRRect(
+                        borderRadius: BorderRadius.circular(8),
+                        child: LinearProgressIndicator(
+                          value: progress > 0 ? progress : null,
+                          minHeight: 12,
+                          backgroundColor: Colors.grey[200],
+                          valueColor: const AlwaysStoppedAnimation<Color>(Colors.red),
+                        ),
+                      );
+                    },
+                  ),
+                  const SizedBox(height: 16),
+                  // 진행률 퍼센트
+                  ValueListenableBuilder<double>(
+                    valueListenable: progressNotifier,
+                    builder: (context, progress, _) {
+                      return Text(
+                        '${(progress * 100).toInt()}%',
+                        style: const TextStyle(
+                          fontSize: 24,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.red,
+                        ),
+                      );
+                    },
+                  ),
+                  const SizedBox(height: 8),
+                  // 상태 메시지
+                  ValueListenableBuilder<String>(
+                    valueListenable: statusNotifier,
+                    builder: (context, status, _) {
+                      return Text(
+                        status,
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: Colors.grey[600],
+                        ),
+                        textAlign: TextAlign.center,
+                      );
+                    },
+                  ),
+                  // 처리 항목 수
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: ValueListenableBuilder<double>(
+                      valueListenable: progressNotifier,
+                      builder: (context, progress, _) {
+                        final processed = (progress * totalCount).toInt();
+                        return Text(
+                          '$processed / $totalCount',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Colors.grey[500],
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    // 오버레이 삽입
+    Overlay.of(context).insert(overlayEntry);
+
+    try {
+      // 삭제 실행 (진행률 콜백 전달)
+      statusNotifier.value = '$category 삭제 중...';
+      await context.read<StationProvider>().deleteCategoryData(
+        category,
+        onProgress: (progress) {
+          progressNotifier.value = progress;
+        },
+      );
+
+      progressNotifier.value = 1.0;
+      statusNotifier.value = '삭제 완료!';
+
+      // 잠시 대기 후 오버레이 제거
+      await Future.delayed(const Duration(milliseconds: 500));
+
+      if (!mounted) return;
+
+      // 오버레이 제거
+      overlayEntry.remove();
+      progressNotifier.dispose();
+      statusNotifier.dispose();
+
+      // 완료 메시지
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('$category가 삭제되었습니다.'),
+          backgroundColor: Colors.green,
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+
+      // 오버레이 제거
+      overlayEntry.remove();
+      progressNotifier.dispose();
+      statusNotifier.dispose();
+
+      // 오류 메시지
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('삭제 실패: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
   }
 
   void _openRoadview(RadioStation station) {
@@ -1565,112 +1618,6 @@ class _MapScreenState extends State<MapScreen>
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('${provider.stations.length}개의 무선국을 가져왔습니다.'),
-        ),
-      );
-    }
-  }
-
-  /// 메뉴 액션 처리
-  Future<void> _handleMenuAction(String action) async {
-    switch (action) {
-      case 'sync_upload':
-        await _syncToCloud();
-        break;
-      case 'sync_download':
-        await _syncFromCloud();
-        break;
-      case 'logout':
-        await _handleLogout();
-        break;
-    }
-  }
-
-  /// 클라우드로 데이터 업로드
-  Future<void> _syncToCloud() async {
-    final provider = context.read<StationProvider>();
-    final cloudService = context.read<CloudDataService>();
-
-    // CloudDataService 연결
-    provider.setCloudDataService(cloudService);
-
-    if (provider.categories.isEmpty) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('업로드할 데이터가 없습니다.')),
-        );
-      }
-      return;
-    }
-
-    // 확인 다이얼로그
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('클라우드 업로드'),
-        content: Text('${provider.categories.length}개의 카테고리를 클라우드에 업로드하시겠습니까?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('취소'),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('업로드'),
-          ),
-        ],
-      ),
-    );
-
-    if (confirmed != true || !mounted) return;
-
-    final success = await provider.syncAllToCloud();
-
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(success ? '클라우드 업로드가 완료되었습니다.' : '클라우드 업로드에 실패했습니다.'),
-          backgroundColor: success ? Colors.green : Colors.red,
-        ),
-      );
-    }
-  }
-
-  /// 클라우드에서 데이터 다운로드
-  Future<void> _syncFromCloud() async {
-    final provider = context.read<StationProvider>();
-    final cloudService = context.read<CloudDataService>();
-
-    // CloudDataService 연결
-    provider.setCloudDataService(cloudService);
-
-    // 확인 다이얼로그
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('클라우드 다운로드'),
-        content: const Text('클라우드에서 데이터를 다운로드하시겠습니까?\n기존 로컬 데이터와 병합됩니다.'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('취소'),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('다운로드'),
-          ),
-        ],
-      ),
-    );
-
-    if (confirmed != true || !mounted) return;
-
-    final success = await provider.syncFromCloud();
-
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(success ? '클라우드 다운로드가 완료되었습니다.' : '클라우드 다운로드에 실패했습니다.'),
-          backgroundColor: success ? Colors.green : Colors.red,
         ),
       );
     }
@@ -1790,6 +1737,67 @@ class _MapScreenState extends State<MapScreen>
         SnackBar(content: Text('Excel 내보내기 실패: $e')),
       );
     }
+  }
+}
+
+/// 환영 헤더 위젯 (검색창 대신 환영 문구와 로그아웃 버튼 표시)
+class _WelcomeHeaderWidget extends StatelessWidget {
+  final VoidCallback onLogout;
+
+  const _WelcomeHeaderWidget({
+    required this.onLogout,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.all(12),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(8),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.1),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          // 환영 문구
+          Expanded(
+            child: Consumer<AuthService>(
+              builder: (context, authService, _) {
+                final userName = authService.userName;
+                final displayName = userName != null && userName.isNotEmpty
+                    ? userName
+                    : (authService.userEmail?.split('@').first ?? '사용자');
+                return Text(
+                  '$displayName님, 어서오세요.',
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                  ),
+                );
+              },
+            ),
+          ),
+          // 로그아웃 버튼
+          TextButton.icon(
+            onPressed: onLogout,
+            icon: const Icon(Icons.logout, size: 18, color: Colors.red),
+            label: const Text('로그아웃', style: TextStyle(color: Colors.red, fontSize: 13)),
+            style: TextButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              minimumSize: Size.zero,
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
 

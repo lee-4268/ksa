@@ -76,12 +76,12 @@ class CloudDataService extends ChangeNotifier {
     }
   }
 
-  /// 모든 카테고리 조회
+  /// 모든 카테고리 조회 (페이지네이션 처리)
   Future<List<Map<String, dynamic>>> listCategories() async {
     try {
       const query = '''
-        query ListCategories {
-          listCategories {
+        query ListCategories(\$limit: Int, \$nextToken: String) {
+          listCategories(limit: \$limit, nextToken: \$nextToken) {
             items {
               id
               name
@@ -89,29 +89,51 @@ class CloudDataService extends ChangeNotifier {
               updatedAt
               owner
             }
+            nextToken
           }
         }
       ''';
 
-      final request = GraphQLRequest<String>(
-        document: query,
-        authorizationMode: APIAuthorizationType.userPools,
-      );
-      final response = await Amplify.API.query(request: request).response;
+      final allCategories = <Map<String, dynamic>>[];
+      String? nextToken;
 
-      if (response.hasErrors) {
-        debugPrint('카테고리 목록 조회 오류: ${response.errors}');
-        return [];
-      }
+      // 페이지네이션 처리 - 모든 데이터를 가져올 때까지 반복
+      do {
+        final request = GraphQLRequest<String>(
+          document: query,
+          variables: {
+            'limit': 1000, // 한 번에 최대 1000개 요청
+            if (nextToken != null) 'nextToken': nextToken,
+          },
+          authorizationMode: APIAuthorizationType.userPools,
+        );
 
-      final data = response.data;
-      if (data != null) {
-        final jsonData = _parseJson(data);
-        final items = jsonData?['listCategories']?['items'] as List?;
-        return items?.cast<Map<String, dynamic>>() ?? [];
-      }
+        final response = await Amplify.API.query(request: request).response;
 
-      return [];
+        if (response.hasErrors) {
+          debugPrint('카테고리 목록 조회 오류: ${response.errors}');
+          break;
+        }
+
+        final data = response.data;
+        if (data != null) {
+          final jsonData = _parseJson(data);
+          final listCategories = jsonData?['listCategories'];
+          final items = listCategories?['items'] as List?;
+
+          if (items != null && items.isNotEmpty) {
+            allCategories.addAll(items.cast<Map<String, dynamic>>());
+          }
+
+          // 다음 페이지 토큰
+          nextToken = listCategories?['nextToken'] as String?;
+        } else {
+          break;
+        }
+      } while (nextToken != null);
+
+      debugPrint('카테고리 ${allCategories.length}개 조회');
+      return allCategories;
     } catch (e) {
       debugPrint('카테고리 목록 조회 실패: $e');
       return [];
@@ -256,12 +278,12 @@ class CloudDataService extends ChangeNotifier {
     }
   }
 
-  /// 카테고리별 무선국 목록 조회
+  /// 카테고리별 무선국 목록 조회 (페이지네이션 처리)
   Future<List<RadioStation>> listStationsByCategory(String categoryId) async {
     try {
       const query = '''
-        query ListStations(\$filter: ModelStationFilterInput) {
-          listStations(filter: \$filter) {
+        query ListStations(\$filter: ModelStationFilterInput, \$limit: Int, \$nextToken: String) {
+          listStations(filter: \$filter, limit: \$limit, nextToken: \$nextToken) {
             items {
               id
               categoryId
@@ -285,49 +307,68 @@ class CloudDataService extends ChangeNotifier {
               createdAt
               updatedAt
             }
+            nextToken
           }
         }
       ''';
 
-      final request = GraphQLRequest<String>(
-        document: query,
-        variables: {
-          'filter': {
-            'categoryId': {'eq': categoryId},
+      final allStations = <RadioStation>[];
+      String? nextToken;
+
+      // 페이지네이션 처리 - 모든 데이터를 가져올 때까지 반복
+      do {
+        final request = GraphQLRequest<String>(
+          document: query,
+          variables: {
+            'filter': {
+              'categoryId': {'eq': categoryId},
+            },
+            'limit': 1000, // 한 번에 최대 1000개 요청
+            if (nextToken != null) 'nextToken': nextToken,
           },
-        },
-        authorizationMode: APIAuthorizationType.userPools,
-      );
+          authorizationMode: APIAuthorizationType.userPools,
+        );
 
-      final response = await Amplify.API.query(request: request).response;
+        final response = await Amplify.API.query(request: request).response;
 
-      if (response.hasErrors) {
-        debugPrint('무선국 목록 조회 오류: ${response.errors}');
-        return [];
-      }
+        if (response.hasErrors) {
+          debugPrint('무선국 목록 조회 오류: ${response.errors}');
+          break;
+        }
 
-      final data = response.data;
-      if (data != null) {
-        final jsonData = _parseJson(data);
-        final items = jsonData?['listStations']?['items'] as List?;
-        if (items == null) return [];
+        final data = response.data;
+        if (data != null) {
+          final jsonData = _parseJson(data);
+          final listStations = jsonData?['listStations'];
+          final items = listStations?['items'] as List?;
 
-        return items.map((item) => _mapToRadioStation(item as Map<String, dynamic>)).toList();
-      }
+          if (items != null && items.isNotEmpty) {
+            allStations.addAll(
+              items.map((item) => _mapToRadioStation(item as Map<String, dynamic>))
+            );
+          }
 
-      return [];
+          // 다음 페이지 토큰
+          nextToken = listStations?['nextToken'] as String?;
+        } else {
+          break;
+        }
+      } while (nextToken != null);
+
+      debugPrint('카테고리 $categoryId: ${allStations.length}개 스테이션 조회');
+      return allStations;
     } catch (e) {
       debugPrint('무선국 목록 조회 실패: $e');
       return [];
     }
   }
 
-  /// 모든 무선국 조회
+  /// 모든 무선국 조회 (페이지네이션 처리)
   Future<List<RadioStation>> listAllStations() async {
     try {
       const query = '''
-        query ListStations {
-          listStations {
+        query ListStations(\$limit: Int, \$nextToken: String) {
+          listStations(limit: \$limit, nextToken: \$nextToken) {
             items {
               id
               categoryId
@@ -351,31 +392,53 @@ class CloudDataService extends ChangeNotifier {
               createdAt
               updatedAt
             }
+            nextToken
           }
         }
       ''';
 
-      final request = GraphQLRequest<String>(
-        document: query,
-        authorizationMode: APIAuthorizationType.userPools,
-      );
-      final response = await Amplify.API.query(request: request).response;
+      final allStations = <RadioStation>[];
+      String? nextToken;
 
-      if (response.hasErrors) {
-        debugPrint('전체 무선국 목록 조회 오류: ${response.errors}');
-        return [];
-      }
+      // 페이지네이션 처리 - 모든 데이터를 가져올 때까지 반복
+      do {
+        final request = GraphQLRequest<String>(
+          document: query,
+          variables: {
+            'limit': 1000, // 한 번에 최대 1000개 요청
+            if (nextToken != null) 'nextToken': nextToken,
+          },
+          authorizationMode: APIAuthorizationType.userPools,
+        );
 
-      final data = response.data;
-      if (data != null) {
-        final jsonData = _parseJson(data);
-        final items = jsonData?['listStations']?['items'] as List?;
-        if (items == null) return [];
+        final response = await Amplify.API.query(request: request).response;
 
-        return items.map((item) => _mapToRadioStation(item as Map<String, dynamic>)).toList();
-      }
+        if (response.hasErrors) {
+          debugPrint('전체 무선국 목록 조회 오류: ${response.errors}');
+          break;
+        }
 
-      return [];
+        final data = response.data;
+        if (data != null) {
+          final jsonData = _parseJson(data);
+          final listStations = jsonData?['listStations'];
+          final items = listStations?['items'] as List?;
+
+          if (items != null && items.isNotEmpty) {
+            allStations.addAll(
+              items.map((item) => _mapToRadioStation(item as Map<String, dynamic>))
+            );
+          }
+
+          // 다음 페이지 토큰
+          nextToken = listStations?['nextToken'] as String?;
+        } else {
+          break;
+        }
+      } while (nextToken != null);
+
+      debugPrint('전체 스테이션 ${allStations.length}개 조회');
+      return allStations;
     } catch (e) {
       debugPrint('전체 무선국 목록 조회 실패: $e');
       return [];

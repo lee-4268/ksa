@@ -155,49 +155,52 @@ class StationProvider extends ChangeNotifier {
     }
   }
 
-  /// 클라우드에서 데이터 로드 (내부 함수)
+  /// 클라우드에서 데이터 로드 (내부 함수) - 최적화됨
   Future<bool> _loadFromCloud() async {
     if (_cloudDataService == null) return false;
 
     try {
-      final cloudData = await _cloudDataService!.syncCloudToLocal();
+      // 1. 카테고리 목록 조회 (1회만 호출)
+      final categories = await _cloudDataService!.listCategories();
 
-      // 클라우드에 데이터가 없으면 로컬 데이터 유지
-      if (cloudData.isEmpty) {
-        debugPrint('클라우드에 데이터 없음, 로컬 데이터 유지');
+      if (categories.isEmpty) {
+        debugPrint('클라우드에 카테고리 없음, 로컬 데이터 유지');
         _stations = _storageService.getAllStations();
         return true;
       }
 
-      // 클라우드 데이터로 교체
+      // 2. 로컬 데이터 초기화
       await _storageService.clearAllStations();
       _stations.clear();
       _cloudIdMap.clear();
       _cloudCategoryIdMap.clear();
 
-      // 카테고리 목록 조회
-      final categories = await _cloudDataService!.listCategories();
+      // 3. 카테고리별 스테이션 로드 (병렬 처리)
+      final allStationsToSave = <RadioStation>[];
+
       for (final cat in categories) {
         final catName = cat['name'] as String;
         final catId = cat['id'] as String;
         _cloudCategoryIdMap[catName] = catId;
-      }
 
-      for (final entry in cloudData.entries) {
-        final categoryName = entry.key;
-        final stations = entry.value;
+        // 카테고리별 스테이션 조회
+        final stations = await _cloudDataService!.listStationsByCategory(catId);
 
-        // 스테이션 저장 (로컬 캐시)
         for (final station in stations) {
-          final stationWithCategory = station.copyWith(categoryName: categoryName);
-          await _storageService.saveStation(stationWithCategory);
+          final cloudId = station.id;
+          final stationWithCategory = station.copyWith(categoryName: catName);
+          allStationsToSave.add(stationWithCategory);
           _stations.add(stationWithCategory);
-
-          // 클라우드 ID 매핑
-          _cloudIdMap[stationWithCategory.id] = station.id;
+          _cloudIdMap[cloudId] = cloudId;
         }
       }
 
+      // 4. 로컬에 일괄 저장 (배치 처리로 성능 향상)
+      if (allStationsToSave.isNotEmpty) {
+        await _storageService.saveStations(allStationsToSave);
+      }
+
+      debugPrint('클라우드에서 ${_stations.length}개 스테이션 로드 완료');
       return true;
     } catch (e) {
       debugPrint('클라우드에서 데이터 로드 실패: $e');
@@ -298,37 +301,60 @@ class StationProvider extends ChangeNotifier {
 
       final categoryName = result.fileName;
 
+      // ==================== 기존 동일 카테고리 데이터 삭제 (중복 방지) ====================
+      final existingCategoryStations = _stations
+          .where((s) => (s.categoryName ?? '기타') == categoryName)
+          .toList();
+
+      if (existingCategoryStations.isNotEmpty) {
+        debugPrint('기존 카테고리 "$categoryName" 데이터 ${existingCategoryStations.length}개 삭제');
+        _updateProgress(0.55, '기존 데이터 정리 중...');
+
+        // 클라우드에서 기존 스테이션 삭제
+        if (_cloudDataService != null) {
+          final cloudCategoryId = _cloudCategoryIdMap[categoryName];
+          if (cloudCategoryId != null) {
+            for (final station in existingCategoryStations) {
+              final cloudId = _cloudIdMap[station.id];
+              if (cloudId != null) {
+                try {
+                  await _cloudDataService!.deleteStation(cloudId);
+                } catch (e) {
+                  debugPrint('기존 스테이션 클라우드 삭제 실패: $e');
+                }
+                _cloudIdMap.remove(station.id);
+              }
+            }
+            // 기존 카테고리 삭제
+            try {
+              await _cloudDataService!.deleteCategory(cloudCategoryId);
+            } catch (e) {
+              debugPrint('기존 카테고리 클라우드 삭제 실패: $e');
+            }
+            _cloudCategoryIdMap.remove(categoryName);
+          }
+        }
+
+        // 로컬에서 기존 스테이션 삭제
+        for (final station in existingCategoryStations) {
+          await _storageService.deleteStation(station.id);
+        }
+        _stations.removeWhere((s) => (s.categoryName ?? '기타') == categoryName);
+      }
+
       // ==================== 클라우드 업로드 (자동) ====================
       if (_cloudDataService != null) {
         _updateProgress(0.60, '클라우드에 업로드 중...');
         await Future.delayed(const Duration(milliseconds: 50));
 
         try {
-          // 1. 카테고리 생성 또는 조회
-          String? cloudCategoryId = _cloudCategoryIdMap[categoryName];
+          // 1. 새 카테고리 생성
+          final cloudCategoryId = await _cloudDataService!.createCategory(categoryName);
 
-          if (cloudCategoryId == null) {
-            // 기존 카테고리 확인
-            final categories = await _cloudDataService!.listCategories();
-            for (final cat in categories) {
-              if (cat['name'] == categoryName) {
-                cloudCategoryId = cat['id'] as String;
-                _cloudCategoryIdMap[categoryName] = cloudCategoryId;
-                break;
-              }
-            }
-
-            // 없으면 새로 생성
-            if (cloudCategoryId == null) {
-              cloudCategoryId = await _cloudDataService!.createCategory(categoryName);
-              if (cloudCategoryId != null) {
-                _cloudCategoryIdMap[categoryName] = cloudCategoryId;
-              }
-            }
-          }
-
-          // 2. 각 무선국 클라우드 업로드
           if (cloudCategoryId != null) {
+            _cloudCategoryIdMap[categoryName] = cloudCategoryId;
+
+            // 2. 각 무선국 클라우드 업로드
             final totalStations = importedStations.length;
             int uploadedCount = 0;
 
@@ -339,7 +365,12 @@ class StationProvider extends ChangeNotifier {
               final cloudStationId = await _cloudDataService!.createStation(station, cloudCategoryId);
 
               if (cloudStationId != null) {
-                _cloudIdMap[station.id] = cloudStationId;
+                // 로컬 ID를 클라우드 ID로 업데이트 (일관성 유지)
+                importedStations[i] = station.copyWith(
+                  id: cloudStationId,
+                  categoryName: categoryName,
+                );
+                _cloudIdMap[cloudStationId] = cloudStationId;
                 uploadedCount++;
               }
 
@@ -351,6 +382,8 @@ class StationProvider extends ChangeNotifier {
             }
 
             debugPrint('클라우드 업로드 완료: $uploadedCount/$totalStations');
+          } else {
+            debugPrint('카테고리 생성 실패, 로컬에만 저장');
           }
         } catch (cloudError) {
           debugPrint('클라우드 업로드 오류 (로컬만 저장): $cloudError');
@@ -510,11 +543,15 @@ class StationProvider extends ChangeNotifier {
   }
 
   /// 카테고리별 데이터 삭제 (자동 클라우드 동기화)
-  Future<void> deleteCategoryData(String category) async {
+  /// [onProgress] 콜백으로 진행률 전달 (0.0 ~ 1.0)
+  Future<void> deleteCategoryData(String category, {Function(double)? onProgress}) async {
     try {
       final stationsToDelete = _stations
           .where((s) => (s.categoryName ?? '기타') == category)
           .toList();
+
+      final totalCount = stationsToDelete.length;
+      int processedCount = 0;
 
       // 클라우드에서 카테고리 삭제
       final cloudCategoryId = _cloudCategoryIdMap[category];
@@ -527,6 +564,9 @@ class StationProvider extends ChangeNotifier {
               await _cloudDataService!.deleteStation(cloudId);
               _cloudIdMap.remove(station.id);
             }
+            processedCount++;
+            // 클라우드 삭제 진행률 (0% ~ 50%)
+            onProgress?.call(processedCount / totalCount * 0.5);
           }
           // 카테고리 삭제
           await _cloudDataService!.deleteCategory(cloudCategoryId);
@@ -534,10 +574,18 @@ class StationProvider extends ChangeNotifier {
           debugPrint('클라우드 카테고리 삭제 실패: $e');
         }
         _cloudCategoryIdMap.remove(category);
+      } else {
+        // 클라우드 서비스 없으면 바로 50%로 설정
+        onProgress?.call(0.5);
       }
 
+      // 로컬 삭제 (50% ~ 100%)
+      processedCount = 0;
       for (final station in stationsToDelete) {
         await _storageService.deleteStation(station.id);
+        processedCount++;
+        // 로컬 삭제 진행률 (50% ~ 100%)
+        onProgress?.call(0.5 + processedCount / totalCount * 0.5);
       }
 
       _stations.removeWhere((s) => (s.categoryName ?? '기타') == category);

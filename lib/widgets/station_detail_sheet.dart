@@ -172,32 +172,37 @@ class _StationDetailSheetState extends State<StationDetailSheet> {
             ),
           );
 
-          // 웹에서 마우스 휠 이벤트가 맵으로 전파되지 않도록 차단
-          if (kIsWeb) {
-            return Listener(
-              behavior: HitTestBehavior.opaque, // 이벤트를 이 위젯에서 처리
-              onPointerSignal: (event) {
-                // 마우스 휠 이벤트를 감지하여 스크롤 처리
-                if (event is PointerScrollEvent) {
-                  // GestureBinding을 통해 이벤트를 소비 (전파 차단)
-                  GestureBinding.instance.pointerSignalResolver.register(event, (event) {
-                    // 스크롤 델타를 사용하여 ScrollController로 직접 스크롤
-                    final scrollEvent = event as PointerScrollEvent;
-                    final delta = scrollEvent.scrollDelta.dy;
-                    final currentOffset = scrollController.offset;
-                    final maxOffset = scrollController.position.maxScrollExtent;
-                    final minOffset = scrollController.position.minScrollExtent;
+          // 모든 플랫폼에서 이벤트가 맵으로 전파되지 않도록 차단
+          // GestureDetector의 behavior: HitTestBehavior.opaque로 터치/마우스 이벤트 소비
+          return GestureDetector(
+            behavior: HitTestBehavior.opaque, // 모든 이벤트를 이 위젯에서 처리
+            onHorizontalDragUpdate: (_) {}, // 수평 드래그 소비
+            onVerticalDragUpdate: (_) {}, // 수직 드래그 소비 (DraggableScrollableSheet과 충돌하지 않음)
+            child: kIsWeb
+                ? Listener(
+                    behavior: HitTestBehavior.opaque, // 이벤트를 이 위젯에서 처리
+                    onPointerSignal: (event) {
+                      // 마우스 휠 이벤트를 감지하여 스크롤 처리
+                      if (event is PointerScrollEvent) {
+                        // GestureBinding을 통해 이벤트를 소비 (전파 차단)
+                        GestureBinding.instance.pointerSignalResolver.register(event, (event) {
+                          // 스크롤 델타를 사용하여 ScrollController로 직접 스크롤
+                          final scrollEvent = event as PointerScrollEvent;
+                          final delta = scrollEvent.scrollDelta.dy;
+                          final currentOffset = scrollController.offset;
+                          final maxOffset = scrollController.position.maxScrollExtent;
+                          final minOffset = scrollController.position.minScrollExtent;
 
-                    // 새 오프셋 계산 (범위 내로 제한)
-                    final newOffset = (currentOffset + delta).clamp(minOffset, maxOffset);
-                    scrollController.jumpTo(newOffset);
-                  });
-                }
-              },
-              child: scrollableContent,
-            );
-          }
-          return scrollableContent;
+                          // 새 오프셋 계산 (범위 내로 제한)
+                          final newOffset = (currentOffset + delta).clamp(minOffset, maxOffset);
+                          scrollController.jumpTo(newOffset);
+                        });
+                      }
+                    },
+                    child: scrollableContent,
+                  )
+                : scrollableContent,
+          );
         },
       ),
     );
