@@ -1,0 +1,14 @@
+{
+  "resourceName": "ksaphotos",
+  "policyUUID": "fee5da25",
+  "bucketName": "ksa-photos-bucket",
+  "storageAccess": "auth",
+  "guestAccess": [],
+  "authAccess": [
+    "CREATE_AND_UPDATE",
+    "READ",
+    "DELETE"
+  ],
+  "triggerFunction": "NONE",
+  "groupAccess": {}
+}

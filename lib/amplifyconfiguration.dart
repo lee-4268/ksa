@@ -8,7 +8,7 @@ const amplifyconfig = '''{
                     "endpointType": "GraphQL",
                     "endpoint": "https://mtokcw2pmffyjdhl3uhfihwj7m.appsync-api.ap-northeast-2.amazonaws.com/graphql",
                     "region": "ap-northeast-2",
-                    "authorizationType": "AMAZON_COGNITO_USER_POOLS"
+                    "authorizationType": "API_KEY"
                 }
             }
         }
@@ -63,10 +63,31 @@ const amplifyconfig = '''{
                     "Default": {
                         "ApiUrl": "https://mtokcw2pmffyjdhl3uhfihwj7m.appsync-api.ap-northeast-2.amazonaws.com/graphql",
                         "Region": "ap-northeast-2",
+                        "AuthMode": "API_KEY",
+                        "ClientDatabasePrefix": "ksa_API_KEY"
+                    },
+                    "ksa_AMAZON_COGNITO_USER_POOLS": {
+                        "ApiUrl": "https://mtokcw2pmffyjdhl3uhfihwj7m.appsync-api.ap-northeast-2.amazonaws.com/graphql",
+                        "Region": "ap-northeast-2",
                         "AuthMode": "AMAZON_COGNITO_USER_POOLS",
                         "ClientDatabasePrefix": "ksa_AMAZON_COGNITO_USER_POOLS"
                     }
+                },
+                "S3TransferUtility": {
+                    "Default": {
+                        "Bucket": "ksa-photos-bucket1d5de-dev",
+                        "Region": "ap-northeast-2"
+                    }
                 }
+            }
+        }
+    },
+    "storage": {
+        "plugins": {
+            "awsS3StoragePlugin": {
+                "bucket": "ksa-photos-bucket1d5de-dev",
+                "region": "ap-northeast-2",
+                "defaultAccessLevel": "guest"
             }
         }
     }
