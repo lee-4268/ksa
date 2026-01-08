@@ -844,12 +844,22 @@ class _StationDetailSheetState extends State<StationDetailSheet> {
             onPressed: () async {
               Navigator.pop(ctx);
 
-              // 파일 삭제
+              final photoPath = _photoPaths[index];
+
+              // S3 또는 로컬 파일 삭제
               try {
-                final file = File(_photoPaths[index]);
-                if (await file.exists()) {
-                  await file.delete();
+                if (photoPath.startsWith('s3://')) {
+                  // S3에 저장된 사진 삭제
+                  await PhotoStorageService.deletePhoto(photoPath);
+                  debugPrint('S3 사진 삭제 완료: $photoPath');
+                } else if (!kIsWeb && !photoPath.startsWith('data:') && !photoPath.startsWith('http')) {
+                  // 웹이 아니고, base64/URL이 아닌 경우에만 로컬 파일 삭제 시도
+                  final file = File(photoPath);
+                  if (await file.exists()) {
+                    await file.delete();
+                  }
                 }
+                // base64 data URL은 별도 삭제 불필요 (메모리에서만 존재)
               } catch (e) {
                 debugPrint('파일 삭제 오류: $e');
               }
