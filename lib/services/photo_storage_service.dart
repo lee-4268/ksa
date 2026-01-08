@@ -126,13 +126,34 @@ class PhotoStorageService {
     if (!_isStorageConfigured) return;
 
     try {
-      final key = photoPath.substring(5);
-      await Amplify.Storage.remove(
-        path: StoragePath.fromString(key),
-      ).result;
-      debugPrint('S3 사진 삭제 완료: $key');
+      final fullPath = photoPath.substring(5); // 's3://' 제거
+      // fullPath 형식: 'private/{identityId}/photos/{stationId}/{timestamp}_{fileName}'
+
+      // 경로에서 identityId 이후의 상대 경로 추출
+      // 'private/{identityId}/photos/...' -> 'photos/...'
+      final pathParts = fullPath.split('/');
+      if (pathParts.length >= 3 && pathParts[0] == 'private') {
+        // pathParts[0] = 'private'
+        // pathParts[1] = identityId
+        // pathParts[2...] = 실제 파일 경로 (photos/stationId/file)
+        final relativePath = pathParts.sublist(2).join('/');
+
+        await Amplify.Storage.remove(
+          path: StoragePath.fromIdentityId(
+            (identityId) => 'private/$identityId/$relativePath',
+          ),
+        ).result;
+        debugPrint('S3 사진 삭제 완료: $relativePath');
+      } else {
+        // 예상치 못한 경로 형식인 경우 기존 방식 시도
+        await Amplify.Storage.remove(
+          path: StoragePath.fromString(fullPath),
+        ).result;
+        debugPrint('S3 사진 삭제 완료 (fromString): $fullPath');
+      }
     } catch (e) {
       debugPrint('S3 사진 삭제 오류: $e');
+      rethrow; // 호출자에게 오류 전파
     }
   }
 
