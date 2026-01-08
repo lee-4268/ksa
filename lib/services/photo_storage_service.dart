@@ -50,17 +50,20 @@ class PhotoStorageService {
   ) async {
     try {
       final timestamp = DateTime.now().millisecondsSinceEpoch;
-      // private 경로 사용 (사용자별 분리)
-      final key = 'private/photos/$stationId/${timestamp}_$fileName';
+      // 파일명만 지정 (private 접근 레벨 사용 - Amplify가 자동으로 사용자 ID 추가)
+      final fileKey = 'photos/$stationId/${timestamp}_$fileName';
 
       final result = await Amplify.Storage.uploadData(
         data: StorageDataPayload.bytes(bytes),
-        path: StoragePath.fromString(key),
+        path: StoragePath.fromIdentityId(
+          (identityId) => 'private/$identityId/$fileKey',
+        ),
       ).result;
 
-      debugPrint('S3 업로드 완료: ${result.uploadedItem.path}');
+      final uploadedPath = result.uploadedItem.path;
+      debugPrint('S3 업로드 완료: $uploadedPath');
       // S3 키 반환 (나중에 getUrl로 URL 생성)
-      return 's3://$key';
+      return 's3://$uploadedPath';
     } catch (e) {
       debugPrint('S3 업로드 오류: $e');
       // S3 실패 시 base64로 폴백
