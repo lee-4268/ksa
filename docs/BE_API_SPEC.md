@@ -1,0 +1,879 @@
+# KSA Backend API 명세서
+
+## GraphQL API Specification
+
+**버전:** 1.0.0
+**최종 수정일:** 2026-01-13
+**API 타입:** AWS AppSync GraphQL
+
+---
+
+## 1. API 정보
+
+### 1.1 Endpoint
+```
+https://mtokcw2pmffyjdhl3uhfihwj7m.appsync-api.ap-northeast-2.amazonaws.com/graphql
+```
+
+### 1.2 Region
+`ap-northeast-2` (Seoul, Korea)
+
+### 1.3 Authentication
+| 타입 | 설명 |
+|------|------|
+| Primary | AMAZON_COGNITO_USER_POOLS |
+| Secondary | API_KEY |
+
+### 1.4 Authorization
+Owner-based authorization - 사용자는 자신이 생성한 데이터만 접근 가능
+
+---
+
+## 2. Schema
+
+### 2.1 Category Type
+카테고리 (Excel 파일 그룹)
+
+```graphql
+type Category @model @auth(rules: [
+  { allow: owner, operations: [create, read, update, delete] }
+]) {
+  id: ID!
+  name: String!
+  stations: [Station] @hasMany(indexName: "byCategory", fields: ["id"])
+  createdAt: AWSDateTime
+  updatedAt: AWSDateTime
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| id | ID | O | 고유 식별자 (UUID) |
+| name | String | O | 카테고리 이름 |
+| stations | [Station] | - | 소속 무선국 목록 (관계) |
+| createdAt | AWSDateTime | - | 생성 일시 (자동) |
+| updatedAt | AWSDateTime | - | 수정 일시 (자동) |
+
+---
+
+### 2.2 Station Type
+무선국
+
+```graphql
+type Station @model @auth(rules: [
+  { allow: owner, operations: [create, read, update, delete] }
+]) {
+  id: ID!
+  categoryId: ID! @index(name: "byCategory", sortKeyFields: ["createdAt"])
+
+  # 기본 정보
+  stationName: String!
+  licenseNumber: String
+  address: String!
+  latitude: Float
+  longitude: Float
+
+  # 상세 정보
+  callSign: String
+  gain: String
+  antennaCount: String
+  remarks: String
+  typeApprovalNumber: String
+  frequency: String
+  stationType: String
+  stationOwner: String
+
+  # 검사 정보
+  isInspected: Boolean @default(value: "false")
+  inspectionDate: AWSDateTime
+  memo: String
+
+  # 사진
+  photoKeys: [String]
+
+  createdAt: AWSDateTime
+  updatedAt: AWSDateTime
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| id | ID | O | 고유 식별자 (UUID) |
+| categoryId | ID | O | 소속 카테고리 ID |
+| stationName | String | O | ERP 국소명 |
+| licenseNumber | String | - | 허가번호 |
+| address | String | O | 설치장소 주소 |
+| latitude | Float | - | 위도 |
+| longitude | Float | - | 경도 |
+| callSign | String | - | 호출부호 |
+| gain | String | - | 안테나 이득 |
+| antennaCount | String | - | 안테나 수량 |
+| remarks | String | - | 비고 |
+| typeApprovalNumber | String | - | 형식검정번호 |
+| frequency | String | - | 주파수 |
+| stationType | String | - | 무선국 종류 |
+| stationOwner | String | - | 소유자 |
+| isInspected | Boolean | - | 검사완료 여부 (기본: false) |
+| inspectionDate | AWSDateTime | - | 검사일시 |
+| memo | String | - | 메모 |
+| photoKeys | [String] | - | S3 사진 키 목록 |
+| createdAt | AWSDateTime | - | 생성 일시 (자동) |
+| updatedAt | AWSDateTime | - | 수정 일시 (자동) |
+
+---
+
+## 3. Queries
+
+### 3.1 getCategory
+카테고리 단건 조회
+
+```graphql
+query GetCategory($id: ID!) {
+  getCategory(id: $id) {
+    id
+    name
+    stations {
+      items {
+        id
+        stationName
+        address
+        isInspected
+      }
+    }
+    createdAt
+    updatedAt
+  }
+}
+```
+
+**Variables:**
+```json
+{
+  "id": "category-uuid"
+}
+```
+
+**Response:**
+```json
+{
+  "data": {
+    "getCategory": {
+      "id": "category-uuid",
+      "name": "2026년 1월 검사목록",
+      "stations": {
+        "items": [
+          {
+            "id": "station-uuid",
+            "stationName": "서울중앙국",
+            "address": "서울시 중구 세종대로 110",
+            "isInspected": false
+          }
+        ]
+      },
+      "createdAt": "2026-01-13T00:00:00.000Z",
+      "updatedAt": "2026-01-13T00:00:00.000Z"
+    }
+  }
+}
+```
+
+---
+
+### 3.2 listCategories
+카테고리 목록 조회
+
+```graphql
+query ListCategories($limit: Int, $nextToken: String) {
+  listCategories(limit: $limit, nextToken: $nextToken) {
+    items {
+      id
+      name
+      createdAt
+      updatedAt
+    }
+    nextToken
+  }
+}
+```
+
+**Variables:**
+```json
+{
+  "limit": 1000,
+  "nextToken": null
+}
+```
+
+**Response:**
+```json
+{
+  "data": {
+    "listCategories": {
+      "items": [
+        {
+          "id": "category-uuid-1",
+          "name": "2026년 1월 검사목록",
+          "createdAt": "2026-01-13T00:00:00.000Z",
+          "updatedAt": "2026-01-13T00:00:00.000Z"
+        },
+        {
+          "id": "category-uuid-2",
+          "name": "2026년 2월 검사목록",
+          "createdAt": "2026-01-13T01:00:00.000Z",
+          "updatedAt": "2026-01-13T01:00:00.000Z"
+        }
+      ],
+      "nextToken": null
+    }
+  }
+}
+```
+
+---
+
+### 3.3 getStation
+무선국 단건 조회
+
+```graphql
+query GetStation($id: ID!) {
+  getStation(id: $id) {
+    id
+    categoryId
+    stationName
+    licenseNumber
+    address
+    latitude
+    longitude
+    callSign
+    gain
+    antennaCount
+    remarks
+    typeApprovalNumber
+    frequency
+    stationType
+    stationOwner
+    isInspected
+    inspectionDate
+    memo
+    photoKeys
+    createdAt
+    updatedAt
+  }
+}
+```
+
+**Variables:**
+```json
+{
+  "id": "station-uuid"
+}
+```
+
+---
+
+### 3.4 listStations
+무선국 목록 조회
+
+```graphql
+query ListStations(
+  $filter: ModelStationFilterInput
+  $limit: Int
+  $nextToken: String
+) {
+  listStations(filter: $filter, limit: $limit, nextToken: $nextToken) {
+    items {
+      id
+      categoryId
+      stationName
+      licenseNumber
+      address
+      latitude
+      longitude
+      callSign
+      gain
+      antennaCount
+      remarks
+      typeApprovalNumber
+      frequency
+      stationType
+      stationOwner
+      isInspected
+      inspectionDate
+      memo
+      photoKeys
+      createdAt
+      updatedAt
+    }
+    nextToken
+  }
+}
+```
+
+**Variables:**
+```json
+{
+  "filter": null,
+  "limit": 1000,
+  "nextToken": null
+}
+```
+
+---
+
+### 3.5 stationsByCategory
+카테고리별 무선국 조회 (GSI 사용)
+
+```graphql
+query StationsByCategory(
+  $categoryId: ID!
+  $sortDirection: ModelSortDirection
+  $limit: Int
+  $nextToken: String
+) {
+  stationsByCategory(
+    categoryId: $categoryId
+    sortDirection: $sortDirection
+    limit: $limit
+    nextToken: $nextToken
+  ) {
+    items {
+      id
+      categoryId
+      stationName
+      address
+      latitude
+      longitude
+      isInspected
+      createdAt
+    }
+    nextToken
+  }
+}
+```
+
+**Variables:**
+```json
+{
+  "categoryId": "category-uuid",
+  "sortDirection": "DESC",
+  "limit": 1000,
+  "nextToken": null
+}
+```
+
+---
+
+## 4. Mutations
+
+### 4.1 createCategory
+카테고리 생성
+
+```graphql
+mutation CreateCategory($input: CreateCategoryInput!) {
+  createCategory(input: $input) {
+    id
+    name
+    createdAt
+    updatedAt
+  }
+}
+```
+
+**Variables:**
+```json
+{
+  "input": {
+    "name": "2026년 1월 검사목록"
+  }
+}
+```
+
+**Response:**
+```json
+{
+  "data": {
+    "createCategory": {
+      "id": "generated-uuid",
+      "name": "2026년 1월 검사목록",
+      "createdAt": "2026-01-13T00:00:00.000Z",
+      "updatedAt": "2026-01-13T00:00:00.000Z"
+    }
+  }
+}
+```
+
+---
+
+### 4.2 updateCategory
+카테고리 수정
+
+```graphql
+mutation UpdateCategory($input: UpdateCategoryInput!) {
+  updateCategory(input: $input) {
+    id
+    name
+    createdAt
+    updatedAt
+  }
+}
+```
+
+**Variables:**
+```json
+{
+  "input": {
+    "id": "category-uuid",
+    "name": "수정된 카테고리명"
+  }
+}
+```
+
+---
+
+### 4.3 deleteCategory
+카테고리 삭제
+
+```graphql
+mutation DeleteCategory($input: DeleteCategoryInput!) {
+  deleteCategory(input: $input) {
+    id
+  }
+}
+```
+
+**Variables:**
+```json
+{
+  "input": {
+    "id": "category-uuid"
+  }
+}
+```
+
+---
+
+### 4.4 createStation
+무선국 생성
+
+```graphql
+mutation CreateStation($input: CreateStationInput!) {
+  createStation(input: $input) {
+    id
+    categoryId
+    stationName
+    licenseNumber
+    address
+    latitude
+    longitude
+    callSign
+    gain
+    antennaCount
+    remarks
+    typeApprovalNumber
+    frequency
+    stationType
+    stationOwner
+    isInspected
+    inspectionDate
+    memo
+    photoKeys
+    createdAt
+    updatedAt
+  }
+}
+```
+
+**Variables:**
+```json
+{
+  "input": {
+    "categoryId": "category-uuid",
+    "stationName": "서울중앙국",
+    "licenseNumber": "RN-2026-001",
+    "address": "서울시 중구 세종대로 110",
+    "latitude": 37.5665,
+    "longitude": 126.9780,
+    "callSign": "HLK",
+    "gain": "10",
+    "antennaCount": "2",
+    "remarks": "비고 내용",
+    "typeApprovalNumber": "KCC-2026-001",
+    "frequency": "100.0 MHz",
+    "stationType": "기지국",
+    "stationOwner": "한국통신",
+    "isInspected": false,
+    "memo": null,
+    "photoKeys": []
+  }
+}
+```
+
+---
+
+### 4.5 updateStation
+무선국 수정
+
+```graphql
+mutation UpdateStation($input: UpdateStationInput!) {
+  updateStation(input: $input) {
+    id
+    categoryId
+    stationName
+    isInspected
+    inspectionDate
+    memo
+    photoKeys
+    updatedAt
+  }
+}
+```
+
+**Variables (검사완료 처리):**
+```json
+{
+  "input": {
+    "id": "station-uuid",
+    "isInspected": true,
+    "inspectionDate": "2026-01-13T10:30:00.000Z"
+  }
+}
+```
+
+**Variables (메모 수정):**
+```json
+{
+  "input": {
+    "id": "station-uuid",
+    "memo": "현장 확인 결과 정상 운영 중"
+  }
+}
+```
+
+**Variables (사진 추가):**
+```json
+{
+  "input": {
+    "id": "station-uuid",
+    "photoKeys": [
+      "photos/station-uuid/1705123456789_photo1.jpg",
+      "photos/station-uuid/1705123456790_photo2.jpg"
+    ]
+  }
+}
+```
+
+---
+
+### 4.6 deleteStation
+무선국 삭제
+
+```graphql
+mutation DeleteStation($input: DeleteStationInput!) {
+  deleteStation(input: $input) {
+    id
+  }
+}
+```
+
+**Variables:**
+```json
+{
+  "input": {
+    "id": "station-uuid"
+  }
+}
+```
+
+---
+
+## 5. Input Types
+
+### 5.1 CreateCategoryInput
+```graphql
+input CreateCategoryInput {
+  id: ID
+  name: String!
+}
+```
+
+### 5.2 UpdateCategoryInput
+```graphql
+input UpdateCategoryInput {
+  id: ID!
+  name: String
+}
+```
+
+### 5.3 DeleteCategoryInput
+```graphql
+input DeleteCategoryInput {
+  id: ID!
+}
+```
+
+### 5.4 CreateStationInput
+```graphql
+input CreateStationInput {
+  id: ID
+  categoryId: ID!
+  stationName: String!
+  licenseNumber: String
+  address: String!
+  latitude: Float
+  longitude: Float
+  callSign: String
+  gain: String
+  antennaCount: String
+  remarks: String
+  typeApprovalNumber: String
+  frequency: String
+  stationType: String
+  stationOwner: String
+  isInspected: Boolean
+  inspectionDate: AWSDateTime
+  memo: String
+  photoKeys: [String]
+}
+```
+
+### 5.5 UpdateStationInput
+```graphql
+input UpdateStationInput {
+  id: ID!
+  categoryId: ID
+  stationName: String
+  licenseNumber: String
+  address: String
+  latitude: Float
+  longitude: Float
+  callSign: String
+  gain: String
+  antennaCount: String
+  remarks: String
+  typeApprovalNumber: String
+  frequency: String
+  stationType: String
+  stationOwner: String
+  isInspected: Boolean
+  inspectionDate: AWSDateTime
+  memo: String
+  photoKeys: [String]
+}
+```
+
+### 5.6 DeleteStationInput
+```graphql
+input DeleteStationInput {
+  id: ID!
+}
+```
+
+### 5.7 ModelStationFilterInput
+```graphql
+input ModelStationFilterInput {
+  id: ModelIDInput
+  categoryId: ModelIDInput
+  stationName: ModelStringInput
+  address: ModelStringInput
+  isInspected: ModelBooleanInput
+  and: [ModelStationFilterInput]
+  or: [ModelStationFilterInput]
+  not: ModelStationFilterInput
+}
+```
+
+---
+
+## 6. S3 Storage API
+
+### 6.1 Configuration
+| 항목 | 값 |
+|------|-----|
+| Bucket | ksa-photos-bucket1d5de-dev |
+| Region | ap-northeast-2 |
+| Access Level | Private |
+
+### 6.2 Upload
+**Endpoint:** AWS S3 (Amplify SDK)
+
+**Path Format:**
+```
+private/{identityId}/photos/{stationId}/{timestamp}_{fileName}
+```
+
+**Request:**
+```dart
+await Amplify.Storage.uploadData(
+  data: StorageDataPayload.bytes(bytes),
+  path: StoragePath.fromIdentityId(
+    (identityId) => 'private/$identityId/$fileKey',
+  ),
+).result;
+```
+
+### 6.3 Download (Presigned URL)
+**Request:**
+```dart
+final result = await Amplify.Storage.getUrl(
+  path: StoragePath.fromIdentityId(
+    (identityId) => 'private/$identityId/$relativePath',
+  ),
+  options: StorageGetUrlOptions(
+    pluginOptions: S3GetUrlPluginOptions(
+      expiresIn: Duration(hours: 1),
+    ),
+  ),
+).result;
+```
+
+**Response:** Presigned URL (1시간 유효)
+
+### 6.4 Delete
+**Request:**
+```dart
+await Amplify.Storage.remove(
+  path: StoragePath.fromIdentityId(
+    (identityId) => 'private/$identityId/$relativePath',
+  ),
+).result;
+```
+
+---
+
+## 7. Cognito Authentication API
+
+### 7.1 Configuration
+| 항목 | 값 |
+|------|-----|
+| User Pool ID | ap-northeast-2_omieCGwQP |
+| App Client ID | ehlckq7k9tl2n9b6gq12pj7tp |
+| Identity Pool ID | ap-northeast-2:4640cfa8-1f7b-43eb-b2fa-4f8d021a70e1 |
+
+### 7.2 Sign Up
+```dart
+await Amplify.Auth.signUp(
+  username: email,
+  password: password,
+  options: SignUpOptions(
+    userAttributes: {
+      AuthUserAttributeKey.email: email,
+      AuthUserAttributeKey.name: name,
+      AuthUserAttributeKey.phoneNumber: phoneNumber,
+    },
+  ),
+);
+```
+
+### 7.3 Confirm Sign Up
+```dart
+await Amplify.Auth.confirmSignUp(
+  username: email,
+  confirmationCode: code,
+);
+```
+
+### 7.4 Sign In
+```dart
+await Amplify.Auth.signIn(
+  username: email,
+  password: password,
+);
+```
+
+### 7.5 Sign Out
+```dart
+await Amplify.Auth.signOut();
+```
+
+### 7.6 Reset Password
+```dart
+await Amplify.Auth.resetPassword(username: email);
+```
+
+### 7.7 Confirm Reset Password
+```dart
+await Amplify.Auth.confirmResetPassword(
+  username: email,
+  newPassword: newPassword,
+  confirmationCode: code,
+);
+```
+
+---
+
+## 8. Error Codes
+
+### 8.1 GraphQL Errors
+| Code | Description |
+|------|-------------|
+| Unauthorized | 인증 실패 또는 권한 없음 |
+| ValidationError | 입력 데이터 유효성 검증 실패 |
+| ConditionalCheckFailedException | 조건부 업데이트 실패 |
+| ProvisionedThroughputExceededException | DynamoDB 처리량 초과 |
+
+### 8.2 Cognito Errors
+| Code | Description |
+|------|-------------|
+| UserNotFoundException | 존재하지 않는 사용자 |
+| NotAuthorizedException | 인증 실패 |
+| UsernameExistsException | 중복 이메일 |
+| CodeMismatchException | 잘못된 인증 코드 |
+| InvalidPasswordException | 비밀번호 정책 불충족 |
+| LimitExceededException | 요청 횟수 초과 |
+| ExpiredCodeException | 만료된 인증 코드 |
+
+### 8.3 S3 Errors
+| Code | Description |
+|------|-------------|
+| AccessDenied | 접근 권한 없음 |
+| NoSuchKey | 존재하지 않는 키 |
+| InvalidAccessKeyId | 잘못된 액세스 키 |
+| SignatureDoesNotMatch | 서명 불일치 |
+
+---
+
+## 9. Rate Limits
+
+| Service | Limit |
+|---------|-------|
+| AppSync Queries | 1,000 req/sec |
+| AppSync Mutations | 1,000 req/sec |
+| Cognito Sign In | 5 req/sec/IP |
+| Cognito Sign Up | 5 req/sec/IP |
+| S3 PUT | 3,500 req/sec/prefix |
+| S3 GET | 5,500 req/sec/prefix |
+
+---
+
+## 10. Pagination
+
+### 10.1 기본 페이지 크기
+- 기본값: 1,000 items
+- 최대값: 1,000 items
+
+### 10.2 사용 예시
+```graphql
+# 첫 번째 페이지
+query {
+  listStations(limit: 1000) {
+    items { ... }
+    nextToken
+  }
+}
+
+# 다음 페이지
+query {
+  listStations(limit: 1000, nextToken: "eyJ2ZXJzaW9u...") {
+    items { ... }
+    nextToken
+  }
+}
+```
+
+---
+
+## 변경 이력
+
+| 버전 | 날짜 | 변경 내용 | 작성자 |
+|------|------|----------|--------|
+| 1.0.0 | 2026-01-13 | 최초 작성 | Dev Team |

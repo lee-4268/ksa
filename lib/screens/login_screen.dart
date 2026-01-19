@@ -90,21 +90,20 @@ class _LoginScreenState extends State<LoginScreen> {
                             size: 36,
                             color: _primaryColor,
                           ),
-                          const SizedBox(width: 8),
+                          const SizedBox(width: 12),
                           Text(
-                            'KSA',
+                            '무선국 관리 시스템',
                             style: TextStyle(
-                              fontSize: 28,
+                              fontSize: 24,
                               fontWeight: FontWeight.bold,
                               color: _primaryColor,
-                              letterSpacing: 2,
                             ),
                           ),
                         ],
                       ),
                       const SizedBox(height: 8),
                       Text(
-                        "Member's Login",
+                        '로그인',
                         textAlign: TextAlign.center,
                         style: TextStyle(
                           fontSize: 14,
