@@ -1,0 +1,42 @@
+# YOLOv8 분류 모델 학습 설정
+
+# 모델 설정
+model: yolov8n-cls.pt    # 사전학습 모델 (n/s/m/l/x 중 선택)
+
+# 학습 하이퍼파라미터
+epochs: 100              # 학습 에폭 수
+batch: 16                # 배치 크기 (GPU 메모리에 따라 조정)
+imgsz: 224               # 입력 이미지 크기
+patience: 20             # Early stopping patience
+lr0: 0.01                # 초기 학습률
+lrf: 0.01                # 최종 학습률 비율
+momentum: 0.937          # SGD momentum
+weight_decay: 0.0005     # 가중치 감쇠
+warmup_epochs: 3.0       # 웜업 에폭
+warmup_momentum: 0.8     # 웜업 모멘텀
+
+# 데이터 증강
+hsv_h: 0.015             # HSV-Hue 증강
+hsv_s: 0.7               # HSV-Saturation 증강
+hsv_v: 0.4               # HSV-Value 증강
+degrees: 0.0             # 회전 각도
+translate: 0.1           # 이동
+scale: 0.5               # 스케일
+shear: 0.0               # 전단
+perspective: 0.0         # 원근
+flipud: 0.0              # 상하 반전
+fliplr: 0.5              # 좌우 반전
+mosaic: 0.0              # 모자이크 (분류에서는 비활성화)
+mixup: 0.0               # MixUp
+
+# 기타 설정
+workers: 8               # 데이터 로더 워커 수
+device: cpu              # GPU 디바이스 (0, 1, 2... 또는 'cpu')
+project: C:/Users/user/Desktop/26/ksa/yolov8/runs/classify   # 결과 저장 경로 (절대 경로)
+name: tower_classifier   # 실험 이름
+exist_ok: False          # 기존 폴더 덮어쓰기
+pretrained: True         # 사전학습 가중치 사용
+optimizer: auto          # 옵티마이저 (SGD, Adam, AdamW, auto)
+verbose: True            # 상세 출력
+seed: 42                 # 랜덤 시드
+deterministic: True      # 결정적 학습

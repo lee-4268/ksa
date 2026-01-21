@@ -702,4 +702,173 @@ class CloudDataService extends ChangeNotifier {
     _errorMessage = null;
     notifyListeners();
   }
+
+  // ==================== Tower Classification CRUD ====================
+
+  /// 철탑 분류 결과 생성
+  Future<String?> createTowerClassification({
+    required String imageKey,
+    required String imageName,
+    required String className,
+    required String classNameKr,
+    required double confidence,
+    required bool isConfident,
+    String? top5Predictions,
+    String? ensembleMethod,
+    List<String>? ensembleImageKeys,
+    double? processingTimeMs,
+  }) async {
+    try {
+      const mutation = '''
+        mutation CreateTowerClassification(\$input: CreateTowerClassificationInput!) {
+          createTowerClassification(input: \$input) {
+            id
+            imageKey
+            imageName
+            className
+            classNameKr
+            confidence
+            isConfident
+            top5Predictions
+            ensembleMethod
+            ensembleImageKeys
+            processingTimeMs
+            createdAt
+            updatedAt
+            owner
+          }
+        }
+      ''';
+
+      final request = GraphQLRequest<String>(
+        document: mutation,
+        variables: {
+          'input': {
+            'imageKey': imageKey,
+            'imageName': imageName,
+            'className': className,
+            'classNameKr': classNameKr,
+            'confidence': confidence,
+            'isConfident': isConfident,
+            if (top5Predictions != null) 'top5Predictions': top5Predictions,
+            if (ensembleMethod != null) 'ensembleMethod': ensembleMethod,
+            if (ensembleImageKeys != null) 'ensembleImageKeys': ensembleImageKeys,
+            if (processingTimeMs != null) 'processingTimeMs': processingTimeMs,
+          },
+        },
+        authorizationMode: APIAuthorizationType.userPools,
+      );
+
+      final response = await Amplify.API.mutate(request: request).response;
+
+      if (response.hasErrors) {
+        debugPrint('철탑 분류 결과 저장 오류: ${response.errors}');
+        return null;
+      }
+
+      final data = response.data;
+      if (data != null) {
+        final jsonData = _parseJson(data);
+        final id = jsonData?['createTowerClassification']?['id'] as String?;
+        debugPrint('철탑 분류 결과 저장 완료: $id');
+        return id;
+      }
+
+      return null;
+    } catch (e) {
+      debugPrint('철탑 분류 결과 저장 실패: $e');
+      return null;
+    }
+  }
+
+  /// 철탑 분류 결과 목록 조회 (최신순)
+  Future<List<Map<String, dynamic>>> listTowerClassifications({int limit = 50}) async {
+    try {
+      const query = '''
+        query ListTowerClassifications(\$limit: Int, \$nextToken: String) {
+          listTowerClassifications(limit: \$limit, nextToken: \$nextToken) {
+            items {
+              id
+              imageKey
+              imageName
+              className
+              classNameKr
+              confidence
+              isConfident
+              top5Predictions
+              ensembleMethod
+              ensembleImageKeys
+              processingTimeMs
+              createdAt
+              updatedAt
+              owner
+            }
+            nextToken
+          }
+        }
+      ''';
+
+      final request = GraphQLRequest<String>(
+        document: query,
+        variables: {
+          'limit': limit,
+        },
+        authorizationMode: APIAuthorizationType.userPools,
+      );
+
+      final response = await Amplify.API.query(request: request).response;
+
+      if (response.hasErrors) {
+        debugPrint('철탑 분류 목록 조회 오류: ${response.errors}');
+        return [];
+      }
+
+      final data = response.data;
+      if (data != null) {
+        final jsonData = _parseJson(data);
+        final items = jsonData?['listTowerClassifications']?['items'] as List?;
+        if (items != null) {
+          return items.cast<Map<String, dynamic>>();
+        }
+      }
+
+      return [];
+    } catch (e) {
+      debugPrint('철탑 분류 목록 조회 실패: $e');
+      return [];
+    }
+  }
+
+  /// 철탑 분류 결과 삭제
+  Future<bool> deleteTowerClassification(String id) async {
+    try {
+      const mutation = '''
+        mutation DeleteTowerClassification(\$input: DeleteTowerClassificationInput!) {
+          deleteTowerClassification(input: \$input) {
+            id
+          }
+        }
+      ''';
+
+      final request = GraphQLRequest<String>(
+        document: mutation,
+        variables: {
+          'input': {'id': id},
+        },
+        authorizationMode: APIAuthorizationType.userPools,
+      );
+
+      final response = await Amplify.API.mutate(request: request).response;
+
+      if (response.hasErrors) {
+        debugPrint('철탑 분류 결과 삭제 오류: ${response.errors}');
+        return false;
+      }
+
+      return true;
+    } catch (e) {
+      debugPrint('철탑 분류 결과 삭제 실패: $e');
+      return false;
+    }
+  }
 }

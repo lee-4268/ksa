@@ -169,6 +169,7 @@ class _MapScreenState extends State<MapScreen>
               bottom: false,
               child: _WelcomeHeaderWidget(
                 onLogout: _handleLogout,
+                onHome: () => Navigator.pop(context),
               ),
             ),
           ),
@@ -227,6 +228,7 @@ class _MapScreenState extends State<MapScreen>
                       bottom: false,
                       child: _WelcomeHeaderWidget(
                         onLogout: _handleLogout,
+                        onHome: () => Navigator.pop(context),
                       ),
                     ),
                   ),
@@ -2273,9 +2275,11 @@ class _MapScreenState extends State<MapScreen>
 /// 환영 헤더 위젯 (검색창 대신 환영 문구와 로그아웃 버튼 표시)
 class _WelcomeHeaderWidget extends StatefulWidget {
   final VoidCallback onLogout;
+  final VoidCallback? onHome;
 
   const _WelcomeHeaderWidget({
     required this.onLogout,
+    this.onHome,
   });
 
   @override
@@ -2287,7 +2291,7 @@ class _WelcomeHeaderWidgetState extends State<_WelcomeHeaderWidget> {
   Widget build(BuildContext context) {
     return Container(
       margin: const EdgeInsets.all(12),
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(8),
@@ -2312,6 +2316,17 @@ class _WelcomeHeaderWidgetState extends State<_WelcomeHeaderWidget> {
 
           return Row(
             children: [
+              // 뒤로가기 버튼 (홈으로)
+              if (widget.onHome != null) ...[
+                IconButton(
+                  onPressed: widget.onHome,
+                  icon: const Icon(Icons.arrow_back, size: 22, color: Colors.black87),
+                  tooltip: '홈으로',
+                  padding: const EdgeInsets.all(4),
+                  constraints: const BoxConstraints(),
+                ),
+                const SizedBox(width: 8),
+              ],
               // 환영 문구 + 남은 시간
               Expanded(
                 child: Column(
@@ -2321,27 +2336,28 @@ class _WelcomeHeaderWidgetState extends State<_WelcomeHeaderWidget> {
                     Text(
                       '$displayName님, 어서오세요.',
                       style: const TextStyle(
-                        fontSize: 16,
+                        fontSize: 15,
                         fontWeight: FontWeight.w600,
                       ),
+                      overflow: TextOverflow.ellipsis,
                     ),
                     const SizedBox(height: 2),
                     Row(
                       children: [
                         Icon(
                           Icons.timer_outlined,
-                          size: 14,
+                          size: 13,
                           color: remainingMinutes <= 30 ? Colors.orange : Colors.grey[500],
                         ),
-                        const SizedBox(width: 4),
+                        const SizedBox(width: 3),
                         Text(
-                          '남은 시간: $timeText',
+                          timeText,
                           style: TextStyle(
-                            fontSize: 12,
+                            fontSize: 11,
                             color: remainingMinutes <= 30 ? Colors.orange : Colors.grey[600],
                           ),
                         ),
-                        const SizedBox(width: 8),
+                        const SizedBox(width: 6),
                         // 세션 연장 버튼
                         GestureDetector(
                           onTap: () {
@@ -2355,7 +2371,7 @@ class _WelcomeHeaderWidgetState extends State<_WelcomeHeaderWidget> {
                             );
                           },
                           child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                             decoration: BoxDecoration(
                               color: Colors.blue.shade50,
                               borderRadius: BorderRadius.circular(4),
@@ -2364,7 +2380,7 @@ class _WelcomeHeaderWidgetState extends State<_WelcomeHeaderWidget> {
                             child: Text(
                               '연장',
                               style: TextStyle(
-                                fontSize: 11,
+                                fontSize: 10,
                                 color: Colors.blue[700],
                                 fontWeight: FontWeight.w500,
                               ),
@@ -2379,10 +2395,10 @@ class _WelcomeHeaderWidgetState extends State<_WelcomeHeaderWidget> {
               // 로그아웃 버튼
               TextButton.icon(
                 onPressed: widget.onLogout,
-                icon: const Icon(Icons.logout, size: 18, color: Colors.red),
-                label: const Text('로그아웃', style: TextStyle(color: Colors.red, fontSize: 13)),
+                icon: const Icon(Icons.logout, size: 16, color: Colors.red),
+                label: const Text('로그아웃', style: TextStyle(color: Colors.red, fontSize: 12)),
                 style: TextButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
                   minimumSize: Size.zero,
                   tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                 ),
