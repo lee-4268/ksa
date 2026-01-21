@@ -104,7 +104,10 @@
       "Bash(\"C:\\\\Users\\\\user\\\\Downloads\\\\flutter\\\\bin\\\\flutter.bat\" build web --web-renderer html)",
       "Bash(\"C:\\\\Users\\\\user\\\\Downloads\\\\flutter\\\\bin\\\\flutter.bat\" build web)",
       "Bash(curl:*)",
-      "Bash(tasklist:*)"
+      "Bash(tasklist:*)",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\user\\\\Desktop\\\\26\\\\ksa\\\\yolov8\" -Recurse)",
+      "Bash(Select-Object FullName, Length)",
+      "Bash(Format-Table -AutoSize)"
     ]
   }
 }

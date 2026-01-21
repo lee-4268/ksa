@@ -5,7 +5,7 @@ import 'package:http/http.dart' as http;
 /// 철탑형태 분류 서비스 - FastAPI 기반 YOLOv8 모델 연동
 class TowerClassificationService {
   // FastAPI 서버 URL
-  static const String _baseUrl = 'http://127.0.0.1:8000';
+  static const String _baseUrl = 'http://15.165.204.39:8000';
 
   // 분류 클래스 정보 (9개 클래스)
   static const Map<int, Map<String, String>> classNames = {
