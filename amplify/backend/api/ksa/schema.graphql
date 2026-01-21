@@ -9,6 +9,35 @@ type Category @model @auth(rules: [
   updatedAt: AWSDateTime
 }
 
+# 철탑형태 분류 결과 - 소유자만 접근 가능
+type TowerClassification @model @auth(rules: [
+  { allow: owner, operations: [create, read, update, delete] }
+]) {
+  id: ID!
+
+  # 이미지 정보
+  imageKey: String!           # S3 이미지 키
+  imageName: String           # 원본 파일명
+
+  # 분류 결과
+  className: String!          # 영문 클래스명 (예: steel_pipe)
+  classNameKr: String!        # 한글 클래스명 (예: 강관주)
+  confidence: Float!          # 신뢰도 (0.0 ~ 1.0)
+  isConfident: Boolean        # 신뢰도 임계값 이상 여부
+
+  # Top-5 예측 (JSON 문자열로 저장)
+  top5Predictions: String     # JSON: [{rank, className, classNameKr, confidence}]
+
+  # 앙상블 정보 (선택)
+  ensembleMethod: String      # mean, max, vote (앙상블인 경우)
+  ensembleImageKeys: [String] # 앙상블에 사용된 이미지 키 목록
+
+  # 메타데이터
+  processingTimeMs: Float
+  createdAt: AWSDateTime
+  updatedAt: AWSDateTime
+}
+
 # 무선국 데이터 - 소유자만 접근 가능
 type Station @model @auth(rules: [
   { allow: owner, operations: [create, read, update, delete] }

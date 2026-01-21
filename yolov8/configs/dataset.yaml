@@ -1,0 +1,36 @@
+# 철탑/안테나 분류 데이터셋 설정
+# YOLOv8 Classification용 데이터셋 구성
+
+# 데이터 경로 (절대 경로 또는 상대 경로)
+# YOLOv8 Classification은 path/train/클래스명/ 구조 사용
+# 절대 경로 사용으로 실행 위치와 관계없이 동작
+path: C:/Users/user/Desktop/26/ksa/yolov8/data
+train: train
+val: val
+
+# 클래스 정의 (철탑/안테나 유형) - 9개 클래스
+names:
+  0: simple_pole              # 간이폴, 분산폴 및 비기준 설치대
+  1: steel_pipe               # 강관주
+  2: complex_type             # 복합형
+  3: indoor                   # 옥내, 터널, 지하 등
+  4: single_pole_building     # 원폴(건물)
+  5: tower_building           # 철탑(건물)
+  6: tower_ground             # 철탑(지면)
+  7: telecom_pole             # 통신주
+  8: frame_mount              # 프레임
+
+# 클래스 수
+nc: 9
+
+# 한글 클래스명 매핑 (참조용)
+# names_kr:
+#   simple_pole: 간이폴, 분산폴 및 비기준 설치대
+#   steel_pipe: 강관주
+#   complex_type: 복합형
+#   indoor: 옥내, 터널, 지하 등
+#   single_pole_building: 원폴(건물)
+#   tower_building: 철탑(건물)
+#   tower_ground: 철탑(지면)
+#   telecom_pole: 통신주
+#   frame_mount: 프레임

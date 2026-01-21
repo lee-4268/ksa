@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/auth_service.dart';
 import 'register_screen.dart';
-import 'map_screen.dart';
+import 'home_screen.dart';
 
 /// 로그인 화면 - 모던한 카드 스타일 UI
 class LoginScreen extends StatefulWidget {
@@ -40,7 +40,7 @@ class _LoginScreenState extends State<LoginScreen> {
     if (success && mounted) {
       Navigator.pushReplacement(
         context,
-        MaterialPageRoute(builder: (_) => const MapScreen()),
+        MaterialPageRoute(builder: (_) => const HomeScreen()),
       );
     } else if (mounted && authService.errorMessage != null) {
       ScaffoldMessenger.of(context).showSnackBar(

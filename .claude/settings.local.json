@@ -88,7 +88,23 @@
       "Bash(amplify status:*)",
       "Bash(amplify add hosting:*)",
       "Bash(amplify push:*)",
-      "Bash(amplify add:*)"
+      "Bash(amplify add:*)",
+      "Bash(flutter doctor:*)",
+      "Bash(cmd /c \"where flutter 2>nul || echo NOT_FOUND\")",
+      "Bash(cmd /c \"dir C:\\\\Users\\\\user\\\\flutter\\\\bin\\\\flutter.bat 2>nul && echo FOUND || dir C:\\\\flutter\\\\bin\\\\flutter.bat 2>nul && echo FOUND || echo FLUTTER_NOT_FOUND\")",
+      "Bash(cmd /c \"echo %PATH%\")",
+      "Bash(\"C:\\\\Users\\\\user\\\\Downloads\\\\flutter\\\\bin\\\\flutter.bat\" doctor)",
+      "Bash(\"C:\\\\Users\\\\user\\\\Downloads\\\\flutter\\\\bin\\\\flutter.bat\" pub get)",
+      "Bash(\"C:\\\\Users\\\\user\\\\Downloads\\\\flutter\\\\bin\\\\flutter.bat\" pub run build_runner build --delete-conflicting-outputs)",
+      "Bash(\"C:\\\\Users\\\\user\\\\Downloads\\\\flutter\\\\bin\\\\flutter.bat\" run -d chrome --web-port=8080)",
+      "Bash(\"C:\\\\Users\\\\user\\\\Downloads\\\\flutter\\\\bin\\\\flutter.bat\" analyze)",
+      "Bash(pip install:*)",
+      "Bash(cmd /c \"pip install uvicorn fastapi python-multipart ultralytics pydantic\")",
+      "Bash(\"C:\\\\Users\\\\user\\\\Downloads\\\\flutter\\\\bin\\\\flutter.bat\" run -d chrome --web-port=8080 --web-browser-flag=\"--disable-web-security\")",
+      "Bash(\"C:\\\\Users\\\\user\\\\Downloads\\\\flutter\\\\bin\\\\flutter.bat\" build web --web-renderer html)",
+      "Bash(\"C:\\\\Users\\\\user\\\\Downloads\\\\flutter\\\\bin\\\\flutter.bat\" build web)",
+      "Bash(curl:*)",
+      "Bash(tasklist:*)"
     ]
   }
 }

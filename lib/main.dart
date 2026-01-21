@@ -7,7 +7,7 @@ import 'package:amplify_storage_s3/amplify_storage_s3.dart';
 
 import 'amplifyconfiguration.dart';
 import 'providers/station_provider.dart';
-import 'screens/map_screen.dart';
+import 'screens/home_screen.dart';
 import 'screens/login_screen.dart';
 import 'services/storage_service.dart';
 import 'services/auth_service.dart';
@@ -159,7 +159,7 @@ class _AuthWrapperState extends State<AuthWrapper> {
 
         // 로그인 상태에 따라 화면 분기
         if (authService.isSignedIn) {
-          return const MapScreen();
+          return const HomeScreen();
         } else {
           return const LoginScreen();
         }
