@@ -31,8 +31,11 @@ dependencies:
   hive: ^2.2.3
   hive_flutter: ^1.1.0
 
-  # HTTP 요청 (지오코딩)
+  # HTTP 요청 (지오코딩, 날씨 API)
   http: ^1.2.2
+
+  # 위치 정보 (날씨용)
+  geolocator: ^13.0.2
 
   # URL 런처 (로드뷰)
   url_launcher: ^6.3.1
@@ -66,3 +69,8 @@ flutter:
 
   assets:
     - image/
+
+  fonts:
+    - family: BMJUA
+      fonts:
+        - asset: assets/fonts/BMJUA_ttf.ttf

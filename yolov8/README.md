@@ -2,15 +2,22 @@
 
 YOLOv8을 활용한 통신 철탑 및 안테나 형태 분류 시스템
 
-## 분류 클래스
+**버전:** 1.1.0
+**최종 수정일:** 2026-01-22
 
-| 클래스명 | 한글명 | 설명 |
-|---------|-------|------|
-| dispersed_pole | 분산폴 | 분산형 안테나 폴 |
-| single_pole | 원폴 | 원형 단일 폴 |
-| eco_friendly | 환경친화형 | 가로등형/경관형 등 |
-| utility_pole | 전주 | 콘크리트 전주 |
-| steel_pipe | 강관주 | 철제 강관 구조물 |
+## 분류 클래스 (9개)
+
+| ID | 클래스명 | 한글명 | 약어 |
+|----|---------|-------|------|
+| 0 | simple_pole | 간이폴, 분산폴 및 비기준 설치대 | 간이폴 |
+| 1 | steel_pipe | 강관주 | 강관주 |
+| 2 | complex_type | 복합형 | 복합형 |
+| 3 | indoor | 옥내, 터널, 지하 등 | 옥내 |
+| 4 | single_pole_building | 원폴(건물) | 원폴건물 |
+| 5 | tower_building | 철탑(건물) | 철탑건물 |
+| 6 | tower_ground | 철탑(지면) | 철탑지면 |
+| 7 | telecom_pole | 통신주 | 통신주 |
+| 8 | frame_mount | 프레임 | 프레임 |
 
 ## 프로젝트 구조
 
@@ -211,3 +218,104 @@ device: cpu
 - `epochs` 수를 늘리세요
 - `lr0` 학습률을 조정하세요
 - 데이터 증강 설정을 조정하세요
+
+---
+
+## AWS EC2 배포
+
+### 배포 아키텍처
+
+```
+Flutter App (Amplify HTTPS)
+        │
+        ▼
+API Gateway (HTTPS)
+https://c3jictzagh.execute-api.ap-northeast-2.amazonaws.com
+        │
+        ▼
+EC2 Instance (c7i-flex.large, Ubuntu 22.04)
+http://15.165.204.39:8000
+FastAPI + YOLOv8 Model
+```
+
+### EC2 인스턴스 정보
+
+| 항목 | 값 |
+|------|-----|
+| Instance Type | c7i-flex.large (2 vCPU, 4GB RAM) |
+| OS | Ubuntu 22.04 LTS |
+| Region | ap-northeast-2 (Seoul) |
+| Public IP | 15.165.204.39 |
+| Port | 8000 |
+
+### 서버 파일 구조
+
+```
+/home/ubuntu/tower-api/
+├── api/
+│   ├── __init__.py
+│   └── main.py          # FastAPI 서버
+├── best.pt              # YOLOv8 학습된 모델
+└── venv/                # Python 가상환경
+```
+
+### 서버 관리 명령어
+
+```bash
+# SSH 접속
+ssh -i "tower-api-key.pem" ubuntu@15.165.204.39
+
+# 서비스 상태 확인
+sudo systemctl status tower-api
+
+# 서비스 재시작
+sudo systemctl restart tower-api
+
+# 로그 확인
+sudo journalctl -u tower-api -f
+
+# 서비스 중지
+sudo systemctl stop tower-api
+```
+
+### 모델 업데이트 방법
+
+1. 로컬에서 모델 재학습
+2. 새 모델 업로드:
+```powershell
+scp -i "tower-api-key.pem" best.pt ubuntu@15.165.204.39:~/tower-api/
+```
+3. 서비스 재시작:
+```bash
+sudo systemctl restart tower-api
+```
+
+### systemd 서비스 설정
+
+`/etc/systemd/system/tower-api.service`:
+```ini
+[Unit]
+Description=Tower Classification FastAPI
+After=network.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/home/ubuntu/tower-api/api
+Environment="PATH=/home/ubuntu/tower-api/venv/bin"
+ExecStart=/home/ubuntu/tower-api/venv/bin/uvicorn main:app --host 0.0.0.0 --port 8000
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### API Gateway 설정
+
+| 항목 | 값 |
+|------|-----|
+| API Name | tower-api |
+| Type | HTTP API |
+| Route | ANY /{proxy+} |
+| Integration | HTTP Proxy → http://15.165.204.39:8000/{proxy} |
+| Invoke URL | https://c3jictzagh.execute-api.ap-northeast-2.amazonaws.com |

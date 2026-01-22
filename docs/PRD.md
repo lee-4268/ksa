@@ -2,8 +2,8 @@
 
 ## Product Requirements Document
 
-**버전:** 1.0.0
-**최종 수정일:** 2026-01-13
+**버전:** 1.1.0
+**최종 수정일:** 2026-01-22
 **작성자:** Development Team
 
 ---
@@ -81,6 +81,14 @@ KSA (Korea Station Administration) - 무선국 검사 관리 시스템
 | S3 업로드 | AWS S3에 사진 업로드 | P0 |
 | 사진 보기 | 전체화면 사진 뷰어 | P1 |
 | 사진 삭제 | S3 및 로컬 사진 삭제 | P1 |
+
+### 2.6 AI 철탑형태 분류
+| 기능 | 설명 | 우선순위 |
+|------|------|----------|
+| 이미지 업로드 | 카메라/갤러리에서 철탑 이미지 선택 | P0 |
+| 자동 분류 | YOLOv8 모델 기반 설치형태 자동 분류 | P0 |
+| 분류 결과 표시 | Top-5 분류 결과 및 신뢰도 표시 | P0 |
+| 서버 상태 확인 | AI 서버 연결 상태 실시간 확인 | P1 |
 
 ---
 
@@ -185,7 +193,14 @@ KSA (Korea Station Administration) - 무선국 검사 관리 시스템
 - **Storage:** AWS S3
 - **Region:** ap-northeast-2 (서울)
 
-### 6.3 외부 API
+### 6.3 AI 서버 (AWS EC2)
+- **Framework:** FastAPI + Uvicorn
+- **Model:** YOLOv8n-cls (철탑형태 분류)
+- **Proxy:** AWS API Gateway (HTTPS)
+- **Instance:** c7i-flex.large (Ubuntu 22.04)
+- **Endpoint:** https://c3jictzagh.execute-api.ap-northeast-2.amazonaws.com
+
+### 6.4 외부 API
 - Kakao Maps JavaScript API (Web)
 - Kakao Maps Native SDK (Mobile)
 - Kakao Geocoding REST API
@@ -194,7 +209,7 @@ KSA (Korea Station Administration) - 무선국 검사 관리 시스템
 
 ## 7. 릴리스 계획
 
-### v1.0.0 (현재)
+### v1.0.0
 - [x] 사용자 인증 (로그인/회원가입)
 - [x] Excel 가져오기/내보내기
 - [x] 지도 기반 무선국 표시
@@ -202,7 +217,13 @@ KSA (Korea Station Administration) - 무선국 검사 관리 시스템
 - [x] 사진 촬영 및 S3 업로드
 - [x] 클라우드 동기화
 
-### v1.1.0 (예정)
+### v1.1.0 (현재)
+- [x] AI 철탑형태 분류 기능
+- [x] FastAPI 서버 (EC2 배포)
+- [x] API Gateway HTTPS 프록시
+- [x] 홈 화면 메뉴 시스템
+
+### v1.2.0 (예정)
 - [ ] 오프라인 모드 강화
 - [ ] 푸시 알림
 - [ ] 검사 보고서 생성
@@ -232,3 +253,4 @@ KSA (Korea Station Administration) - 무선국 검사 관리 시스템
 | 버전 | 날짜 | 변경 내용 | 작성자 |
 |------|------|----------|--------|
 | 1.0.0 | 2026-01-13 | 최초 작성 | Dev Team |
+| 1.1.0 | 2026-01-22 | AI 철탑형태 분류 기능 추가, EC2/API Gateway 배포 | Dev Team |

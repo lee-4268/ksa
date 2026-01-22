@@ -1,10 +1,10 @@
 # KSA Backend API 명세서
 
-## GraphQL API Specification
+## GraphQL API Specification + Tower Classification REST API
 
-**버전:** 1.0.0
-**최종 수정일:** 2026-01-13
-**API 타입:** AWS AppSync GraphQL
+**버전:** 1.1.0
+**최종 수정일:** 2026-01-22
+**API 타입:** AWS AppSync GraphQL + FastAPI REST
 
 ---
 
@@ -872,8 +872,160 @@ query {
 
 ---
 
+---
+
+## 10. Tower Classification API (FastAPI)
+
+철탑/안테나 설치형태 분류를 위한 REST API
+
+### 10.1 API 정보
+
+| 항목 | 값 |
+|------|-----|
+| Base URL | https://c3jictzagh.execute-api.ap-northeast-2.amazonaws.com |
+| Protocol | HTTPS (API Gateway) |
+| Backend | FastAPI + Uvicorn (EC2) |
+| Model | YOLOv8n-cls |
+
+### 10.2 분류 클래스 (9개)
+
+| ID | 영문명 | 한글명 | 약어 |
+|----|--------|--------|------|
+| 0 | simple_pole | 간이폴, 분산폴 및 비기준 설치대 | 간이폴 |
+| 1 | steel_pipe | 강관주 | 강관주 |
+| 2 | complex_type | 복합형 | 복합형 |
+| 3 | indoor | 옥내, 터널, 지하 등 | 옥내 |
+| 4 | single_pole_building | 원폴(건물) | 원폴건물 |
+| 5 | tower_building | 철탑(건물) | 철탑건물 |
+| 6 | tower_ground | 철탑(지면) | 철탑지면 |
+| 7 | telecom_pole | 통신주 | 통신주 |
+| 8 | frame_mount | 프레임 | 프레임 |
+
+### 10.3 Endpoints
+
+#### GET /health
+서버 및 모델 상태 확인
+
+**Response:**
+```json
+{
+  "status": "healthy",
+  "model_loaded": true,
+  "model_path": "/home/ubuntu/tower-api/best.pt",
+  "timestamp": "2026-01-22T09:00:00.000Z"
+}
+```
+
+#### GET /classes
+분류 클래스 목록 조회
+
+**Response:**
+```json
+{
+  "classes": [
+    {"id": 0, "name": "simple_pole", "name_kr": "간이폴, 분산폴 및 비기준 설치대", "short_name": "간이폴"},
+    {"id": 1, "name": "steel_pipe", "name_kr": "강관주", "short_name": "강관주"},
+    ...
+  ]
+}
+```
+
+#### POST /predict
+단일 이미지 분류
+
+**Request:**
+- Content-Type: `multipart/form-data`
+- Body: `file` (이미지 파일)
+- Query: `conf_threshold` (선택, 기본값: 0.5)
+
+**Response:**
+```json
+{
+  "success": true,
+  "prediction": {
+    "class_name": "steel_pipe",
+    "class_name_kr": "강관주",
+    "short_name": "강관주",
+    "confidence": 0.9234
+  },
+  "top5": [
+    {"rank": 1, "class_name": "steel_pipe", "class_name_kr": "강관주", "confidence": 0.9234},
+    {"rank": 2, "class_name": "telecom_pole", "class_name_kr": "통신주", "confidence": 0.0521},
+    ...
+  ],
+  "is_confident": true,
+  "processing_time_ms": 245.32
+}
+```
+
+#### POST /predict/ensemble
+다중 이미지 앙상블 분류
+
+**Request:**
+- Content-Type: `multipart/form-data`
+- Body: `files` (여러 이미지 파일, 최대 10개)
+- Query:
+  - `method` (mean|max|vote, 기본값: mean)
+  - `conf_threshold` (선택, 기본값: 0.5)
+
+**Response:**
+```json
+{
+  "success": true,
+  "method": "mean",
+  "num_images": 3,
+  "final_prediction": {
+    "class_name": "tower_ground",
+    "class_name_kr": "철탑(지면)",
+    "short_name": "철탑지면",
+    "confidence": 0.8756
+  },
+  "top5": [...],
+  "individual_predictions": [
+    {"filename": "image1.jpg", "prediction": "tower_ground", "prediction_kr": "철탑(지면)", "confidence": 0.91},
+    {"filename": "image2.jpg", "prediction": "tower_ground", "prediction_kr": "철탑(지면)", "confidence": 0.87},
+    {"filename": "image3.jpg", "prediction": "tower_building", "prediction_kr": "철탑(건물)", "confidence": 0.82}
+  ],
+  "is_confident": true,
+  "processing_time_ms": 523.45
+}
+```
+
+### 10.4 Error Responses
+
+| Status Code | 설명 |
+|-------------|------|
+| 400 | 잘못된 파일 형식 (지원: jpg, jpeg, png, bmp, webp) |
+| 500 | 서버 내부 오류 |
+| 503 | 모델 로드 실패 |
+
+**Error Response Format:**
+```json
+{
+  "detail": "Invalid file type. Allowed: {'.jpg', '.jpeg', '.png', '.bmp', '.webp'}"
+}
+```
+
+### 10.5 인프라 구성
+
+```
+Flutter App (Amplify HTTPS)
+        │
+        ▼
+API Gateway (HTTPS)
+https://c3jictzagh.execute-api.ap-northeast-2.amazonaws.com
+        │
+        ▼
+EC2 Instance (c7i-flex.large)
+http://15.165.204.39:8000
+FastAPI + YOLOv8 Model
+```
+
+---
+
 ## 변경 이력
 
 | 버전 | 날짜 | 변경 내용 | 작성자 |
 |------|------|----------|--------|
 | 1.0.0 | 2026-01-13 | 최초 작성 | Dev Team |
+| 1.1.0 | 2026-01-22 | Tower Classification API 추가 | Dev Team |

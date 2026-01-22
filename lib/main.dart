@@ -85,18 +85,37 @@ class MyApp extends StatelessWidget {
         ),
       ],
       child: MaterialApp(
-        title: '무선국 검사 관리',
+        title: '무선국 관리 시스템',
         debugShowCheckedModeBanner: false,
         theme: ThemeData(
-          colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
+          colorScheme: ColorScheme.fromSeed(
+            seedColor: const Color(0xFFE53935),
+            brightness: Brightness.light,
+          ),
           useMaterial3: true,
+          fontFamily: 'BMJUA',
+          scaffoldBackgroundColor: Colors.white,
           appBarTheme: const AppBarTheme(
             centerTitle: true,
+            backgroundColor: Colors.white,
+            foregroundColor: Colors.black87,
+            elevation: 0,
           ),
           cardTheme: CardThemeData(
-            elevation: 2,
+            elevation: 0,
+            color: Colors.white,
             shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
+              borderRadius: BorderRadius.circular(16),
+              side: BorderSide(color: Colors.grey.shade200),
+            ),
+          ),
+          elevatedButtonTheme: ElevatedButtonThemeData(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFE53935),
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
             ),
           ),
         ),

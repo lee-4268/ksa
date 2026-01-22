@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:amplify_flutter/amplify_flutter.dart';
 import 'package:amplify_auth_cognito/amplify_auth_cognito.dart';
 import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 /// AWS Cognito 기반 인증 서비스
 class AuthService extends ChangeNotifier {
@@ -13,11 +14,14 @@ class AuthService extends ChangeNotifier {
   /// 세션 타임아웃 (2시간 = 7200초)
   static const Duration sessionTimeout = Duration(hours: 2);
 
+  /// 세션 만료 시간 저장 키
+  static const String _sessionExpiryKey = 'session_expiry_time';
+
   /// 세션 타이머
   Timer? _sessionTimer;
 
-  /// 마지막 활동 시간
-  DateTime? _lastActivityTime;
+  /// 세션 만료 예정 시간 (절대 시간)
+  DateTime? _sessionExpiryTime;
 
   /// 세션 만료 여부
   bool _isSessionExpired = false;
@@ -80,14 +84,26 @@ class AuthService extends ChangeNotifier {
       );
 
       if (session.isSignedIn) {
-        _currentUser = await Amplify.Auth.getCurrentUser();
-        debugPrint('로그인 상태: ${_currentUser?.userId}');
-        // 사용자 속성(이름 등) 조회 - 백그라운드에서 비동기 처리 (로그인 속도 개선)
-        fetchUserAttributes();
-        // 기존 세션에도 타이머 시작
-        _startSessionTimer();
+        // 저장된 세션 만료 시간 확인 (브라우저 종료 후에도 유지)
+        final isExpired = await _checkStoredSessionExpiry();
+
+        if (isExpired) {
+          // 세션이 만료됨 - 로그아웃 처리
+          debugPrint('저장된 세션 만료로 로그아웃');
+          _isSessionExpired = true;
+          await Amplify.Auth.signOut();
+        } else {
+          _currentUser = await Amplify.Auth.getCurrentUser();
+          debugPrint('로그인 상태: ${_currentUser?.userId}');
+          // 사용자 속성(이름 등) 조회 - 백그라운드에서 비동기 처리 (로그인 속도 개선)
+          fetchUserAttributes();
+          // 세션 타이머 시작 (기존 만료 시간 유지)
+          _startSessionTimerWithExistingExpiry();
+        }
       } else {
         debugPrint('로그인 필요');
+        // 로그인 안 된 상태면 저장된 세션 만료 시간 삭제
+        await _clearSessionExpiry();
       }
     } on AuthException catch (e) {
       // 로그인되지 않은 상태에서는 정상적인 오류 - 무시
@@ -98,6 +114,27 @@ class AuthService extends ChangeNotifier {
 
     _isInitialized = true;
     notifyListeners();
+  }
+
+  /// 기존 만료 시간으로 세션 타이머 시작 (앱 재시작 시)
+  void _startSessionTimerWithExistingExpiry() {
+    _stopSessionTimer();
+    _isSessionExpired = false;
+
+    // 이미 _sessionExpiryTime이 _checkStoredSessionExpiry에서 복원됨
+    if (_sessionExpiryTime == null) {
+      // 만료 시간이 없으면 새로 설정
+      _startSessionTimer();
+      return;
+    }
+
+    // 1분마다 세션 만료 체크
+    _sessionTimer = Timer.periodic(const Duration(minutes: 1), (_) {
+      _checkSessionTimeout();
+    });
+
+    final remaining = _sessionExpiryTime!.difference(DateTime.now());
+    debugPrint('세션 타이머 복원: ${remaining.inMinutes}분 남음 (만료: $_sessionExpiryTime)');
   }
 
   /// 회원가입
@@ -319,17 +356,20 @@ class AuthService extends ChangeNotifier {
   }
 
   /// 세션 타이머 시작 (로그인 후 호출)
-  void _startSessionTimer() {
+  Future<void> _startSessionTimer() async {
     _stopSessionTimer();
-    _lastActivityTime = DateTime.now();
     _isSessionExpired = false;
+
+    // 세션 만료 시간 설정 및 저장 (현재 시간 + 2시간)
+    _sessionExpiryTime = DateTime.now().add(sessionTimeout);
+    await _saveSessionExpiry(_sessionExpiryTime!);
 
     // 1분마다 세션 만료 체크
     _sessionTimer = Timer.periodic(const Duration(minutes: 1), (_) {
       _checkSessionTimeout();
     });
 
-    debugPrint('세션 타이머 시작: ${sessionTimeout.inHours}시간 후 자동 로그아웃');
+    debugPrint('세션 타이머 시작: ${sessionTimeout.inHours}시간 후 자동 로그아웃 (만료: $_sessionExpiryTime)');
   }
 
   /// 세션 타이머 중지
@@ -338,13 +378,65 @@ class AuthService extends ChangeNotifier {
     _sessionTimer = null;
   }
 
+  /// 세션 만료 시간 저장 (로컬 스토리지)
+  Future<void> _saveSessionExpiry(DateTime expiryTime) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_sessionExpiryKey, expiryTime.toIso8601String());
+    } catch (e) {
+      debugPrint('세션 만료 시간 저장 오류: $e');
+    }
+  }
+
+  /// 세션 만료 시간 불러오기 (로컬 스토리지)
+  Future<DateTime?> _loadSessionExpiry() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final expiryStr = prefs.getString(_sessionExpiryKey);
+      if (expiryStr != null) {
+        return DateTime.parse(expiryStr);
+      }
+    } catch (e) {
+      debugPrint('세션 만료 시간 불러오기 오류: $e');
+    }
+    return null;
+  }
+
+  /// 세션 만료 시간 삭제 (로컬 스토리지)
+  Future<void> _clearSessionExpiry() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_sessionExpiryKey);
+    } catch (e) {
+      debugPrint('세션 만료 시간 삭제 오류: $e');
+    }
+  }
+
+  /// 저장된 세션 만료 시간 확인 (앱 시작 시 호출)
+  Future<bool> _checkStoredSessionExpiry() async {
+    final storedExpiry = await _loadSessionExpiry();
+    if (storedExpiry != null) {
+      if (DateTime.now().isAfter(storedExpiry)) {
+        // 이미 만료됨
+        debugPrint('저장된 세션이 이미 만료됨: $storedExpiry');
+        await _clearSessionExpiry();
+        return true; // 만료됨
+      } else {
+        // 아직 유효함 - 만료 시간 복원
+        _sessionExpiryTime = storedExpiry;
+        debugPrint('세션 복원: 만료 시간 $storedExpiry');
+        return false; // 유효함
+      }
+    }
+    return false;
+  }
+
   /// 세션 타임아웃 체크
   void _checkSessionTimeout() {
-    if (_lastActivityTime == null || _currentUser == null) return;
+    if (_sessionExpiryTime == null || _currentUser == null) return;
 
-    final elapsed = DateTime.now().difference(_lastActivityTime!);
-    if (elapsed >= sessionTimeout) {
-      debugPrint('세션 타임아웃: ${elapsed.inMinutes}분 경과');
+    if (DateTime.now().isAfter(_sessionExpiryTime!)) {
+      debugPrint('세션 타임아웃: 만료 시간 초과');
       _handleSessionExpired();
     }
   }
@@ -353,6 +445,7 @@ class AuthService extends ChangeNotifier {
   Future<void> _handleSessionExpired() async {
     _stopSessionTimer();
     _isSessionExpired = true;
+    await _clearSessionExpiry();
 
     try {
       await Amplify.Auth.signOut();
@@ -365,25 +458,24 @@ class AuthService extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// 사용자 활동 갱신 (화면 터치, 데이터 조작 시 호출)
+  /// 사용자 활동 갱신 (화면 터치, 데이터 조작 시 호출) - 세션 연장하지 않음
   void updateActivity() {
-    if (_currentUser == null) return;
-    _lastActivityTime = DateTime.now();
+    // 절대 시간 기반이므로 활동 갱신 불필요
   }
 
   /// 세션 연장 (버튼 클릭 시 호출)
-  void extendSession() {
+  Future<void> extendSession() async {
     if (_currentUser == null) return;
-    _lastActivityTime = DateTime.now();
-    debugPrint('세션 연장: 2시간 추가');
+    _sessionExpiryTime = DateTime.now().add(sessionTimeout);
+    await _saveSessionExpiry(_sessionExpiryTime!);
+    debugPrint('세션 연장: 2시간 추가 (만료: $_sessionExpiryTime)');
     notifyListeners();
   }
 
   /// 남은 세션 시간 (분)
   int get remainingSessionMinutes {
-    if (_lastActivityTime == null) return 0;
-    final elapsed = DateTime.now().difference(_lastActivityTime!);
-    final remaining = sessionTimeout - elapsed;
+    if (_sessionExpiryTime == null) return 0;
+    final remaining = _sessionExpiryTime!.difference(DateTime.now());
     return remaining.inMinutes.clamp(0, sessionTimeout.inMinutes);
   }
 

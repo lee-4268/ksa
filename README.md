@@ -9,6 +9,7 @@
 - **현장 검사 관리** - 검사 상태 변경, 메모 작성, 사진 촬영
 - **클라우드 동기화** - AWS 기반 실시간 데이터 동기화
 - **사용자 인증** - AWS Cognito 기반 회원가입/로그인
+- **AI 철탑형태 분류** - YOLOv8 기반 철탑/안테나 설치형태 자동 분류
 
 ## 스크린샷
 
@@ -29,6 +30,12 @@
 - **API:** AWS AppSync (GraphQL)
 - **Storage:** AWS S3
 - **Region:** ap-northeast-2 (Seoul)
+
+### AI 서버 (AWS EC2)
+- **Framework:** FastAPI + Uvicorn
+- **Model:** YOLOv8n-cls (철탑형태 분류)
+- **Proxy:** AWS API Gateway (HTTPS)
+- **Instance:** c7i-flex.large (Ubuntu 22.04)
 
 ## 시작하기
 
@@ -98,16 +105,31 @@ lib/
 │   ├── storage_service.dart     # 로컬 저장소
 │   ├── photo_storage_service.dart # S3 사진 관리
 │   ├── excel_service.dart       # Excel 처리
-│   └── geocoding_service.dart   # 주소→좌표 변환
+│   ├── geocoding_service.dart   # 주소→좌표 변환
+│   └── tower_classification_service.dart  # AI 철탑분류 서비스
 ├── screens/
 │   ├── login_screen.dart        # 로그인 화면
 │   ├── register_screen.dart     # 회원가입 화면
+│   ├── home_screen.dart         # 홈 화면 (메뉴 선택)
 │   ├── map_screen.dart          # 지도 화면
-│   └── roadview_screen.dart     # 로드뷰 화면
+│   ├── roadview_screen.dart     # 로드뷰 화면
+│   └── tower_classification_screen.dart  # 철탑형태 분류 화면
 └── widgets/
     ├── station_detail_sheet.dart    # 상세정보 바텀시트
     ├── station_list_drawer.dart     # 무선국 목록 드로어
     └── ...
+
+yolov8/
+├── api/
+│   └── main.py                  # FastAPI 서버
+├── configs/
+│   ├── dataset.yaml             # 데이터셋 설정
+│   └── train_config.yaml        # 학습 설정
+├── data/                        # 학습 데이터
+├── runs/                        # 학습 결과 및 모델
+├── train.py                     # 학습 스크립트
+├── predict.py                   # 추론 스크립트
+└── README.md
 ```
 
 ## 환경 설정
@@ -156,11 +178,38 @@ amplify push
 - 사진 촬영/업로드
 - 검사완료 처리
 
+### 5. 철탑형태 분류 화면
+- AI 기반 설치형태 자동 분류
+- 이미지 업로드 (카메라/갤러리)
+- 9가지 철탑 유형 분류
+- Top-5 분류 결과 및 신뢰도 표시
+
+## 시스템 아키텍처
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                         AWS Cloud                               │
+│                                                                 │
+│  ┌──────────────┐    ┌──────────────┐    ┌──────────────────┐  │
+│  │   Amplify    │    │ API Gateway  │    │   EC2 Instance   │  │
+│  │ (Flutter Web)│    │   (HTTPS)    │───►│  FastAPI Server  │  │
+│  │              │    │              │    │  + YOLOv8 Model  │  │
+│  └──────┬───────┘    └──────────────┘    └──────────────────┘  │
+│         │                                                       │
+│         ▼                                                       │
+│  ┌──────────────┐    ┌──────────────┐    ┌──────────────────┐  │
+│  │   Cognito    │    │   AppSync    │    │       S3         │  │
+│  │    (Auth)    │    │  (GraphQL)   │    │    (Storage)     │  │
+│  └──────────────┘    └──────────────┘    └──────────────────┘  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
 ## API 문서
 
 - [PRD (제품 요구사항 문서)](docs/PRD.md)
 - [Frontend API 명세서](docs/FE_API_SPEC.md)
 - [Backend API 명세서](docs/BE_API_SPEC.md)
+- [YOLOv8 모델 문서](yolov8/README.md)
 
 ## 데이터 흐름
 
@@ -214,5 +263,5 @@ This project is proprietary software.
 
 ---
 
-**버전:** 1.0.0
-**최종 수정일:** 2026-01-13
+**버전:** 1.1.0
+**최종 수정일:** 2026-01-22
