@@ -20,8 +20,8 @@
   <title>무선국 검사 관리</title>
   <link rel="manifest" href="manifest.json">
 
-  <!-- 카카오맵 API (웹용) - 비동기 로딩으로 성능 개선 -->
-  <script type="text/javascript" src="https://dapi.kakao.com/v2/maps/sdk.js?appkey=6f4fbe76fbb53a0ba573d755b1a3adde&autoload=false"></script>
+  <!-- 카카오맵 API (웹용) - 비동기 로딩으로 성능 개선, services 라이브러리 포함 -->
+  <script type="text/javascript" src="https://dapi.kakao.com/v2/maps/sdk.js?appkey=6f4fbe76fbb53a0ba573d755b1a3adde&libraries=services&autoload=false"></script>
   <script>
     // 카카오맵 SDK 수동 로드 (비동기) - 로드 완료 후 콜백
     window.kakaoMapsLoaded = false;
@@ -42,6 +42,33 @@
 
     // 스크립트 로드 후 초기화
     initKakaoMaps();
+
+    // Dart에서 호출할 역지오코딩 함수
+    function _callKakaoGeocoderFromDart(lat, lon, callback) {
+      if (!window.kakaoMapsLoaded || typeof kakao === 'undefined' || !kakao.maps || !kakao.maps.services) {
+        console.log('카카오맵 서비스가 아직 로드되지 않음');
+        callback(null, 'ERROR');
+        return;
+      }
+
+      try {
+        var geocoder = new kakao.maps.services.Geocoder();
+        geocoder.coord2RegionCode(lon, lat, function(result, status) {
+          callback(result, status.toString());
+        });
+      } catch (e) {
+        console.error('카카오 Geocoder 호출 오류:', e);
+        callback(null, 'ERROR');
+      }
+    }
+
+    // Dart에서 JavaScript 객체 속성 접근용 헬퍼
+    function _getPropertyFromDart(obj, propertyName) {
+      if (obj && typeof obj === 'object' && propertyName in obj) {
+        return obj[propertyName];
+      }
+      return null;
+    }
   </script>
 </head>
 <body>

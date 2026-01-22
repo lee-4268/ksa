@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:geolocator/geolocator.dart';
+import 'kakao_geocoding_web.dart' if (dart.library.io) 'kakao_geocoding_stub.dart';
 
 /// 날씨 정보 모델
 class WeatherInfo {
@@ -56,18 +57,24 @@ class WeatherService {
   }
 
   /// 지역명 가져오기
-  /// 웹: 격자 좌표 기반 지역명 매핑 사용
-  /// 모바일: 카카오 API 사용
+  /// 웹: 카카오맵 JavaScript SDK 사용 (CORS 문제 없음)
+  /// 모바일: 카카오 REST API 사용
   static Future<String?> _getLocationName(double lat, double lon) async {
-    // 웹 플랫폼에서는 격자 좌표 기반 지역명 매핑 사용
+    // 웹 플랫폼에서는 카카오맵 JavaScript SDK를 통한 역지오코딩 사용
     if (kIsWeb) {
+      debugPrint('웹 플랫폼: 카카오맵 SDK 역지오코딩 시도 (lat=$lat, lon=$lon)');
+      final locationName = await KakaoGeocodingWeb.getLocationName(lat, lon);
+      if (locationName != null) {
+        debugPrint('웹 플랫폼: 카카오맵 SDK 역지오코딩 성공 = $locationName');
+        return locationName;
+      }
+      // SDK 실패 시 격자 좌표 기반 폴백
+      debugPrint('웹 플랫폼: SDK 실패, 격자 좌표 기반 폴백');
       final grid = _convertToGrid(lat, lon);
-      final locationName = _getLocationNameFromGrid(grid['nx']!, grid['ny']!);
-      debugPrint('웹 플랫폼: 격자 좌표 기반 지역명 = $locationName');
-      return locationName;
+      return _getLocationNameFromGrid(grid['nx']!, grid['ny']!);
     }
 
-    // 모바일: 카카오 API 사용
+    // 모바일: 카카오 REST API 사용
     try {
       const kakaoApiKey = '6dd0c0e78e66ff915c1590bd3d7ab09d';
 

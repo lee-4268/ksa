@@ -110,7 +110,10 @@
       "Bash(Format-Table -AutoSize)",
       "Bash(flutter sdk-path:*)",
       "Bash(unzip:*)",
-      "Bash(\"C:/platform-tools/adb.exe\" devices)"
+      "Bash(\"C:/platform-tools/adb.exe\" devices)",
+      "Bash(cd:*)",
+      "Bash(aws s3 sync:*)",
+      "Bash(cmd /c \"aws s3 sync build/web s3://radio-inspection-web --delete\")"
     ]
   }
 }
