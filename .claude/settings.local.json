@@ -107,7 +107,8 @@
       "Bash(tasklist:*)",
       "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\user\\\\Desktop\\\\26\\\\ksa\\\\yolov8\" -Recurse)",
       "Bash(Select-Object FullName, Length)",
-      "Bash(Format-Table -AutoSize)"
+      "Bash(Format-Table -AutoSize)",
+      "Bash(flutter sdk-path:*)"
     ]
   }
 }

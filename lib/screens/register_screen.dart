@@ -134,6 +134,13 @@ class _RegisterScreenState extends State<RegisterScreen> {
     }
   }
 
+  /// 입력 필드 스타일 (웹에서 텍스트 겹침 방지용 시스템 폰트)
+  static const TextStyle _inputTextStyle = TextStyle(
+    fontSize: 15,
+    fontFamily: null, // 시스템 기본 폰트
+    letterSpacing: 0,
+  );
+
   /// 입력 필드 데코레이션 빌더
   InputDecoration _buildInputDecoration({
     required String label,
@@ -142,7 +149,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
   }) {
     return InputDecoration(
       hintText: hint,
-      hintStyle: TextStyle(color: Colors.grey[400]),
+      hintStyle: TextStyle(
+        color: Colors.grey[400],
+        fontFamily: null,
+      ),
       filled: true,
       fillColor: Colors.grey[50],
       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
@@ -268,7 +278,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
           TextFormField(
             controller: _nameController,
             textInputAction: TextInputAction.next,
-            style: const TextStyle(fontSize: 15),
+            style: _inputTextStyle,
             decoration: _buildInputDecoration(
               label: '이름',
               hint: '이름 입력 (선택사항)',
@@ -290,7 +300,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
             controller: _emailController,
             keyboardType: TextInputType.emailAddress,
             textInputAction: TextInputAction.next,
-            style: const TextStyle(fontSize: 15),
+            style: _inputTextStyle,
             decoration: _buildInputDecoration(
               label: '이메일',
               hint: '이메일 주소 입력',
@@ -321,7 +331,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
             controller: _phoneController,
             keyboardType: TextInputType.phone,
             textInputAction: TextInputAction.next,
-            style: const TextStyle(fontSize: 15),
+            style: _inputTextStyle,
             decoration: _buildInputDecoration(
               label: '연락처',
               hint: '하이픈(-) 없이 숫자만 입력',
@@ -352,8 +362,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
           TextFormField(
             controller: _passwordController,
             obscureText: _obscurePassword,
+            obscuringCharacter: '•',
             textInputAction: TextInputAction.next,
-            style: const TextStyle(fontSize: 15),
+            style: _inputTextStyle,
             decoration: _buildInputDecoration(
               label: '비밀번호',
               hint: '8자 이상 입력',
@@ -397,9 +408,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
           TextFormField(
             controller: _confirmPasswordController,
             obscureText: _obscureConfirmPassword,
+            obscuringCharacter: '•',
             textInputAction: TextInputAction.done,
             onFieldSubmitted: (_) => _handleSignUp(),
-            style: const TextStyle(fontSize: 15),
+            style: _inputTextStyle,
             decoration: _buildInputDecoration(
               label: '비밀번호 확인',
               hint: '비밀번호 재입력',
@@ -550,6 +562,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
             fontSize: 24,
             letterSpacing: 8,
             fontWeight: FontWeight.w600,
+            fontFamily: null, // 시스템 기본 폰트
           ),
           decoration: _buildInputDecoration(
             label: '인증 코드',

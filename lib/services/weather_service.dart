@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:geolocator/geolocator.dart';
@@ -23,7 +24,7 @@ class WeatherService {
   // 기상청 초단기실황 API (공공데이터포털)
   // 실제 서비스키는 공공데이터포털에서 발급받아야 합니다
   static const String _serviceKey = 'UBG8tBW43f1rTQXOjXsfgPlxewnI/nNtlKaX5HzLsiwFjjFZJ6dee7lmAoZ7452c6ZVWWDKMLEiaGsasY7RiYg=='; // TODO: 실제 키로 교체
-  static const String _baseUrl = 'http://apis.data.go.kr/1360000/VilageFcstInfoService_2.0';
+  static const String _baseUrl = 'https://apis.data.go.kr/1360000/VilageFcstInfoService_2.0';
 
   /// 현재 위치의 날씨 정보 가져오기
   static Future<WeatherInfo> getCurrentWeather() async {
@@ -55,9 +56,17 @@ class WeatherService {
   }
 
   /// 역지오코딩으로 지역명 가져오기 (카카오 API 사용)
+  /// 웹 플랫폼에서는 CORS 문제로 REST API 직접 호출 불가 → 모바일에서만 동작
   static Future<String?> _getLocationName(double lat, double lon) async {
+    // 웹 플랫폼에서는 카카오 REST API 직접 호출 시 CORS 에러 발생
+    // 웹에서는 지역명 없이 기온만 표시
+    if (kIsWeb) {
+      debugPrint('웹 플랫폼: 카카오 역지오코딩 건너뜀 (CORS 제한)');
+      return null;
+    }
+
     try {
-      // 카카오 REST API 키 (geocoding_service.dart와 동일한 키 사용)
+      // 카카오 REST API 키 (모바일에서만 사용)
       const kakaoApiKey = '6dd0c0e78e66ff915c1590bd3d7ab09d';
 
       final url = Uri.parse(
@@ -85,6 +94,8 @@ class WeatherService {
           final region1 = region['region_1depth_name'] as String?;
           return region1;
         }
+      } else {
+        debugPrint('카카오 API 응답 오류: ${response.statusCode}');
       }
     } catch (e) {
       debugPrint('지역명 가져오기 실패: $e');
@@ -170,6 +181,8 @@ class WeatherService {
       }
       final baseTime = '${hour.toString().padLeft(2, '0')}00';
 
+      debugPrint('기상청 API 요청: baseDate=$baseDate, baseTime=$baseTime, nx=$nx, ny=$ny');
+
       final url = Uri.parse(
         '$_baseUrl/getUltraSrtNcst'
         '?serviceKey=$_serviceKey'
@@ -182,33 +195,55 @@ class WeatherService {
         '&ny=$ny'
       );
 
-      final response = await http.get(url).timeout(const Duration(seconds: 5));
+      final response = await http.get(url).timeout(const Duration(seconds: 10));
+      debugPrint('기상청 API 응답 코드: ${response.statusCode}');
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
+
+        // 응답 코드 확인
+        final resultCode = data['response']?['header']?['resultCode'];
+        final resultMsg = data['response']?['header']?['resultMsg'];
+        debugPrint('기상청 API 결과: $resultCode - $resultMsg');
+
+        if (resultCode != '00') {
+          debugPrint('기상청 API 오류: $resultMsg');
+          return _getDefaultWeather(locationName);
+        }
+
         final items = data['response']?['body']?['items']?['item'] as List?;
 
         if (items != null && items.isNotEmpty) {
           String? pty; // 강수형태
-          String? sky; // 하늘상태
           double? temp; // 기온
+          double? reh; // 습도
 
           for (var item in items) {
-            switch (item['category']) {
+            final category = item['category'];
+            final value = item['obsrValue']?.toString();
+            debugPrint('기상 데이터: $category = $value');
+
+            switch (category) {
               case 'PTY': // 강수형태: 0없음, 1비, 2비/눈, 3눈, 4소나기
-                pty = item['obsrValue'];
-                break;
-              case 'SKY': // 하늘상태: 1맑음, 3구름많음, 4흐림
-                sky = item['obsrValue'];
+                pty = value;
                 break;
               case 'T1H': // 기온
-                temp = double.tryParse(item['obsrValue'].toString());
+                temp = double.tryParse(value ?? '');
+                break;
+              case 'REH': // 습도
+                reh = double.tryParse(value ?? '');
                 break;
             }
           }
 
-          return _parseWeather(pty, sky, temp, locationName);
+          debugPrint('파싱 결과: pty=$pty, temp=$temp, reh=$reh');
+          return _parseWeatherFromNcst(pty, temp, locationName);
+        } else {
+          debugPrint('기상청 API 응답에 items가 없음');
         }
+      } else {
+        debugPrint('기상청 API HTTP 오류: ${response.statusCode}');
+        debugPrint('응답 본문: ${response.body}');
       }
     } catch (e) {
       debugPrint('기상청 API 호출 실패: $e');
@@ -217,9 +252,10 @@ class WeatherService {
     return _getDefaultWeather(locationName);
   }
 
-  /// 날씨 코드를 한글과 이모지로 변환
-  static WeatherInfo _parseWeather(String? pty, String? sky, double? temp, String? locationName) {
-    // 강수형태 우선 체크
+  /// 초단기실황(getUltraSrtNcst) API 응답 파싱
+  /// 초단기실황은 SKY(하늘상태) 항목이 없고 PTY(강수형태)와 T1H(기온)만 제공
+  static WeatherInfo _parseWeatherFromNcst(String? pty, double? temp, String? locationName) {
+    // 강수형태 체크
     if (pty != null && pty != '0') {
       switch (pty) {
         case '1':
@@ -232,17 +268,13 @@ class WeatherService {
       }
     }
 
-    // 하늘상태
-    switch (sky) {
-      case '1':
-        return WeatherInfo(condition: '맑음', icon: '☀️', temperature: temp, locationName: locationName);
-      case '3':
-        return WeatherInfo(condition: '구름많음', icon: '⛅', temperature: temp, locationName: locationName);
-      case '4':
-        return WeatherInfo(condition: '흐림', icon: '☁️', temperature: temp, locationName: locationName);
+    // 강수 없음 - 시간대별 기본 아이콘 (낮/밤)
+    final hour = DateTime.now().hour;
+    if (hour >= 6 && hour < 18) {
+      return WeatherInfo(condition: '맑음', icon: '☀️', temperature: temp, locationName: locationName);
+    } else {
+      return WeatherInfo(condition: '맑음', icon: '🌙', temperature: temp, locationName: locationName);
     }
-
-    return _getDefaultWeather(locationName);
   }
 
   /// 기본 날씨 (API 실패 시)
@@ -267,7 +299,7 @@ class WeatherService {
     const double XO = 43; // 기준점 X좌표
     const double YO = 136; // 기준점 Y좌표
 
-    const double DEGRAD = 3.141592653589793 / 180.0;
+    const double DEGRAD = math.pi / 180.0;
 
     double re = RE / GRID;
     double slat1 = SLAT1 * DEGRAD;
@@ -275,85 +307,21 @@ class WeatherService {
     double olon = OLON * DEGRAD;
     double olat = OLAT * DEGRAD;
 
-    double sn = (log(cos(slat1) / cos(slat2))) /
-                log(tan(3.141592653589793 * 0.25 + slat2 * 0.5) / tan(3.141592653589793 * 0.25 + slat1 * 0.5));
-    double sf = pow(tan(3.141592653589793 * 0.25 + slat1 * 0.5), sn) * cos(slat1) / sn;
-    double ro = re * sf / pow(tan(3.141592653589793 * 0.25 + olat * 0.5), sn);
+    double sn = math.log(math.cos(slat1) / math.cos(slat2)) /
+                math.log(math.tan(math.pi * 0.25 + slat2 * 0.5) / math.tan(math.pi * 0.25 + slat1 * 0.5));
+    double sf = math.pow(math.tan(math.pi * 0.25 + slat1 * 0.5), sn) * math.cos(slat1) / sn;
+    double ro = re * sf / math.pow(math.tan(math.pi * 0.25 + olat * 0.5), sn);
 
-    double ra = re * sf / pow(tan(3.141592653589793 * 0.25 + lat * DEGRAD * 0.5), sn);
+    double ra = re * sf / math.pow(math.tan(math.pi * 0.25 + lat * DEGRAD * 0.5), sn);
     double theta = lon * DEGRAD - olon;
-    if (theta > 3.141592653589793) theta -= 2.0 * 3.141592653589793;
-    if (theta < -3.141592653589793) theta += 2.0 * 3.141592653589793;
+    if (theta > math.pi) theta -= 2.0 * math.pi;
+    if (theta < -math.pi) theta += 2.0 * math.pi;
     theta *= sn;
 
-    int nx = (ra * sin(theta) + XO + 0.5).floor();
-    int ny = (ro - ra * cos(theta) + YO + 0.5).floor();
+    int nx = (ra * math.sin(theta) + XO + 0.5).floor();
+    int ny = (ro - ra * math.cos(theta) + YO + 0.5).floor();
 
+    debugPrint('좌표 변환: lat=$lat, lon=$lon → nx=$nx, ny=$ny');
     return {'nx': nx, 'ny': ny};
   }
 }
-
-// dart:math 함수들
-double log(double x) => x > 0 ? _log(x) : 0;
-double _log(double x) {
-  if (x <= 0) return double.negativeInfinity;
-  double result = 0;
-  while (x >= 2) {
-    x /= 2.718281828459045;
-    result++;
-  }
-  while (x < 1) {
-    x *= 2.718281828459045;
-    result--;
-  }
-  double y = x - 1;
-  double term = y;
-  double sum = term;
-  for (int i = 2; i < 100; i++) {
-    term *= -y * (i - 1) / i;
-    sum += term;
-    if (term.abs() < 1e-15) break;
-  }
-  return result + sum;
-}
-
-double pow(double base, double exp) {
-  if (exp == 0) return 1;
-  if (base == 0) return 0;
-  return _exp(exp * log(base));
-}
-
-double _exp(double x) {
-  double result = 1;
-  double term = 1;
-  for (int i = 1; i < 100; i++) {
-    term *= x / i;
-    result += term;
-    if (term.abs() < 1e-15) break;
-  }
-  return result;
-}
-
-double sin(double x) {
-  x = x % (2 * 3.141592653589793);
-  double result = 0;
-  double term = x;
-  for (int i = 1; i < 50; i++) {
-    result += term;
-    term *= -x * x / ((2 * i) * (2 * i + 1));
-  }
-  return result;
-}
-
-double cos(double x) {
-  x = x % (2 * 3.141592653589793);
-  double result = 0;
-  double term = 1;
-  for (int i = 0; i < 50; i++) {
-    result += term;
-    term *= -x * x / ((2 * i + 1) * (2 * i + 2));
-  }
-  return result;
-}
-
-double tan(double x) => sin(x) / cos(x);

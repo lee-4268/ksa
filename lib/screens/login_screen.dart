@@ -52,6 +52,74 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
+  /// 비밀번호 입력 필드
+  /// 시스템 기본 폰트를 사용하여 Canvas/HTML input 간 문자 폭 일치
+  Widget _buildPasswordField() {
+    return TextFormField(
+      controller: _passwordController,
+      obscureText: _obscurePassword,
+      obscuringCharacter: '*',
+      textInputAction: TextInputAction.done,
+      onFieldSubmitted: (_) => _handleLogin(),
+      // 시스템 기본 폰트 사용 - 웹에서 Canvas와 HTML input 간 문자 폭 일치
+      style: const TextStyle(
+        fontSize: 15,
+        fontFamily: null,
+        letterSpacing: 0,
+      ),
+      decoration: InputDecoration(
+        hintText: '비밀번호 입력',
+        hintStyle: TextStyle(color: Colors.grey[400]),
+        filled: true,
+        fillColor: Colors.grey[50],
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 16,
+          vertical: 14,
+        ),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(8),
+          borderSide: BorderSide(color: Colors.grey[300]!),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(8),
+          borderSide: BorderSide(color: Colors.grey[300]!),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(8),
+          borderSide: const BorderSide(color: _primaryColor, width: 1.5),
+        ),
+        errorBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(8),
+          borderSide: const BorderSide(color: Colors.red),
+        ),
+        focusedErrorBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(8),
+          borderSide: const BorderSide(color: Colors.red, width: 1.5),
+        ),
+        suffixIcon: IconButton(
+          icon: Icon(
+            _obscurePassword
+                ? Icons.visibility_off_outlined
+                : Icons.visibility_outlined,
+            color: Colors.grey[500],
+            size: 20,
+          ),
+          onPressed: () {
+            setState(() {
+              _obscurePassword = !_obscurePassword;
+            });
+          },
+        ),
+      ),
+      validator: (value) {
+        if (value == null || value.isEmpty) {
+          return '비밀번호를 입력하세요';
+        }
+        return null;
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -127,10 +195,18 @@ class _LoginScreenState extends State<LoginScreen> {
                         controller: _emailController,
                         keyboardType: TextInputType.emailAddress,
                         textInputAction: TextInputAction.next,
-                        style: const TextStyle(fontSize: 15),
+                        // 시스템 기본 폰트 사용 - 웹에서 텍스트 겹침 문제 방지
+                        style: const TextStyle(
+                          fontSize: 15,
+                          fontFamily: null,
+                          letterSpacing: 0,
+                        ),
                         decoration: InputDecoration(
                           hintText: '이메일 주소 입력',
-                          hintStyle: TextStyle(color: Colors.grey[400]),
+                          hintStyle: TextStyle(
+                            color: Colors.grey[400],
+                            fontFamily: null,
+                          ),
                           filled: true,
                           fillColor: Colors.grey[50],
                           contentPadding: const EdgeInsets.symmetric(
@@ -176,64 +252,7 @@ class _LoginScreenState extends State<LoginScreen> {
                         ),
                       ),
                       const SizedBox(height: 8),
-                      TextFormField(
-                        controller: _passwordController,
-                        obscureText: _obscurePassword,
-                        textInputAction: TextInputAction.done,
-                        onFieldSubmitted: (_) => _handleLogin(),
-                        style: const TextStyle(
-                          fontSize: 15,
-                          color: Colors.black,
-                          fontWeight: FontWeight.w500,
-                        ),
-                        cursorColor: Colors.black87,
-                        decoration: InputDecoration(
-                          hintText: '비밀번호 입력',
-                          hintStyle: TextStyle(color: Colors.grey[400]),
-                          filled: true,
-                          fillColor: Colors.grey[50],
-                          contentPadding: const EdgeInsets.symmetric(
-                            horizontal: 16,
-                            vertical: 14,
-                          ),
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(8),
-                            borderSide: BorderSide(color: Colors.grey[300]!),
-                          ),
-                          enabledBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(8),
-                            borderSide: BorderSide(color: Colors.grey[300]!),
-                          ),
-                          focusedBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(8),
-                            borderSide: BorderSide(color: _primaryColor, width: 1.5),
-                          ),
-                          errorBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(8),
-                            borderSide: const BorderSide(color: Colors.red),
-                          ),
-                          suffixIcon: IconButton(
-                            icon: Icon(
-                              _obscurePassword
-                                  ? Icons.visibility_off_outlined
-                                  : Icons.visibility_outlined,
-                              color: Colors.grey[500],
-                              size: 20,
-                            ),
-                            onPressed: () {
-                              setState(() {
-                                _obscurePassword = !_obscurePassword;
-                              });
-                            },
-                          ),
-                        ),
-                        validator: (value) {
-                          if (value == null || value.isEmpty) {
-                            return '비밀번호를 입력하세요';
-                          }
-                          return null;
-                        },
-                      ),
+                      _buildPasswordField(),
 
                       // 비밀번호 초기화 링크
                       Align(
@@ -483,9 +502,17 @@ class _PasswordResetScreenState extends State<PasswordResetScreen> {
                       TextField(
                         controller: _emailController,
                         keyboardType: TextInputType.emailAddress,
+                        style: const TextStyle(
+                          fontSize: 15,
+                          fontFamily: null,
+                          letterSpacing: 0,
+                        ),
                         decoration: InputDecoration(
                           hintText: '가입한 이메일 주소',
-                          hintStyle: TextStyle(color: Colors.grey[400]),
+                          hintStyle: TextStyle(
+                            color: Colors.grey[400],
+                            fontFamily: null,
+                          ),
                           filled: true,
                           fillColor: Colors.grey[50],
                           contentPadding: const EdgeInsets.symmetric(
@@ -520,9 +547,17 @@ class _PasswordResetScreenState extends State<PasswordResetScreen> {
                       TextField(
                         controller: _codeController,
                         keyboardType: TextInputType.number,
+                        style: const TextStyle(
+                          fontSize: 15,
+                          fontFamily: null,
+                          letterSpacing: 0,
+                        ),
                         decoration: InputDecoration(
                           hintText: '6자리 인증 코드',
-                          hintStyle: TextStyle(color: Colors.grey[400]),
+                          hintStyle: TextStyle(
+                            color: Colors.grey[400],
+                            fontFamily: null,
+                          ),
                           filled: true,
                           fillColor: Colors.grey[50],
                           contentPadding: const EdgeInsets.symmetric(
@@ -558,9 +593,18 @@ class _PasswordResetScreenState extends State<PasswordResetScreen> {
                       TextField(
                         controller: _newPasswordController,
                         obscureText: _obscureNewPassword,
+                        obscuringCharacter: '•',
+                        style: const TextStyle(
+                          fontSize: 15,
+                          fontFamily: null,
+                          letterSpacing: 0,
+                        ),
                         decoration: InputDecoration(
                           hintText: '8자 이상 입력',
-                          hintStyle: TextStyle(color: Colors.grey[400]),
+                          hintStyle: TextStyle(
+                            color: Colors.grey[400],
+                            fontFamily: null,
+                          ),
                           filled: true,
                           fillColor: Colors.grey[50],
                           contentPadding: const EdgeInsets.symmetric(
@@ -610,9 +654,18 @@ class _PasswordResetScreenState extends State<PasswordResetScreen> {
                       TextField(
                         controller: _confirmPasswordController,
                         obscureText: _obscureConfirmPassword,
+                        obscuringCharacter: '•',
+                        style: const TextStyle(
+                          fontSize: 15,
+                          fontFamily: null,
+                          letterSpacing: 0,
+                        ),
                         decoration: InputDecoration(
                           hintText: '비밀번호 재입력',
-                          hintStyle: TextStyle(color: Colors.grey[400]),
+                          hintStyle: TextStyle(
+                            color: Colors.grey[400],
+                            fontFamily: null,
+                          ),
                           filled: true,
                           fillColor: Colors.grey[50],
                           contentPadding: const EdgeInsets.symmetric(

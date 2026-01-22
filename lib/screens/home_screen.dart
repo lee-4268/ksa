@@ -292,20 +292,20 @@ class _HomeScreenState extends State<HomeScreen> {
         if (_isLoadingWeather) {
           weatherText = '날씨 정보를 불러오는 중...';
         } else if (_weatherInfo != null) {
-          // 기온 문자열 생성 (섭씨 기호 사용)
+          // 기온 문자열 생성 (한글 '도' 사용)
           String tempStr = '';
           if (_weatherInfo!.temperature != null) {
             final temp = _weatherInfo!.temperature!;
-            tempStr = '${temp.toStringAsFixed(0)}℃';
+            tempStr = '${temp.toStringAsFixed(0)}도';
           }
 
           // 지역명 포함 여부에 따라 문구 생성
           if (_weatherInfo!.locationName != null && tempStr.isNotEmpty) {
-            weatherText = '현재 ${_weatherInfo!.locationName}의 기온은 $tempStr이고 날씨는 ${_weatherInfo!.condition}입니다. ${_weatherInfo!.icon}';
+            weatherText = '현재 ${_weatherInfo!.locationName}의 기온은 $tempStr, 날씨는 ${_weatherInfo!.condition}입니다. ${_weatherInfo!.icon}';
           } else if (_weatherInfo!.locationName != null) {
             weatherText = '현재 ${_weatherInfo!.locationName}의 날씨는 ${_weatherInfo!.condition}입니다. ${_weatherInfo!.icon}';
           } else if (tempStr.isNotEmpty) {
-            weatherText = '현재 기온은 $tempStr이고 날씨는 ${_weatherInfo!.condition}입니다. ${_weatherInfo!.icon}';
+            weatherText = '현재 기온은 $tempStr, 날씨는 ${_weatherInfo!.condition}입니다. ${_weatherInfo!.icon}';
           } else {
             weatherText = '현재 날씨는 ${_weatherInfo!.condition}입니다. ${_weatherInfo!.icon}';
           }
