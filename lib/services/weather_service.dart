@@ -121,31 +121,37 @@ class WeatherService {
         return null;
       }
 
-      // 현재 위치 가져오기 (타임아웃 설정 추가)
+      // 먼저 마지막으로 알려진 위치 시도 (빠름)
+      debugPrint('마지막으로 알려진 위치 확인 중...');
+      try {
+        final lastPosition = await Geolocator.getLastKnownPosition();
+        if (lastPosition != null) {
+          debugPrint('마지막 위치 발견: lat=${lastPosition.latitude}, lon=${lastPosition.longitude}');
+          // 마지막 위치가 있으면 바로 사용 (더 빠른 응답)
+          // 백그라운드에서 현재 위치 갱신은 하지 않음
+          return lastPosition;
+        }
+      } catch (e) {
+        debugPrint('마지막 위치 확인 실패: $e');
+      }
+
+      // 마지막 위치가 없으면 현재 위치 가져오기 (타임아웃 15초)
       debugPrint('현재 위치 가져오는 중...');
       final position = await Geolocator.getCurrentPosition(
         locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.low,
-          timeLimit: Duration(seconds: 10),
+          accuracy: LocationAccuracy.medium,
         ),
+      ).timeout(
+        const Duration(seconds: 15),
+        onTimeout: () {
+          debugPrint('위치 가져오기 타임아웃 (15초)');
+          throw Exception('위치 가져오기 타임아웃');
+        },
       );
       debugPrint('위치 획득 성공: lat=${position.latitude}, lon=${position.longitude}');
       return position;
     } catch (e) {
       debugPrint('위치 가져오기 실패: $e');
-
-      // 타임아웃 시 마지막으로 알려진 위치 시도
-      try {
-        debugPrint('마지막으로 알려진 위치 시도 중...');
-        final lastPosition = await Geolocator.getLastKnownPosition();
-        if (lastPosition != null) {
-          debugPrint('마지막 위치 사용: lat=${lastPosition.latitude}, lon=${lastPosition.longitude}');
-          return lastPosition;
-        }
-      } catch (e2) {
-        debugPrint('마지막 위치 가져오기도 실패: $e2');
-      }
-
       return null;
     }
   }

@@ -181,7 +181,12 @@ class _LoginScreenState extends State<LoginScreen> {
                         obscureText: _obscurePassword,
                         textInputAction: TextInputAction.done,
                         onFieldSubmitted: (_) => _handleLogin(),
-                        style: const TextStyle(fontSize: 15, color: Colors.black87),
+                        style: const TextStyle(
+                          fontSize: 15,
+                          color: Colors.black,
+                          fontWeight: FontWeight.w500,
+                        ),
+                        cursorColor: Colors.black87,
                         decoration: InputDecoration(
                           hintText: '비밀번호 입력',
                           hintStyle: TextStyle(color: Colors.grey[400]),
