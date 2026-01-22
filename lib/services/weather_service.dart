@@ -97,29 +97,55 @@ class WeatherService {
     try {
       // 위치 서비스 활성화 확인
       bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      debugPrint('위치 서비스 활성화 여부: $serviceEnabled');
       if (!serviceEnabled) {
+        debugPrint('위치 서비스가 비활성화되어 있습니다.');
         return null;
       }
 
       // 권한 확인
       LocationPermission permission = await Geolocator.checkPermission();
+      debugPrint('현재 위치 권한 상태: $permission');
       if (permission == LocationPermission.denied) {
+        debugPrint('위치 권한 요청 중...');
         permission = await Geolocator.requestPermission();
+        debugPrint('위치 권한 요청 결과: $permission');
         if (permission == LocationPermission.denied) {
+          debugPrint('위치 권한이 거부되었습니다.');
           return null;
         }
       }
 
       if (permission == LocationPermission.deniedForever) {
+        debugPrint('위치 권한이 영구적으로 거부되었습니다.');
         return null;
       }
 
-      // 현재 위치 가져오기
-      return await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.low,
+      // 현재 위치 가져오기 (타임아웃 설정 추가)
+      debugPrint('현재 위치 가져오는 중...');
+      final position = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.low,
+          timeLimit: Duration(seconds: 10),
+        ),
       );
+      debugPrint('위치 획득 성공: lat=${position.latitude}, lon=${position.longitude}');
+      return position;
     } catch (e) {
       debugPrint('위치 가져오기 실패: $e');
+
+      // 타임아웃 시 마지막으로 알려진 위치 시도
+      try {
+        debugPrint('마지막으로 알려진 위치 시도 중...');
+        final lastPosition = await Geolocator.getLastKnownPosition();
+        if (lastPosition != null) {
+          debugPrint('마지막 위치 사용: lat=${lastPosition.latitude}, lon=${lastPosition.longitude}');
+          return lastPosition;
+        }
+      } catch (e2) {
+        debugPrint('마지막 위치 가져오기도 실패: $e2');
+      }
+
       return null;
     }
   }
