@@ -353,7 +353,7 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             const SizedBox(height: 6),
             Text(
-              '관리하시려는 기능을 선택해주세요.',
+              '원하는 기능을 선택해주세요.',
               style: TextStyle(
                 fontSize: 16,
                 color: Colors.grey.shade600,

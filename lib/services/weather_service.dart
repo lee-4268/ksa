@@ -55,18 +55,20 @@ class WeatherService {
     return _getDefaultWeather();
   }
 
-  /// 역지오코딩으로 지역명 가져오기 (카카오 API 사용)
-  /// 웹 플랫폼에서는 CORS 문제로 REST API 직접 호출 불가 → 모바일에서만 동작
+  /// 지역명 가져오기
+  /// 웹: 격자 좌표 기반 지역명 매핑 사용
+  /// 모바일: 카카오 API 사용
   static Future<String?> _getLocationName(double lat, double lon) async {
-    // 웹 플랫폼에서는 카카오 REST API 직접 호출 시 CORS 에러 발생
-    // 웹에서는 지역명 없이 기온만 표시
+    // 웹 플랫폼에서는 격자 좌표 기반 지역명 매핑 사용
     if (kIsWeb) {
-      debugPrint('웹 플랫폼: 카카오 역지오코딩 건너뜀 (CORS 제한)');
-      return null;
+      final grid = _convertToGrid(lat, lon);
+      final locationName = _getLocationNameFromGrid(grid['nx']!, grid['ny']!);
+      debugPrint('웹 플랫폼: 격자 좌표 기반 지역명 = $locationName');
+      return locationName;
     }
 
+    // 모바일: 카카오 API 사용
     try {
-      // 카카오 REST API 키 (모바일에서만 사용)
       const kakaoApiKey = '6dd0c0e78e66ff915c1590bd3d7ab09d';
 
       final url = Uri.parse(
@@ -84,13 +86,11 @@ class WeatherService {
         final documents = data['documents'] as List?;
 
         if (documents != null && documents.isNotEmpty) {
-          // region_2depth_name이 시/군/구 이름 (예: 평택시, 화성시)
           final region = documents.first;
           final region2 = region['region_2depth_name'] as String?;
           if (region2 != null && region2.isNotEmpty) {
             return region2;
           }
-          // 없으면 region_1depth_name 사용 (예: 경기도, 서울특별시)
           final region1 = region['region_1depth_name'] as String?;
           return region1;
         }
@@ -100,6 +100,246 @@ class WeatherService {
     } catch (e) {
       debugPrint('지역명 가져오기 실패: $e');
     }
+
+    // 모바일에서도 API 실패 시 격자 좌표 기반 폴백
+    final grid = _convertToGrid(lat, lon);
+    return _getLocationNameFromGrid(grid['nx']!, grid['ny']!);
+  }
+
+  /// 격자 좌표(nx, ny)로 지역명 찾기
+  /// 기상청 격자 좌표는 약 5km 해상도이므로 대략적인 지역 매핑
+  static String? _getLocationNameFromGrid(int nx, int ny) {
+    // 주요 도시/지역의 격자 좌표 매핑 (기상청 격자 좌표 기준)
+    // 격자 좌표는 범위로 매핑 (±2 허용)
+
+    final regions = [
+      // 서울특별시
+      _GridRegion(60, 127, '서울'),
+      _GridRegion(61, 126, '서울'),
+      _GridRegion(61, 127, '서울'),
+      _GridRegion(62, 126, '서울'),
+
+      // 경기도
+      _GridRegion(60, 120, '수원'),
+      _GridRegion(60, 121, '수원'),
+      _GridRegion(62, 120, '성남'),
+      _GridRegion(64, 128, '의정부'),
+      _GridRegion(55, 124, '안양'),
+      _GridRegion(58, 125, '부천'),
+      _GridRegion(56, 126, '광명'),
+      _GridRegion(51, 125, '시흥'),
+      _GridRegion(52, 123, '안산'),
+      _GridRegion(57, 119, '용인'),
+      _GridRegion(62, 123, '고양'),
+      _GridRegion(64, 124, '파주'),
+      _GridRegion(55, 127, '김포'),
+      _GridRegion(68, 100, '평택'),
+      _GridRegion(57, 112, '평택'),
+      _GridRegion(62, 114, '화성'),
+      _GridRegion(63, 111, '오산'),
+      _GridRegion(61, 118, '군포'),
+      _GridRegion(63, 119, '의왕'),
+      _GridRegion(64, 119, '안성'),
+      _GridRegion(66, 131, '양주'),
+      _GridRegion(64, 118, '이천'),
+      _GridRegion(71, 131, '포천'),
+      _GridRegion(69, 125, '동두천'),
+      _GridRegion(76, 122, '가평'),
+      _GridRegion(73, 134, '연천'),
+      _GridRegion(70, 121, '양평'),
+      _GridRegion(68, 117, '여주'),
+      _GridRegion(69, 107, '광주'),
+      _GridRegion(64, 116, '하남'),
+      _GridRegion(65, 121, '구리'),
+      _GridRegion(66, 123, '남양주'),
+
+      // 인천광역시
+      _GridRegion(55, 124, '인천'),
+      _GridRegion(54, 125, '인천'),
+      _GridRegion(55, 125, '인천'),
+
+      // 부산광역시
+      _GridRegion(98, 76, '부산'),
+      _GridRegion(99, 75, '부산'),
+      _GridRegion(98, 75, '부산'),
+
+      // 대구광역시
+      _GridRegion(89, 90, '대구'),
+      _GridRegion(88, 90, '대구'),
+
+      // 대전광역시
+      _GridRegion(67, 100, '대전'),
+      _GridRegion(68, 100, '대전'),
+
+      // 광주광역시
+      _GridRegion(58, 74, '광주'),
+      _GridRegion(59, 74, '광주'),
+
+      // 울산광역시
+      _GridRegion(102, 84, '울산'),
+      _GridRegion(101, 84, '울산'),
+
+      // 세종특별자치시
+      _GridRegion(66, 103, '세종'),
+
+      // 강원도
+      _GridRegion(73, 134, '춘천'),
+      _GridRegion(92, 131, '강릉'),
+      _GridRegion(87, 141, '속초'),
+      _GridRegion(76, 139, '홍천'),
+      _GridRegion(84, 123, '원주'),
+      _GridRegion(93, 124, '삼척'),
+      _GridRegion(86, 127, '정선'),
+      _GridRegion(90, 135, '동해'),
+      _GridRegion(85, 138, '양양'),
+      _GridRegion(80, 130, '횡성'),
+      _GridRegion(77, 125, '영월'),
+      _GridRegion(81, 118, '평창'),
+      _GridRegion(84, 129, '태백'),
+      _GridRegion(73, 139, '인제'),
+      _GridRegion(70, 141, '고성'),
+      _GridRegion(73, 127, '화천'),
+      _GridRegion(72, 139, '양구'),
+      _GridRegion(81, 106, '철원'),
+
+      // 충청북도
+      _GridRegion(69, 107, '청주'),
+      _GridRegion(76, 114, '충주'),
+      _GridRegion(76, 106, '제천'),
+      _GridRegion(65, 105, '보은'),
+      _GridRegion(73, 97, '옥천'),
+      _GridRegion(71, 99, '영동'),
+      _GridRegion(64, 111, '증평'),
+      _GridRegion(67, 106, '진천'),
+      _GridRegion(69, 112, '괴산'),
+      _GridRegion(64, 115, '음성'),
+      _GridRegion(80, 119, '단양'),
+
+      // 충청남도
+      _GridRegion(68, 100, '천안'),
+      _GridRegion(55, 106, '공주'),
+      _GridRegion(51, 95, '보령'),
+      _GridRegion(68, 95, '아산'),
+      _GridRegion(55, 99, '서산'),
+      _GridRegion(63, 89, '논산'),
+      _GridRegion(60, 102, '계룡'),
+      _GridRegion(52, 99, '당진'),
+      _GridRegion(62, 101, '금산'),
+      _GridRegion(56, 92, '부여'),
+      _GridRegion(51, 86, '서천'),
+      _GridRegion(46, 89, '청양'),
+      _GridRegion(48, 100, '홍성'),
+      _GridRegion(56, 103, '예산'),
+      _GridRegion(48, 109, '태안'),
+
+      // 전라북도
+      _GridRegion(63, 89, '전주'),
+      _GridRegion(56, 80, '군산'),
+      _GridRegion(54, 76, '익산'),
+      _GridRegion(61, 79, '정읍'),
+      _GridRegion(55, 71, '남원'),
+      _GridRegion(63, 75, '김제'),
+      _GridRegion(72, 70, '완주'),
+      _GridRegion(68, 72, '진안'),
+      _GridRegion(68, 68, '무주'),
+      _GridRegion(74, 74, '장수'),
+      _GridRegion(66, 84, '임실'),
+      _GridRegion(68, 78, '순창'),
+      _GridRegion(56, 83, '고창'),
+      _GridRegion(51, 72, '부안'),
+
+      // 전라남도
+      _GridRegion(51, 67, '목포'),
+      _GridRegion(67, 62, '여수'),
+      _GridRegion(70, 70, '순천'),
+      _GridRegion(59, 66, '나주'),
+      _GridRegion(73, 66, '광양'),
+      _GridRegion(52, 71, '담양'),
+      _GridRegion(61, 66, '곡성'),
+      _GridRegion(57, 64, '구례'),
+      _GridRegion(52, 56, '고흥'),
+      _GridRegion(48, 59, '보성'),
+      _GridRegion(59, 52, '화순'),
+      _GridRegion(50, 67, '장흥'),
+      _GridRegion(59, 56, '강진'),
+      _GridRegion(50, 53, '해남'),
+      _GridRegion(56, 66, '영암'),
+      _GridRegion(56, 71, '무안'),
+      _GridRegion(48, 74, '함평'),
+      _GridRegion(52, 77, '영광'),
+      _GridRegion(56, 63, '장성'),
+      _GridRegion(48, 62, '완도'),
+      _GridRegion(56, 50, '진도'),
+      _GridRegion(33, 33, '신안'),
+      _GridRegion(66, 55, '여천'),
+
+      // 경상북도
+      _GridRegion(91, 106, '포항'),
+      _GridRegion(91, 90, '경주'),
+      _GridRegion(80, 91, '김천'),
+      _GridRegion(89, 91, '안동'),
+      _GridRegion(81, 81, '구미'),
+      _GridRegion(88, 83, '영주'),
+      _GridRegion(83, 95, '영천'),
+      _GridRegion(81, 84, '상주'),
+      _GridRegion(77, 93, '문경'),
+      _GridRegion(89, 101, '경산'),
+      _GridRegion(75, 88, '의성'),
+      _GridRegion(79, 78, '청송'),
+      _GridRegion(87, 76, '영양'),
+      _GridRegion(91, 77, '영덕'),
+      _GridRegion(82, 76, '청도'),
+      _GridRegion(83, 80, '고령'),
+      _GridRegion(83, 73, '성주'),
+      _GridRegion(87, 68, '칠곡'),
+      _GridRegion(77, 86, '예천'),
+      _GridRegion(90, 77, '봉화'),
+      _GridRegion(92, 86, '울진'),
+      _GridRegion(99, 95, '울릉'),
+
+      // 경상남도
+      _GridRegion(91, 77, '창원'),
+      _GridRegion(89, 77, '진주'),
+      _GridRegion(95, 77, '통영'),
+      _GridRegion(77, 68, '사천'),
+      _GridRegion(90, 69, '김해'),
+      _GridRegion(87, 68, '밀양'),
+      _GridRegion(95, 74, '거제'),
+      _GridRegion(91, 74, '양산'),
+      _GridRegion(72, 74, '의령'),
+      _GridRegion(79, 75, '함안'),
+      _GridRegion(76, 80, '창녕'),
+      _GridRegion(81, 75, '고성'),
+      _GridRegion(72, 63, '남해'),
+      _GridRegion(80, 67, '하동'),
+      _GridRegion(74, 67, '산청'),
+      _GridRegion(82, 68, '함양'),
+      _GridRegion(81, 63, '거창'),
+      _GridRegion(83, 68, '합천'),
+
+      // 제주특별자치도
+      _GridRegion(52, 38, '제주'),
+      _GridRegion(53, 38, '제주'),
+      _GridRegion(52, 33, '서귀포'),
+    ];
+
+    // 가장 가까운 지역 찾기 (거리 기반)
+    String? closestRegion;
+    int minDistance = 999;
+
+    for (final region in regions) {
+      final distance = (region.nx - nx).abs() + (region.ny - ny).abs();
+      if (distance < minDistance) {
+        minDistance = distance;
+        closestRegion = region.name;
+      }
+    }
+
+    // 거리가 10 이하일 때만 반환 (약 50km 이내)
+    if (minDistance <= 10) {
+      return closestRegion;
+    }
+
     return null;
   }
 
@@ -324,4 +564,13 @@ class WeatherService {
     debugPrint('좌표 변환: lat=$lat, lon=$lon → nx=$nx, ny=$ny');
     return {'nx': nx, 'ny': ny};
   }
+}
+
+/// 격자 좌표-지역명 매핑 클래스
+class _GridRegion {
+  final int nx;
+  final int ny;
+  final String name;
+
+  const _GridRegion(this.nx, this.ny, this.name);
 }

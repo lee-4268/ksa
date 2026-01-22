@@ -108,7 +108,9 @@
       "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\user\\\\Desktop\\\\26\\\\ksa\\\\yolov8\" -Recurse)",
       "Bash(Select-Object FullName, Length)",
       "Bash(Format-Table -AutoSize)",
-      "Bash(flutter sdk-path:*)"
+      "Bash(flutter sdk-path:*)",
+      "Bash(unzip:*)",
+      "Bash(\"C:/platform-tools/adb.exe\" devices)"
     ]
   }
 }

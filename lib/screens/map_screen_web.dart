@@ -357,6 +357,7 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
+        backgroundColor: Colors.white,
         title: Row(
           children: [
             const Icon(Icons.layers, color: Colors.blue),
