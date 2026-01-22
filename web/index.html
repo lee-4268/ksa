@@ -44,30 +44,52 @@
     initKakaoMaps();
 
     // Dart에서 호출할 역지오코딩 함수
+    // 결과를 JS에서 직접 파싱하여 지역명 문자열만 콜백으로 전달
     function _callKakaoGeocoderFromDart(lat, lon, callback) {
-      if (!window.kakaoMapsLoaded || typeof kakao === 'undefined' || !kakao.maps || !kakao.maps.services) {
-        console.log('카카오맵 서비스가 아직 로드되지 않음');
-        callback(null, 'ERROR');
+      console.log('_callKakaoGeocoderFromDart 호출됨: lat=' + lat + ', lon=' + lon);
+
+      if (!window.kakaoMapsLoaded) {
+        console.log('카카오맵이 아직 로드되지 않음, 1초 후 재시도');
+        setTimeout(function() {
+          _callKakaoGeocoderFromDart(lat, lon, callback);
+        }, 1000);
+        return;
+      }
+
+      if (typeof kakao === 'undefined' || !kakao.maps || !kakao.maps.services) {
+        console.log('카카오맵 서비스 객체 없음');
+        callback(null);
         return;
       }
 
       try {
         var geocoder = new kakao.maps.services.Geocoder();
+        console.log('Geocoder 생성 완료, coord2RegionCode 호출');
+
         geocoder.coord2RegionCode(lon, lat, function(result, status) {
-          callback(result, status.toString());
+          console.log('coord2RegionCode 콜백, status:', status);
+
+          // status가 kakao.maps.services.Status.OK와 같은지 확인
+          if (status === kakao.maps.services.Status.OK && result && result.length > 0) {
+            console.log('역지오코딩 성공, 결과:', result);
+
+            // region_2depth_name (시/군/구) 우선, 없으면 region_1depth_name (시/도)
+            var locationName = result[0].region_2depth_name;
+            if (!locationName || locationName === '') {
+              locationName = result[0].region_1depth_name;
+            }
+
+            console.log('추출된 지역명:', locationName);
+            callback(locationName);
+          } else {
+            console.log('역지오코딩 실패 또는 결과 없음');
+            callback(null);
+          }
         });
       } catch (e) {
         console.error('카카오 Geocoder 호출 오류:', e);
-        callback(null, 'ERROR');
+        callback(null);
       }
-    }
-
-    // Dart에서 JavaScript 객체 속성 접근용 헬퍼
-    function _getPropertyFromDart(obj, propertyName) {
-      if (obj && typeof obj === 'object' && propertyName in obj) {
-        return obj[propertyName];
-      }
-      return null;
     }
   </script>
 </head>
