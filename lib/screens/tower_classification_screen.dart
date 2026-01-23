@@ -656,6 +656,15 @@ class _TowerClassificationScreenState extends State<TowerClassificationScreen>
 
             // Top-5 결과
             _buildTop5Results(result.top5),
+
+            // 피드백 버튼
+            const SizedBox(height: 16),
+            _buildFeedbackButton(
+              originalClassEn: result.className,
+              originalClassKr: result.classNameKr,
+              imageBytes: _selectedImages.isNotEmpty ? _selectedImages.first.bytes : null,
+              filename: _selectedImages.isNotEmpty ? _selectedImages.first.name : null,
+            ),
           ],
         ),
       ),
@@ -750,6 +759,15 @@ class _TowerClassificationScreenState extends State<TowerClassificationScreen>
             const SizedBox(height: 16),
             // Top-5 결과
             _buildTop5Results(result.finalPrediction.top5),
+
+            // 피드백 버튼 (앙상블 결과에도 추가)
+            const SizedBox(height: 16),
+            _buildFeedbackButton(
+              originalClassEn: result.finalPrediction.className,
+              originalClassKr: result.finalPrediction.classNameKr,
+              imageBytes: _ensembleImages.isNotEmpty ? _ensembleImages.first.bytes : null,
+              filename: _ensembleImages.isNotEmpty ? _ensembleImages.first.name : null,
+            ),
           ],
         ),
       ),
@@ -1020,6 +1038,240 @@ class _TowerClassificationScreenState extends State<TowerClassificationScreen>
         _errorMessage = '앙상블 분류 실패: $e';
         _isLoading = false;
       });
+    }
+  }
+
+  /// 피드백 버튼 위젯
+  Widget _buildFeedbackButton({
+    required String originalClassEn,
+    required String originalClassKr,
+    Uint8List? imageBytes,
+    String? filename,
+  }) {
+    return OutlinedButton.icon(
+      onPressed: imageBytes != null && filename != null
+          ? () => _showClassSelectionDialog(
+                originalClassEn: originalClassEn,
+                originalClassKr: originalClassKr,
+                imageBytes: imageBytes,
+                filename: filename,
+              )
+          : null,
+      icon: const Icon(Icons.edit_note, size: 18),
+      label: const Text('결과 수정'),
+      style: OutlinedButton.styleFrom(
+        foregroundColor: Colors.orange[700],
+        side: BorderSide(color: Colors.orange[300]!),
+        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+      ),
+    );
+  }
+
+  /// 클래스 선택 다이얼로그 표시
+  Future<void> _showClassSelectionDialog({
+    required String originalClassEn,
+    required String originalClassKr,
+    required Uint8List imageBytes,
+    required String filename,
+  }) async {
+    final classOptions = TowerClassificationService.getClassOptions();
+
+    final selectedClass = await showDialog<ClassOption>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Row(
+          children: [
+            Icon(Icons.edit, color: _primaryColor, size: 24),
+            const SizedBox(width: 8),
+            const Text('올바른 클래스 선택', style: TextStyle(fontSize: 18)),
+          ],
+        ),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.grey[100],
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.info_outline, size: 18, color: Colors.grey),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        '현재 분류: $originalClassKr',
+                        style: TextStyle(fontSize: 13, color: Colors.grey[700]),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                '올바른 철탑 유형을 선택해주세요:',
+                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+              ),
+              const SizedBox(height: 12),
+              Flexible(
+                child: ListView.builder(
+                  shrinkWrap: true,
+                  itemCount: classOptions.length,
+                  itemBuilder: (context, index) {
+                    final option = classOptions[index];
+                    final isCurrentClass = option.englishName == originalClassEn;
+
+                    return ListTile(
+                      dense: true,
+                      leading: Container(
+                        width: 32,
+                        height: 32,
+                        decoration: BoxDecoration(
+                          color: isCurrentClass ? Colors.grey[300] : _primaryColor.withValues(alpha: 0.1),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        alignment: Alignment.center,
+                        child: Text(
+                          '${option.id + 1}',
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.bold,
+                            color: isCurrentClass ? Colors.grey : _primaryColor,
+                          ),
+                        ),
+                      ),
+                      title: Text(
+                        option.shortName,
+                        style: TextStyle(
+                          fontWeight: FontWeight.w600,
+                          color: isCurrentClass ? Colors.grey : Colors.black87,
+                        ),
+                      ),
+                      subtitle: Text(
+                        option.koreanName,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: isCurrentClass ? Colors.grey : Colors.grey[600],
+                        ),
+                      ),
+                      trailing: isCurrentClass
+                          ? Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                              decoration: BoxDecoration(
+                                color: Colors.grey[200],
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: const Text(
+                                '현재',
+                                style: TextStyle(fontSize: 11, color: Colors.grey),
+                              ),
+                            )
+                          : const Icon(Icons.chevron_right, color: Colors.grey),
+                      enabled: !isCurrentClass,
+                      onTap: isCurrentClass ? null : () => Navigator.of(context).pop(option),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('취소'),
+          ),
+        ],
+      ),
+    );
+
+    // 클래스가 선택되었으면 피드백 제출
+    if (selectedClass != null) {
+      await _submitFeedback(
+        imageBytes: imageBytes,
+        filename: filename,
+        originalClass: originalClassEn,
+        correctedClass: selectedClass.englishName,
+        correctedClassKr: selectedClass.shortName,
+      );
+    }
+  }
+
+  /// 피드백 제출
+  Future<void> _submitFeedback({
+    required Uint8List imageBytes,
+    required String filename,
+    required String originalClass,
+    required String correctedClass,
+    required String correctedClassKr,
+  }) async {
+    // 로딩 다이얼로그 표시
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const AlertDialog(
+        content: Row(
+          children: [
+            CircularProgressIndicator(),
+            SizedBox(width: 16),
+            Text('피드백 저장 중...'),
+          ],
+        ),
+      ),
+    );
+
+    try {
+      final result = await _classificationService.submitFeedback(
+        imageBytes: imageBytes,
+        filename: filename,
+        originalClass: originalClass,
+        correctedClass: correctedClass,
+      );
+
+      // 로딩 다이얼로그 닫기
+      if (mounted) Navigator.of(context).pop();
+
+      // 결과 표시
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: [
+                Icon(
+                  result.success ? Icons.check_circle : Icons.error,
+                  color: Colors.white,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    result.success
+                        ? '피드백이 저장되었습니다. (수정: $correctedClassKr)'
+                        : result.message,
+                  ),
+                ),
+              ],
+            ),
+            backgroundColor: result.success ? Colors.green : Colors.red,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    } catch (e) {
+      // 로딩 다이얼로그 닫기
+      if (mounted) Navigator.of(context).pop();
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('피드백 저장 실패: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     }
   }
 }

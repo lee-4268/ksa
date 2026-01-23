@@ -9,9 +9,12 @@ import shutil
 from pathlib import Path
 from typing import List, Optional
 from datetime import datetime
+import logging
 
+import boto3
+from botocore.exceptions import ClientError
 import numpy as np
-from fastapi import FastAPI, File, UploadFile, HTTPException, Query
+from fastapi import FastAPI, File, UploadFile, HTTPException, Query, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -34,6 +37,14 @@ UPLOAD_DIR.mkdir(exist_ok=True)
 
 # Allowed image extensions
 ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+
+# S3 Configuration for feedback storage
+S3_BUCKET_NAME = os.getenv("FEEDBACK_S3_BUCKET", "tower-classification-feedback")
+S3_REGION = os.getenv("AWS_REGION", "ap-northeast-2")
+
+# Logger setup
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Class name mappings (Korean)
 CLASS_NAMES_KR = {
@@ -113,6 +124,15 @@ class HealthResponse(BaseModel):
 
 class ClassListResponse(BaseModel):
     classes: List[dict]
+
+
+class FeedbackResponse(BaseModel):
+    success: bool
+    message: str
+    s3_key: Optional[str] = None
+    original_class: str
+    corrected_class: str
+    timestamp: str
 
 
 # ============================================================
@@ -198,6 +218,33 @@ def cleanup_file(file_path: Path):
             file_path.unlink()
     except Exception:
         pass
+
+
+def get_s3_client():
+    """Get boto3 S3 client"""
+    return boto3.client('s3', region_name=S3_REGION)
+
+
+def upload_to_s3(file_path: Path, s3_key: str) -> bool:
+    """Upload file to S3 bucket"""
+    try:
+        s3_client = get_s3_client()
+        s3_client.upload_file(
+            str(file_path),
+            S3_BUCKET_NAME,
+            s3_key,
+            ExtraArgs={
+                'ContentType': 'image/jpeg'
+            }
+        )
+        logger.info(f"Uploaded to S3: s3://{S3_BUCKET_NAME}/{s3_key}")
+        return True
+    except ClientError as e:
+        logger.error(f"S3 upload failed: {e}")
+        return False
+    except Exception as e:
+        logger.error(f"S3 upload error: {e}")
+        return False
 
 
 def predict_single_image(image_path: Path) -> dict:
@@ -452,6 +499,132 @@ async def predict_ensemble(
     finally:
         for file_path in file_paths:
             cleanup_file(file_path)
+
+
+@app.post("/feedback", response_model=FeedbackResponse)
+async def submit_feedback(
+    file: UploadFile = File(..., description="Image file"),
+    original_class: str = Form(..., description="Original predicted class (English)"),
+    corrected_class: str = Form(..., description="User-corrected class (English)")
+):
+    """
+    Submit feedback for model improvement
+
+    - User can correct classification results
+    - Images are stored in S3 for future retraining
+    - Storage path: feedback/{corrected_class}/{timestamp}_{filename}
+    """
+    # Validate file
+    if not validate_image(file):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid file type. Allowed: {ALLOWED_EXTENSIONS}"
+        )
+
+    # Validate class names
+    valid_classes = list(CLASS_NAMES_KR.keys())
+    if corrected_class not in valid_classes:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid corrected_class. Valid options: {valid_classes}"
+        )
+
+    file_path = None
+    try:
+        # Save uploaded file temporarily
+        file_path = await save_upload_file(file)
+
+        # Generate S3 key
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        original_filename = Path(file.filename).stem
+        ext = Path(file.filename).suffix.lower()
+        s3_key = f"feedback/{corrected_class}/{timestamp}_{original_filename}{ext}"
+
+        # Upload to S3
+        upload_success = upload_to_s3(file_path, s3_key)
+
+        if upload_success:
+            logger.info(f"Feedback saved: {original_class} -> {corrected_class}, S3: {s3_key}")
+            return {
+                "success": True,
+                "message": "피드백이 저장되었습니다. 모델 개선에 활용됩니다.",
+                "s3_key": s3_key,
+                "original_class": original_class,
+                "corrected_class": corrected_class,
+                "timestamp": datetime.now().isoformat()
+            }
+        else:
+            # S3 upload failed - save locally as fallback
+            local_feedback_dir = Path("feedback_local") / corrected_class
+            local_feedback_dir.mkdir(parents=True, exist_ok=True)
+            local_path = local_feedback_dir / f"{timestamp}_{original_filename}{ext}"
+            shutil.copy(file_path, local_path)
+
+            logger.warning(f"S3 failed, saved locally: {local_path}")
+            return {
+                "success": True,
+                "message": "피드백이 로컬에 저장되었습니다. (S3 연결 실패)",
+                "s3_key": None,
+                "original_class": original_class,
+                "corrected_class": corrected_class,
+                "timestamp": datetime.now().isoformat()
+            }
+
+    except Exception as e:
+        logger.error(f"Feedback submission error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+    finally:
+        if file_path:
+            cleanup_file(file_path)
+
+
+@app.get("/feedback/stats")
+async def get_feedback_stats():
+    """
+    Get feedback statistics
+
+    - Shows count of feedback images per class
+    - Useful for monitoring data collection progress
+    """
+    try:
+        s3_client = get_s3_client()
+
+        stats = {}
+        for class_name in CLASS_NAMES_KR.keys():
+            prefix = f"feedback/{class_name}/"
+            try:
+                response = s3_client.list_objects_v2(
+                    Bucket=S3_BUCKET_NAME,
+                    Prefix=prefix
+                )
+                count = response.get('KeyCount', 0)
+                stats[class_name] = {
+                    "count": count,
+                    "class_name_kr": CLASS_NAMES_KR[class_name]
+                }
+            except ClientError:
+                stats[class_name] = {
+                    "count": 0,
+                    "class_name_kr": CLASS_NAMES_KR[class_name],
+                    "error": "S3 접근 실패"
+                }
+
+        return {
+            "success": True,
+            "bucket": S3_BUCKET_NAME,
+            "stats": stats,
+            "total_feedback": sum(s.get("count", 0) for s in stats.values()),
+            "timestamp": datetime.now().isoformat()
+        }
+
+    except Exception as e:
+        logger.error(f"Feedback stats error: {e}")
+        return {
+            "success": False,
+            "message": str(e),
+            "timestamp": datetime.now().isoformat()
+        }
 
 
 # ============================================================

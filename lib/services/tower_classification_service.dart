@@ -215,6 +215,63 @@ class TowerClassificationService {
       rethrow;
     }
   }
+
+  /// 피드백 제출 (분류 결과 수정)
+  /// 이미지와 올바른 라벨을 S3에 저장하여 향후 재학습에 활용
+  Future<FeedbackResult> submitFeedback({
+    required Uint8List imageBytes,
+    required String filename,
+    required String originalClass,
+    required String correctedClass,
+  }) async {
+    try {
+      final uri = Uri.parse('$_baseUrl/feedback');
+
+      final request = http.MultipartRequest('POST', uri)
+        ..fields['original_class'] = originalClass
+        ..fields['corrected_class'] = correctedClass
+        ..files.add(http.MultipartFile.fromBytes(
+          'file',
+          imageBytes,
+          filename: filename,
+        ));
+
+      final streamedResponse = await request.send().timeout(
+        const Duration(seconds: 30),
+      );
+      final response = await http.Response.fromStream(streamedResponse);
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+
+        if (data['success'] == true) {
+          return FeedbackResult(
+            success: true,
+            message: data['message'] ?? '피드백이 저장되었습니다.',
+            s3Key: data['s3_key'],
+          );
+        }
+      }
+
+      throw Exception('피드백 저장 실패: ${response.statusCode} - ${response.body}');
+    } catch (e) {
+      debugPrint('피드백 저장 오류: $e');
+      return FeedbackResult(
+        success: false,
+        message: '피드백 저장 실패: $e',
+      );
+    }
+  }
+
+  /// 9개 클래스 목록 반환 (피드백용)
+  static List<ClassOption> getClassOptions() {
+    return classNames.entries.map((entry) => ClassOption(
+      id: entry.key,
+      englishName: entry.value['en']!,
+      koreanName: entry.value['kr']!,
+      shortName: entry.value['short']!,
+    )).toList();
+  }
 }
 
 /// 분류 결과 (단일 이미지)
@@ -317,4 +374,32 @@ class ServerStatus {
   });
 
   bool get isReady => isConnected && isModelLoaded;
+}
+
+/// 피드백 결과
+class FeedbackResult {
+  final bool success;
+  final String message;
+  final String? s3Key;
+
+  FeedbackResult({
+    required this.success,
+    required this.message,
+    this.s3Key,
+  });
+}
+
+/// 클래스 선택 옵션 (피드백용)
+class ClassOption {
+  final int id;
+  final String englishName;
+  final String koreanName;
+  final String shortName;
+
+  ClassOption({
+    required this.id,
+    required this.englishName,
+    required this.koreanName,
+    required this.shortName,
+  });
 }

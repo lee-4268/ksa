@@ -73,10 +73,28 @@
           if (status === kakao.maps.services.Status.OK && result && result.length > 0) {
             console.log('역지오코딩 성공, 결과:', result);
 
-            // region_2depth_name (시/군/구) 우선, 없으면 region_1depth_name (시/도)
-            var locationName = result[0].region_2depth_name;
-            if (!locationName || locationName === '') {
-              locationName = result[0].region_1depth_name;
+            // "시" 단위까지만 추출
+            var region1 = result[0].region_1depth_name || ''; // 시/도 (서울특별시, 경기도 등)
+            var region2 = result[0].region_2depth_name || ''; // 시/군/구 (강서구, 안양시 만안구 등)
+            var locationName = '';
+
+            // 특별시/광역시인 경우: "서울시", "인천시", "부산시" 등
+            if (region1.indexOf('특별시') !== -1 || region1.indexOf('광역시') !== -1) {
+              locationName = region1.replace('특별시', '시').replace('광역시', '시').replace('특별자치시', '시');
+            } else {
+              // 도 단위 (경기도, 충청남도 등): region_2depth_name에서 "시" 단위 추출
+              // region2 예: "안양시 만안구", "수원시 팔달구", "부천시" 등
+              if (region2) {
+                var siMatch = region2.match(/^(\S+시)/);
+                if (siMatch) {
+                  locationName = siMatch[1]; // "안양시", "수원시", "부천시" 등
+                } else {
+                  // "시"가 없으면 region2 그대로 (군/구 단위)
+                  locationName = region2.split(' ')[0];
+                }
+              } else {
+                locationName = region1;
+              }
             }
 
             console.log('추출된 지역명:', locationName);

@@ -13,7 +13,7 @@ cache: false
 device: cpu
 workers: 8
 project: C:/Users/user/Desktop/26/ksa/yolov8/runs/classify
-name: tower_classifier
+name: tower_classifier2
 exist_ok: false
 pretrained: true
 optimizer: auto
@@ -105,4 +105,4 @@ auto_augment: randaugment
 erasing: 0.4
 cfg: null
 tracker: botsort.yaml
-save_dir: C:\Users\user\Desktop\26\ksa\yolov8\runs\classify\tower_classifier
+save_dir: C:\Users\user\Desktop\26\ksa\yolov8\runs\classify\tower_classifier2
