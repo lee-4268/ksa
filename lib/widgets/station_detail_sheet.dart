@@ -1,5 +1,5 @@
 import 'dart:io';
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
@@ -7,6 +7,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 import '../models/radio_station.dart';
 import '../providers/station_provider.dart';
+import '../screens/tower_classification_screen.dart';
 import '../services/photo_storage_service.dart';
 
 class StationDetailSheet extends StatefulWidget {
@@ -29,6 +30,7 @@ class _StationDetailSheetState extends State<StationDetailSheet> {
   final ImagePicker _imagePicker = ImagePicker();
   List<String> _photoPaths = [];
   String _currentMemo = ''; // 현재 저장된 메모 (실시간 반영용)
+  String? _currentInstallationType; // 현재 설치대 (실시간 반영용)
 
   // 테마 색상 (로그인 페이지와 일관성)
   static const Color _primaryColor = Color(0xFFE53935);
@@ -39,6 +41,7 @@ class _StationDetailSheetState extends State<StationDetailSheet> {
     _memoController = TextEditingController(text: widget.station.memo ?? '');
     _photoPaths = List<String>.from(widget.station.photoPaths ?? []);
     _currentMemo = widget.station.memo ?? '';
+    _currentInstallationType = widget.station.installationType;
   }
 
   @override
@@ -175,6 +178,10 @@ class _StationDetailSheetState extends State<StationDetailSheet> {
                   _buildInfoSection(context),
                   const SizedBox(height: 24),
 
+                  // 철탑형태 분류 섹션
+                  _buildTowerClassificationSection(context),
+                  const SizedBox(height: 24),
+
                   // 메모 섹션
                   _buildMemoSection(context),
                   const SizedBox(height: 24),
@@ -296,6 +303,10 @@ class _StationDetailSheetState extends State<StationDetailSheet> {
               _buildInfoRow('기수', widget.station.antennaCount!),
             if (widget.station.remarks != null && widget.station.remarks!.isNotEmpty)
               _buildInfoRow('비고', widget.station.remarks!),
+            // 설치대 항상 표시 (Excel import 데이터)
+            _buildInfoRow('설치대', _currentInstallationType?.isNotEmpty == true
+                ? _currentInstallationType!
+                : '미지정'),
             if (widget.station.stationType != null && widget.station.stationType!.isNotEmpty)
               _buildInfoRow('팀명', widget.station.stationType!),
             if (widget.station.hasCoordinates)
@@ -366,6 +377,160 @@ class _StationDetailSheetState extends State<StationDetailSheet> {
         ],
       ),
     );
+  }
+
+  /// 철탑형태 분류 섹션
+  Widget _buildTowerClassificationSection(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.grey[200]!),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.04),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Colors.purple.shade50,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Icon(Icons.cell_tower, color: Colors.purple.shade600, size: 20),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '철탑형태 분류',
+                        style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      if (_currentInstallationType != null && _currentInstallationType!.isNotEmpty)
+                        Text(
+                          '현재: $_currentInstallationType',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Colors.grey[600],
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Divider(color: Colors.grey[200]),
+            const SizedBox(height: 8),
+            Text(
+              'AI를 활용하여 철탑/안테나 설치형태를 자동으로 분류합니다.',
+              style: TextStyle(fontSize: 13, color: Colors.grey[600]),
+            ),
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: () => _openTowerClassification(context),
+                icon: const Icon(Icons.auto_fix_high, size: 18),
+                label: const Text('철탑형태 분류하기'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.purple.shade600,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  elevation: 0,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 철탑형태 분류 화면 열기
+  Future<void> _openTowerClassification(BuildContext context) async {
+    final result = await Navigator.push<TowerClassificationResult>(
+      context,
+      MaterialPageRoute(
+        builder: (context) => TowerClassificationScreen(
+          stationId: widget.station.id,
+          stationName: widget.station.displayName,
+          returnResult: true,
+        ),
+      ),
+    );
+
+    // 결과가 있으면 처리
+    if (result != null && mounted) {
+      // 이미지가 있으면 S3에 업로드하고 사진 목록에 추가
+      if (result.imageBytes != null) {
+        try {
+          final savedPath = await PhotoStorageService.uploadPhoto(
+            bytes: result.imageBytes!,
+            fileName: 'tower_${DateTime.now().millisecondsSinceEpoch}.jpg',
+            stationId: widget.station.id,
+          );
+          if (savedPath != null) {
+            setState(() {
+              _photoPaths.add(savedPath);
+            });
+            _savePhotos();
+          }
+        } catch (e) {
+          debugPrint('사진 업로드 실패: $e');
+        }
+      }
+
+      // 설치대 업데이트
+      if (result.installationType != null) {
+        setState(() {
+          _currentInstallationType = result.installationType;
+        });
+        _saveInstallationType(result.installationType!);
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              const Icon(Icons.check_circle, color: Colors.white, size: 20),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  result.installationType != null
+                      ? '설치대가 "${result.installationType}"(으)로 업데이트되었습니다.'
+                      : '철탑형태 분류가 완료되었습니다.',
+                ),
+              ),
+            ],
+          ),
+          backgroundColor: Colors.green,
+        ),
+      );
+    }
+  }
+
+  /// 설치대 정보 저장
+  void _saveInstallationType(String installationType) {
+    final provider = context.read<StationProvider>();
+    provider.updateInstallationType(widget.station.id, installationType);
   }
 
   Widget _buildMemoSection(BuildContext context) {
@@ -833,6 +998,8 @@ class _StationDetailSheetState extends State<StationDetailSheet> {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
+        backgroundColor: Colors.white,
+        surfaceTintColor: Colors.white,
         title: const Text('사진 삭제'),
         content: const Text('이 사진을 삭제하시겠습니까?'),
         actions: [
@@ -991,6 +1158,8 @@ class _StationDetailSheetState extends State<StationDetailSheet> {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
+        backgroundColor: Colors.white,
+        surfaceTintColor: Colors.white,
         title: const Text('삭제 확인'),
         content: Text('${widget.station.displayName}을(를) 삭제하시겠습니까?'),
         actions: [

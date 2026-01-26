@@ -541,6 +541,27 @@ class StationProvider extends ChangeNotifier {
     }
   }
 
+  /// 설치대(철탑형태) 업데이트 (자동 클라우드 동기화)
+  Future<void> updateInstallationType(String id, String installationType) async {
+    try {
+      await _storageService.updateInstallationType(id, installationType);
+      final index = _stations.indexWhere((s) => s.id == id);
+      if (index != -1) {
+        _stations[index] = _stations[index].copyWith(installationType: installationType);
+        if (_selectedStation?.id == id) {
+          _selectedStation = _stations[index];
+        }
+        notifyListeners();
+
+        // 클라우드 동기화 (백그라운드)
+        _syncStationToCloud(_stations[index]);
+      }
+    } catch (e) {
+      _errorMessage = '설치대 저장 실패: $e';
+      notifyListeners();
+    }
+  }
+
   /// 무선국 삭제 (자동 클라우드 동기화)
   Future<void> deleteStation(String id) async {
     try {

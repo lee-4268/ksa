@@ -1265,6 +1265,8 @@ class _MapScreenState extends State<MapScreen>
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
+        backgroundColor: Colors.white,
+        surfaceTintColor: Colors.white,
         title: const Text('선택 항목 삭제'),
         content: Text('${_selectedStationIds.length}개의 항목을 삭제하시겠습니까?'),
         actions: [
@@ -1566,6 +1568,8 @@ class _MapScreenState extends State<MapScreen>
     showDialog(
       context: context,
       builder: (dialogContext) => AlertDialog(
+        backgroundColor: Colors.white,
+        surfaceTintColor: Colors.white,
         title: const Text('카테고리 삭제'),
         content: Text('$category의 모든 데이터($stationCount개)를 삭제하시겠습니까?'),
         actions: [

@@ -3,7 +3,6 @@ import 'package:provider/provider.dart';
 import '../services/auth_service.dart';
 import '../services/weather_service.dart';
 import 'map_screen.dart';
-import 'tower_classification_screen.dart';
 import 'login_screen.dart';
 
 /// 메인 홈 화면 - 메뉴 선택 인터페이스
@@ -20,7 +19,6 @@ class _HomeScreenState extends State<HomeScreen> {
   // 테마 색상
   static const Color _primaryColor = Color(0xFFE53935);
   static const Color _blueAccent = Color(0xFF4A90D9);
-  static const Color _orangeAccent = Color(0xFFF5A623);
 
   // 날씨 정보
   WeatherInfo? _weatherInfo;
@@ -177,13 +175,6 @@ class _HomeScreenState extends State<HomeScreen> {
                   subtitle: '무선국 검사 및 현장 수검 관리',
                   color: _blueAccent,
                   onTap: () => _navigateFromDrawer(const MapScreen()),
-                ),
-                _buildDrawerItem(
-                  icon: Icons.camera_alt_outlined,
-                  title: '철탑형태 분류',
-                  subtitle: 'AI 기반 설치형태 자동 분류',
-                  color: _orangeAccent,
-                  onTap: () => _navigateFromDrawer(const TowerClassificationScreen()),
                 ),
                 const Padding(
                   padding: EdgeInsets.symmetric(horizontal: 16),
@@ -379,17 +370,6 @@ class _HomeScreenState extends State<HomeScreen> {
           iconColor: _blueAccent,
           onTap: () => _navigateToScreen(const MapScreen()),
         ),
-        const SizedBox(height: 16),
-        _buildMenuCard(
-          icon: Icons.camera_alt_outlined,
-          title: '철탑형태 분류',
-          description: 'AI 기반 이미지 분석을 통해 설치된 철탑의 형태를 자동으로 분류합니다.',
-          buttonText: '분석 시작',
-          buttonIcon: Icons.auto_awesome,
-          iconBackgroundColor: _orangeAccent.withValues(alpha: 0.1),
-          iconColor: _orangeAccent,
-          onTap: () => _navigateToScreen(const TowerClassificationScreen()),
-        ),
       ],
     );
   }
@@ -403,7 +383,6 @@ class _HomeScreenState extends State<HomeScreen> {
     required IconData buttonIcon,
     required Color iconBackgroundColor,
     required Color iconColor,
-    String? badge,
     required VoidCallback onTap,
   }) {
     return Container(
@@ -441,24 +420,6 @@ class _HomeScreenState extends State<HomeScreen> {
                       ),
                       child: Icon(icon, color: iconColor, size: 26),
                     ),
-                    const Spacer(),
-                    // AI 뱃지 (있을 경우)
-                    if (badge != null)
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                        decoration: BoxDecoration(
-                          color: _orangeAccent.withValues(alpha: 0.1),
-                          borderRadius: BorderRadius.circular(20),
-                        ),
-                        child: Text(
-                          badge,
-                          style: TextStyle(
-                            color: _orangeAccent,
-                            fontSize: 11,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ),
                   ],
                 ),
                 const SizedBox(height: 16),
@@ -528,6 +489,7 @@ class _HomeScreenState extends State<HomeScreen> {
       context: context,
       builder: (context) => AlertDialog(
         backgroundColor: Colors.white,
+        surfaceTintColor: Colors.white,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: const Text('로그아웃'),
         content: const Text('로그아웃 하시겠습니까?'),

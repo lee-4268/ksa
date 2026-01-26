@@ -75,4 +75,14 @@ class StorageService {
       await station.save();
     }
   }
+
+  /// 설치대(철탑형태) 업데이트
+  Future<void> updateInstallationType(String id, String installationType) async {
+    final station = _box.get(id);
+    if (station != null) {
+      station.installationType = installationType;
+      station.updatedAt = DateTime.now();
+      await station.save();
+    }
+  }
 }

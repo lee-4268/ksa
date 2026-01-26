@@ -61,6 +61,7 @@ type Station @model @auth(rules: [
   frequency: String
   stationType: String
   stationOwner: String
+  installationType: String    # 설치대 (철탑형태)
 
   # 검사 정보
   isInspected: Boolean @default(value: "false")

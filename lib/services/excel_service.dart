@@ -438,10 +438,14 @@ class ExcelService {
       final headerRowContent = headerRow.group(1) ?? '';
 
       // 디버깅: 첫 번째 행 XML 구조 출력 (처음 500자만)
+      debugPrint('===== XML 직접 파싱 디버그 =====');
       debugPrint('첫 번째 행 XML (처음 500자): ${headerRowContent.length > 500 ? headerRowContent.substring(0, 500) : headerRowContent}');
 
-      final headerCells = _extractCellsFromRow(headerRowContent, sharedStrings);
-      debugPrint('헤더: $headerCells');
+      final headerCells = _extractCellsFromRow(headerRowContent, sharedStrings, debug: true);
+      debugPrint('헤더 셀 수: ${headerCells.length}');
+      for (int i = 0; i < headerCells.length; i++) {
+        debugPrint('헤더[$i]: "${headerCells[i]}"');
+      }
 
       // 헤더 매핑
       final columnMap = <String, int>{};
@@ -449,18 +453,58 @@ class ExcelService {
         final value = headerCells[i].toLowerCase();
         _mapColumnByValue(value, i, columnMap);
       }
-      debugPrint('컬럼 매핑: $columnMap');
+      debugPrint('1행 컬럼 매핑: $columnMap');
+
+      // 두 번째 행도 확인하여 병합셀 하위 헤더 처리 (이득, 기수 등)
+      int dataStartRow = 1; // 기본값: 두 번째 행부터 데이터
+      if (rows.length > 1) {
+        final secondRow = rows[1];
+        final secondRowContent = secondRow.group(1) ?? '';
+        final secondRowCells = _extractCellsFromRow(secondRowContent, sharedStrings, debug: true);
+        bool isSecondRowHeader = false;
+
+        debugPrint('두 번째 행 헤더 확인 (셀 수: ${secondRowCells.length}):');
+        for (int i = 0; i < secondRowCells.length; i++) {
+          final value = secondRowCells[i].toLowerCase();
+          if (value.isNotEmpty) {
+            debugPrint('2행[$i]: "$value"');
+            // 이득, 기수 등 서브헤더 키워드 확인
+            if (value.contains('이득') || value.contains('기수') || value == 'db') {
+              isSecondRowHeader = true;
+            }
+            // 1행에서 매핑되지 않은 컬럼만 2행에서 매핑
+            _mapColumnByValue(value, i, columnMap);
+          }
+        }
+        debugPrint('1+2행 컬럼 매핑: $columnMap');
+
+        // 두 번째 행이 서브헤더이면 세 번째 행부터 데이터 시작
+        if (isSecondRowHeader) {
+          dataStartRow = 2;
+          debugPrint('두 번째 행이 서브헤더로 감지됨 - 데이터 시작 행: 3행');
+        }
+      }
+
+      debugPrint('설치대 컬럼 인덱스: ${columnMap['installationType']}');
+      debugPrint('비고 컬럼 인덱스: ${columnMap['remarks']}');
 
       // 주소 컬럼이 없으면 자동 매핑
       if (!columnMap.containsKey('address')) {
+        debugPrint('주소 컬럼을 찾지 못함 - 자동 매핑 시도');
         _autoMapColumns(headerCells.length, columnMap);
+        debugPrint('자동 매핑 후: $columnMap');
       }
 
       // 데이터 행 파싱 (청크 단위로 처리하여 UI 응답성 유지)
       const int chunkSize = 20; // 20개 행마다 이벤트 루프에 제어권 반환
-      for (int i = 1; i < rows.length; i++) {
+      for (int i = dataStartRow; i < rows.length; i++) {
         final rowContent = rows[i].group(1) ?? '';
-        final cells = _extractCellsFromRow(rowContent, sharedStrings);
+        // 첫 3개 데이터 행에 대해 상세 디버깅
+        final isDebugRow = i - dataStartRow < 3;
+        if (isDebugRow) {
+          debugPrint('--- 행 ${i + 1} XML 파싱 중 ---');
+        }
+        final cells = _extractCellsFromRow(rowContent, sharedStrings, debug: isDebugRow);
 
         String getCellValue(String key) {
           final index = columnMap[key];
@@ -470,6 +514,26 @@ class ExcelService {
 
         final stationName = getCellValue('stationName');
         final address = getCellValue('address');
+        final installationTypeVal = getCellValue('installationType');
+        final remarksVal = getCellValue('remarks');
+
+        // 상세 디버깅 (처음 5개 데이터 행만)
+        if (i - dataStartRow < 5) {
+          final rowNum = i + 1; // Excel 행 번호 (1-based)
+          debugPrint('--- 데이터 행 $rowNum (index=$i) ---');
+          debugPrint('  셀 수: ${cells.length}');
+          // 모든 셀 값 출력
+          for (int j = 0; j < cells.length; j++) {
+            final cellVal = cells[j];
+            if (cellVal.isNotEmpty) {
+              debugPrint('  셀[$j]: "$cellVal"');
+            }
+          }
+          debugPrint('  stationName(idx=${columnMap['stationName']}): "$stationName"');
+          debugPrint('  address(idx=${columnMap['address']}): "$address"');
+          debugPrint('  installationType(idx=${columnMap['installationType']}): "$installationTypeVal"');
+          debugPrint('  remarks(idx=${columnMap['remarks']}): "$remarksVal"');
+        }
 
         if (address.isEmpty && stationName.isEmpty) continue;
 
@@ -485,6 +549,7 @@ class ExcelService {
           antennaCount: getCellValue('antennaCount').isNotEmpty ? getCellValue('antennaCount') : null,
           remarks: getCellValue('remarks').isNotEmpty ? getCellValue('remarks') : null,
           typeApprovalNumber: getCellValue('typeApprovalNumber').isNotEmpty ? getCellValue('typeApprovalNumber') : null,
+          installationType: installationTypeVal.isNotEmpty ? installationTypeVal : null,
           categoryName: categoryName,
         ));
 
@@ -494,7 +559,22 @@ class ExcelService {
         }
       }
 
-      debugPrint('XML 직접 파싱 완료: ${stations.length}개');
+      debugPrint('===== XML 직접 파싱 완료 =====');
+      debugPrint('총 파싱된 스테이션: ${stations.length}개');
+      debugPrint('컬럼 매핑 최종: $columnMap');
+
+      // 설치대와 비고 값이 있는 스테이션 수 출력
+      int installationTypeCount = stations.where((s) => s.installationType?.isNotEmpty == true).length;
+      int remarksCount = stations.where((s) => s.remarks?.isNotEmpty == true).length;
+      debugPrint('설치대 값이 있는 스테이션: $installationTypeCount개');
+      debugPrint('비고 값이 있는 스테이션: $remarksCount개');
+
+      // 처음 3개 스테이션의 설치대/비고 값 출력
+      for (int i = 0; i < stations.length && i < 3; i++) {
+        final s = stations[i];
+        debugPrint('스테이션[$i] ${s.stationName}: 설치대="${s.installationType ?? ""}", 비고="${s.remarks ?? ""}"');
+      }
+
       return stations;
     } catch (e) {
       debugPrint('XML 직접 파싱 오류: $e');
@@ -503,7 +583,8 @@ class ExcelService {
   }
 
   /// XML 행에서 셀 값 추출
-  List<String> _extractCellsFromRow(String rowXml, List<String> sharedStrings) {
+  /// 디버그 모드에서 상세 로그 출력
+  List<String> _extractCellsFromRow(String rowXml, List<String> sharedStrings, {bool debug = false}) {
     final cells = <String>[];
 
     // 모든 셀 위치를 추적
@@ -514,15 +595,41 @@ class ExcelService {
     // 공백이 있든 없든 매칭되도록 \s* 사용
     final cellWithContentPattern = RegExp(r'<c\s*([^>]*)>(.*?)</c>', multiLine: true, dotAll: true);
 
+    // r 속성이 없는 셀을 위한 순차 인덱스 (일부 Excel 파일에서 r 속성 누락 가능)
+    int sequentialColIndex = 0;
+
     for (final match in cellWithContentPattern.allMatches(rowXml)) {
       final attributes = match.group(1) ?? '';
       final content = match.group(2) ?? '';
 
+      int colIndex;
+
       // r 속성에서 셀 위치 추출 (예: r="A1", r="AB123")
       final rMatch = RegExp(r'r="([A-Z]+)(\d+)"').firstMatch(attributes);
-      if (rMatch == null) continue;
+      if (rMatch != null) {
+        final colLetter = rMatch.group(1) ?? 'A';
 
-      final colLetter = rMatch.group(1) ?? 'A';
+        // 열 문자를 인덱스로 변환 (A=0, B=1, ..., Z=25, AA=26, ...)
+        colIndex = 0;
+        for (int i = 0; i < colLetter.length; i++) {
+          colIndex = colIndex * 26 + (colLetter.codeUnitAt(i) - 'A'.codeUnitAt(0) + 1);
+        }
+        colIndex--; // 0-based
+
+        sequentialColIndex = colIndex + 1; // 다음 순차 인덱스 업데이트
+
+        if (debug) {
+          debugPrint('  셀 발견: r="$colLetter" → colIndex=$colIndex');
+        }
+      } else {
+        // r 속성이 없는 경우 순차 인덱스 사용
+        colIndex = sequentialColIndex;
+        sequentialColIndex++;
+
+        if (debug) {
+          debugPrint('  셀 발견: r 속성 없음 → colIndex=$colIndex (순차)');
+        }
+      }
 
       // t 속성 추출 (셀 타입: s=shared string, n=number, b=boolean, inlineStr 등)
       final tMatch = RegExp(r't="([^"]*)"').firstMatch(attributes);
@@ -539,13 +646,6 @@ class ExcelService {
           cellValue = isMatch.group(1) ?? '';
         }
       }
-
-      // 열 문자를 인덱스로 변환 (A=0, B=1, ..., Z=25, AA=26, ...)
-      int colIndex = 0;
-      for (int i = 0; i < colLetter.length; i++) {
-        colIndex = colIndex * 26 + (colLetter.codeUnitAt(i) - 'A'.codeUnitAt(0) + 1);
-      }
-      colIndex--; // 0-based
 
       if (colIndex > maxCol) maxCol = colIndex;
 
@@ -566,6 +666,10 @@ class ExcelService {
       }
 
       cellMap[colIndex] = value;
+
+      if (debug && value.isNotEmpty) {
+        debugPrint('    → 값: "$value" (type=$cellType)');
+      }
     }
 
     // 빈 셀도 포함하여 리스트 생성
@@ -694,12 +798,25 @@ class ExcelService {
 
   /// 컬럼 값에 따라 매핑 (value는 이미 lowercase 처리됨)
   void _mapColumnByValue(String value, int index, Map<String, int> columnMap) {
-    // ERP국소명 (대소문자 무시)
-    if (value.contains('erp국소명') || value.contains('erp 국소명')) {
+    // ERP국소명/국소명/무선국명 등 (대소문자 무시)
+    // 공백 제거한 버전도 확인
+    final noSpaceValue = value.replaceAll(RegExp(r'\s+'), '');
+
+    if (value.contains('erp국소명') || value.contains('erp 국소명') || noSpaceValue.contains('erp국소명')) {
       columnMap['stationName'] = index;
-    } else if (value.contains('국소명') || value.contains('국명') || value.contains('station')) {
+      debugPrint('국소명 컬럼 발견 (ERP): index=$index, value="$value"');
+    } else if (value.contains('통합시설명칭') || noSpaceValue.contains('통합시설명칭')) {
+      // 통합시설명칭 - 우선순위 높음
+      columnMap['stationName'] = index;
+      debugPrint('국소명 컬럼 발견 (통합시설명칭): index=$index, value="$value"');
+    } else if (value.contains('국소명') || value.contains('국명') || value.contains('station') ||
+               value.contains('무선국명') || value.contains('기지국명') || value.contains('발신국명') ||
+               value == '명칭' || value == '국소' || value.contains('station name') ||
+               value.contains('시설명칭') || value.contains('시설명') ||
+               noSpaceValue.contains('국소명') || noSpaceValue.contains('무선국명')) {
       if (!columnMap.containsKey('stationName')) {
         columnMap['stationName'] = index;
+        debugPrint('국소명 컬럼 발견: index=$index, value="$value"');
       }
     }
     // 호출명칭
@@ -717,40 +834,81 @@ class ExcelService {
       }
     }
     // 이득(dB)
-    if (value.contains('이득') || value.contains('gain') || value.contains('db')) {
-      columnMap['gain'] = index;
+    if (value.contains('이득') || value.contains('gain') || value == 'db') {
+      if (!columnMap.containsKey('gain')) {
+        columnMap['gain'] = index;
+        debugPrint('이득 컬럼 발견: index=$index, value="$value"');
+      }
     }
     // 기수
     if (value.contains('기수') || (value.contains('antenna') && value.contains('count'))) {
-      columnMap['antennaCount'] = index;
+      if (!columnMap.containsKey('antennaCount')) {
+        columnMap['antennaCount'] = index;
+        debugPrint('기수 컬럼 발견: index=$index, value="$value"');
+      }
     }
-    // 비고
-    if (value.contains('비고') || value.contains('remarks') || value.contains('note')) {
-      columnMap['remarks'] = index;
+    // 비고 - 정확한 매칭 우선
+    if (value == '비고' || value.contains('비고란') || value.contains('remarks') || value == 'note') {
+      if (!columnMap.containsKey('remarks')) {
+        columnMap['remarks'] = index;
+        debugPrint('비고 컬럼 발견: index=$index, value="$value"');
+      }
     }
     // 형식검정번호
     if (value.contains('형식검정번호') || value.contains('형식검정') || value.contains('검정번호')) {
-      columnMap['typeApprovalNumber'] = index;
+      if (!columnMap.containsKey('typeApprovalNumber')) {
+        columnMap['typeApprovalNumber'] = index;
+        debugPrint('형식검정번호 컬럼 발견: index=$index, value="$value"');
+      }
     }
     // 주파수
     if (value.contains('주파수') || value.contains('frequency') || value.contains('freq')) {
-      columnMap['frequency'] = index;
+      if (!columnMap.containsKey('frequency')) {
+        columnMap['frequency'] = index;
+      }
     }
-    // 종류
-    if (value.contains('종류') || value.contains('종별') || value.contains('type') || value.contains('구분')) {
-      columnMap['stationType'] = index;
+    // 설치대 (철탑형태) - 다양한 표현 지원 (다른 매칭보다 먼저 검사)
+    final cleanValue = value.replaceAll(RegExp(r'\s+'), ''); // 공백 제거
+    // '설치대', '철탑형태', '설치형태', 'installation', '철탑', '안테나형태', '지지물' 등
+    // '설치구분', '지지물종류', '지지물구분' 등도 포함
+    if (value.contains('설치대') || value.contains('철탑형태') || value.contains('설치형태') ||
+        value.contains('installation') || cleanValue.contains('설치대') || cleanValue.contains('철탑형태') ||
+        value.contains('지지물') || value.contains('안테나형태') ||
+        (value.contains('철탑') && !value.contains('번호')) ||
+        value == '설치' || cleanValue == '설치대' ||
+        value.contains('설치구분') || value.contains('지지구분') ||
+        value.contains('지지물종류') || value.contains('지지물구분') ||
+        (value.contains('설치') && value.contains('종류')) ||
+        (value.contains('설치') && value.contains('구분'))) {
+      if (!columnMap.containsKey('installationType')) {
+        columnMap['installationType'] = index;
+        debugPrint('설치대 컬럼 발견: index=$index, value="$value"');
+      }
+    }
+    // 종류 - 'type' 단독 매칭 제외 (설치대 관련 패턴 제외)
+    final isInstallationType = value.contains('설치') || value.contains('지지물') || value.contains('철탑') || value.contains('안테나');
+    if (!isInstallationType && (value.contains('종류') || value.contains('종별') || value.contains('구분') || value == 'type')) {
+      if (!columnMap.containsKey('stationType')) {
+        columnMap['stationType'] = index;
+      }
     }
     // 소유자
     if (value.contains('소유자') || value.contains('owner') || value.contains('대표자') || value.contains('사업자')) {
-      columnMap['owner'] = index;
+      if (!columnMap.containsKey('owner')) {
+        columnMap['owner'] = index;
+      }
     }
     // 위도
     if (value.contains('위도') || value.contains('lat')) {
-      columnMap['latitude'] = index;
+      if (!columnMap.containsKey('latitude')) {
+        columnMap['latitude'] = index;
+      }
     }
     // 경도
     if (value.contains('경도') || value.contains('lng') || value.contains('lon')) {
-      columnMap['longitude'] = index;
+      if (!columnMap.containsKey('longitude')) {
+        columnMap['longitude'] = index;
+      }
     }
   }
 
@@ -845,6 +1003,13 @@ class ExcelService {
       final antennaCount = getCellValue('antennaCount');
       final remarks = getCellValue('remarks');
       final typeApprovalNumber = getCellValue('typeApprovalNumber');
+      final installationType = getCellValue('installationType');
+
+      // 디버깅 (처음 5개 행만)
+      if (rowIndex < 7) {
+        debugPrint('[$rowIndex] 비고(remarks) 매핑: index=${columnMap['remarks']}, value="$remarks"');
+        debugPrint('[$rowIndex] installationType 매핑: index=${columnMap['installationType']}, value="$installationType"');
+      }
 
       if (address.isEmpty && stationName.isEmpty) {
         return null;
@@ -870,6 +1035,7 @@ class ExcelService {
         antennaCount: antennaCount.isNotEmpty ? antennaCount : null,
         remarks: remarks.isNotEmpty ? remarks : null,
         typeApprovalNumber: typeApprovalNumber.isNotEmpty ? typeApprovalNumber : null,
+        installationType: installationType.isNotEmpty ? installationType : null,
         categoryName: categoryName,
       );
     } catch (e) {
@@ -969,8 +1135,12 @@ class ExcelService {
         fontColorHex: excel_pkg.ExcelColor.fromHexString('#FFFFFF'),
       );
 
-      // 헤더 추가 (사진 열 제거)
-      final headers = ['호출명칭', 'ERP국소명', '설치장소(주소)', '허가번호', '특이사항 메모', '검사상태'];
+      // 헤더 추가 (import 형식과 일치 + 추가 컬럼)
+      final headers = [
+        '호출명칭', 'ERP국소명', '설치장소(주소)', '허가번호',
+        '이득(dB)', '기수', '형식검정번호', '비고', '설치대',
+        '특이사항 메모', '검사상태'
+      ];
       for (int col = 0; col < headers.length; col++) {
         final cell = sheet.cell(excel_pkg.CellIndex.indexByColumnRow(columnIndex: col, rowIndex: 0));
         cell.value = excel_pkg.TextCellValue(headers[col]);
@@ -1001,13 +1171,33 @@ class ExcelService {
         sheet.cell(excel_pkg.CellIndex.indexByColumnRow(columnIndex: 3, rowIndex: rowIndex))
             .value = excel_pkg.TextCellValue(station.licenseNumber);
 
-        // 특이사항 메모
+        // 이득(dB)
         sheet.cell(excel_pkg.CellIndex.indexByColumnRow(columnIndex: 4, rowIndex: rowIndex))
+            .value = excel_pkg.TextCellValue(station.gain ?? '');
+
+        // 기수
+        sheet.cell(excel_pkg.CellIndex.indexByColumnRow(columnIndex: 5, rowIndex: rowIndex))
+            .value = excel_pkg.TextCellValue(station.antennaCount ?? '');
+
+        // 형식검정번호
+        sheet.cell(excel_pkg.CellIndex.indexByColumnRow(columnIndex: 6, rowIndex: rowIndex))
+            .value = excel_pkg.TextCellValue(station.typeApprovalNumber ?? '');
+
+        // 비고
+        sheet.cell(excel_pkg.CellIndex.indexByColumnRow(columnIndex: 7, rowIndex: rowIndex))
+            .value = excel_pkg.TextCellValue(station.remarks ?? '');
+
+        // 설치대
+        sheet.cell(excel_pkg.CellIndex.indexByColumnRow(columnIndex: 8, rowIndex: rowIndex))
+            .value = excel_pkg.TextCellValue(station.installationType ?? '');
+
+        // 특이사항 메모
+        sheet.cell(excel_pkg.CellIndex.indexByColumnRow(columnIndex: 9, rowIndex: rowIndex))
             .value = excel_pkg.TextCellValue(station.memo ?? '');
 
         // 검사상태
         final inspectionStatus = station.isInspected ? '검사완료' : '검사대기';
-        sheet.cell(excel_pkg.CellIndex.indexByColumnRow(columnIndex: 5, rowIndex: rowIndex))
+        sheet.cell(excel_pkg.CellIndex.indexByColumnRow(columnIndex: 10, rowIndex: rowIndex))
             .value = excel_pkg.TextCellValue(inspectionStatus);
 
         // 사진 파일 정보 수집 (국소명 폴더/파일명 구조)
@@ -1034,12 +1224,17 @@ class ExcelService {
       }
 
       // 컬럼 너비 설정
-      sheet.setColumnWidth(0, 15);  // 호출명칭
-      sheet.setColumnWidth(1, 25);  // ERP국소명
-      sheet.setColumnWidth(2, 40);  // 설치장소(주소)
-      sheet.setColumnWidth(3, 15);  // 허가번호
-      sheet.setColumnWidth(4, 30);  // 특이사항 메모
-      sheet.setColumnWidth(5, 12);  // 검사상태
+      sheet.setColumnWidth(0, 15);   // 호출명칭
+      sheet.setColumnWidth(1, 25);   // ERP국소명
+      sheet.setColumnWidth(2, 40);   // 설치장소(주소)
+      sheet.setColumnWidth(3, 15);   // 허가번호
+      sheet.setColumnWidth(4, 10);   // 이득(dB)
+      sheet.setColumnWidth(5, 8);    // 기수
+      sheet.setColumnWidth(6, 20);   // 형식검정번호
+      sheet.setColumnWidth(7, 20);   // 비고
+      sheet.setColumnWidth(8, 15);   // 설치대
+      sheet.setColumnWidth(9, 30);   // 특이사항 메모
+      sheet.setColumnWidth(10, 12);  // 검사상태
 
       // 파일 저장
       final bytes = excel.encode();

@@ -3,9 +3,36 @@ import 'package:image_picker/image_picker.dart';
 import 'dart:typed_data';
 import '../services/tower_classification_service.dart';
 
+/// 철탑형태 분류 결과 (상세정보에서 사용)
+class TowerClassificationResult {
+  final String? installationType;
+  final String? photoPath;
+  final Uint8List? imageBytes;
+
+  TowerClassificationResult({
+    this.installationType,
+    this.photoPath,
+    this.imageBytes,
+  });
+}
+
 /// 철탑형태 분류 화면 - AI 자동 분류
 class TowerClassificationScreen extends StatefulWidget {
-  const TowerClassificationScreen({super.key});
+  /// 무선국 ID (상세정보에서 호출 시 사용)
+  final String? stationId;
+
+  /// 무선국 이름 (상세정보에서 호출 시 표시)
+  final String? stationName;
+
+  /// 상세정보에서 호출 시 true - 저장 버튼 표시
+  final bool returnResult;
+
+  const TowerClassificationScreen({
+    super.key,
+    this.stationId,
+    this.stationName,
+    this.returnResult = false,
+  });
 
   @override
   State<TowerClassificationScreen> createState() => _TowerClassificationScreenState();
@@ -32,6 +59,9 @@ class _TowerClassificationScreenState extends State<TowerClassificationScreen>
   List<SelectedImage> _ensembleImages = [];
   EnsembleResult? _ensembleResult;
   String _ensembleMethod = 'mean';
+
+  // 선택된 설치대 (상세정보 저장용)
+  String? _selectedInstallationType;
 
   // 테마 색상
   static const Color _primaryColor = Color(0xFFE53935);
@@ -86,13 +116,26 @@ class _TowerClassificationScreenState extends State<TowerClassificationScreen>
           icon: const Icon(Icons.arrow_back, color: Colors.black87),
           onPressed: () => Navigator.pop(context),
         ),
-        title: const Text(
-          '철탑형태 분류',
-          style: TextStyle(
-            color: Colors.black87,
-            fontSize: 18,
-            fontWeight: FontWeight.bold,
-          ),
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            const Text(
+              '철탑형태 분류',
+              style: TextStyle(
+                color: Colors.black87,
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            if (widget.stationName != null)
+              Text(
+                widget.stationName!,
+                style: TextStyle(
+                  color: Colors.grey[600],
+                  fontSize: 12,
+                ),
+              ),
+          ],
         ),
         centerTitle: true,
         actions: [
@@ -648,7 +691,6 @@ class _TowerClassificationScreenState extends State<TowerClassificationScreen>
             // 메인 결과
             _buildMainResult(
               className: result.classNameKr,
-              shortName: result.shortName,
               confidence: result.confidence,
               isConfident: result.isConfident,
             ),
@@ -665,8 +707,97 @@ class _TowerClassificationScreenState extends State<TowerClassificationScreen>
               imageBytes: _selectedImages.isNotEmpty ? _selectedImages.first.bytes : null,
               filename: _selectedImages.isNotEmpty ? _selectedImages.first.name : null,
             ),
+
+            // 상세정보에서 호출 시 설치대 선택 및 저장 버튼
+            if (widget.returnResult) ...[
+              const SizedBox(height: 24),
+              const Divider(),
+              const SizedBox(height: 16),
+              _buildInstallationTypeSelector(result.classNameKr),
+              const SizedBox(height: 16),
+              _buildSaveAndReturnButton(),
+            ],
           ],
         ),
+      ),
+    );
+  }
+
+  /// 설치대 선택 (9개 전체 클래스) - 원문(전체 한글명) 표시
+  Widget _buildInstallationTypeSelector(String recommendedType) {
+    // 분류 결과가 나오면 자동으로 선택
+    _selectedInstallationType ??= recommendedType;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          '설치대로 저장할 결과 선택:',
+          style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+        ),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: TowerClassificationService.getClassOptions().map((classOption) {
+            final isSelected = _selectedInstallationType == classOption.koreanName;
+            final isTopResult = recommendedType == classOption.koreanName;
+            return ChoiceChip(
+              label: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(classOption.koreanName),
+                  if (isTopResult) ...[
+                    const SizedBox(width: 4),
+                    Icon(Icons.star, size: 14, color: isSelected ? _primaryColor : Colors.amber),
+                  ],
+                ],
+              ),
+              selected: isSelected,
+              onSelected: (selected) {
+                if (selected) {
+                  setState(() {
+                    _selectedInstallationType = classOption.koreanName;
+                  });
+                }
+              },
+              selectedColor: _primaryColor.withValues(alpha: 0.2),
+              labelStyle: TextStyle(
+                color: isSelected ? _primaryColor : Colors.grey[700],
+                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+              ),
+            );
+          }).toList(),
+        ),
+      ],
+    );
+  }
+
+  /// 저장하고 돌아가기 버튼
+  Widget _buildSaveAndReturnButton() {
+    return ElevatedButton.icon(
+      onPressed: _saveAndReturn,
+      icon: const Icon(Icons.save),
+      label: const Text('저장하고 돌아가기'),
+      style: ElevatedButton.styleFrom(
+        backgroundColor: Colors.green,
+        foregroundColor: Colors.white,
+        padding: const EdgeInsets.symmetric(vertical: 16),
+        minimumSize: const Size(double.infinity, 50),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+    );
+  }
+
+  /// 저장하고 결과 반환
+  void _saveAndReturn() {
+    final imageBytes = _selectedImages.isNotEmpty ? _selectedImages.first.bytes : null;
+
+    Navigator.pop(
+      context,
+      TowerClassificationResult(
+        installationType: _selectedInstallationType,
+        imageBytes: imageBytes,
       ),
     );
   }
@@ -715,7 +846,6 @@ class _TowerClassificationScreenState extends State<TowerClassificationScreen>
             // 최종 결과
             _buildMainResult(
               className: result.finalPrediction.classNameKr,
-              shortName: result.finalPrediction.shortName,
               confidence: result.finalPrediction.confidence,
               isConfident: result.isConfident,
             ),
@@ -768,8 +898,47 @@ class _TowerClassificationScreenState extends State<TowerClassificationScreen>
               imageBytes: _ensembleImages.isNotEmpty ? _ensembleImages.first.bytes : null,
               filename: _ensembleImages.isNotEmpty ? _ensembleImages.first.name : null,
             ),
+
+            // 상세정보에서 호출 시 설치대 선택 및 저장 버튼
+            if (widget.returnResult) ...[
+              const SizedBox(height: 24),
+              const Divider(),
+              const SizedBox(height: 16),
+              _buildInstallationTypeSelector(result.finalPrediction.classNameKr),
+              const SizedBox(height: 16),
+              _buildSaveAndReturnButtonEnsemble(),
+            ],
           ],
         ),
+      ),
+    );
+  }
+
+  /// 저장하고 돌아가기 버튼 (앙상블)
+  Widget _buildSaveAndReturnButtonEnsemble() {
+    return ElevatedButton.icon(
+      onPressed: _saveAndReturnEnsemble,
+      icon: const Icon(Icons.save),
+      label: const Text('저장하고 돌아가기'),
+      style: ElevatedButton.styleFrom(
+        backgroundColor: Colors.green,
+        foregroundColor: Colors.white,
+        padding: const EdgeInsets.symmetric(vertical: 16),
+        minimumSize: const Size(double.infinity, 50),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+    );
+  }
+
+  /// 저장하고 결과 반환 (앙상블)
+  void _saveAndReturnEnsemble() {
+    final imageBytes = _ensembleImages.isNotEmpty ? _ensembleImages.first.bytes : null;
+
+    Navigator.pop(
+      context,
+      TowerClassificationResult(
+        installationType: _selectedInstallationType,
+        imageBytes: imageBytes,
       ),
     );
   }
@@ -777,7 +946,6 @@ class _TowerClassificationScreenState extends State<TowerClassificationScreen>
   /// 메인 결과 위젯
   Widget _buildMainResult({
     required String className,
-    required String shortName,
     required double confidence,
     required bool isConfident,
   }) {
@@ -810,16 +978,11 @@ class _TowerClassificationScreenState extends State<TowerClassificationScreen>
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  shortName,
+                  className,
                   style: const TextStyle(
-                    fontSize: 20,
+                    fontSize: 18,
                     fontWeight: FontWeight.bold,
                   ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  className,
-                  style: TextStyle(fontSize: 13, color: Colors.grey[700]),
                 ),
               ],
             ),
@@ -1079,6 +1242,8 @@ class _TowerClassificationScreenState extends State<TowerClassificationScreen>
     final selectedClass = await showDialog<ClassOption>(
       context: context,
       builder: (context) => AlertDialog(
+        backgroundColor: Colors.white,
+        surfaceTintColor: Colors.white,
         title: Row(
           children: [
             Icon(Icons.edit, color: _primaryColor, size: 24),
@@ -1145,17 +1310,10 @@ class _TowerClassificationScreenState extends State<TowerClassificationScreen>
                         ),
                       ),
                       title: Text(
-                        option.shortName,
+                        option.koreanName,
                         style: TextStyle(
                           fontWeight: FontWeight.w600,
                           color: isCurrentClass ? Colors.grey : Colors.black87,
-                        ),
-                      ),
-                      subtitle: Text(
-                        option.koreanName,
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: isCurrentClass ? Colors.grey : Colors.grey[600],
                         ),
                       ),
                       trailing: isCurrentClass
@@ -1196,7 +1354,7 @@ class _TowerClassificationScreenState extends State<TowerClassificationScreen>
         filename: filename,
         originalClass: originalClassEn,
         correctedClass: selectedClass.englishName,
-        correctedClassKr: selectedClass.shortName,
+        correctedClassKr: selectedClass.koreanName,
       );
     }
   }
@@ -1213,8 +1371,10 @@ class _TowerClassificationScreenState extends State<TowerClassificationScreen>
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (context) => const AlertDialog(
-        content: Row(
+      builder: (context) => AlertDialog(
+        backgroundColor: Colors.white,
+        surfaceTintColor: Colors.white,
+        content: const Row(
           children: [
             CircularProgressIndicator(),
             SizedBox(width: 16),

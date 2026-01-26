@@ -487,6 +487,8 @@ class _BottomStationSheetState extends State<BottomStationSheet> {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
+        backgroundColor: Colors.white,
+        surfaceTintColor: Colors.white,
         title: const Text('카테고리 삭제'),
         content: Text('$category의 모든 데이터를 삭제하시겠습니까?'),
         actions: [

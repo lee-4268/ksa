@@ -67,6 +67,9 @@ class RadioStation extends HiveObject {
   @HiveField(20)
   String? typeApprovalNumber; // 형식검정번호
 
+  @HiveField(21)
+  String? installationType; // 설치대 (철탑형태)
+
   RadioStation({
     required this.id,
     required this.stationName,
@@ -89,6 +92,7 @@ class RadioStation extends HiveObject {
     this.categoryName,
     this.photoPaths,
     this.typeApprovalNumber,
+    this.installationType,
   })  : createdAt = createdAt ?? DateTime.now(),
         updatedAt = updatedAt ?? DateTime.now();
 
@@ -114,6 +118,7 @@ class RadioStation extends HiveObject {
     String? categoryName,
     List<String>? photoPaths,
     String? typeApprovalNumber,
+    String? installationType,
   }) {
     return RadioStation(
       id: id ?? this.id,
@@ -137,6 +142,7 @@ class RadioStation extends HiveObject {
       categoryName: categoryName ?? this.categoryName,
       photoPaths: photoPaths ?? this.photoPaths,
       typeApprovalNumber: typeApprovalNumber ?? this.typeApprovalNumber,
+      installationType: installationType ?? this.installationType,
     );
   }
 
@@ -163,6 +169,7 @@ class RadioStation extends HiveObject {
       'categoryName': categoryName,
       'photoPaths': photoPaths,
       'typeApprovalNumber': typeApprovalNumber,
+      'installationType': installationType,
     };
   }
 
@@ -195,6 +202,7 @@ class RadioStation extends HiveObject {
       categoryName: json['categoryName'] as String?,
       photoPaths: (json['photoPaths'] as List<dynamic>?)?.cast<String>(),
       typeApprovalNumber: json['typeApprovalNumber'] as String?,
+      installationType: json['installationType'] as String?,
     );
   }
 

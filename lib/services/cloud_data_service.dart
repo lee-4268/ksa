@@ -210,6 +210,7 @@ class CloudDataService extends ChangeNotifier {
             frequency
             stationType
             stationOwner
+            installationType
             isInspected
             inspectionDate
             memo
@@ -238,6 +239,7 @@ class CloudDataService extends ChangeNotifier {
             'frequency': station.frequency,
             'stationType': station.stationType,
             'stationOwner': station.owner,
+            'installationType': station.installationType,
             'isInspected': station.isInspected,
             'inspectionDate': station.inspectionDate?.toUtc().toIso8601String(),
             'memo': station.memo,
@@ -301,6 +303,7 @@ class CloudDataService extends ChangeNotifier {
               frequency
               stationType
               stationOwner
+              installationType
               isInspected
               inspectionDate
               memo
@@ -386,6 +389,7 @@ class CloudDataService extends ChangeNotifier {
               frequency
               stationType
               stationOwner
+              installationType
               isInspected
               inspectionDate
               memo
@@ -480,6 +484,7 @@ class CloudDataService extends ChangeNotifier {
             'frequency': station.frequency,
             'stationType': station.stationType,
             'stationOwner': station.owner,
+            'installationType': station.installationType,
             'isInspected': station.isInspected,
             'inspectionDate': station.inspectionDate?.toUtc().toIso8601String(),
             'memo': station.memo,
@@ -683,6 +688,7 @@ class CloudDataService extends ChangeNotifier {
       frequency: data['frequency'] as String?,
       stationType: data['stationType'] as String?,
       owner: data['stationOwner'] as String?,
+      installationType: data['installationType'] as String?,
       isInspected: data['isInspected'] as bool? ?? false,
       inspectionDate: data['inspectionDate'] != null
           ? DateTime.tryParse(data['inspectionDate'] as String)
