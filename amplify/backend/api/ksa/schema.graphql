@@ -4,6 +4,7 @@ type Category @model @auth(rules: [
 ]) {
   id: ID!
   name: String!
+  originalExcelKey: String    # 원본 Excel 파일 S3 키 (서식 유지 export용)
   stations: [Station] @hasMany(indexName: "byCategory", fields: ["id"])
   createdAt: AWSDateTime
   updatedAt: AWSDateTime

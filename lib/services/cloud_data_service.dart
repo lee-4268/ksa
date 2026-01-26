@@ -16,7 +16,7 @@ class CloudDataService extends ChangeNotifier {
   // ==================== Category CRUD ====================
 
   /// 카테고리 생성
-  Future<String?> createCategory(String name) async {
+  Future<String?> createCategory(String name, {String? originalExcelKey}) async {
     _isLoading = true;
     _errorMessage = null;
     notifyListeners();
@@ -27,6 +27,7 @@ class CloudDataService extends ChangeNotifier {
           createCategory(input: \$input) {
             id
             name
+            originalExcelKey
             createdAt
             updatedAt
             owner
@@ -39,6 +40,7 @@ class CloudDataService extends ChangeNotifier {
         variables: {
           'input': {
             'name': name,
+            if (originalExcelKey != null) 'originalExcelKey': originalExcelKey,
           },
         },
         authorizationMode: APIAuthorizationType.userPools,
@@ -77,23 +79,66 @@ class CloudDataService extends ChangeNotifier {
   }
 
   /// 모든 카테고리 조회 (페이지네이션 처리)
+  /// originalExcelKey 필드가 스키마에 없는 경우 (amplify push 전) 자동으로 fallback
   Future<List<Map<String, dynamic>>> listCategories() async {
+    // 먼저 originalExcelKey 포함 쿼리 시도, 실패 시 미포함 쿼리로 재시도
     try {
-      const query = '''
-        query ListCategories(\$limit: Int, \$nextToken: String) {
-          listCategories(limit: \$limit, nextToken: \$nextToken) {
-            items {
-              id
-              name
-              createdAt
-              updatedAt
-              owner
-            }
-            nextToken
-          }
-        }
-      ''';
+      return await _listCategoriesWithOriginalExcelKey();
+    } catch (e) {
+      final errorMsg = e.toString().toLowerCase();
+      // originalExcelKey 필드가 스키마에 없는 경우 (amplify push 필요)
+      if (errorMsg.contains('originalexcelkey') ||
+          errorMsg.contains('cannot query field') ||
+          errorMsg.contains('validation error')) {
+        debugPrint('originalExcelKey 필드 없음 - fallback 쿼리 사용');
+        return await _listCategoriesBasic();
+      }
+      rethrow;
+    }
+  }
 
+  /// originalExcelKey 포함 카테고리 조회
+  Future<List<Map<String, dynamic>>> _listCategoriesWithOriginalExcelKey() async {
+    const query = '''
+      query ListCategories(\$limit: Int, \$nextToken: String) {
+        listCategories(limit: \$limit, nextToken: \$nextToken) {
+          items {
+            id
+            name
+            originalExcelKey
+            createdAt
+            updatedAt
+            owner
+          }
+          nextToken
+        }
+      }
+    ''';
+    return await _executeListCategoriesQuery(query);
+  }
+
+  /// 기본 카테고리 조회 (originalExcelKey 미포함 - 하위 호환성)
+  Future<List<Map<String, dynamic>>> _listCategoriesBasic() async {
+    const query = '''
+      query ListCategories(\$limit: Int, \$nextToken: String) {
+        listCategories(limit: \$limit, nextToken: \$nextToken) {
+          items {
+            id
+            name
+            createdAt
+            updatedAt
+            owner
+          }
+          nextToken
+        }
+      }
+    ''';
+    return await _executeListCategoriesQuery(query);
+  }
+
+  /// 카테고리 조회 쿼리 실행 (공통 로직)
+  Future<List<Map<String, dynamic>>> _executeListCategoriesQuery(String query) async {
+    try {
       final allCategories = <Map<String, dynamic>>[];
       String? nextToken;
 
@@ -874,6 +919,85 @@ class CloudDataService extends ChangeNotifier {
       return true;
     } catch (e) {
       debugPrint('철탑 분류 결과 삭제 실패: $e');
+      return false;
+    }
+  }
+
+  // ==================== 원본 Excel 관리 ====================
+
+  /// 원본 Excel 파일을 S3에 업로드
+  Future<String?> uploadOriginalExcel(Uint8List bytes, String categoryName) async {
+    try {
+      final timestamp = DateTime.now().millisecondsSinceEpoch;
+      final fileKey = 'original-excel/$categoryName-$timestamp.xlsx';
+
+      final result = await Amplify.Storage.uploadData(
+        data: StorageDataPayload.bytes(bytes),
+        path: StoragePath.fromIdentityId(
+          (identityId) => 'private/$identityId/$fileKey',
+        ),
+      ).result;
+
+      final uploadedPath = result.uploadedItem.path;
+      debugPrint('원본 Excel 업로드 완료: $uploadedPath');
+      // 전체 경로 반환 (다운로드 시 사용)
+      return uploadedPath;
+    } catch (e) {
+      debugPrint('원본 Excel 업로드 실패: $e');
+      return null;
+    }
+  }
+
+  /// S3에서 원본 Excel 파일 다운로드
+  Future<Uint8List?> downloadOriginalExcel(String storedPath) async {
+    try {
+      // storedPath는 업로드 시 반환된 전체 경로 (예: private/{identityId}/original-excel/...)
+      final result = await Amplify.Storage.downloadData(
+        path: StoragePath.fromString(storedPath),
+      ).result;
+
+      debugPrint('원본 Excel 다운로드 완료: ${result.bytes.length} bytes');
+      return Uint8List.fromList(result.bytes);
+    } catch (e) {
+      debugPrint('원본 Excel 다운로드 실패: $e');
+      return null;
+    }
+  }
+
+  /// 카테고리의 originalExcelKey 업데이트
+  Future<bool> updateCategoryOriginalExcelKey(String categoryId, String originalExcelKey) async {
+    try {
+      const mutation = '''
+        mutation UpdateCategory(\$input: UpdateCategoryInput!) {
+          updateCategory(input: \$input) {
+            id
+            originalExcelKey
+          }
+        }
+      ''';
+
+      final request = GraphQLRequest<String>(
+        document: mutation,
+        variables: {
+          'input': {
+            'id': categoryId,
+            'originalExcelKey': originalExcelKey,
+          },
+        },
+        authorizationMode: APIAuthorizationType.userPools,
+      );
+
+      final response = await Amplify.API.mutate(request: request).response;
+
+      if (response.hasErrors) {
+        debugPrint('카테고리 originalExcelKey 업데이트 오류: ${response.errors}');
+        return false;
+      }
+
+      debugPrint('카테고리 originalExcelKey 업데이트 완료');
+      return true;
+    } catch (e) {
+      debugPrint('카테고리 originalExcelKey 업데이트 실패: $e');
       return false;
     }
   }

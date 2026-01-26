@@ -31,6 +31,8 @@ class StationProvider extends ChangeNotifier {
   final Map<String, String> _cloudIdMap = {};
   // 카테고리 클라우드 ID 매핑 (카테고리명 -> 클라우드 카테고리 ID)
   final Map<String, String> _cloudCategoryIdMap = {};
+  // 카테고리별 원본 Excel S3 키 매핑 (카테고리명 -> originalExcelKey)
+  final Map<String, String> _categoryOriginalExcelKeyMap = {};
 
   StationProvider(this._storageService);
 
@@ -210,6 +212,7 @@ class StationProvider extends ChangeNotifier {
       _stations = []; // clear() 대신 새 리스트 할당으로 확실히 초기화
       _cloudIdMap.clear();
       _cloudCategoryIdMap.clear();
+      _categoryOriginalExcelKeyMap.clear();
 
       // 3. 카테고리별 스테이션 로드 - 중복 방지를 위해 Set 사용
       final stationIdSet = <String>{}; // 이미 추가된 스테이션 ID 추적
@@ -219,6 +222,13 @@ class StationProvider extends ChangeNotifier {
         final catName = cat['name'] as String;
         final catId = cat['id'] as String;
         _cloudCategoryIdMap[catName] = catId;
+
+        // 원본 Excel S3 키 저장 (있는 경우)
+        final originalExcelKey = cat['originalExcelKey'] as String?;
+        if (originalExcelKey != null && originalExcelKey.isNotEmpty) {
+          _categoryOriginalExcelKeyMap[catName] = originalExcelKey;
+          debugPrint('카테고리 "$catName" 원본 Excel 키: $originalExcelKey');
+        }
 
         // 카테고리별 스테이션 조회
         final stations = await _cloudDataService!.listStationsByCategory(catId);
@@ -404,6 +414,25 @@ class StationProvider extends ChangeNotifier {
 
           if (cloudCategoryId != null) {
             _cloudCategoryIdMap[categoryName] = cloudCategoryId;
+
+            // 2. 원본 Excel 파일을 S3에 업로드 (서식 유지 export용)
+            if (result.originalBytes != null) {
+              try {
+                final originalExcelPath = await _cloudDataService!.uploadOriginalExcel(
+                  result.originalBytes!,
+                  categoryName,
+                );
+                if (originalExcelPath != null) {
+                  await _cloudDataService!.updateCategoryOriginalExcelKey(
+                    cloudCategoryId,
+                    originalExcelPath,
+                  );
+                  debugPrint('원본 Excel S3 업로드 완료: $originalExcelPath');
+                }
+              } catch (e) {
+                debugPrint('원본 Excel 업로드 실패 (무시됨): $e');
+              }
+            }
 
             // 2. 각 무선국 클라우드 업로드
             final totalStations = importedStations.length;
@@ -683,6 +712,7 @@ class StationProvider extends ChangeNotifier {
       _selectedCategories.clear();
       _cloudIdMap.clear();
       _cloudCategoryIdMap.clear();
+      _categoryOriginalExcelKeyMap.clear();
       _isDataLoaded = false; // 데이터 로드 상태 초기화
       notifyListeners();
     } catch (e) {
@@ -698,6 +728,7 @@ class StationProvider extends ChangeNotifier {
     _selectedCategories.clear();
     _cloudIdMap.clear();
     _cloudCategoryIdMap.clear();
+    _categoryOriginalExcelKeyMap.clear();
     _isDataLoaded = false;
     _cloudDataService = null;
     notifyListeners();
@@ -867,6 +898,58 @@ class StationProvider extends ChangeNotifier {
       return filePath;
     } catch (e) {
       _errorMessage = 'Excel 내보내기 실패: $e';
+      notifyListeners();
+      return null;
+    }
+  }
+
+  /// 카테고리에 원본 Excel이 있는지 확인
+  bool hasOriginalExcel(String category) {
+    return _categoryOriginalExcelKeyMap.containsKey(category) &&
+           _categoryOriginalExcelKeyMap[category]!.isNotEmpty;
+  }
+
+  /// 원본 Excel 서식을 유지하여 내보내기 (수검여부/특이사항 컬럼만 추가)
+  /// saveOnly: true면 저장만, false면 공유 다이얼로그도 표시
+  Future<String?> exportCategoryWithOriginalFormat(String category, {bool saveOnly = false}) async {
+    if (_cloudDataService == null) {
+      _errorMessage = '클라우드 서비스가 초기화되지 않았습니다.';
+      notifyListeners();
+      return null;
+    }
+
+    try {
+      final categoryStations = stationsByCategory[category] ?? [];
+      if (categoryStations.isEmpty) {
+        throw Exception('내보낼 데이터가 없습니다.');
+      }
+
+      // 원본 Excel S3 키 확인
+      final originalExcelKey = _categoryOriginalExcelKeyMap[category];
+      if (originalExcelKey == null || originalExcelKey.isEmpty) {
+        throw Exception('원본 Excel 파일이 없습니다. 일반 내보내기를 사용해주세요.');
+      }
+
+      debugPrint('원본 Excel 다운로드 시작: $originalExcelKey');
+
+      // S3에서 원본 Excel 다운로드
+      final originalBytes = await _cloudDataService!.downloadOriginalExcel(originalExcelKey);
+      if (originalBytes == null) {
+        throw Exception('원본 Excel 파일 다운로드 실패');
+      }
+
+      debugPrint('원본 Excel 다운로드 완료: ${originalBytes.length} bytes');
+
+      // 원본 서식 유지하여 내보내기
+      final filePath = await _excelService.exportWithOriginalFormat(
+        originalBytes,
+        categoryStations,
+        category,
+        saveOnly: saveOnly,
+      );
+      return filePath;
+    } catch (e) {
+      _errorMessage = '원본 서식 Excel 내보내기 실패: $e';
       notifyListeners();
       return null;
     }

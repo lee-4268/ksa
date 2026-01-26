@@ -13,8 +13,13 @@ import 'excel_export_stub.dart'
 class ExcelImportResult {
   final List<RadioStation> stations;
   final String fileName;
+  final Uint8List? originalBytes; // 원본 Excel 파일 bytes (서식 유지 export용)
 
-  ExcelImportResult({required this.stations, required this.fileName});
+  ExcelImportResult({
+    required this.stations,
+    required this.fileName,
+    this.originalBytes,
+  });
 }
 
 class ExcelService {
@@ -41,10 +46,13 @@ class ExcelService {
         throw Exception('파일을 읽을 수 없습니다.');
       }
 
+      // 원본 bytes 복사 (서식 유지 export용)
+      final originalBytes = Uint8List.fromList(bytes);
+
       // excel 패키지로 파싱 (numFmtId 오류 시 XML 직접 파싱으로 fallback)
       try {
         final stations = _parseWithExcelPackage(bytes, fileName);
-        return ExcelImportResult(stations: stations, fileName: fileName);
+        return ExcelImportResult(stations: stations, fileName: fileName, originalBytes: originalBytes);
       } catch (e) {
         debugPrint('excel 패키지 파싱 실패: $e');
 
@@ -58,7 +66,7 @@ class ExcelService {
             try {
               final stations = await _parseXmlDirectly(bytes, fileName);
               debugPrint('XML 직접 파싱 성공: ${stations.length}개');
-              return ExcelImportResult(stations: stations, fileName: fileName);
+              return ExcelImportResult(stations: stations, fileName: fileName, originalBytes: originalBytes);
             } catch (e4) {
               debugPrint('XML 직접 파싱도 실패: $e4');
               throw Exception('Excel 파일 파싱 실패. 지원되지 않는 형식이거나 파일이 손상되었습니다.');
@@ -72,7 +80,7 @@ class ExcelService {
             debugPrint('전처리된 바이트 크기: ${fixedBytes.length}');
             final stations = _parseWithExcelPackage(fixedBytes, fileName);
             debugPrint('전처리 후 파싱 성공');
-            return ExcelImportResult(stations: stations, fileName: fileName);
+            return ExcelImportResult(stations: stations, fileName: fileName, originalBytes: originalBytes);
           } catch (e2, stackTrace) {
             debugPrint('전처리 후에도 파싱 실패: $e2');
             debugPrint('스택트레이스: $stackTrace');
@@ -82,7 +90,7 @@ class ExcelService {
             try {
               final stations = _parseWithExcelPackageIgnoreNumFmt(bytes, fileName);
               debugPrint('원본 파일 파싱 성공 (numFmt 무시)');
-              return ExcelImportResult(stations: stations, fileName: fileName);
+              return ExcelImportResult(stations: stations, fileName: fileName, originalBytes: originalBytes);
             } catch (e3) {
               debugPrint('원본 파일 파싱도 실패: $e3');
 
@@ -91,7 +99,7 @@ class ExcelService {
               try {
                 final stations = await _parseXmlDirectly(bytes, fileName);
                 debugPrint('XML 직접 파싱 성공: ${stations.length}개');
-                return ExcelImportResult(stations: stations, fileName: fileName);
+                return ExcelImportResult(stations: stations, fileName: fileName, originalBytes: originalBytes);
               } catch (e4) {
                 debugPrint('XML 직접 파싱도 실패: $e4');
                 throw Exception('Excel 파일 파싱 실패. 지원되지 않는 형식이거나 파일이 손상되었습니다.');
@@ -1283,5 +1291,349 @@ class ExcelService {
       debugPrint('파일 공유 오류: $e');
       rethrow;
     }
+  }
+
+  /// 원본 Excel 서식을 유지하면서 수검여부/특이사항 컬럼만 추가하여 내보내기
+  /// [originalBytes] - 원본 Excel 파일 바이트
+  /// [stations] - 현재 스테이션 데이터 (수검여부, 메모 등 업데이트된 정보 포함)
+  /// [categoryName] - 카테고리명 (파일명용)
+  /// [saveOnly] - true면 저장만, false면 공유 다이얼로그도 표시
+  Future<String?> exportWithOriginalFormat(
+    Uint8List originalBytes,
+    List<RadioStation> stations,
+    String categoryName, {
+    bool saveOnly = false,
+  }) async {
+    try {
+      debugPrint('===== 원본 서식 유지 Export 시작 =====');
+      debugPrint('원본 파일 크기: ${originalBytes.length} bytes');
+      debugPrint('스테이션 수: ${stations.length}');
+
+      // 스테이션 데이터를 주소 기준으로 매핑 (원본 행과 매칭용)
+      final stationMap = <String, RadioStation>{};
+      for (final station in stations) {
+        // 주소와 국소명 조합으로 고유 키 생성
+        final key = '${station.address}_${station.stationName}'.toLowerCase();
+        stationMap[key] = station;
+        // 주소만으로도 매핑 시도 (fallback)
+        stationMap[station.address.toLowerCase()] = station;
+      }
+
+      // xlsx ZIP 아카이브 열기
+      final archive = ZipDecoder().decodeBytes(originalBytes);
+      final newArchive = Archive();
+
+      // 공유 문자열 목록 추출 및 새 문자열 추가 준비
+      List<String> sharedStrings = [];
+      String? sharedStringsXml;
+      ArchiveFile? sharedStringsFile;
+
+      for (final file in archive) {
+        if (file.isFile && file.name.toLowerCase().contains('sharedstrings.xml')) {
+          sharedStringsFile = file;
+          final content = file.content;
+          if (content != null) {
+            sharedStringsXml = utf8.decode(content as List<int>);
+            // 기존 공유 문자열 추출
+            final tPattern = RegExp(r'<t[^>]*>([^<]*)</t>', multiLine: true);
+            for (final match in tPattern.allMatches(sharedStringsXml!)) {
+              sharedStrings.add(match.group(1) ?? '');
+            }
+          }
+          break;
+        }
+      }
+      debugPrint('기존 공유 문자열 수: ${sharedStrings.length}');
+
+      // 새로 추가할 문자열들
+      final newStrings = <String>[];
+      final stringToIndex = <String, int>{};
+
+      // 기존 문자열 인덱스 매핑
+      for (int i = 0; i < sharedStrings.length; i++) {
+        stringToIndex[sharedStrings[i]] = i;
+      }
+
+      // 새 문자열 인덱스 얻기 (기존에 있으면 기존 인덱스, 없으면 새로 추가)
+      int getOrAddStringIndex(String text) {
+        if (stringToIndex.containsKey(text)) {
+          return stringToIndex[text]!;
+        }
+        final newIndex = sharedStrings.length + newStrings.length;
+        stringToIndex[text] = newIndex;
+        newStrings.add(text);
+        return newIndex;
+      }
+
+      // 헤더 문자열 인덱스 미리 확보
+      final headerInspectionIdx = getOrAddStringIndex('수검여부');
+      final headerMemoIdx = getOrAddStringIndex('특이사항');
+      debugPrint('헤더 인덱스 - 수검여부: $headerInspectionIdx, 특이사항: $headerMemoIdx');
+
+      // 워크시트 파일 찾기 및 수정
+      ArchiveFile? worksheetFile;
+      String? worksheetXml;
+      String? worksheetPath;
+
+      // workbook.xml에서 대상 시트 경로 찾기
+      for (final file in archive) {
+        if (file.isFile && file.name.toLowerCase().contains('workbook.xml') &&
+            !file.name.toLowerCase().contains('.rels')) {
+          final content = file.content;
+          if (content != null) {
+            final xmlStr = utf8.decode(content as List<int>);
+            final sheetNames = <String>[];
+            final sheetPattern = RegExp(r'<sheet[^>]*name="([^"]*)"', multiLine: true);
+            for (final match in sheetPattern.allMatches(xmlStr)) {
+              sheetNames.add(match.group(1) ?? '');
+            }
+            final targetSheetName = _findTargetSheet(sheetNames);
+            debugPrint('대상 시트: $targetSheetName');
+          }
+          break;
+        }
+      }
+
+      // 첫 번째 워크시트 파일 찾기 (sheet1.xml 우선)
+      for (final file in archive) {
+        if (file.isFile && file.name.toLowerCase().contains('worksheets/sheet')) {
+          if (worksheetFile == null || file.name.toLowerCase().contains('sheet1.xml')) {
+            worksheetFile = file;
+            worksheetPath = file.name;
+          }
+        }
+      }
+
+      if (worksheetFile == null || worksheetFile.content == null) {
+        throw Exception('워크시트를 찾을 수 없습니다.');
+      }
+
+      worksheetXml = utf8.decode(worksheetFile.content as List<int>);
+      debugPrint('워크시트 파일: $worksheetPath');
+
+      // 마지막 컬럼 문자 찾기 (dimension 태그에서)
+      String lastColLetter = 'A';
+      final dimPattern = RegExp(r'<dimension\s+ref="([A-Z]+)\d+:([A-Z]+)\d+"', multiLine: true);
+      final dimMatch = dimPattern.firstMatch(worksheetXml!);
+      if (dimMatch != null) {
+        lastColLetter = dimMatch.group(2) ?? 'A';
+        debugPrint('기존 마지막 컬럼: $lastColLetter');
+      }
+
+      // 새 컬럼 문자 계산 (예: Z -> AA -> AB)
+      String incrementColumn(String col) {
+        final chars = col.split('').reversed.toList();
+        bool carry = true;
+        for (int i = 0; i < chars.length && carry; i++) {
+          if (chars[i] == 'Z') {
+            chars[i] = 'A';
+          } else {
+            chars[i] = String.fromCharCode(chars[i].codeUnitAt(0) + 1);
+            carry = false;
+          }
+        }
+        if (carry) chars.add('A');
+        return chars.reversed.join();
+      }
+
+      final col1Letter = incrementColumn(lastColLetter); // 수검여부 컬럼
+      final col2Letter = incrementColumn(col1Letter);    // 특이사항 컬럼
+      debugPrint('새 컬럼 문자: $col1Letter (수검여부), $col2Letter (특이사항)');
+
+      // dimension 업데이트
+      if (dimMatch != null) {
+        final oldDim = dimMatch.group(0)!;
+        final newDim = oldDim.replaceAll(
+          RegExp(r':([A-Z]+)(\d+)"'),
+          ':$col2Letter\$2"',
+        );
+        worksheetXml = worksheetXml!.replaceFirst(oldDim, newDim);
+        debugPrint('Dimension 업데이트: $oldDim -> $newDim');
+      }
+
+      // 각 행에 새 셀 추가
+      final rowPattern = RegExp(r'(<row[^>]*r="(\d+)"[^>]*>)(.*?)(</row>)', multiLine: true, dotAll: true);
+
+      // 헤더 행인지 판별할 변수
+      bool isFirstDataRow = true;
+      int headerRowNum = 1;
+
+      worksheetXml = worksheetXml!.replaceAllMapped(rowPattern, (match) {
+        final rowStart = match.group(1)!;
+        final rowNum = int.parse(match.group(2)!);
+        final rowContent = match.group(3)!;
+        final rowEnd = match.group(4)!;
+
+        String newCell1;
+        String newCell2;
+
+        if (rowNum <= 2 && isFirstDataRow) {
+          // 헤더 행 (1행 또는 2행) - 새 컬럼 헤더 추가
+          // 첫 번째 행이 헤더인지 확인
+          if (rowNum == 1) {
+            // 1행에 "수검여부", "특이사항" 헤더 추가
+            newCell1 = '<c r="$col1Letter$rowNum" t="s"><v>$headerInspectionIdx</v></c>';
+            newCell2 = '<c r="$col2Letter$rowNum" t="s"><v>$headerMemoIdx</v></c>';
+            headerRowNum = 1;
+          } else {
+            // 2행이 서브헤더일 수 있음 - 빈 셀 추가
+            newCell1 = '<c r="$col1Letter$rowNum"><v></v></c>';
+            newCell2 = '<c r="$col2Letter$rowNum"><v></v></c>';
+          }
+        } else {
+          // 데이터 행 - 해당 스테이션의 수검여부/특이사항 추가
+          isFirstDataRow = false;
+
+          // 현재 행에서 주소와 국소명 추출하여 스테이션 매칭
+          RadioStation? matchedStation;
+
+          // 셀에서 주소 추출 시도
+          final cellPattern = RegExp(r'<c[^>]*r="([A-Z]+)\d+"[^>]*(?:t="s")?[^>]*>(?:<v>(\d+)</v>)?</c>', multiLine: true);
+          final cells = <String, String>{};
+
+          for (final cellMatch in cellPattern.allMatches(rowContent)) {
+            final colLetter = cellMatch.group(1) ?? '';
+            final valueIdx = cellMatch.group(2);
+            if (valueIdx != null) {
+              final idx = int.tryParse(valueIdx);
+              if (idx != null && idx < sharedStrings.length) {
+                cells[colLetter] = sharedStrings[idx];
+              }
+            }
+          }
+
+          // 스테이션 매칭 시도 (주소 컬럼이 보통 C 또는 D)
+          for (final entry in cells.entries) {
+            final value = entry.value.toLowerCase();
+            if (stationMap.containsKey(value)) {
+              matchedStation = stationMap[value];
+              break;
+            }
+          }
+
+          // 국소명+주소 조합으로도 매칭 시도
+          if (matchedStation == null) {
+            for (final addr in cells.values) {
+              for (final name in cells.values) {
+                final key = '${addr}_$name'.toLowerCase();
+                if (stationMap.containsKey(key)) {
+                  matchedStation = stationMap[key];
+                  break;
+                }
+              }
+              if (matchedStation != null) break;
+            }
+          }
+
+          // 매칭된 스테이션이 없으면 행 번호로 매칭 시도
+          if (matchedStation == null) {
+            final dataRowIndex = rowNum - headerRowNum - 1;
+            if (dataRowIndex >= 0 && dataRowIndex < stations.length) {
+              matchedStation = stations[dataRowIndex];
+            }
+          }
+
+          if (matchedStation != null) {
+            // 수검여부
+            final inspectionText = matchedStation.isInspected ? '검사완료' : '미검사';
+            final inspectionIdx = getOrAddStringIndex(inspectionText);
+            newCell1 = '<c r="$col1Letter$rowNum" t="s"><v>$inspectionIdx</v></c>';
+
+            // 특이사항 (메모)
+            final memoText = matchedStation.memo ?? '';
+            if (memoText.isNotEmpty) {
+              final memoIdx = getOrAddStringIndex(memoText);
+              newCell2 = '<c r="$col2Letter$rowNum" t="s"><v>$memoIdx</v></c>';
+            } else {
+              newCell2 = '<c r="$col2Letter$rowNum"><v></v></c>';
+            }
+          } else {
+            // 매칭 실패 시 빈 셀
+            newCell1 = '<c r="$col1Letter$rowNum"><v></v></c>';
+            newCell2 = '<c r="$col2Letter$rowNum"><v></v></c>';
+          }
+        }
+
+        return '$rowStart$rowContent$newCell1$newCell2$rowEnd';
+      });
+
+      // sharedStrings.xml 업데이트 (새 문자열 추가)
+      if (newStrings.isNotEmpty && sharedStringsXml != null) {
+        debugPrint('새로 추가된 문자열 수: ${newStrings.length}');
+
+        // count와 uniqueCount 업데이트
+        final totalCount = sharedStrings.length + newStrings.length;
+        sharedStringsXml = sharedStringsXml!.replaceAllMapped(
+          RegExp(r'<sst[^>]*count="(\d+)"[^>]*uniqueCount="(\d+)"'),
+          (m) => m.group(0)!
+              .replaceFirst(RegExp(r'count="\d+"'), 'count="$totalCount"')
+              .replaceFirst(RegExp(r'uniqueCount="\d+"'), 'uniqueCount="$totalCount"'),
+        );
+
+        // </sst> 앞에 새 문자열 추가
+        final newSiElements = newStrings.map((s) => '<si><t>${_escapeXml(s)}</t></si>').join('');
+        sharedStringsXml = sharedStringsXml!.replaceFirst('</sst>', '$newSiElements</sst>');
+      }
+
+      // 수정된 파일들로 새 아카이브 생성
+      for (final file in archive) {
+        if (file.isFile) {
+          final content = file.content;
+          if (content == null) continue;
+
+          Uint8List newContent;
+
+          if (file.name == worksheetPath) {
+            // 수정된 워크시트
+            newContent = Uint8List.fromList(utf8.encode(worksheetXml!));
+          } else if (file.name == sharedStringsFile?.name && sharedStringsXml != null) {
+            // 수정된 sharedStrings
+            newContent = Uint8List.fromList(utf8.encode(sharedStringsXml!));
+          } else {
+            // 나머지 파일은 그대로
+            newContent = Uint8List.fromList(content as List<int>);
+          }
+
+          final newFile = ArchiveFile(file.name, newContent.length, newContent);
+          newFile.compress = true;
+          newArchive.addFile(newFile);
+        }
+      }
+
+      // ZIP 인코딩
+      final modifiedBytes = ZipEncoder().encode(newArchive);
+      if (modifiedBytes == null) {
+        throw Exception('수정된 Excel 파일 생성 실패');
+      }
+
+      debugPrint('수정된 파일 크기: ${modifiedBytes.length} bytes');
+      debugPrint('===== 원본 서식 유지 Export 완료 =====');
+
+      // 파일 저장
+      final sanitizedName = categoryName.replaceAll(RegExp(r'[<>:"/\\|?*]'), '_');
+      final fileName = '${sanitizedName}_검사결과.xlsx';
+
+      final filePath = await platform_export.saveExcelFile(
+        Uint8List.fromList(modifiedBytes),
+        fileName,
+        saveOnly: saveOnly,
+      );
+
+      return filePath;
+    } catch (e, stackTrace) {
+      debugPrint('원본 서식 유지 Export 오류: $e');
+      debugPrint('스택 트레이스: $stackTrace');
+      rethrow;
+    }
+  }
+
+  /// XML 특수문자 이스케이프
+  String _escapeXml(String text) {
+    return text
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&apos;');
   }
 }

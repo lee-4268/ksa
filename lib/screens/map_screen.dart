@@ -2022,6 +2022,122 @@ class _MapScreenState extends State<MapScreen>
 
   /// Excel 내보내기 - 저장/공유 선택 팝업 (일관된 디자인)
   Future<void> _exportCategoryToExcel(String category) async {
+    final provider = context.read<StationProvider>();
+    final hasOriginalExcel = provider.hasOriginalExcel(category);
+
+    // 원본 Excel이 있는 경우 형식 선택 다이얼로그 먼저 표시
+    bool useOriginalFormat = false;
+    if (hasOriginalExcel) {
+      final formatChoice = await showDialog<String>(
+        context: context,
+        builder: (context) => Dialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          child: Container(
+            padding: const EdgeInsets.all(24),
+            constraints: const BoxConstraints(maxWidth: 380),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // 헤더 아이콘
+                Container(
+                  width: 56,
+                  height: 56,
+                  decoration: BoxDecoration(
+                    color: Colors.blue.withValues(alpha: 0.1),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(
+                    Icons.description_outlined,
+                    color: Colors.blue,
+                    size: 28,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                const Text(
+                  '내보내기 형식 선택',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  '원본 파일의 서식을 유지하거나\n새 서식으로 내보낼 수 있습니다.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: Colors.grey[600],
+                  ),
+                ),
+                const SizedBox(height: 24),
+                // 원본 서식 유지 버튼
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    onPressed: () => Navigator.pop(context, 'original'),
+                    icon: const Icon(Icons.auto_awesome, size: 18),
+                    label: const Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text('원본 서식 유지', style: TextStyle(fontWeight: FontWeight.w600)),
+                        Text('(수검여부/특이사항 컬럼만 추가)', style: TextStyle(fontSize: 11)),
+                      ],
+                    ),
+                    style: ElevatedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      backgroundColor: Colors.blue,
+                      foregroundColor: Colors.white,
+                      elevation: 0,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                // 새 서식 버튼
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: () => Navigator.pop(context, 'new'),
+                    icon: const Icon(Icons.table_chart_outlined, size: 18),
+                    label: const Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text('새 서식으로 내보내기'),
+                        Text('(전체 컬럼 재구성)', style: TextStyle(fontSize: 11)),
+                      ],
+                    ),
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      side: BorderSide(color: Colors.grey[300]!),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      foregroundColor: Colors.grey[700],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                // 취소 버튼
+                TextButton(
+                  onPressed: () => Navigator.pop(context, 'cancel'),
+                  style: TextButton.styleFrom(
+                    foregroundColor: Colors.grey[600],
+                  ),
+                  child: const Text('취소'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+
+      if (formatChoice == null || formatChoice == 'cancel') return;
+      if (!mounted) return;
+      useOriginalFormat = (formatChoice == 'original');
+    }
+
     // 저장/공유 선택 다이얼로그 표시
     final choice = await showDialog<String>(
       context: context,
@@ -2122,8 +2238,6 @@ class _MapScreenState extends State<MapScreen>
     if (choice == null || choice == 'cancel') return;
     if (!mounted) return;
 
-    final provider = context.read<StationProvider>();
-
     // 로딩 표시 (일관된 디자인)
     if (!mounted) return;
     showDialog(
@@ -2154,7 +2268,14 @@ class _MapScreenState extends State<MapScreen>
     try {
       // saveOnly: 'save' 선택 시 저장만, 'share' 선택 시 공유 다이얼로그 표시
       final saveOnly = (choice == 'save');
-      final filePath = await provider.exportCategoryToExcel(category, saveOnly: saveOnly);
+
+      // 원본 서식 유지 또는 새 서식 내보내기
+      final String? filePath;
+      if (useOriginalFormat) {
+        filePath = await provider.exportCategoryWithOriginalFormat(category, saveOnly: saveOnly);
+      } else {
+        filePath = await provider.exportCategoryToExcel(category, saveOnly: saveOnly);
+      }
 
       if (!mounted) return;
       Navigator.pop(context); // 로딩 다이얼로그 닫기
@@ -2218,7 +2339,7 @@ class _MapScreenState extends State<MapScreen>
                             const SizedBox(width: 8),
                             Expanded(
                               child: Text(
-                                filePath,
+                                filePath!,
                                 style: TextStyle(
                                   fontSize: 12,
                                   color: Colors.grey[700],
