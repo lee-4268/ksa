@@ -2,8 +2,8 @@
 
 ## Frontend Services Specification
 
-**버전:** 1.0.0
-**최종 수정일:** 2026-01-13
+**버전:** 1.2.0
+**최종 수정일:** 2026-01-27
 
 ---
 
@@ -184,12 +184,13 @@ AWS AppSync GraphQL API와의 통신을 담당합니다.
 새 카테고리를 생성합니다.
 
 ```dart
-Future<String?> createCategory(String name)
+Future<String?> createCategory(String name, {String? originalExcelKey})
 ```
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | name | String | O | 카테고리 이름 |
+| originalExcelKey | String | - | 원본 Excel 파일의 S3 키 |
 
 **Returns:** `String?` - 생성된 카테고리 ID
 
@@ -208,11 +209,28 @@ Future<List<Map<String, dynamic>>> listCategories()
   {
     'id': 'category-id',
     'name': '카테고리명',
+    'originalExcelKey': 's3://private/{identityId}/excel-originals/...',
     'createdAt': '2026-01-13T00:00:00Z',
     'updatedAt': '2026-01-13T00:00:00Z',
   }
 ]
 ```
+
+---
+
+#### `updateCategoryOriginalExcelKey`
+카테고리의 원본 Excel S3 키를 업데이트합니다.
+
+```dart
+Future<bool> updateCategoryOriginalExcelKey(String categoryId, String originalExcelKey)
+```
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| categoryId | String | O | 카테고리 ID |
+| originalExcelKey | String | O | 원본 Excel 파일의 S3 키 |
+
+**Returns:** `bool` - 업데이트 성공 여부
 
 ---
 
@@ -617,6 +635,39 @@ Future<void> exportToExcelWithPhotosMobile(
 
 ---
 
+#### `exportWithOriginalFormat`
+원본 Excel 형식을 유지하면서 검사 결과를 내보냅니다.
+
+```dart
+Future<Uint8List?> exportWithOriginalFormat({
+  required Uint8List originalExcelBytes,
+  required List<RadioStation> stations,
+})
+```
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| originalExcelBytes | Uint8List | O | 원본 Excel 파일 바이트 |
+| stations | List<RadioStation> | O | 검사 결과가 포함된 무선국 목록 |
+
+**Returns:** `Uint8List?` - 수정된 Excel 파일 바이트
+
+**특징:**
+- 원본 Excel의 서식(셀 병합, 스타일, 컬럼 너비) 유지
+- 검사완료, 특이사항(메모), 설치대(수정후), 검사사진 컬럼 추가
+- 스테이션 매칭: 허가번호 → 국소명+호출부호 → 국소명+주소 우선순위
+- 컬럼 너비 자동 조정 (Excel 자동맞춤 방식)
+
+**추가되는 컬럼:**
+| 컬럼명 | 설명 |
+|--------|------|
+| 검사완료 | O/X 표시 |
+| 특이사항 | 메모 내용 |
+| 설치대(수정후) | 변경된 경우 수정값, 미변경 시 원본값 |
+| 검사사진 | 사진 파일명 (여러 장인 경우 쉼표 구분) |
+
+---
+
 ## 6. GeocodingService (지오코딩 서비스)
 
 **파일:** `lib/services/geocoding_service.dart`
@@ -786,8 +837,235 @@ Future<void> updateMemo(String id, String memo)
 
 ---
 
+#### `updateInstallationType`
+설치대(철탑형태)를 업데이트합니다.
+
+```dart
+Future<void> updateInstallationType(String id, String installationType)
+```
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| id | String | O | 무선국 ID |
+| installationType | String | O | 새 설치대 형태 |
+
+**참고:** 이 메서드는 자동으로 클라우드에 동기화됩니다. AI 분류 결과 또는 수동 입력값을 저장할 때 사용합니다.
+
+---
+
+## 8. TowerClassificationService (철탑형태 분류 서비스)
+
+**파일:** `lib/services/tower_classification_service.dart`
+
+YOLOv8 모델 기반 철탑/설치대 형태 분류를 담당합니다.
+
+### 8.1 Constants
+
+#### `classNames`
+9개 분류 클래스 정보
+
+```dart
+static const Map<int, Map<String, String>> classNames = {
+  0: {'en': 'simple_pole', 'kr': '간이폴, 분산폴 및 비기준 설치대', 'short': '간이폴'},
+  1: {'en': 'steel_pipe', 'kr': '강관주', 'short': '강관주'},
+  2: {'en': 'complex_type', 'kr': '복합형', 'short': '복합형'},
+  3: {'en': 'indoor', 'kr': '옥내, 터널, 지하 등', 'short': '옥내'},
+  4: {'en': 'single_pole_building', 'kr': '원폴(건물)', 'short': '원폴(건물)'},
+  5: {'en': 'tower_building', 'kr': '철탑(건물)', 'short': '철탑(건물)'},
+  6: {'en': 'tower_ground', 'kr': '철탑(지면)', 'short': '철탑(지면)'},
+  7: {'en': 'telecom_pole', 'kr': '통신주', 'short': '통신주'},
+  8: {'en': 'frame_mount', 'kr': '프레임', 'short': '프레임'},
+};
+```
+
+### 8.2 Methods
+
+#### `checkServerConnection`
+서버 연결 상태를 확인합니다.
+
+```dart
+Future<ServerStatus> checkServerConnection()
+```
+
+**Returns:** `ServerStatus`
+```dart
+class ServerStatus {
+  final bool isConnected;
+  final bool isModelLoaded;
+  final String? modelPath;
+  final String? error;
+  bool get isReady => isConnected && isModelLoaded;
+}
+```
+
+---
+
+#### `classifySingle`
+단일 이미지를 분류합니다.
+
+```dart
+Future<ClassificationResult> classifySingle(
+  Uint8List imageBytes,
+  String filename, {
+  double confThreshold = 0.5,
+})
+```
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| imageBytes | Uint8List | O | 이미지 바이트 데이터 |
+| filename | String | O | 파일명 |
+| confThreshold | double | - | 신뢰도 임계값 (기본: 0.5) |
+
+**Returns:** `ClassificationResult`
+```dart
+class ClassificationResult {
+  final String className;       // 영문 클래스명
+  final String classNameKr;     // 한글 클래스명
+  final String shortName;       // 짧은 한글명
+  final double confidence;      // 신뢰도 (0.0~1.0)
+  final List<Top5Prediction> top5;  // Top-5 예측
+  final bool isConfident;       // 신뢰도 임계값 이상 여부
+  final double? processingTimeMs;   // 처리 시간(ms)
+}
+```
+
+---
+
+#### `classifyEnsemble`
+여러 이미지를 앙상블 분류합니다.
+
+```dart
+Future<EnsembleResult> classifyEnsemble(
+  List<Uint8List> imageBytesList,
+  List<String> filenames, {
+  String method = 'mean',
+  double confThreshold = 0.5,
+})
+```
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| imageBytesList | List<Uint8List> | O | 이미지 바이트 목록 |
+| filenames | List<String> | O | 파일명 목록 |
+| method | String | - | 앙상블 방식 (mean, max, vote) |
+| confThreshold | double | - | 신뢰도 임계값 |
+
+**Returns:** `EnsembleResult`
+```dart
+class EnsembleResult {
+  final String method;
+  final int numImages;
+  final ClassificationResult finalPrediction;
+  final List<IndividualPrediction> individualPredictions;
+  final bool isConfident;
+  final double? processingTimeMs;
+}
+```
+
+---
+
+#### `getClassList`
+지원 클래스 목록을 조회합니다.
+
+```dart
+Future<List<ClassInfo>> getClassList()
+```
+
+**Returns:** `List<ClassInfo>`
+```dart
+class ClassInfo {
+  final int id;
+  final String name;
+  final String nameKr;
+  final String shortName;
+}
+```
+
+---
+
+#### `submitFeedback`
+분류 결과 피드백을 제출합니다 (재학습용).
+
+```dart
+Future<FeedbackResult> submitFeedback({
+  required Uint8List imageBytes,
+  required String filename,
+  required String originalClass,
+  required String correctedClass,
+})
+```
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| imageBytes | Uint8List | O | 이미지 바이트 |
+| filename | String | O | 파일명 |
+| originalClass | String | O | 원래 분류 결과 |
+| correctedClass | String | O | 수정된 클래스 |
+
+**Returns:** `FeedbackResult`
+```dart
+class FeedbackResult {
+  final bool success;
+  final String message;
+  final String? s3Key;
+}
+```
+
+---
+
+## 9. WeatherService (날씨 서비스)
+
+**파일:** `lib/services/weather_service.dart`
+
+기상청 API 기반 현재 위치의 날씨 정보를 제공합니다.
+
+### 9.1 Models
+
+#### `WeatherInfo`
+날씨 정보 모델
+
+```dart
+class WeatherInfo {
+  final String condition;    // 맑음, 흐림, 구름많음, 비, 눈 등
+  final String icon;         // 이모지 아이콘 (☀️, 🌧️, ❄️ 등)
+  final double? temperature; // 기온 (섭씨)
+  final String? locationName; // 지역명 (예: 평택시, 화성시)
+}
+```
+
+### 9.2 Methods
+
+#### `getCurrentWeather`
+현재 위치의 날씨 정보를 가져옵니다.
+
+```dart
+static Future<WeatherInfo> getCurrentWeather()
+```
+
+**Returns:** `WeatherInfo` - 현재 날씨 정보
+
+**동작:**
+1. 위치 권한 확인 및 현재 위치 가져오기
+2. 위경도를 기상청 격자 좌표로 변환 (LCC 변환)
+3. 역지오코딩으로 지역명 조회 (카카오맵 API)
+4. 기상청 초단기실황 API 호출
+5. 날씨 정보 파싱 및 반환
+
+**날씨 상태 코드 (PTY):**
+| 코드 | 상태 | 아이콘 |
+|------|------|--------|
+| 0 | 없음 | ☀️/🌙 |
+| 1 | 비 | 🌧️ |
+| 2 | 비/눈 | 🌨️ |
+| 3 | 눈 | ❄️ |
+| 4 | 소나기 | 🌧️ |
+
+---
+
 ## 변경 이력
 
 | 버전 | 날짜 | 변경 내용 | 작성자 |
 |------|------|----------|--------|
 | 1.0.0 | 2026-01-13 | 최초 작성 | Dev Team |
+| 1.2.0 | 2026-01-27 | TowerClassificationService, WeatherService 추가, CloudDataService originalExcelKey 관련 메서드 추가, ExcelService exportWithOriginalFormat 메서드 추가 | Dev Team |

@@ -2,8 +2,8 @@
 
 ## GraphQL API Specification + Tower Classification REST API
 
-**버전:** 1.1.0
-**최종 수정일:** 2026-01-22
+**버전:** 1.2.0
+**최종 수정일:** 2026-01-27
 **API 타입:** AWS AppSync GraphQL + FastAPI REST
 
 ---
@@ -40,6 +40,7 @@ type Category @model @auth(rules: [
 ]) {
   id: ID!
   name: String!
+  originalExcelKey: String    # 원본 Excel 파일 S3 키 (서식 유지 export용)
   stations: [Station] @hasMany(indexName: "byCategory", fields: ["id"])
   createdAt: AWSDateTime
   updatedAt: AWSDateTime
@@ -50,6 +51,7 @@ type Category @model @auth(rules: [
 |-------|------|----------|-------------|
 | id | ID | O | 고유 식별자 (UUID) |
 | name | String | O | 카테고리 이름 |
+| originalExcelKey | String | - | 원본 Excel 파일 S3 키 (서식 유지 export용) |
 | stations | [Station] | - | 소속 무선국 목록 (관계) |
 | createdAt | AWSDateTime | - | 생성 일시 (자동) |
 | updatedAt | AWSDateTime | - | 수정 일시 (자동) |
@@ -82,6 +84,7 @@ type Station @model @auth(rules: [
   frequency: String
   stationType: String
   stationOwner: String
+  installationType: String    # 설치대 (철탑형태)
 
   # 검사 정보
   isInspected: Boolean @default(value: "false")
@@ -113,10 +116,62 @@ type Station @model @auth(rules: [
 | frequency | String | - | 주파수 |
 | stationType | String | - | 무선국 종류 |
 | stationOwner | String | - | 소유자 |
+| installationType | String | - | 설치대/철탑형태 (AI 분류 또는 수동입력) |
 | isInspected | Boolean | - | 검사완료 여부 (기본: false) |
 | inspectionDate | AWSDateTime | - | 검사일시 |
 | memo | String | - | 메모 |
 | photoKeys | [String] | - | S3 사진 키 목록 |
+| createdAt | AWSDateTime | - | 생성 일시 (자동) |
+| updatedAt | AWSDateTime | - | 수정 일시 (자동) |
+
+---
+
+### 2.3 TowerClassification Type
+철탑/설치대 분류 결과
+
+```graphql
+type TowerClassification @model @auth(rules: [
+  { allow: owner, operations: [create, read, update, delete] }
+]) {
+  id: ID!
+
+  # 이미지 정보
+  imageKey: String!           # S3 이미지 키
+  imageName: String           # 원본 파일명
+
+  # 분류 결과
+  className: String!          # 영문 클래스명 (예: steel_pipe)
+  classNameKr: String!        # 한글 클래스명 (예: 강관주)
+  confidence: Float!          # 신뢰도 (0.0 ~ 1.0)
+  isConfident: Boolean        # 신뢰도 임계값 이상 여부
+
+  # Top-5 예측 (JSON 문자열로 저장)
+  top5Predictions: String     # JSON: [{rank, className, classNameKr, confidence}]
+
+  # 앙상블 정보 (선택)
+  ensembleMethod: String      # mean, max, vote (앙상블인 경우)
+  ensembleImageKeys: [String] # 앙상블에 사용된 이미지 키 목록
+
+  # 메타데이터
+  processingTimeMs: Float
+  createdAt: AWSDateTime
+  updatedAt: AWSDateTime
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| id | ID | O | 고유 식별자 (UUID) |
+| imageKey | String | O | S3 이미지 키 |
+| imageName | String | - | 원본 파일명 |
+| className | String | O | 영문 클래스명 (예: steel_pipe) |
+| classNameKr | String | O | 한글 클래스명 (예: 강관주) |
+| confidence | Float | O | 신뢰도 (0.0 ~ 1.0) |
+| isConfident | Boolean | - | 신뢰도 임계값 이상 여부 |
+| top5Predictions | String | - | Top-5 예측 결과 (JSON 문자열) |
+| ensembleMethod | String | - | 앙상블 방식 (mean, max, vote) |
+| ensembleImageKeys | [String] | - | 앙상블에 사용된 이미지 키 목록 |
+| processingTimeMs | Float | - | 처리 시간 (밀리초) |
 | createdAt | AWSDateTime | - | 생성 일시 (자동) |
 | updatedAt | AWSDateTime | - | 수정 일시 (자동) |
 
@@ -593,6 +648,7 @@ mutation DeleteStation($input: DeleteStationInput!) {
 input CreateCategoryInput {
   id: ID
   name: String!
+  originalExcelKey: String
 }
 ```
 
@@ -601,6 +657,7 @@ input CreateCategoryInput {
 input UpdateCategoryInput {
   id: ID!
   name: String
+  originalExcelKey: String
 }
 ```
 
@@ -629,6 +686,7 @@ input CreateStationInput {
   frequency: String
   stationType: String
   stationOwner: String
+  installationType: String
   isInspected: Boolean
   inspectionDate: AWSDateTime
   memo: String
@@ -654,6 +712,7 @@ input UpdateStationInput {
   frequency: String
   stationType: String
   stationOwner: String
+  installationType: String
   isInspected: Boolean
   inspectionDate: AWSDateTime
   memo: String
@@ -693,7 +752,7 @@ input ModelStationFilterInput {
 | Region | ap-northeast-2 |
 | Access Level | Private |
 
-### 6.2 Upload
+### 6.2 사진 업로드 (Photo Upload)
 **Endpoint:** AWS S3 (Amplify SDK)
 
 **Path Format:**
@@ -701,6 +760,15 @@ input ModelStationFilterInput {
 private/{identityId}/photos/{stationId}/{timestamp}_{fileName}
 ```
 
+### 6.3 원본 Excel 파일 저장 (Original Excel Storage)
+**Path Format:**
+```
+private/{identityId}/excel-originals/{categoryId}_{timestamp}.xlsx
+```
+
+**용도:** 원본 Excel 파일의 서식(셀 병합, 스타일, 컬럼 너비 등)을 유지하여 Export 시 활용
+
+### 6.4 Upload Request
 **Request:**
 ```dart
 await Amplify.Storage.uploadData(
@@ -711,7 +779,7 @@ await Amplify.Storage.uploadData(
 ).result;
 ```
 
-### 6.3 Download (Presigned URL)
+### 6.5 Download (Presigned URL)
 **Request:**
 ```dart
 final result = await Amplify.Storage.getUrl(
@@ -728,7 +796,7 @@ final result = await Amplify.Storage.getUrl(
 
 **Response:** Presigned URL (1시간 유효)
 
-### 6.4 Delete
+### 6.6 Delete
 **Request:**
 ```dart
 await Amplify.Storage.remove(
@@ -1029,3 +1097,4 @@ FastAPI + YOLOv8 Model
 |------|------|----------|--------|
 | 1.0.0 | 2026-01-13 | 최초 작성 | Dev Team |
 | 1.1.0 | 2026-01-22 | Tower Classification API 추가 | Dev Team |
+| 1.2.0 | 2026-01-27 | Category.originalExcelKey, Station.installationType, TowerClassification 타입, 원본 Excel S3 저장 스펙 추가 | Dev Team |

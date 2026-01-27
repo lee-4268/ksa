@@ -1589,6 +1589,9 @@ class ExcelService {
       final col3Letter = incrementColumn(col2Letter);    // 특이사항 컬럼
       debugPrint('새 컬럼 문자: $col1Letter (설치대수정후), $col2Letter (수검여부), $col3Letter (특이사항)');
 
+      // 사진 파일 정보 수집 (ZIP 생성용)
+      final List<Map<String, dynamic>> photoInfoList = [];
+
       // dimension 업데이트
       if (dimMatch != null) {
         final oldDim = dimMatch.group(0)!;
@@ -1665,7 +1668,7 @@ class ExcelService {
       String maxCol2Text = '수검여부';
       String maxCol3Text = '특이사항';
 
-      // 스테이션 데이터에서 최대 너비 텍스트 찾기
+      // 스테이션 데이터에서 최대 너비 텍스트 찾기 및 사진 정보 수집
       for (final station in stations) {
         // 설치대(수정후) - 원본 또는 수정된 값 중 출력될 값 기준
         final currentInstallation = station.installationType ?? '';
@@ -1682,6 +1685,25 @@ class ExcelService {
         final memo = station.memo ?? '';
         if (memo.length > maxCol3Text.length) {
           maxCol3Text = memo;
+        }
+        // 사진 정보 수집 (ZIP 생성용)
+        if (station.photoPaths != null && station.photoPaths!.isNotEmpty) {
+          final sanitizedStationName = _sanitizeFileName(station.stationName);
+
+          for (int j = 0; j < station.photoPaths!.length; j++) {
+            final photoPath = station.photoPaths![j];
+            final extension = _extractPhotoExtension(photoPath);
+            final photoFileName = station.photoPaths!.length == 1
+                ? '사진.$extension'
+                : '사진${j + 1}.$extension';
+
+            // 사진 정보 저장 (ZIP 생성용)
+            photoInfoList.add({
+              'originalPath': photoPath,
+              'folderName': sanitizedStationName,
+              'fileName': photoFileName,
+            });
+          }
         }
       }
 
@@ -2073,19 +2095,36 @@ class ExcelService {
       }
 
       debugPrint('수정된 파일 크기: ${modifiedBytes.length} bytes');
+      debugPrint('사진 수: ${photoInfoList.length}');
       debugPrint('===== 원본 서식 유지 Export 완료 =====');
 
       // 파일 저장
       final sanitizedName = categoryName.replaceAll(RegExp(r'[<>:"/\\|?*]'), '_');
-      final fileName = '${sanitizedName}_검사결과.xlsx';
 
-      final filePath = await platform_export.saveExcelFile(
-        Uint8List.fromList(modifiedBytes),
-        fileName,
-        saveOnly: saveOnly,
-      );
-
-      return filePath;
+      // 사진이 있으면 ZIP 파일로 내보내기, 없으면 Excel만 내보내기
+      if (photoInfoList.isNotEmpty) {
+        // ZIP 파일 생성 (Excel + 사진)
+        final zipFileName = '${sanitizedName}_검사결과.zip';
+        final filePath = await platform_export.saveExcelWithPhotosAsZip(
+          Uint8List.fromList(modifiedBytes),
+          '${sanitizedName}_검사결과.xlsx',
+          photoInfoList,
+          zipFileName,
+          saveOnly: saveOnly,
+        );
+        debugPrint('ZIP 파일 저장 완료: $filePath');
+        return filePath;
+      } else {
+        // Excel만 저장
+        final fileName = '${sanitizedName}_검사결과.xlsx';
+        final filePath = await platform_export.saveExcelFile(
+          Uint8List.fromList(modifiedBytes),
+          fileName,
+          saveOnly: saveOnly,
+        );
+        debugPrint('Excel 파일 저장 완료: $filePath');
+        return filePath;
+      }
     } catch (e, stackTrace) {
       debugPrint('원본 서식 유지 Export 오류: $e');
       debugPrint('스택 트레이스: $stackTrace');
