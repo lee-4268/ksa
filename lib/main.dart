@@ -4,6 +4,7 @@ import 'package:amplify_flutter/amplify_flutter.dart';
 import 'package:amplify_auth_cognito/amplify_auth_cognito.dart';
 import 'package:amplify_api/amplify_api.dart';
 import 'package:amplify_storage_s3/amplify_storage_s3.dart';
+import 'package:intl/date_symbol_data_local.dart';
 
 import 'amplifyconfiguration.dart';
 import 'providers/station_provider.dart';
@@ -20,6 +21,9 @@ import 'main_init_stub.dart' if (dart.library.io) 'main_init_mobile.dart'
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // 한국어 locale 데이터 초기화 (달력용)
+  await initializeDateFormatting('ko_KR');
 
   // 모바일에서만 카카오맵 SDK 초기화
   await platform_init.initializeKakaoSdk();
