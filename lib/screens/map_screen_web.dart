@@ -354,6 +354,9 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
 
   /// 겹친 마커 선택 다이얼로그
   void _showStationSelectionDialog(List<RadioStation> stations) {
+    // 다이얼로그가 열리면 지도 상호작용 비활성화
+    setMapDraggable(false);
+
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -407,7 +410,10 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
           ),
         ],
       ),
-    );
+    ).whenComplete(() {
+      // 다이얼로그가 닫히면 지도 상호작용 활성화
+      setMapDraggable(true);
+    });
   }
 
   void _registerView() {
@@ -457,6 +463,13 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
         window['kakaoInfoWindow_$_containerId'] = infowindow;
 
         window['kakaoMapMarkers_$_containerId'] = [];
+
+        // 맵 클릭 시 InfoWindow만 닫음 (지도 상호작용은 Flutter에서 관리)
+        kakao.maps.event.addListener(map, 'click', function() {
+          infowindow.close();
+          window.postMessage({type: 'infoWindowClosed'}, '*');
+          console.log('InfoWindow closed');
+        });
 
         console.log('Kakao Map initialized: $_containerId');
       })();
@@ -693,6 +706,11 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
         kakao.maps.event.addListener(marker, 'click', function() {
           infowindow.setContent(iwContent);
           infowindow.open(map, marker);
+
+          // 상세정보 창이 열리면 지도 드래그/줌 비활성화
+          map.setDraggable(false);
+          map.setZoomable(false);
+          console.log('InfoWindow opened, map interaction disabled');
 
           window.postMessage({
             type: 'markerClick',

@@ -58,6 +58,18 @@ class PlatformMapWidgetState extends State<PlatformMapWidget>
   static const String _pendingStyleId = 'pending_marker_style';
   static const String _inspectedStyleId = 'inspected_marker_style';
 
+  /// 맵 상호작용 활성화 상태 (드래그, 줌 등)
+  bool _isMapInteractionEnabled = true;
+
+  /// 맵 드래그/줌 활성화/비활성화 (웹 버전과 동일한 인터페이스)
+  void setMapDraggable(bool draggable) {
+    if (_isMapInteractionEnabled == draggable) return;
+    setState(() {
+      _isMapInteractionEnabled = draggable;
+    });
+    debugPrint('Map interaction set to: $draggable');
+  }
+
   /// 마커 아이콘 PNG 바이트 (SVG에서 변환)
   Uint8List? _pendingIconBytes;
   Uint8List? _inspectedIconBytes;
@@ -208,6 +220,9 @@ class PlatformMapWidgetState extends State<PlatformMapWidget>
 
   /// 겹친 마커 선택 다이얼로그 표시
   void _showOverlappingMarkersDialog(List<RadioStation> stations) {
+    // 다이얼로그가 열리면 지도 상호작용 비활성화
+    setMapDraggable(false);
+
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.white,
@@ -282,7 +297,10 @@ class PlatformMapWidgetState extends State<PlatformMapWidget>
           ),
         );
       },
-    );
+    ).whenComplete(() {
+      // 다이얼로그가 닫히면 지도 상호작용 활성화
+      setMapDraggable(true);
+    });
   }
 
   /// 마커 스타일 및 레이어 초기화 (필수)
@@ -626,7 +644,10 @@ class PlatformMapWidgetState extends State<PlatformMapWidget>
       final initialLng = widget.initialStation?.longitude ?? 126.9706;
       final initialLevel = widget.initialZoomLevel ?? 15;
 
-      return KakaoMap(
+      // IgnorePointer로 감싸서 상세정보 창이 열려있을 때 지도 상호작용 차단
+      return IgnorePointer(
+        ignoring: !_isMapInteractionEnabled,
+        child: KakaoMap(
         onMapCreated: (controller) {
           debugPrint('카카오맵 네이티브 SDK 로드 완료');
           _mapController = controller;
@@ -646,6 +667,7 @@ class PlatformMapWidgetState extends State<PlatformMapWidget>
           longitude: initialLng,
         ),
         initialLevel: initialLevel,
+      ),
       );
     } catch (e) {
       debugPrint('카카오맵 위젯 생성 오류: $e');

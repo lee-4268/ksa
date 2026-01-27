@@ -33,6 +33,8 @@ class StationProvider extends ChangeNotifier {
   final Map<String, String> _cloudCategoryIdMap = {};
   // 카테고리별 원본 Excel S3 키 매핑 (카테고리명 -> originalExcelKey)
   final Map<String, String> _categoryOriginalExcelKeyMap = {};
+  // 카테고리별 원본 Excel 바이트 캐시 (클라우드 연결 없이도 서식 유지 export용)
+  final Map<String, Uint8List> _originalExcelBytesCache = {};
 
   StationProvider(this._storageService);
 
@@ -59,13 +61,17 @@ class StationProvider extends ChangeNotifier {
     return cats;
   }
 
-  // 카테고리별 스테이션 맵
+  // 카테고리별 스테이션 맵 (createdAt 순으로 정렬하여 원본 Excel 순서 유지)
   Map<String, List<RadioStation>> get stationsByCategory {
     final map = <String, List<RadioStation>>{};
     for (final station in _stations) {
       final category = station.categoryName ?? '기타';
       map.putIfAbsent(category, () => []);
       map[category]!.add(station);
+    }
+    // 각 카테고리의 스테이션을 createdAt 순으로 정렬 (원본 Excel 순서 유지)
+    for (final category in map.keys) {
+      map[category]!.sort((a, b) => a.createdAt.compareTo(b.createdAt));
     }
     return map;
   }
@@ -403,6 +409,17 @@ class StationProvider extends ChangeNotifier {
         _stations.removeWhere((s) => (s.categoryName ?? '기타') == categoryName);
       }
 
+      // ==================== 원본 Excel 바이트 캐시 저장 (서식 유지 export용) ====================
+      if (result.originalBytes != null) {
+        _originalExcelBytesCache[categoryName] = result.originalBytes!;
+        debugPrint('========== Import 완료 - 원본 서식 유지 상태 ==========');
+        debugPrint('카테고리: $categoryName');
+        debugPrint('원본 Excel 로컬 캐시: ✓ 저장됨 (${result.originalBytes!.length} bytes)');
+        debugPrint('클라우드 연결: ${_cloudDataService != null ? "✓ 연결됨" : "✗ 미연결 (로컬 캐시만 사용)"}');
+        debugPrint('원본 서식 유지 Export: ✓ 가능');
+        debugPrint('=====================================================');
+      }
+
       // ==================== 클라우드 업로드 (자동) ====================
       if (_cloudDataService != null) {
         _updateProgress(0.60, '클라우드에 업로드 중...');
@@ -427,6 +444,8 @@ class StationProvider extends ChangeNotifier {
                     cloudCategoryId,
                     originalExcelPath,
                   );
+                  // S3 키를 메모리 맵에도 저장 (카테고리 삭제 시 S3 파일 삭제용)
+                  _categoryOriginalExcelKeyMap[categoryName] = originalExcelPath;
                   debugPrint('원본 Excel S3 업로드 완료: $originalExcelPath');
                 }
               } catch (e) {
@@ -646,6 +665,9 @@ class StationProvider extends ChangeNotifier {
   /// 카테고리별 데이터 삭제 (자동 클라우드 동기화)
   /// [onProgress] 콜백으로 진행률 전달 (0.0 ~ 1.0)
   Future<void> deleteCategoryData(String category, {Function(double)? onProgress}) async {
+    debugPrint('========== 카테고리 삭제 시작 ==========');
+    debugPrint('카테고리: $category');
+
     try {
       final stationsToDelete = _stations
           .where((s) => (s.categoryName ?? '기타') == category)
@@ -658,7 +680,15 @@ class StationProvider extends ChangeNotifier {
       final cloudCategoryId = _cloudCategoryIdMap[category];
       if (_cloudDataService != null && cloudCategoryId != null) {
         try {
-          // 먼저 해당 카테고리의 모든 스테이션 삭제
+          // 1. S3에서 원본 Excel 파일 삭제
+          final originalExcelKey = _categoryOriginalExcelKeyMap[category];
+          if (originalExcelKey != null && originalExcelKey.isNotEmpty) {
+            debugPrint('S3 원본 Excel 삭제 시도: $originalExcelKey');
+            final deleted = await _cloudDataService!.deleteOriginalExcel(originalExcelKey);
+            debugPrint('S3 원본 Excel 삭제 ${deleted ? "성공" : "실패"}: $originalExcelKey');
+          }
+
+          // 2. 해당 카테고리의 모든 스테이션 삭제
           for (final station in stationsToDelete) {
             final cloudId = _cloudIdMap[station.id];
             if (cloudId != null) {
@@ -669,8 +699,10 @@ class StationProvider extends ChangeNotifier {
             // 클라우드 삭제 진행률 (0% ~ 50%)
             onProgress?.call(processedCount / totalCount * 0.5);
           }
-          // 카테고리 삭제
+
+          // 3. 카테고리 삭제
           await _cloudDataService!.deleteCategory(cloudCategoryId);
+          debugPrint('클라우드 카테고리 삭제 완료: $cloudCategoryId');
         } catch (e) {
           debugPrint('클라우드 카테고리 삭제 실패: $e');
         }
@@ -679,6 +711,11 @@ class StationProvider extends ChangeNotifier {
         // 클라우드 서비스 없으면 바로 50%로 설정
         onProgress?.call(0.5);
       }
+
+      // 로컬 캐시 및 매핑 정리
+      _originalExcelBytesCache.remove(category);
+      _categoryOriginalExcelKeyMap.remove(category);
+      debugPrint('로컬 캐시 및 S3 키 매핑 삭제 완료: $category');
 
       // 로컬 삭제 (50% ~ 100%)
       processedCount = 0;
@@ -696,8 +733,11 @@ class StationProvider extends ChangeNotifier {
           (_selectedStation!.categoryName ?? '기타') == category) {
         _selectedStation = null;
       }
+
+      debugPrint('========== 카테고리 삭제 완료 ==========');
       notifyListeners();
     } catch (e) {
+      debugPrint('카테고리 삭제 실패: $e');
       _errorMessage = '카테고리 삭제 실패: $e';
       notifyListeners();
     }
@@ -743,6 +783,37 @@ class StationProvider extends ChangeNotifier {
   /// CloudDataService 설정
   void setCloudDataService(CloudDataService service) {
     _cloudDataService = service;
+    debugPrint('========== 클라우드 서비스 연결 상태 ==========');
+    debugPrint('CloudDataService 연결됨: ${_cloudDataService != null}');
+    debugPrint('===============================================');
+  }
+
+  /// 클라우드 연결 여부 확인
+  bool get isCloudConnected => _cloudDataService != null;
+
+  /// 클라우드 연결 상태 상세 로그 출력
+  void printCloudStatus() {
+    debugPrint('========== 클라우드/S3 연결 상태 상세 ==========');
+    debugPrint('CloudDataService 연결: ${_cloudDataService != null ? "✓ 연결됨" : "✗ 미연결"}');
+    debugPrint('카테고리 클라우드 ID 매핑: ${_cloudCategoryIdMap.length}개');
+    debugPrint('원본 Excel S3 키 매핑: ${_categoryOriginalExcelKeyMap.length}개');
+    debugPrint('원본 Excel 로컬 캐시: ${_originalExcelBytesCache.length}개');
+
+    if (_categoryOriginalExcelKeyMap.isNotEmpty) {
+      debugPrint('--- S3 원본 Excel 키 목록 ---');
+      _categoryOriginalExcelKeyMap.forEach((category, key) {
+        debugPrint('  - $category: $key');
+      });
+    }
+
+    if (_originalExcelBytesCache.isNotEmpty) {
+      debugPrint('--- 로컬 캐시 원본 Excel 목록 ---');
+      _originalExcelBytesCache.forEach((category, bytes) {
+        debugPrint('  - $category: ${bytes.length} bytes');
+      });
+    }
+
+    debugPrint('===============================================');
   }
 
   // ==================== 클라우드 동기화 기능 ====================
@@ -903,8 +974,13 @@ class StationProvider extends ChangeNotifier {
     }
   }
 
-  /// 카테고리에 원본 Excel이 있는지 확인
+  /// 카테고리에 원본 Excel이 있는지 확인 (캐시 또는 S3)
   bool hasOriginalExcel(String category) {
+    // 1. 메모리 캐시에 있는지 확인
+    if (_originalExcelBytesCache.containsKey(category)) {
+      return true;
+    }
+    // 2. S3 키가 있는지 확인
     return _categoryOriginalExcelKeyMap.containsKey(category) &&
            _categoryOriginalExcelKeyMap[category]!.isNotEmpty;
   }
@@ -912,11 +988,11 @@ class StationProvider extends ChangeNotifier {
   /// 원본 Excel 서식을 유지하여 내보내기 (수검여부/특이사항 컬럼만 추가)
   /// saveOnly: true면 저장만, false면 공유 다이얼로그도 표시
   Future<String?> exportCategoryWithOriginalFormat(String category, {bool saveOnly = false}) async {
-    if (_cloudDataService == null) {
-      _errorMessage = '클라우드 서비스가 초기화되지 않았습니다.';
-      notifyListeners();
-      return null;
-    }
+    debugPrint('========== 원본 서식 유지 Export 시작 ==========');
+    debugPrint('카테고리: $category');
+    debugPrint('로컬 캐시 존재: ${_originalExcelBytesCache.containsKey(category) ? "✓" : "✗"}');
+    debugPrint('S3 키 존재: ${_categoryOriginalExcelKeyMap.containsKey(category) ? "✓" : "✗"}');
+    debugPrint('클라우드 연결: ${_cloudDataService != null ? "✓" : "✗"}');
 
     try {
       final categoryStations = stationsByCategory[category] ?? [];
@@ -924,21 +1000,32 @@ class StationProvider extends ChangeNotifier {
         throw Exception('내보낼 데이터가 없습니다.');
       }
 
-      // 원본 Excel S3 키 확인
-      final originalExcelKey = _categoryOriginalExcelKeyMap[category];
-      if (originalExcelKey == null || originalExcelKey.isEmpty) {
+      Uint8List? originalBytes;
+
+      // 1. 메모리 캐시에서 먼저 확인
+      if (_originalExcelBytesCache.containsKey(category)) {
+        originalBytes = _originalExcelBytesCache[category];
+        debugPrint('→ 원본 Excel 소스: 로컬 캐시 (${originalBytes?.length ?? 0} bytes)');
+      }
+      // 2. 캐시가 없으면 S3에서 다운로드 시도
+      else if (_cloudDataService != null) {
+        final originalExcelKey = _categoryOriginalExcelKeyMap[category];
+        if (originalExcelKey != null && originalExcelKey.isNotEmpty) {
+          debugPrint('→ 원본 Excel 소스: S3 다운로드 시도 ($originalExcelKey)');
+          originalBytes = await _cloudDataService!.downloadOriginalExcel(originalExcelKey);
+          if (originalBytes != null) {
+            debugPrint('→ S3 다운로드 성공: ${originalBytes.length} bytes');
+            // 다운로드한 바이트를 캐시에 저장
+            _originalExcelBytesCache[category] = originalBytes;
+          }
+        }
+      } else {
+        debugPrint('→ 클라우드 미연결 & 캐시 없음');
+      }
+
+      if (originalBytes == null) {
         throw Exception('원본 Excel 파일이 없습니다. 일반 내보내기를 사용해주세요.');
       }
-
-      debugPrint('원본 Excel 다운로드 시작: $originalExcelKey');
-
-      // S3에서 원본 Excel 다운로드
-      final originalBytes = await _cloudDataService!.downloadOriginalExcel(originalExcelKey);
-      if (originalBytes == null) {
-        throw Exception('원본 Excel 파일 다운로드 실패');
-      }
-
-      debugPrint('원본 Excel 다운로드 완료: ${originalBytes.length} bytes');
 
       // 원본 서식 유지하여 내보내기
       final filePath = await _excelService.exportWithOriginalFormat(

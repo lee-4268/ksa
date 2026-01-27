@@ -503,6 +503,19 @@ class ExcelService {
         debugPrint('자동 매핑 후: $columnMap');
       }
 
+      // 비고 컬럼 검증 - 첫 몇 개 데이터 행을 미리 추출하여 검증
+      if (columnMap.containsKey('remarks')) {
+        final previewRows = <List<String>>[];
+        final previewCount = rows.length < 12 ? rows.length : 12;
+        for (int i = dataStartRow; i < previewCount && i < rows.length; i++) {
+          final rowContent = rows[i].group(1) ?? '';
+          final cells = _extractCellsFromRow(rowContent, sharedStrings);
+          previewRows.add(cells);
+        }
+        _validateRemarksColumn(columnMap, previewRows);
+        debugPrint('비고 컬럼 검증 완료: ${columnMap.containsKey('remarks') ? '매핑 유지' : '매핑 제거됨'}');
+      }
+
       // 데이터 행 파싱 (청크 단위로 처리하여 UI 응답성 유지)
       const int chunkSize = 20; // 20개 행마다 이벤트 루프에 제어권 반환
       for (int i = dataStartRow; i < rows.length; i++) {
@@ -555,9 +568,10 @@ class ExcelService {
           callSign: getCellValue('callSign').isNotEmpty ? getCellValue('callSign') : null,
           gain: getCellValue('gain').isNotEmpty ? getCellValue('gain') : null,
           antennaCount: getCellValue('antennaCount').isNotEmpty ? getCellValue('antennaCount') : null,
-          remarks: getCellValue('remarks').isNotEmpty ? getCellValue('remarks') : null,
+          remarks: _validateRemarksValue(getCellValue('remarks')),
           typeApprovalNumber: getCellValue('typeApprovalNumber').isNotEmpty ? getCellValue('typeApprovalNumber') : null,
           installationType: installationTypeVal.isNotEmpty ? installationTypeVal : null,
+          originalInstallationType: installationTypeVal.isNotEmpty ? installationTypeVal : null, // 원본 설치대 저장
           categoryName: categoryName,
         ));
 
@@ -758,6 +772,19 @@ class ExcelService {
       debugPrint('자동 매핑 후: $columnMap');
     }
 
+    // 비고 컬럼 검증 - 첫 몇 개 데이터 행을 추출하여 검증
+    if (columnMap.containsKey('remarks')) {
+      final previewRows = <List<String>>[];
+      final previewCount = sheet.rows.length < 12 ? sheet.rows.length : 12;
+      for (int i = dataStartRow; i < previewCount && i < sheet.rows.length; i++) {
+        final row = sheet.rows[i];
+        final cells = row.map((cell) => _getCellStringValueExcel(cell)).toList();
+        previewRows.add(cells);
+      }
+      _validateRemarksColumn(columnMap, previewRows);
+      debugPrint('비고 컬럼 검증 완료: ${columnMap.containsKey('remarks') ? '매핑 유지' : '매핑 제거됨'}');
+    }
+
     // 첫 번째 데이터 행 샘플 출력
     if (sheet.rows.length > dataStartRow) {
       final firstDataRow = sheet.rows[dataStartRow];
@@ -855,11 +882,13 @@ class ExcelService {
         debugPrint('기수 컬럼 발견: index=$index, value="$value"');
       }
     }
-    // 비고 - 정확한 매칭 우선
-    if (value == '비고' || value.contains('비고란') || value.contains('remarks') || value == 'note') {
+    // 비고 - 정확한 매칭만 (다른 컬럼과 혼동 방지)
+    // 정확히 '비고'만 매칭하거나, 'remarks', 'note' 정확 매칭
+    // '비고란'을 포함하는 경우는 제외 (다른 컬럼일 가능성)
+    if (value == '비고' || value == 'remarks' || value == 'note' || value == '비고사항') {
       if (!columnMap.containsKey('remarks')) {
         columnMap['remarks'] = index;
-        debugPrint('비고 컬럼 발견: index=$index, value="$value"');
+        debugPrint('비고 컬럼 발견 (정확 매칭): index=$index, value="$value"');
       }
     }
     // 형식검정번호
@@ -917,6 +946,44 @@ class ExcelService {
       if (!columnMap.containsKey('longitude')) {
         columnMap['longitude'] = index;
       }
+    }
+  }
+
+  /// 비고 컬럼 검증 - 첫 몇 개 데이터 행의 값이 순수 숫자인지 확인
+  /// 순수 숫자만 있으면 잘못된 매핑으로 판단하여 제거
+  void _validateRemarksColumn(
+    Map<String, int> columnMap,
+    List<List<String>> dataRows,
+  ) {
+    if (!columnMap.containsKey('remarks')) return;
+
+    final remarksIndex = columnMap['remarks']!;
+    int numericCount = 0;
+    int nonEmptyCount = 0;
+
+    // 처음 10개 데이터 행 검사
+    final checkCount = dataRows.length < 10 ? dataRows.length : 10;
+    for (int i = 0; i < checkCount; i++) {
+      final row = dataRows[i];
+      if (remarksIndex >= row.length) continue;
+
+      final value = row[remarksIndex].trim();
+      if (value.isEmpty) continue;
+
+      nonEmptyCount++;
+      // 순수 숫자인지 확인 (정수, 소수)
+      if (RegExp(r'^-?\d+\.?\d*$').hasMatch(value)) {
+        numericCount++;
+      }
+    }
+
+    // 비어있지 않은 값 중 80% 이상이 순수 숫자면 잘못된 매핑으로 판단
+    if (nonEmptyCount > 0 && numericCount / nonEmptyCount >= 0.8) {
+      debugPrint('비고 컬럼 검증 실패: index=$remarksIndex, 숫자비율=${numericCount}/${nonEmptyCount}');
+      debugPrint('비고 컬럼이 숫자 컬럼으로 판단되어 매핑 제거');
+      columnMap.remove('remarks');
+    } else {
+      debugPrint('비고 컬럼 검증 통과: index=$remarksIndex, 숫자비율=${numericCount}/${nonEmptyCount}');
     }
   }
 
@@ -1041,15 +1108,31 @@ class ExcelService {
         callSign: callSign.isNotEmpty ? callSign : null,
         gain: gain.isNotEmpty ? gain : null,
         antennaCount: antennaCount.isNotEmpty ? antennaCount : null,
-        remarks: remarks.isNotEmpty ? remarks : null,
+        remarks: _validateRemarksValue(remarks),
         typeApprovalNumber: typeApprovalNumber.isNotEmpty ? typeApprovalNumber : null,
         installationType: installationType.isNotEmpty ? installationType : null,
+        originalInstallationType: installationType.isNotEmpty ? installationType : null, // 원본 설치대 저장
         categoryName: categoryName,
       );
     } catch (e) {
       debugPrint('행 $rowIndex 파싱 오류: $e');
       return null;
     }
+  }
+
+  /// 비고 값이 유효한지 확인 (순수 숫자만 있는 경우 무효로 처리)
+  /// Excel에서 빈 셀이 숫자로 잘못 파싱되는 경우를 방지
+  String? _validateRemarksValue(String? value) {
+    if (value == null || value.isEmpty) return null;
+
+    // 순수 숫자인 경우 (정수 또는 소수)는 비고 값으로 부적절
+    // 예: "556", "665", "123.45" 등
+    if (RegExp(r'^-?\d+\.?\d*$').hasMatch(value.trim())) {
+      debugPrint('비고 값 필터링: "$value" (순수 숫자는 비고로 부적절)');
+      return null;
+    }
+
+    return value;
   }
 
   /// 국소명을 안전한 파일명으로 변환
@@ -1309,15 +1392,26 @@ class ExcelService {
       debugPrint('원본 파일 크기: ${originalBytes.length} bytes');
       debugPrint('스테이션 수: ${stations.length}');
 
-      // 스테이션 데이터를 주소 기준으로 매핑 (원본 행과 매칭용)
-      final stationMap = <String, RadioStation>{};
+      // 스테이션 데이터를 여러 기준으로 매핑 (신뢰할 수 있는 매칭)
+      // 우선순위: 허가번호 > 국소명+호출명칭 > 국소명+주소
+      final stationByLicense = <String, RadioStation>{};
+      final stationByNameAndCallSign = <String, RadioStation>{};
+      final stationByNameAndAddress = <String, RadioStation>{};
       for (final station in stations) {
-        // 주소와 국소명 조합으로 고유 키 생성
-        final key = '${station.address}_${station.stationName}'.toLowerCase();
-        stationMap[key] = station;
-        // 주소만으로도 매핑 시도 (fallback)
-        stationMap[station.address.toLowerCase()] = station;
+        // 1. 허가번호로 매핑 (가장 고유함)
+        final license = station.licenseNumber.trim();
+        if (license.isNotEmpty) {
+          stationByLicense[license] = station;
+        }
+        // 2. 국소명+호출명칭으로 매핑 (같은 국소명이어도 호출명칭이 다르면 구분)
+        final callSign = station.callSign?.trim() ?? '';
+        final nameAndCallSign = '${station.stationName.trim()}|$callSign';
+        stationByNameAndCallSign[nameAndCallSign] = station;
+        // 3. 국소명+주소로 매핑 (fallback)
+        final nameAndAddr = '${station.stationName.trim()}|${station.address.trim()}';
+        stationByNameAndAddress[nameAndAddr] = station;
       }
+      debugPrint('스테이션 매핑 - 허가번호: ${stationByLicense.length}, 국소명+호출명칭: ${stationByNameAndCallSign.length}, 국소명+주소: ${stationByNameAndAddress.length}');
 
       // xlsx ZIP 아카이브 열기
       final archive = ZipDecoder().decodeBytes(originalBytes);
@@ -1366,16 +1460,20 @@ class ExcelService {
       }
 
       // 헤더 문자열 인덱스 미리 확보
+      final headerInstallationIdx = getOrAddStringIndex('설치대(수정후)');
       final headerInspectionIdx = getOrAddStringIndex('수검여부');
       final headerMemoIdx = getOrAddStringIndex('특이사항');
-      debugPrint('헤더 인덱스 - 수검여부: $headerInspectionIdx, 특이사항: $headerMemoIdx');
+      debugPrint('헤더 인덱스 - 설치대(수정후): $headerInstallationIdx, 수검여부: $headerInspectionIdx, 특이사항: $headerMemoIdx');
 
       // 워크시트 파일 찾기 및 수정
       ArchiveFile? worksheetFile;
       String? worksheetXml;
       String? worksheetPath;
 
-      // workbook.xml에서 대상 시트 경로 찾기
+      // workbook.xml에서 시트 이름과 rId 매핑 추출
+      final sheetNameToRId = <String, String>{};
+      String? targetSheetName;
+
       for (final file in archive) {
         if (file.isFile && file.name.toLowerCase().contains('workbook.xml') &&
             !file.name.toLowerCase().contains('.rels')) {
@@ -1383,23 +1481,73 @@ class ExcelService {
           if (content != null) {
             final xmlStr = utf8.decode(content as List<int>);
             final sheetNames = <String>[];
-            final sheetPattern = RegExp(r'<sheet[^>]*name="([^"]*)"', multiLine: true);
+            // <sheet name="시트명" sheetId="1" r:id="rId1"/> 패턴
+            final sheetPattern = RegExp(r'<sheet[^>]*name="([^"]*)"[^>]*r:id="([^"]*)"', multiLine: true);
             for (final match in sheetPattern.allMatches(xmlStr)) {
-              sheetNames.add(match.group(1) ?? '');
+              final name = match.group(1) ?? '';
+              final rId = match.group(2) ?? '';
+              sheetNames.add(name);
+              sheetNameToRId[name] = rId;
+              debugPrint('시트 발견: "$name" (rId=$rId)');
             }
-            final targetSheetName = _findTargetSheet(sheetNames);
+            targetSheetName = _findTargetSheet(sheetNames);
             debugPrint('대상 시트: $targetSheetName');
           }
           break;
         }
       }
 
-      // 첫 번째 워크시트 파일 찾기 (sheet1.xml 우선)
+      // workbook.xml.rels에서 rId와 실제 파일 경로 매핑
+      final rIdToPath = <String, String>{};
+      for (final file in archive) {
+        if (file.isFile && file.name.toLowerCase().contains('workbook.xml.rels')) {
+          final content = file.content;
+          if (content != null) {
+            final xmlStr = utf8.decode(content as List<int>);
+            // <Relationship Id="rId1" Target="worksheets/sheet1.xml" .../>
+            final relPattern = RegExp(r'<Relationship[^>]*Id="([^"]*)"[^>]*Target="([^"]*)"', multiLine: true);
+            for (final match in relPattern.allMatches(xmlStr)) {
+              final rId = match.group(1) ?? '';
+              final target = match.group(2) ?? '';
+              rIdToPath[rId] = target;
+              debugPrint('관계: $rId -> $target');
+            }
+          }
+          break;
+        }
+      }
+
+      // 대상 시트의 파일 경로 찾기
+      String? targetSheetPath;
+      if (targetSheetName != null && sheetNameToRId.containsKey(targetSheetName)) {
+        final rId = sheetNameToRId[targetSheetName];
+        if (rId != null && rIdToPath.containsKey(rId)) {
+          targetSheetPath = rIdToPath[rId];
+          // 상대 경로를 절대 경로로 변환
+          if (targetSheetPath != null && !targetSheetPath.startsWith('xl/')) {
+            targetSheetPath = 'xl/$targetSheetPath';
+          }
+          debugPrint('대상 시트 파일 경로: $targetSheetPath');
+        }
+      }
+
+      // 대상 워크시트 파일 찾기
       for (final file in archive) {
         if (file.isFile && file.name.toLowerCase().contains('worksheets/sheet')) {
-          if (worksheetFile == null || file.name.toLowerCase().contains('sheet1.xml')) {
-            worksheetFile = file;
-            worksheetPath = file.name;
+          // 대상 경로가 지정된 경우 해당 파일 선택
+          if (targetSheetPath != null) {
+            if (file.name.toLowerCase().endsWith(targetSheetPath.toLowerCase().split('/').last)) {
+              worksheetFile = file;
+              worksheetPath = file.name;
+              debugPrint('대상 시트 파일 선택됨: ${file.name}');
+              break;
+            }
+          } else {
+            // 대상 경로를 찾지 못한 경우 sheet1.xml 사용 (fallback)
+            if (worksheetFile == null || file.name.toLowerCase().contains('sheet1.xml')) {
+              worksheetFile = file;
+              worksheetPath = file.name;
+            }
           }
         }
       }
@@ -1409,7 +1557,7 @@ class ExcelService {
       }
 
       worksheetXml = utf8.decode(worksheetFile.content as List<int>);
-      debugPrint('워크시트 파일: $worksheetPath');
+      debugPrint('선택된 워크시트 파일: $worksheetPath');
 
       // 마지막 컬럼 문자 찾기 (dimension 태그에서)
       String lastColLetter = 'A';
@@ -1436,27 +1584,288 @@ class ExcelService {
         return chars.reversed.join();
       }
 
-      final col1Letter = incrementColumn(lastColLetter); // 수검여부 컬럼
-      final col2Letter = incrementColumn(col1Letter);    // 특이사항 컬럼
-      debugPrint('새 컬럼 문자: $col1Letter (수검여부), $col2Letter (특이사항)');
+      final col1Letter = incrementColumn(lastColLetter); // 설치대(수정후) 컬럼
+      final col2Letter = incrementColumn(col1Letter);    // 수검여부 컬럼
+      final col3Letter = incrementColumn(col2Letter);    // 특이사항 컬럼
+      debugPrint('새 컬럼 문자: $col1Letter (설치대수정후), $col2Letter (수검여부), $col3Letter (특이사항)');
 
       // dimension 업데이트
       if (dimMatch != null) {
         final oldDim = dimMatch.group(0)!;
         final newDim = oldDim.replaceAll(
           RegExp(r':([A-Z]+)(\d+)"'),
-          ':$col2Letter\$2"',
+          ':$col3Letter\$2"',
         );
         worksheetXml = worksheetXml!.replaceFirst(oldDim, newDim);
         debugPrint('Dimension 업데이트: $oldDim -> $newDim');
       }
 
+      // 컬럼 문자를 숫자로 변환하는 함수 (A=1, B=2, ..., Z=26, AA=27)
+      int columnLetterToNumber(String col) {
+        int result = 0;
+        for (int i = 0; i < col.length; i++) {
+          result = result * 26 + (col.codeUnitAt(i) - 'A'.codeUnitAt(0) + 1);
+        }
+        return result;
+      }
+
+      // 마지막 컬럼의 병합 상태 추출 및 새 컬럼에 적용
+      // 예: <mergeCell ref="Z1:Z2"/> 형태로 1행~2행이 병합된 경우
+      final mergeCellsPattern = RegExp(r'<mergeCells[^>]*>(.*?)</mergeCells>', multiLine: true, dotAll: true);
+      final mergeCellsMatch = mergeCellsPattern.firstMatch(worksheetXml!);
+
+      if (mergeCellsMatch != null) {
+        String mergeCellsContent = mergeCellsMatch.group(1) ?? '';
+
+        // 마지막 컬럼의 병합 정보 찾기
+        final lastColMergePattern = RegExp(
+          r'<mergeCell\s+ref="' + lastColLetter + r'(\d+):' + lastColLetter + r'(\d+)"',
+          multiLine: true,
+        );
+
+        final newMergeCells = <String>[];
+        for (final mergeMatch in lastColMergePattern.allMatches(mergeCellsContent)) {
+          final startRow = mergeMatch.group(1);
+          final endRow = mergeMatch.group(2);
+          if (startRow != null && endRow != null) {
+            // 새 컬럼들에도 동일한 병합 적용
+            newMergeCells.add('<mergeCell ref="$col1Letter$startRow:$col1Letter$endRow"/>');
+            newMergeCells.add('<mergeCell ref="$col2Letter$startRow:$col2Letter$endRow"/>');
+            newMergeCells.add('<mergeCell ref="$col3Letter$startRow:$col3Letter$endRow"/>');
+            debugPrint('병합 셀 복제: ${lastColLetter}$startRow:${lastColLetter}$endRow -> 새 컬럼들');
+          }
+        }
+
+        // 새 병합 정보 추가
+        if (newMergeCells.isNotEmpty) {
+          final oldMergeCells = mergeCellsMatch.group(0)!;
+          // count 속성 업데이트
+          final countPattern = RegExp(r'count="(\d+)"');
+          final countMatch = countPattern.firstMatch(oldMergeCells);
+          if (countMatch != null) {
+            final oldCount = int.parse(countMatch.group(1)!);
+            final newCount = oldCount + newMergeCells.length;
+            var newMergeCellsXml = oldMergeCells.replaceFirst(
+              'count="$oldCount"',
+              'count="$newCount"',
+            );
+            // </mergeCells> 앞에 새 병합 셀 추가
+            newMergeCellsXml = newMergeCellsXml.replaceFirst(
+              '</mergeCells>',
+              '${newMergeCells.join('')}</mergeCells>',
+            );
+            worksheetXml = worksheetXml!.replaceFirst(oldMergeCells, newMergeCellsXml);
+            debugPrint('병합 셀 추가 완료: ${newMergeCells.length}개');
+          }
+        }
+      }
+
+      // 컬럼 너비 설정을 위한 최대 문자열 추적
+      String maxCol1Text = '설치대(수정후)';
+      String maxCol2Text = '수검여부';
+      String maxCol3Text = '특이사항';
+
+      // 스테이션 데이터에서 최대 너비 텍스트 찾기
+      for (final station in stations) {
+        // 설치대(수정후) - 원본 또는 수정된 값 중 출력될 값 기준
+        final currentInstallation = station.installationType ?? '';
+        final originalInstallation = station.originalInstallationType ?? '';
+        final isChanged = currentInstallation.isNotEmpty &&
+                          originalInstallation.isNotEmpty &&
+                          currentInstallation != originalInstallation;
+        final displayInstallation = isChanged ? currentInstallation : originalInstallation;
+        if (displayInstallation.length > maxCol1Text.length) {
+          maxCol1Text = displayInstallation;
+        }
+        // 수검여부 - 고정값이므로 스킵
+        // 특이사항
+        final memo = station.memo ?? '';
+        if (memo.length > maxCol3Text.length) {
+          maxCol3Text = memo;
+        }
+      }
+
+      // 너비를 Excel 단위로 변환 (Excel 자동맞춤과 유사하게)
+      // Excel 너비 단위: 기본 폰트(Calibri 11pt)에서 '0' 문자 너비 기준
+      double calcWidth(String text) {
+        if (text.isEmpty) return 8.43; // Excel 기본 너비
+
+        double totalWidth = 0;
+        for (final char in text.runes) {
+          if (char >= 0xAC00 && char <= 0xD7A3) {
+            // 한글: 약 2 단위
+            totalWidth += 2.0;
+          } else if (char >= 0x3000 && char <= 0x9FFF) {
+            // 기타 CJK 문자: 약 2 단위
+            totalWidth += 2.0;
+          } else {
+            // ASCII 및 기타: 약 1 단위
+            totalWidth += 1.0;
+          }
+        }
+        // 셀 패딩 (좌우 여백) 추가
+        totalWidth += 2.0;
+        return totalWidth.clamp(8.43, 100.0);
+      }
+
+      final col1Width = calcWidth(maxCol1Text);
+      final col2Width = calcWidth(maxCol2Text);
+      final col3Width = calcWidth(maxCol3Text);
+      debugPrint('새 컬럼 너비: $col1Letter=$col1Width, $col2Letter=$col2Width, $col3Letter=$col3Width');
+
+      // 컬럼 너비 정의 추가 (<cols> 섹션)
+      final col1Num = columnLetterToNumber(col1Letter);
+      final col2Num = columnLetterToNumber(col2Letter);
+      final col3Num = columnLetterToNumber(col3Letter);
+
+      final newColDefs =
+        '<col min="$col1Num" max="$col1Num" width="$col1Width" customWidth="1"/>'
+        '<col min="$col2Num" max="$col2Num" width="$col2Width" customWidth="1"/>'
+        '<col min="$col3Num" max="$col3Num" width="$col3Width" customWidth="1"/>';
+
+      // <cols> 섹션이 있으면 끝에 추가, 없으면 <sheetData> 앞에 새로 생성
+      final colsPattern = RegExp(r'(<cols[^>]*>)(.*?)(</cols>)', multiLine: true, dotAll: true);
+      final colsMatch = colsPattern.firstMatch(worksheetXml!);
+
+      if (colsMatch != null) {
+        // 기존 <cols> 섹션에 추가
+        final oldCols = colsMatch.group(0)!;
+        final newCols = oldCols.replaceFirst('</cols>', '$newColDefs</cols>');
+        worksheetXml = worksheetXml!.replaceFirst(oldCols, newCols);
+        debugPrint('기존 <cols> 섹션에 컬럼 너비 추가');
+      } else {
+        // <cols> 섹션이 없으면 <sheetData> 앞에 생성
+        final sheetDataPattern = RegExp(r'<sheetData');
+        worksheetXml = worksheetXml!.replaceFirst(
+          sheetDataPattern,
+          '<cols>$newColDefs</cols><sheetData',
+        );
+        debugPrint('<cols> 섹션 새로 생성');
+      }
+
       // 각 행에 새 셀 추가
       final rowPattern = RegExp(r'(<row[^>]*r="(\d+)"[^>]*>)(.*?)(</row>)', multiLine: true, dotAll: true);
 
-      // 헤더 행인지 판별할 변수
-      bool isFirstDataRow = true;
+      // 헤더 행 수 결정 - 1행~2행에 걸친 병합 셀이 있으면 2행도 헤더
       int headerRowNum = 1;
+      if (mergeCellsMatch != null) {
+        final mergeCellsContent = mergeCellsMatch.group(1) ?? '';
+        // 1행부터 2행까지 병합된 셀이 있는지 확인 (예: A1:A2, B1:B2 등)
+        final headerMergePattern = RegExp(r'<mergeCell\s+ref="[A-Z]+1:[A-Z]+2"', multiLine: true);
+        if (headerMergePattern.hasMatch(mergeCellsContent)) {
+          headerRowNum = 2;
+          debugPrint('헤더가 2행까지 병합됨 - headerRowNum=2');
+        }
+      }
+      debugPrint('헤더 행 수: $headerRowNum');
+
+      // 매칭 통계
+      int totalDataRows = 0;
+      int matchedRows = 0;
+      int unmatchedRows = 0;
+      int skippedEmptyRows = 0;
+
+      // 셀 값 추출 헬퍼 함수 (컬럼 문자와 행번호로 셀 값 추출)
+      String extractCellValue(String rowContent, String colLetter, int rowNum) {
+        // <c r="A1" t="s"><v>0</v></c> 또는 <c r="A1"><v>123</v></c> 형태
+        final cellPattern = RegExp(
+          r'<c[^>]*r="' + colLetter + rowNum.toString() + r'"([^>]*)>.*?<v>([^<]*)</v>',
+          multiLine: true,
+          dotAll: true,
+        );
+        final match = cellPattern.firstMatch(rowContent);
+        if (match == null) return '';
+
+        final attrs = match.group(1) ?? '';
+        final value = match.group(2) ?? '';
+
+        // t="s"이면 sharedStrings에서 가져옴
+        if (attrs.contains('t="s"')) {
+          final idx = int.tryParse(value);
+          if (idx != null && idx < sharedStrings.length) {
+            return sharedStrings[idx];
+          }
+        }
+        return value;
+      }
+
+      // 헤더 행에서 매칭용 컬럼 찾기
+      String? stationNameCol;
+      String? addressCol;
+      String? licenseCol;
+      String? callSignCol;
+
+      // 1행의 모든 셀을 파싱하여 컬럼 매핑
+      final headerRowMatch = rowPattern.firstMatch(worksheetXml!);
+      if (headerRowMatch != null) {
+        final headerContent = headerRowMatch.group(3) ?? '';
+        // 모든 셀 추출
+        final cellPattern = RegExp(r'<c[^>]*r="([A-Z]+)1"([^>]*)>.*?<v>([^<]*)</v>', multiLine: true, dotAll: true);
+        for (final cellMatch in cellPattern.allMatches(headerContent)) {
+          final col = cellMatch.group(1) ?? '';
+          final attrs = cellMatch.group(2) ?? '';
+          final value = cellMatch.group(3) ?? '';
+
+          String headerText = value;
+          if (attrs.contains('t="s"')) {
+            final idx = int.tryParse(value);
+            if (idx != null && idx < sharedStrings.length) {
+              headerText = sharedStrings[idx];
+            }
+          }
+
+          final lowerText = headerText.toLowerCase();
+          // 국소명 컬럼 찾기
+          if (stationNameCol == null &&
+              (lowerText.contains('국소명') || lowerText.contains('erp국소명') ||
+               lowerText.contains('무선국명') || lowerText.contains('시설명칭') ||
+               lowerText.contains('통합시설명칭'))) {
+            stationNameCol = col;
+            debugPrint('국소명 컬럼 발견: $col (헤더: $headerText)');
+          }
+          // 주소 컬럼 찾기
+          if (addressCol == null &&
+              (lowerText.contains('설치장소') || lowerText.contains('주소') ||
+               lowerText.contains('소재지') || lowerText.contains('address'))) {
+            addressCol = col;
+            debugPrint('주소 컬럼 발견: $col (헤더: $headerText)');
+          }
+          // 허가번호 컬럼 찾기
+          if (licenseCol == null &&
+              (lowerText.contains('허가번호') || lowerText.contains('허가') ||
+               lowerText.contains('license'))) {
+            licenseCol = col;
+            debugPrint('허가번호 컬럼 발견: $col (헤더: $headerText)');
+          }
+          // 호출명칭 컬럼 찾기
+          if (callSignCol == null &&
+              (lowerText.contains('호출명칭') || lowerText.contains('호출부호') ||
+               lowerText.contains('callsign') || lowerText.contains('call sign'))) {
+            callSignCol = col;
+            debugPrint('호출명칭 컬럼 발견: $col (헤더: $headerText)');
+          }
+        }
+      }
+      debugPrint('매칭용 컬럼 - 국소명: $stationNameCol, 주소: $addressCol, 허가번호: $licenseCol, 호출명칭: $callSignCol');
+
+      // 마지막 컬럼 셀의 스타일 추출 함수
+      String? extractLastColumnStyle(String rowContent, String lastCol) {
+        // 마지막 컬럼 셀에서 s 속성 추출
+        // 예: <c r="Z1" s="5" t="s"><v>0</v></c> 에서 s="5" 추출
+        final lastColCellPattern = RegExp(
+          r'<c[^>]*r="' + lastCol + r'\d+"([^>]*)>',
+          multiLine: true,
+        );
+        final match = lastColCellPattern.firstMatch(rowContent);
+        if (match != null) {
+          final attrs = match.group(1) ?? '';
+          final styleMatch = RegExp(r's="(\d+)"').firstMatch(attrs);
+          if (styleMatch != null) {
+            return styleMatch.group(1);
+          }
+        }
+        return null;
+      }
 
       worksheetXml = worksheetXml!.replaceAllMapped(rowPattern, (match) {
         final rowStart = match.group(1)!;
@@ -1464,98 +1873,155 @@ class ExcelService {
         final rowContent = match.group(3)!;
         final rowEnd = match.group(4)!;
 
-        String newCell1;
-        String newCell2;
+        // 마지막 컬럼의 스타일 추출
+        final lastColStyle = extractLastColumnStyle(rowContent, lastColLetter);
+        final styleAttr = lastColStyle != null ? ' s="$lastColStyle"' : '';
 
-        if (rowNum <= 2 && isFirstDataRow) {
-          // 헤더 행 (1행 또는 2행) - 새 컬럼 헤더 추가
-          // 첫 번째 행이 헤더인지 확인
+        String newCell1; // 설치대(수정후)
+        String newCell2; // 수검여부
+        String newCell3; // 특이사항
+
+        if (rowNum <= headerRowNum) {
+          // 헤더 행 - 새 컬럼 헤더 추가 (스타일 유지)
           if (rowNum == 1) {
-            // 1행에 "수검여부", "특이사항" 헤더 추가
-            newCell1 = '<c r="$col1Letter$rowNum" t="s"><v>$headerInspectionIdx</v></c>';
-            newCell2 = '<c r="$col2Letter$rowNum" t="s"><v>$headerMemoIdx</v></c>';
-            headerRowNum = 1;
+            // 1행에 "설치대(수정후)", "수검여부", "특이사항" 헤더 추가
+            newCell1 = '<c r="$col1Letter$rowNum"$styleAttr t="s"><v>$headerInstallationIdx</v></c>';
+            newCell2 = '<c r="$col2Letter$rowNum"$styleAttr t="s"><v>$headerInspectionIdx</v></c>';
+            newCell3 = '<c r="$col3Letter$rowNum"$styleAttr t="s"><v>$headerMemoIdx</v></c>';
           } else {
-            // 2행이 서브헤더일 수 있음 - 빈 셀 추가
-            newCell1 = '<c r="$col1Letter$rowNum"><v></v></c>';
-            newCell2 = '<c r="$col2Letter$rowNum"><v></v></c>';
+            // 2행이 서브헤더인 경우 - 빈 셀 추가 (스타일 유지)
+            newCell1 = '<c r="$col1Letter$rowNum"$styleAttr><v></v></c>';
+            newCell2 = '<c r="$col2Letter$rowNum"$styleAttr><v></v></c>';
+            newCell3 = '<c r="$col3Letter$rowNum"$styleAttr><v></v></c>';
           }
         } else {
-          // 데이터 행 - 해당 스테이션의 수검여부/특이사항 추가
-          isFirstDataRow = false;
+          // 데이터 행 - 해당 스테이션의 설치대(수정후)/수검여부/특이사항 추가
 
-          // 현재 행에서 주소와 국소명 추출하여 스테이션 매칭
+          // 빈 행인지 확인 (셀 내용이 없거나 값이 없는 행)
+          // <c> 태그가 없거나, 모든 <v> 태그가 비어있으면 빈 행으로 판단
+          final hasCellContent = RegExp(r'<c[^>]*>.*?<v>[^<]+</v>', dotAll: true).hasMatch(rowContent);
+
+          if (!hasCellContent) {
+            // 빈 행은 건너뛰고 빈 셀만 추가
+            skippedEmptyRows++;
+            debugPrint('빈 행 건너뜀: rowNum=$rowNum');
+            newCell1 = '<c r="$col1Letter$rowNum"$styleAttr><v></v></c>';
+            newCell2 = '<c r="$col2Letter$rowNum"$styleAttr><v></v></c>';
+            newCell3 = '<c r="$col3Letter$rowNum"$styleAttr><v></v></c>';
+            return '$rowStart$rowContent$newCell1$newCell2$newCell3$rowEnd';
+          }
+
+          // 실제 데이터 행 - 국소명 기반으로 스테이션 매칭
+          totalDataRows++;
+
+          // Excel 행에서 매칭용 데이터 추출
           RadioStation? matchedStation;
+          String extractedName = '';
+          String extractedAddress = '';
+          String extractedLicense = '';
+          String extractedCallSign = '';
 
-          // 셀에서 주소 추출 시도
-          final cellPattern = RegExp(r'<c[^>]*r="([A-Z]+)\d+"[^>]*(?:t="s")?[^>]*>(?:<v>(\d+)</v>)?</c>', multiLine: true);
-          final cells = <String, String>{};
-
-          for (final cellMatch in cellPattern.allMatches(rowContent)) {
-            final colLetter = cellMatch.group(1) ?? '';
-            final valueIdx = cellMatch.group(2);
-            if (valueIdx != null) {
-              final idx = int.tryParse(valueIdx);
-              if (idx != null && idx < sharedStrings.length) {
-                cells[colLetter] = sharedStrings[idx];
-              }
-            }
+          if (stationNameCol != null) {
+            extractedName = extractCellValue(rowContent, stationNameCol, rowNum).trim();
+          }
+          if (addressCol != null) {
+            extractedAddress = extractCellValue(rowContent, addressCol, rowNum).trim();
+          }
+          if (licenseCol != null) {
+            extractedLicense = extractCellValue(rowContent, licenseCol, rowNum).trim();
+          }
+          if (callSignCol != null) {
+            extractedCallSign = extractCellValue(rowContent, callSignCol, rowNum).trim();
           }
 
-          // 스테이션 매칭 시도 (주소 컬럼이 보통 C 또는 D)
-          for (final entry in cells.entries) {
-            final value = entry.value.toLowerCase();
-            if (stationMap.containsKey(value)) {
-              matchedStation = stationMap[value];
-              break;
-            }
+          // 매칭 우선순위:
+          // 1차: 허가번호로 매칭 (가장 고유함)
+          if (extractedLicense.isNotEmpty) {
+            matchedStation = stationByLicense[extractedLicense];
+          }
+          // 2차: 국소명+호출명칭으로 매칭 (같은 국소명이어도 호출명칭이 다르면 구분)
+          if (matchedStation == null && extractedName.isNotEmpty) {
+            final key = '$extractedName|$extractedCallSign';
+            matchedStation = stationByNameAndCallSign[key];
+          }
+          // 3차: 국소명+주소로 매칭 (fallback)
+          if (matchedStation == null && extractedName.isNotEmpty && extractedAddress.isNotEmpty) {
+            final key = '$extractedName|$extractedAddress';
+            matchedStation = stationByNameAndAddress[key];
           }
 
-          // 국소명+주소 조합으로도 매칭 시도
+          // 디버그: 매칭 실패 시 로그
           if (matchedStation == null) {
-            for (final addr in cells.values) {
-              for (final name in cells.values) {
-                final key = '${addr}_$name'.toLowerCase();
-                if (stationMap.containsKey(key)) {
-                  matchedStation = stationMap[key];
-                  break;
-                }
-              }
-              if (matchedStation != null) break;
-            }
-          }
-
-          // 매칭된 스테이션이 없으면 행 번호로 매칭 시도
-          if (matchedStation == null) {
-            final dataRowIndex = rowNum - headerRowNum - 1;
-            if (dataRowIndex >= 0 && dataRowIndex < stations.length) {
-              matchedStation = stations[dataRowIndex];
-            }
+            unmatchedRows++;
+            debugPrint('⚠️ 매칭 실패: rowNum=$rowNum, 허가번호="$extractedLicense", '
+                '국소명="$extractedName", 호출명칭="$extractedCallSign", stations수=${stations.length}');
           }
 
           if (matchedStation != null) {
-            // 수검여부
-            final inspectionText = matchedStation.isInspected ? '검사완료' : '미검사';
-            final inspectionIdx = getOrAddStringIndex(inspectionText);
-            newCell1 = '<c r="$col1Letter$rowNum" t="s"><v>$inspectionIdx</v></c>';
+            matchedRows++;
+            // 1. 설치대(수정후) - 원본과 다를 경우에만 표시
+            final currentInstallation = matchedStation.installationType ?? '';
+            final originalInstallation = matchedStation.originalInstallationType ?? '';
 
-            // 특이사항 (메모)
+            // 설치대(수정후) 로직:
+            // - 수정사항 없을 시: 원본 설치대 표시
+            // - 수정사항 있을 시: 수정된 설치대 표시
+            final isInstallationChanged = currentInstallation.isNotEmpty &&
+                                          originalInstallation.isNotEmpty &&
+                                          currentInstallation != originalInstallation;
+
+            // 출력할 설치대 값 결정
+            final displayInstallation = isInstallationChanged ? currentInstallation : originalInstallation;
+
+            // 디버그: 처음 10개 행에 대해 상세 로그
+            if (matchedRows <= 10) {
+              debugPrint('행$rowNum "${matchedStation.stationName}": '
+                  '설치대 원본="$originalInstallation", 현재="$currentInstallation", '
+                  '변경=$isInstallationChanged, 출력="$displayInstallation", 검사=${matchedStation.isInspected}');
+            }
+
+            // 설치대(수정후) - 항상 표시 (원본 또는 수정된 값)
+            if (displayInstallation.isNotEmpty) {
+              final installationIdx = getOrAddStringIndex(displayInstallation);
+              newCell1 = '<c r="$col1Letter$rowNum"$styleAttr t="s"><v>$installationIdx</v></c>';
+            } else {
+              newCell1 = '<c r="$col1Letter$rowNum"$styleAttr><v></v></c>';
+            }
+
+            // 2. 수검여부 - 항상 값 출력
+            final inspectionText = matchedStation.isInspected ? '검사완료' : '검사대기';
+            final inspectionIdx = getOrAddStringIndex(inspectionText);
+            newCell2 = '<c r="$col2Letter$rowNum"$styleAttr t="s"><v>$inspectionIdx</v></c>';
+
+            // 3. 특이사항 (메모)
             final memoText = matchedStation.memo ?? '';
             if (memoText.isNotEmpty) {
               final memoIdx = getOrAddStringIndex(memoText);
-              newCell2 = '<c r="$col2Letter$rowNum" t="s"><v>$memoIdx</v></c>';
+              newCell3 = '<c r="$col3Letter$rowNum"$styleAttr t="s"><v>$memoIdx</v></c>';
             } else {
-              newCell2 = '<c r="$col2Letter$rowNum"><v></v></c>';
+              newCell3 = '<c r="$col3Letter$rowNum"$styleAttr><v></v></c>';
             }
           } else {
-            // 매칭 실패 시 빈 셀
-            newCell1 = '<c r="$col1Letter$rowNum"><v></v></c>';
-            newCell2 = '<c r="$col2Letter$rowNum"><v></v></c>';
+            // 매칭 실패 시 빈 셀 (스타일 유지)
+            newCell1 = '<c r="$col1Letter$rowNum"$styleAttr><v></v></c>';
+            newCell2 = '<c r="$col2Letter$rowNum"$styleAttr><v></v></c>';
+            newCell3 = '<c r="$col3Letter$rowNum"$styleAttr><v></v></c>';
           }
         }
 
-        return '$rowStart$rowContent$newCell1$newCell2$rowEnd';
+        return '$rowStart$rowContent$newCell1$newCell2$newCell3$rowEnd';
       });
+
+      // 매칭 통계 출력
+      debugPrint('===== Export 매칭 통계 =====');
+      debugPrint('총 데이터 행: $totalDataRows');
+      debugPrint('매칭 성공: $matchedRows');
+      debugPrint('매칭 실패: $unmatchedRows');
+      debugPrint('건너뛴 빈 행: $skippedEmptyRows');
+      debugPrint('스테이션 수: ${stations.length}');
+      if (matchedRows != stations.length) {
+        debugPrint('⚠️ 매칭 성공 수와 스테이션 수 불일치! (빈 행 때문일 수 있음)');
+      }
 
       // sharedStrings.xml 업데이트 (새 문자열 추가)
       if (newStrings.isNotEmpty && sharedStringsXml != null) {
