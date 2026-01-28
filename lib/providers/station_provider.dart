@@ -568,6 +568,126 @@ class StationProvider extends ChangeNotifier {
     }
   }
 
+  /// 검사 예정일 업데이트 (자동 클라우드 동기화)
+  Future<void> updateScheduledDate(String id, DateTime? scheduledDate) async {
+    try {
+      await _storageService.updateScheduledDate(id, scheduledDate);
+      final index = _stations.indexWhere((s) => s.id == id);
+      if (index != -1) {
+        _stations[index] = _stations[index].copyWith(scheduledDate: scheduledDate);
+        if (_selectedStation?.id == id) {
+          _selectedStation = _stations[index];
+        }
+        notifyListeners();
+
+        // 클라우드 동기화 (백그라운드)
+        _syncStationToCloud(_stations[index]);
+      }
+    } catch (e) {
+      _errorMessage = '예정일 업데이트 실패: $e';
+      notifyListeners();
+    }
+  }
+
+  /// 카테고리 전체 예정일 일괄 설정
+  Future<void> setCategoryScheduledDate(String category, DateTime scheduledDate) async {
+    try {
+      final categoryStations = stationsByCategory[category] ?? [];
+      for (final station in categoryStations) {
+        if (!station.isInspected) {
+          await updateScheduledDate(station.id, scheduledDate);
+        }
+      }
+    } catch (e) {
+      _errorMessage = '카테고리 예정일 설정 실패: $e';
+      notifyListeners();
+    }
+  }
+
+  /// 예정일별 무선국 맵 (달력 표시용)
+  Map<DateTime, List<RadioStation>> get scheduledDateMap {
+    final map = <DateTime, List<RadioStation>>{};
+    for (final station in _stations) {
+      if (station.scheduledDate != null && !station.isInspected) {
+        final dateKey = DateTime(
+          station.scheduledDate!.year,
+          station.scheduledDate!.month,
+          station.scheduledDate!.day,
+        );
+        map.putIfAbsent(dateKey, () => []);
+        map[dateKey]!.add(station);
+      }
+    }
+    return map;
+  }
+
+  /// 검사 완료일별 무선국 맵 (달력 표시용)
+  Map<DateTime, List<RadioStation>> get inspectionDateMap {
+    final map = <DateTime, List<RadioStation>>{};
+    for (final station in _stations) {
+      if (station.isInspected && station.inspectionDate != null) {
+        final dateKey = DateTime(
+          station.inspectionDate!.year,
+          station.inspectionDate!.month,
+          station.inspectionDate!.day,
+        );
+        map.putIfAbsent(dateKey, () => []);
+        map[dateKey]!.add(station);
+      }
+    }
+    return map;
+  }
+
+  /// 통계 데이터: 최근 N일간 일평균 검사 완료 수
+  double getDailyInspectionRate({int days = 7}) {
+    final now = DateTime.now();
+    final startDate = now.subtract(Duration(days: days));
+
+    final recentInspected = _stations.where((s) =>
+        s.isInspected &&
+        s.inspectionDate != null &&
+        s.inspectionDate!.isAfter(startDate)
+    ).length;
+
+    return recentInspected / days;
+  }
+
+  /// 예상 완료일 계산
+  DateTime? getEstimatedCompletionDate() {
+    final total = _stations.length;
+    final inspected = _stations.where((s) => s.isInspected).length;
+    final remaining = total - inspected;
+
+    if (remaining == 0) return null; // 이미 완료
+
+    final dailyRate = getDailyInspectionRate();
+    if (dailyRate <= 0) return null; // 최근 검사 기록 없음
+
+    final estimatedDays = (remaining / dailyRate).ceil();
+    return DateTime.now().add(Duration(days: estimatedDays));
+  }
+
+  /// 카테고리별 날짜별 완료 통계
+  Map<String, Map<DateTime, int>> getCategoryDateStats() {
+    final stats = <String, Map<DateTime, int>>{};
+
+    for (final station in _stations) {
+      if (station.isInspected && station.inspectionDate != null) {
+        final category = station.categoryName ?? '기타';
+        final dateKey = DateTime(
+          station.inspectionDate!.year,
+          station.inspectionDate!.month,
+          station.inspectionDate!.day,
+        );
+
+        stats.putIfAbsent(category, () => {});
+        stats[category]!.update(dateKey, (v) => v + 1, ifAbsent: () => 1);
+      }
+    }
+
+    return stats;
+  }
+
   /// 사진 경로 업데이트 (자동 클라우드 동기화)
   Future<void> updatePhotoPaths(String id, List<String> photoPaths) async {
     try {

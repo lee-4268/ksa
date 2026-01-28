@@ -40,13 +40,14 @@ class RadioStationAdapter extends TypeAdapter<RadioStation> {
       typeApprovalNumber: fields[20] as String?,
       installationType: fields[21] as String?,
       originalInstallationType: fields[22] as String?,
+      scheduledDate: fields[23] as DateTime?,
     );
   }
 
   @override
   void write(BinaryWriter writer, RadioStation obj) {
     writer
-      ..writeByte(23)
+      ..writeByte(24)
       ..writeByte(0)
       ..write(obj.id)
       ..writeByte(1)
@@ -92,7 +93,9 @@ class RadioStationAdapter extends TypeAdapter<RadioStation> {
       ..writeByte(21)
       ..write(obj.installationType)
       ..writeByte(22)
-      ..write(obj.originalInstallationType);
+      ..write(obj.originalInstallationType)
+      ..writeByte(23)
+      ..write(obj.scheduledDate);
   }
 
   @override

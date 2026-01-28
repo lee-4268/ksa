@@ -85,4 +85,14 @@ class StorageService {
       await station.save();
     }
   }
+
+  /// 검사 예정일 업데이트
+  Future<void> updateScheduledDate(String id, DateTime? scheduledDate) async {
+    final station = _box.get(id);
+    if (station != null) {
+      station.scheduledDate = scheduledDate;
+      station.updatedAt = DateTime.now();
+      await station.save();
+    }
+  }
 }

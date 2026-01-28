@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import '../providers/station_provider.dart';
 import '../services/auth_service.dart';
+import '../services/cloud_data_service.dart';
 import '../services/weather_service.dart';
 import 'map_screen.dart';
 import 'login_screen.dart';
@@ -30,6 +32,20 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     _loadWeather();
+    _loadCloudData();
+  }
+
+  /// 로그인 직후 클라우드 데이터 로드 (일정 및 통계에서 바로 사용 가능)
+  Future<void> _loadCloudData() async {
+    final provider = context.read<StationProvider>();
+    final cloudService = context.read<CloudDataService>();
+    final authService = context.read<AuthService>();
+
+    // 사용자가 로그인되어 있을 때만 CloudDataService 연결 및 데이터 로드
+    if (authService.isSignedIn) {
+      provider.setCloudDataService(cloudService);
+      await provider.loadStations();
+    }
   }
 
   Future<void> _loadWeather() async {

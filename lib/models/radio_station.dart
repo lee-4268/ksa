@@ -73,6 +73,9 @@ class RadioStation extends HiveObject {
   @HiveField(22)
   String? originalInstallationType; // 원본 설치대 (Import 시 저장, 변경 비교용)
 
+  @HiveField(23)
+  DateTime? scheduledDate; // 검사 예정일
+
   RadioStation({
     required this.id,
     required this.stationName,
@@ -97,6 +100,7 @@ class RadioStation extends HiveObject {
     this.typeApprovalNumber,
     this.installationType,
     this.originalInstallationType,
+    this.scheduledDate,
   })  : createdAt = createdAt ?? DateTime.now(),
         updatedAt = updatedAt ?? DateTime.now();
 
@@ -124,6 +128,7 @@ class RadioStation extends HiveObject {
     String? typeApprovalNumber,
     String? installationType,
     String? originalInstallationType,
+    DateTime? scheduledDate,
   }) {
     return RadioStation(
       id: id ?? this.id,
@@ -149,6 +154,7 @@ class RadioStation extends HiveObject {
       typeApprovalNumber: typeApprovalNumber ?? this.typeApprovalNumber,
       installationType: installationType ?? this.installationType,
       originalInstallationType: originalInstallationType ?? this.originalInstallationType,
+      scheduledDate: scheduledDate ?? this.scheduledDate,
     );
   }
 
@@ -177,6 +183,7 @@ class RadioStation extends HiveObject {
       'typeApprovalNumber': typeApprovalNumber,
       'installationType': installationType,
       'originalInstallationType': originalInstallationType,
+      'scheduledDate': scheduledDate?.toIso8601String(),
     };
   }
 
@@ -211,6 +218,9 @@ class RadioStation extends HiveObject {
       typeApprovalNumber: json['typeApprovalNumber'] as String?,
       installationType: json['installationType'] as String?,
       originalInstallationType: json['originalInstallationType'] as String?,
+      scheduledDate: json['scheduledDate'] != null
+          ? DateTime.parse(json['scheduledDate'] as String)
+          : null,
     );
   }
 
