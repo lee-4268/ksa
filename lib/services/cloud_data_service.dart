@@ -718,6 +718,7 @@ class CloudDataService extends ChangeNotifier {
   }
 
   RadioStation _mapToRadioStation(Map<String, dynamic> data) {
+    final installationType = data['installationType'] as String?;
     return RadioStation(
       id: data['id'] as String? ?? '',
       stationName: data['stationName'] as String? ?? '',
@@ -733,7 +734,10 @@ class CloudDataService extends ChangeNotifier {
       frequency: data['frequency'] as String?,
       stationType: data['stationType'] as String?,
       owner: data['stationOwner'] as String?,
-      installationType: data['installationType'] as String?,
+      installationType: installationType,
+      // 클라우드에서 로드 시 원본 설치대 = 현재 설치대로 설정
+      // (클라우드 데이터가 원본 기준이므로 변경 비교 시 정확한 비교 가능)
+      originalInstallationType: installationType,
       isInspected: data['isInspected'] as bool? ?? false,
       inspectionDate: data['inspectionDate'] != null
           ? DateTime.tryParse(data['inspectionDate'] as String)
@@ -961,6 +965,25 @@ class CloudDataService extends ChangeNotifier {
     } catch (e) {
       debugPrint('원본 Excel 다운로드 실패: $e');
       return null;
+    }
+  }
+
+  /// S3에서 원본 Excel 파일 삭제
+  Future<bool> deleteOriginalExcel(String storedPath) async {
+    try {
+      debugPrint('원본 Excel S3 삭제 시작: $storedPath');
+
+      // storedPath 형식: 'private/{identityId}/original-excel/{categoryName}-{timestamp}.xlsx'
+      // StoragePath.fromString을 사용하여 전체 경로로 삭제
+      await Amplify.Storage.remove(
+        path: StoragePath.fromString(storedPath),
+      ).result;
+
+      debugPrint('원본 Excel S3 삭제 완료: $storedPath');
+      return true;
+    } catch (e) {
+      debugPrint('원본 Excel S3 삭제 실패: $e');
+      return false;
     }
   }
 

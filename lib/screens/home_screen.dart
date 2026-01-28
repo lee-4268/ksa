@@ -4,6 +4,7 @@ import '../services/auth_service.dart';
 import '../services/weather_service.dart';
 import 'map_screen.dart';
 import 'login_screen.dart';
+import 'schedule_screen.dart';
 
 /// 메인 홈 화면 - 메뉴 선택 인터페이스
 class HomeScreen extends StatefulWidget {
@@ -19,6 +20,7 @@ class _HomeScreenState extends State<HomeScreen> {
   // 테마 색상
   static const Color _primaryColor = Color(0xFFE53935);
   static const Color _blueAccent = Color(0xFF4A90D9);
+  static const Color _greenColor = Color(0xFF43A047);
 
   // 날씨 정보
   WeatherInfo? _weatherInfo;
@@ -175,6 +177,13 @@ class _HomeScreenState extends State<HomeScreen> {
                   subtitle: '무선국 검사 및 현장 수검 관리',
                   color: _blueAccent,
                   onTap: () => _navigateFromDrawer(const MapScreen()),
+                ),
+                _buildDrawerItem(
+                  icon: Icons.calendar_month,
+                  title: '일정 및 통계',
+                  subtitle: '검사 일정 관리 및 진도율 확인',
+                  color: _greenColor,
+                  onTap: () => _navigateFromDrawer(const ScheduleScreen()),
                 ),
                 const Padding(
                   padding: EdgeInsets.symmetric(horizontal: 16),
@@ -369,6 +378,17 @@ class _HomeScreenState extends State<HomeScreen> {
           iconBackgroundColor: _blueAccent.withValues(alpha: 0.1),
           iconColor: _blueAccent,
           onTap: () => _navigateToScreen(const MapScreen()),
+        ),
+        const SizedBox(height: 16),
+        _buildMenuCard(
+          icon: Icons.calendar_month,
+          title: '일정 및 통계',
+          description: '검사 일정을 달력으로 확인하고, 카테고리별 진도율을 한눈에 파악합니다.',
+          buttonText: '확인하기',
+          buttonIcon: Icons.arrow_forward,
+          iconBackgroundColor: _greenColor.withValues(alpha: 0.1),
+          iconColor: _greenColor,
+          onTap: () => _navigateToScreen(const ScheduleScreen()),
         ),
       ],
     );
