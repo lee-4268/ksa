@@ -362,7 +362,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
           TextFormField(
             controller: _passwordController,
             obscureText: _obscurePassword,
-            obscuringCharacter: '•',
+            obscuringCharacter: '*',
             textInputAction: TextInputAction.next,
             style: _inputTextStyle,
             decoration: _buildInputDecoration(

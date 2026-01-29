@@ -49,14 +49,18 @@ class ExcelService {
       // 원본 bytes 복사 (서식 유지 export용)
       final originalBytes = Uint8List.fromList(bytes);
 
+      // UI 응답성을 위한 짧은 지연 (파일 선택 후 로딩 UI가 표시되도록)
+      await Future.delayed(const Duration(milliseconds: 50));
+
       // excel 패키지로 파싱 (numFmtId 오류 시 XML 직접 파싱으로 fallback)
+      // 모든 플랫폼에서 비동기 처리하여 UI 응답성 유지
       try {
-        final stations = _parseWithExcelPackage(bytes, fileName);
+        final stations = await _parseWithExcelPackageAsync(bytes, fileName);
         return ExcelImportResult(stations: stations, fileName: fileName, originalBytes: originalBytes);
       } catch (e) {
         debugPrint('excel 패키지 파싱 실패: $e');
 
-        // numFmtId 오류인 경우 - 웹에서는 바로 XML 직접 파싱으로 진행 (UI 응답성 유지)
+        // numFmtId 오류인 경우
         if (e.toString().contains('numFmtId')) {
           debugPrint('numFmtId 오류 감지');
 
@@ -73,12 +77,14 @@ class ExcelService {
             }
           }
 
-          // 모바일 환경에서는 기존 로직 유지 (isolate 사용 가능)
+          // 모바일 환경
           debugPrint('모바일 환경 - styles.xml 전처리 시도');
           try {
-            final fixedBytes = _fixNumFmtIdInExcel(bytes);
+            // UI 응답성을 위한 짧은 지연
+            await Future.delayed(Duration.zero);
+            final fixedBytes = await _fixNumFmtIdInExcelAsync(bytes);
             debugPrint('전처리된 바이트 크기: ${fixedBytes.length}');
-            final stations = _parseWithExcelPackage(fixedBytes, fileName);
+            final stations = await _parseWithExcelPackageAsync(fixedBytes, fileName);
             debugPrint('전처리 후 파싱 성공');
             return ExcelImportResult(stations: stations, fileName: fileName, originalBytes: originalBytes);
           } catch (e2, stackTrace) {
@@ -88,7 +94,7 @@ class ExcelService {
             // 원본 파일로 다시 시도 (numFmt 무시)
             debugPrint('원본 파일로 재시도 중...');
             try {
-              final stations = _parseWithExcelPackageIgnoreNumFmt(bytes, fileName);
+              final stations = await _parseWithExcelPackageIgnoreNumFmtAsync(bytes, fileName);
               debugPrint('원본 파일 파싱 성공 (numFmt 무시)');
               return ExcelImportResult(stations: stations, fileName: fileName, originalBytes: originalBytes);
             } catch (e3) {
@@ -114,6 +120,13 @@ class ExcelService {
       debugPrint('Excel 파일 import 오류: $e');
       rethrow;
     }
+  }
+
+  /// Excel 파일 내 numFmtId 오류 수정 - 비동기 버전 (UI 응답성 유지)
+  Future<Uint8List> _fixNumFmtIdInExcelAsync(Uint8List bytes) async {
+    // UI 응답성을 위해 이벤트 루프에 제어권 반환
+    await Future.delayed(Duration.zero);
+    return _fixNumFmtIdInExcel(bytes);
   }
 
   /// Excel 파일 내 numFmtId 오류 수정 (한국 원화 등 특수 형식 처리)
@@ -271,6 +284,12 @@ class ExcelService {
 
     // 5순위: 첫 번째 시트
     return sheetNames.first;
+  }
+
+  /// excel 패키지를 사용한 파싱 (numFmt 오류 무시 버전) - 비동기
+  Future<List<RadioStation>> _parseWithExcelPackageIgnoreNumFmtAsync(List<int> bytes, String categoryName) async {
+    await Future.delayed(Duration.zero);
+    return _parseWithExcelPackageIgnoreNumFmt(bytes, categoryName);
   }
 
   /// excel 패키지를 사용한 파싱 (numFmt 오류 무시 버전)
@@ -702,7 +721,138 @@ class ExcelService {
     return cells;
   }
 
-  /// excel 패키지를 사용한 파싱
+  /// excel 패키지를 사용한 파싱 - 비동기 버전 (UI 응답성 유지)
+  /// 주기적으로 이벤트 루프에 제어권을 반환하여 UI가 멈추지 않도록 함
+  Future<List<RadioStation>> _parseWithExcelPackageAsync(List<int> bytes, String categoryName) async {
+    // Excel 디코딩은 CPU 집약적 작업 - 디코딩 전후로 UI에 제어권 반환
+    debugPrint('===== Excel 디코딩 시작 (비동기) =====');
+    await Future.delayed(Duration.zero);
+
+    final excel = excel_pkg.Excel.decodeBytes(bytes);
+
+    // 디코딩 후 UI 응답성을 위한 yield
+    await Future.delayed(Duration.zero);
+
+    final List<RadioStation> stations = [];
+
+    if (excel.tables.isEmpty) {
+      throw Exception('시트가 없습니다.');
+    }
+
+    // 시트 선택 우선순위: 검사신청내역 > 신청/내역 포함 > 첫 번째 시트
+    final sheetName = _findTargetSheet(excel.tables.keys.toList());
+    debugPrint('===== Excel Import 디버그 =====');
+    debugPrint('선택된 시트: $sheetName (전체 시트: ${excel.tables.keys.toList()})');
+
+    final sheet = excel.tables[sheetName];
+
+    if (sheet == null || sheet.rows.isEmpty) {
+      throw Exception('시트가 비어있습니다.');
+    }
+
+    debugPrint('총 행 수: ${sheet.rows.length}');
+
+    final headerRow = sheet.rows.first;
+    debugPrint('헤더 행 셀 수: ${headerRow.length}');
+
+    // 헤더 내용 출력
+    for (int i = 0; i < headerRow.length; i++) {
+      final cell = headerRow[i];
+      final value = _getCellStringValueExcel(cell);
+      debugPrint('헤더[$i]: "$value"');
+    }
+
+    final columnMap = _mapColumnsExcel(headerRow);
+    debugPrint('컬럼 매핑 결과 (1행): $columnMap');
+
+    // 두 번째 행도 확인하여 병합셀 하위 헤더 처리 (이득, 기수 등)
+    // 두 번째 행이 서브헤더인지 확인 (이득, 기수 등의 키워드 포함 여부)
+    int dataStartRow = 1; // 기본값: 두 번째 행부터 데이터
+    if (sheet.rows.length > 1) {
+      final secondRow = sheet.rows[1];
+      bool isSecondRowHeader = false;
+      debugPrint('두 번째 행 헤더 확인:');
+      for (int i = 0; i < secondRow.length; i++) {
+        final cell = secondRow[i];
+        final value = _getCellStringValueExcel(cell).toLowerCase();
+        if (value.isNotEmpty) {
+          debugPrint('2행[$i]: "$value"');
+          // 이득, 기수 등 서브헤더 키워드 확인
+          if (value.contains('이득') || value.contains('기수') || value.contains('db')) {
+            isSecondRowHeader = true;
+          }
+          // 1행에서 매핑되지 않은 컬럼만 2행에서 매핑
+          _mapColumnByValue(value, i, columnMap);
+        }
+      }
+      debugPrint('컬럼 매핑 결과 (1+2행): $columnMap');
+
+      // 두 번째 행이 서브헤더이면 세 번째 행부터 데이터 시작
+      if (isSecondRowHeader) {
+        dataStartRow = 2;
+        debugPrint('두 번째 행이 서브헤더로 감지됨 - 데이터 시작 행: 3행');
+      }
+    }
+
+    if (!columnMap.containsKey('address')) {
+      debugPrint('주소 컬럼을 찾지 못함 - 자동 매핑 시도');
+      _autoMapColumns(headerRow.length, columnMap);
+      debugPrint('자동 매핑 후: $columnMap');
+    }
+
+    // 비고 컬럼 검증 - 첫 몇 개 데이터 행을 추출하여 검증
+    if (columnMap.containsKey('remarks')) {
+      final previewRows = <List<String>>[];
+      final previewCount = sheet.rows.length < 12 ? sheet.rows.length : 12;
+      for (int i = dataStartRow; i < previewCount && i < sheet.rows.length; i++) {
+        final row = sheet.rows[i];
+        final cells = row.map((cell) => _getCellStringValueExcel(cell)).toList();
+        previewRows.add(cells);
+      }
+      _validateRemarksColumn(columnMap, previewRows);
+      debugPrint('비고 컬럼 검증 완료: ${columnMap.containsKey('remarks') ? '매핑 유지' : '매핑 제거됨'}');
+    }
+
+    // 첫 번째 데이터 행 샘플 출력
+    if (sheet.rows.length > dataStartRow) {
+      final firstDataRow = sheet.rows[dataStartRow];
+      debugPrint('첫 번째 데이터 행 (${dataStartRow + 1}행) 셀 수: ${firstDataRow.length}');
+      for (int i = 0; i < firstDataRow.length; i++) {
+        final cell = firstDataRow[i];
+        final value = _getCellStringValueExcel(cell);
+        debugPrint('데이터[$dataStartRow][$i]: "$value"');
+      }
+    }
+
+    int parsedCount = 0;
+    int skippedCount = 0;
+
+    // 청크 단위로 처리하여 UI 응답성 유지 (20개 행마다 yield)
+    const int chunkSize = 20;
+
+    for (int i = dataStartRow; i < sheet.rows.length; i++) {
+      final row = sheet.rows[i];
+      final station = _parseRowExcel(row, columnMap, i, categoryName);
+      if (station != null) {
+        stations.add(station);
+        parsedCount++;
+      } else {
+        skippedCount++;
+      }
+
+      // 청크 단위로 이벤트 루프에 제어권 반환
+      if ((i - dataStartRow) % chunkSize == 0) {
+        await Future.delayed(Duration.zero);
+      }
+    }
+
+    debugPrint('파싱 완료: 성공 $parsedCount개, 스킵 $skippedCount개');
+    debugPrint('===== Excel Import 완료 =====');
+
+    return stations;
+  }
+
+  /// excel 패키지를 사용한 파싱 (동기 버전 - 레거시 유지)
   List<RadioStation> _parseWithExcelPackage(List<int> bytes, String categoryName) {
     final excel = excel_pkg.Excel.decodeBytes(bytes);
     final List<RadioStation> stations = [];
