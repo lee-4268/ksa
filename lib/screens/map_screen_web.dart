@@ -357,6 +357,9 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
     // 다이얼로그가 열리면 지도 상호작용 비활성화
     setMapDraggable(false);
 
+    // 국소 선택 여부 추적 (선택 시 상세 시트가 열리므로 맵 드래그 활성화 안 함)
+    bool stationSelected = false;
+
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -396,6 +399,7 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
                     ? const Icon(Icons.check_circle, color: Colors.green, size: 20)
                     : null,
                 onTap: () {
+                  stationSelected = true; // 국소 선택됨
                   Navigator.pop(ctx);
                   widget.onMarkerTap?.call(station);
                 },
@@ -411,8 +415,11 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
         ],
       ),
     ).whenComplete(() {
-      // 다이얼로그가 닫히면 지도 상호작용 활성화
-      setMapDraggable(true);
+      // 국소가 선택되지 않고 닫힌 경우에만 지도 상호작용 활성화
+      // (국소 선택 시에는 상세 시트가 열리므로 그쪽에서 관리)
+      if (!stationSelected) {
+        setMapDraggable(true);
+      }
     });
   }
 

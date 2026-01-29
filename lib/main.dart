@@ -10,10 +10,14 @@ import 'amplifyconfiguration.dart';
 import 'providers/station_provider.dart';
 import 'screens/home_screen.dart';
 import 'screens/login_screen.dart';
+import 'screens/pending_approval_screen.dart';
 import 'services/storage_service.dart';
 import 'services/auth_service.dart';
 import 'services/cloud_data_service.dart';
 import 'services/photo_storage_service.dart';
+import 'services/audit_service.dart';
+import 'services/team_context_service.dart';
+import 'services/admin_service.dart';
 
 // 모바일용 조건부 import
 import 'main_init_stub.dart' if (dart.library.io) 'main_init_mobile.dart'
@@ -84,6 +88,13 @@ class MyApp extends StatelessWidget {
       providers: [
         ChangeNotifierProvider(create: (_) => AuthService()),
         ChangeNotifierProvider(create: (_) => CloudDataService()),
+        ChangeNotifierProvider(create: (_) => TeamContextService()),
+        ChangeNotifierProvider(create: (_) => AuditService()),
+        ChangeNotifierProxyProvider<AuditService, AdminService>(
+          create: (ctx) => AdminService(ctx.read<AuditService>()),
+          update: (_, auditService, adminService) =>
+              adminService ?? AdminService(auditService),
+        ),
         ChangeNotifierProvider(
           create: (_) => StationProvider(storageService),
         ),
@@ -182,6 +193,56 @@ class _AuthWrapperState extends State<AuthWrapper> {
 
         // 로그인 상태에 따라 화면 분기
         if (authService.isSignedIn) {
+          // 승인 상태 확인
+          if (authService.isPendingApproval || authService.isRejected) {
+            return const PendingApprovalScreen();
+          }
+
+          if (authService.isSuspended) {
+            return Scaffold(
+              body: Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const Icon(Icons.block, size: 64, color: Colors.red),
+                    const SizedBox(height: 16),
+                    const Text(
+                      '계정이 정지되었습니다',
+                      style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 8),
+                    const Text('관리자에게 문의하세요.'),
+                    const SizedBox(height: 24),
+                    ElevatedButton(
+                      onPressed: () => authService.signOut(),
+                      child: const Text('로그아웃'),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          }
+
+          // 프로필이 없는 경우 (신규 사용자) - 프로필 생성 시도
+          if (authService.hasNoProfile) {
+            WidgetsBinding.instance.addPostFrameCallback((_) async {
+              await authService.createUserProfile();
+            });
+            return const Scaffold(
+              body: Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    CircularProgressIndicator(),
+                    SizedBox(height: 16),
+                    Text('프로필 생성 중...'),
+                  ],
+                ),
+              ),
+            );
+          }
+
+          // 승인된 사용자만 홈 화면 접근
           return const HomeScreen();
         } else {
           return const LoginScreen();

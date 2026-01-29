@@ -1,8 +1,27 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:amplify_flutter/amplify_flutter.dart';
 import 'package:amplify_auth_cognito/amplify_auth_cognito.dart';
+import 'package:amplify_api/amplify_api.dart';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+/// 사용자 상태 (승인 관련)
+enum UserApprovalStatus {
+  pending,
+  approved,
+  rejected,
+  suspended,
+  noProfile, // 프로필이 아직 생성되지 않음
+}
+
+/// 사용자 역할
+enum AppUserRole {
+  superAdmin,
+  divisionAdmin,
+  teamAdmin,
+  member,
+}
 
 /// AWS Cognito 기반 인증 서비스
 class AuthService extends ChangeNotifier {
@@ -10,6 +29,15 @@ class AuthService extends ChangeNotifier {
   bool _isLoading = false;
   String? _errorMessage;
   bool _isInitialized = false;
+
+  // 사용자 프로필 관련
+  String? _profileId;
+  UserApprovalStatus _approvalStatus = UserApprovalStatus.noProfile;
+  AppUserRole _userRole = AppUserRole.member;
+  String? _currentTeamId;
+  String? _currentTeamName;
+  String? _currentDivisionId;
+  String? _currentDivisionName;
 
   /// 세션 타임아웃 (2시간 = 7200초)
   static const Duration sessionTimeout = Duration(hours: 2);
@@ -32,6 +60,26 @@ class AuthService extends ChangeNotifier {
   bool get isSignedIn => _currentUser != null;
   String? get errorMessage => _errorMessage;
   bool get isInitialized => _isInitialized;
+
+  // 프로필 및 승인 상태 Getters
+  String? get profileId => _profileId;
+  UserApprovalStatus get approvalStatus => _approvalStatus;
+  AppUserRole get userRole => _userRole;
+  String? get currentTeamId => _currentTeamId;
+  String? get currentTeamName => _currentTeamName;
+  String? get currentDivisionId => _currentDivisionId;
+  String? get currentDivisionName => _currentDivisionName;
+
+  bool get isPendingApproval => _approvalStatus == UserApprovalStatus.pending;
+  bool get isApproved => _approvalStatus == UserApprovalStatus.approved;
+  bool get isRejected => _approvalStatus == UserApprovalStatus.rejected;
+  bool get isSuspended => _approvalStatus == UserApprovalStatus.suspended;
+  bool get hasNoProfile => _approvalStatus == UserApprovalStatus.noProfile;
+
+  bool get isSuperAdmin => _userRole == AppUserRole.superAdmin;
+  bool get isDivisionAdmin => _userRole == AppUserRole.divisionAdmin || isSuperAdmin;
+  bool get isTeamAdmin => _userRole == AppUserRole.teamAdmin || isDivisionAdmin;
+  bool get isAdmin => isTeamAdmin;
 
   /// 현재 사용자 ID
   String? get userId => _currentUser?.userId;
@@ -72,6 +120,192 @@ class AuthService extends ChangeNotifier {
     }
   }
 
+  /// 사용자 프로필 로드 (승인 상태 확인)
+  Future<void> loadUserProfile() async {
+    if (_currentUser == null) return;
+
+    const query = '''
+      query GetUserProfile(\$cognitoUserId: String!) {
+        userProfileByCognitoId(cognitoUserId: \$cognitoUserId) {
+          items {
+            id
+            cognitoUserId
+            email
+            name
+            phoneNumber
+            teamId
+            divisionId
+            status
+            role
+            approvedBy
+            approvedAt
+            rejectionReason
+            team {
+              id
+              name
+              division {
+                id
+                name
+              }
+            }
+          }
+        }
+      }
+    ''';
+
+    try {
+      final request = GraphQLRequest<String>(
+        document: query,
+        variables: {'cognitoUserId': _currentUser!.userId},
+        authorizationMode: APIAuthorizationType.userPools,
+      );
+
+      final response = await Amplify.API.query(request: request).response;
+
+      if (response.errors.isNotEmpty) {
+        debugPrint('프로필 로드 오류: ${response.errors}');
+        _approvalStatus = UserApprovalStatus.noProfile;
+        notifyListeners();
+        return;
+      }
+
+      final data = jsonDecode(response.data!) as Map<String, dynamic>;
+      final items = data['userProfileByCognitoId']['items'] as List<dynamic>;
+
+      if (items.isEmpty) {
+        _approvalStatus = UserApprovalStatus.noProfile;
+        debugPrint('사용자 프로필 없음 - 생성 필요');
+      } else {
+        final profile = items.first as Map<String, dynamic>;
+        _profileId = profile['id'] as String?;
+
+        // 상태 파싱
+        final statusStr = profile['status'] as String?;
+        switch (statusStr?.toUpperCase()) {
+          case 'PENDING':
+            _approvalStatus = UserApprovalStatus.pending;
+            break;
+          case 'APPROVED':
+            _approvalStatus = UserApprovalStatus.approved;
+            break;
+          case 'REJECTED':
+            _approvalStatus = UserApprovalStatus.rejected;
+            break;
+          case 'SUSPENDED':
+            _approvalStatus = UserApprovalStatus.suspended;
+            break;
+          default:
+            _approvalStatus = UserApprovalStatus.pending;
+        }
+
+        // 역할 파싱
+        final roleStr = profile['role'] as String?;
+        switch (roleStr?.toUpperCase().replaceAll('_', '')) {
+          case 'SUPERADMIN':
+            _userRole = AppUserRole.superAdmin;
+            break;
+          case 'DIVISIONADMIN':
+            _userRole = AppUserRole.divisionAdmin;
+            break;
+          case 'TEAMADMIN':
+            _userRole = AppUserRole.teamAdmin;
+            break;
+          default:
+            _userRole = AppUserRole.member;
+        }
+
+        // 팀/부서 정보
+        _currentTeamId = profile['teamId'] as String?;
+        _currentDivisionId = profile['divisionId'] as String?;
+
+        final team = profile['team'] as Map<String, dynamic>?;
+        if (team != null) {
+          _currentTeamName = team['name'] as String?;
+          final division = team['division'] as Map<String, dynamic>?;
+          if (division != null) {
+            _currentDivisionName = division['name'] as String?;
+          }
+        }
+
+        debugPrint('프로필 로드 완료: status=$_approvalStatus, role=$_userRole, team=$_currentTeamName');
+      }
+
+      notifyListeners();
+    } catch (e) {
+      debugPrint('프로필 로드 예외: $e');
+      _approvalStatus = UserApprovalStatus.noProfile;
+      notifyListeners();
+    }
+  }
+
+  /// 사용자 프로필 생성 (회원가입 완료 후)
+  Future<bool> createUserProfile() async {
+    if (_currentUser == null) return false;
+
+    const mutation = '''
+      mutation CreateUserProfile(\$input: CreateUserProfileInput!) {
+        createUserProfile(input: \$input) {
+          id
+          status
+          role
+        }
+      }
+    ''';
+
+    final input = <String, dynamic>{
+      'cognitoUserId': _currentUser!.userId,
+      'email': userEmail ?? '',
+      'status': 'PENDING',
+      'role': 'MEMBER',
+    };
+
+    if (_userName != null) input['name'] = _userName;
+    if (_userPhoneNumber != null) input['phoneNumber'] = _userPhoneNumber;
+
+    try {
+      final request = GraphQLRequest<String>(
+        document: mutation,
+        variables: {'input': input},
+        authorizationMode: APIAuthorizationType.userPools,
+      );
+
+      final response = await Amplify.API.mutate(request: request).response;
+
+      if (response.errors.isNotEmpty) {
+        debugPrint('프로필 생성 실패: ${response.errors}');
+        return false;
+      }
+
+      final data = jsonDecode(response.data!) as Map<String, dynamic>;
+      _profileId = data['createUserProfile']['id'] as String?;
+      _approvalStatus = UserApprovalStatus.pending;
+      _userRole = AppUserRole.member;
+
+      debugPrint('프로필 생성 완료: $_profileId');
+      notifyListeners();
+      return true;
+    } catch (e) {
+      debugPrint('프로필 생성 예외: $e');
+      return false;
+    }
+  }
+
+  /// 승인 상태 새로고침
+  Future<void> refreshApprovalStatus() async {
+    await loadUserProfile();
+  }
+
+  /// 프로필 정보 클리어 (로그아웃 시)
+  void _clearProfileInfo() {
+    _profileId = null;
+    _approvalStatus = UserApprovalStatus.noProfile;
+    _userRole = AppUserRole.member;
+    _currentTeamId = null;
+    _currentTeamName = null;
+    _currentDivisionId = null;
+    _currentDivisionName = null;
+  }
+
   /// 초기화 - 현재 로그인 상태 확인
   Future<void> init() async {
     if (_isInitialized) return;
@@ -97,6 +331,8 @@ class AuthService extends ChangeNotifier {
           debugPrint('로그인 상태: ${_currentUser?.userId}');
           // 사용자 속성(이름 등) 조회 - 백그라운드에서 비동기 처리 (로그인 속도 개선)
           fetchUserAttributes();
+          // 사용자 프로필 로드 (승인 상태 확인)
+          await loadUserProfile();
           // 세션 타이머 시작 (기존 만료 시간 유지)
           _startSessionTimerWithExistingExpiry();
         }
@@ -250,6 +486,8 @@ class AuthService extends ChangeNotifier {
         debugPrint('로그인 성공: ${_currentUser?.userId}');
         // 사용자 속성(이름 등) 조회 - 백그라운드에서 비동기 처리 (로그인 속도 개선)
         fetchUserAttributes();
+        // 사용자 프로필 로드 (승인 상태 확인)
+        await loadUserProfile();
         // 세션 타이머 시작 (2시간 비활성 시 자동 로그아웃)
         _startSessionTimer();
       }
@@ -294,6 +532,10 @@ class AuthService extends ChangeNotifier {
       await Amplify.Auth.signOut();
       _currentUser = null;
       _isSessionExpired = false;
+      // 프로필 정보 클리어
+      _clearProfileInfo();
+      _userName = null;
+      _userPhoneNumber = null;
       debugPrint('로그아웃 완료');
     } catch (e) {
       debugPrint('로그아웃 오류: $e');

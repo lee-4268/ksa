@@ -7,6 +7,7 @@ import '../services/weather_service.dart';
 import 'map_screen.dart';
 import 'login_screen.dart';
 import 'schedule_screen.dart';
+import 'admin/admin_panel_screen.dart';
 
 /// 메인 홈 화면 - 메뉴 선택 인터페이스
 class HomeScreen extends StatefulWidget {
@@ -23,6 +24,7 @@ class _HomeScreenState extends State<HomeScreen> {
   static const Color _primaryColor = Color(0xFFE53935);
   static const Color _blueAccent = Color(0xFF4A90D9);
   static const Color _greenColor = Color(0xFF43A047);
+  static const Color _indigoColor = Color(0xFF5C6BC0);
 
   // 날씨 정보
   WeatherInfo? _weatherInfo;
@@ -200,6 +202,21 @@ class _HomeScreenState extends State<HomeScreen> {
                   subtitle: '검사 일정 관리 및 진도율 확인',
                   color: _greenColor,
                   onTap: () => _navigateFromDrawer(const ScheduleScreen()),
+                ),
+                // 관리자 메뉴 (관리자만 표시)
+                Consumer<AuthService>(
+                  builder: (context, auth, _) {
+                    if (auth.isAdmin) {
+                      return _buildDrawerItem(
+                        icon: Icons.admin_panel_settings,
+                        title: '관리자 패널',
+                        subtitle: '사용자 승인 및 팀 관리',
+                        color: _indigoColor,
+                        onTap: () => _navigateFromDrawer(const AdminPanelScreen()),
+                      );
+                    }
+                    return const SizedBox.shrink();
+                  },
                 ),
                 const Padding(
                   padding: EdgeInsets.symmetric(horizontal: 16),
@@ -383,30 +400,48 @@ class _HomeScreenState extends State<HomeScreen> {
 
   /// 메뉴 카드들
   Widget _buildMenuCards() {
-    return Column(
-      children: [
-        _buildMenuCard(
-          icon: Icons.description_outlined,
-          title: '수검 관리',
-          description: '무선국 현장 검사 및 실시간 수검 데이터를 체계적으로 관리합니다.',
-          buttonText: '관리하기',
-          buttonIcon: Icons.arrow_forward,
-          iconBackgroundColor: _blueAccent.withValues(alpha: 0.1),
-          iconColor: _blueAccent,
-          onTap: () => _navigateToScreen(const MapScreen()),
-        ),
-        const SizedBox(height: 16),
-        _buildMenuCard(
-          icon: Icons.calendar_month,
-          title: '일정 및 통계',
-          description: '검사 일정을 달력으로 확인하고, 카테고리별 진도율을 한눈에 파악합니다.',
-          buttonText: '확인하기',
-          buttonIcon: Icons.arrow_forward,
-          iconBackgroundColor: _greenColor.withValues(alpha: 0.1),
-          iconColor: _greenColor,
-          onTap: () => _navigateToScreen(const ScheduleScreen()),
-        ),
-      ],
+    return Consumer<AuthService>(
+      builder: (context, auth, _) {
+        return Column(
+          children: [
+            _buildMenuCard(
+              icon: Icons.description_outlined,
+              title: '수검 관리',
+              description: '무선국 현장 검사 및 실시간 수검 데이터를 체계적으로 관리합니다.',
+              buttonText: '관리하기',
+              buttonIcon: Icons.arrow_forward,
+              iconBackgroundColor: _blueAccent.withValues(alpha: 0.1),
+              iconColor: _blueAccent,
+              onTap: () => _navigateToScreen(const MapScreen()),
+            ),
+            const SizedBox(height: 16),
+            _buildMenuCard(
+              icon: Icons.calendar_month,
+              title: '일정 및 통계',
+              description: '검사 일정을 달력으로 확인하고, 카테고리별 진도율을 한눈에 파악합니다.',
+              buttonText: '확인하기',
+              buttonIcon: Icons.arrow_forward,
+              iconBackgroundColor: _greenColor.withValues(alpha: 0.1),
+              iconColor: _greenColor,
+              onTap: () => _navigateToScreen(const ScheduleScreen()),
+            ),
+            // 관리자 패널 카드 (관리자만 표시)
+            if (auth.isAdmin) ...[
+              const SizedBox(height: 16),
+              _buildMenuCard(
+                icon: Icons.admin_panel_settings,
+                title: '관리자 패널',
+                description: '사용자 가입 승인, 팀 관리, 감사 로그를 확인합니다.',
+                buttonText: '관리하기',
+                buttonIcon: Icons.arrow_forward,
+                iconBackgroundColor: _indigoColor.withValues(alpha: 0.1),
+                iconColor: _indigoColor,
+                onTap: () => _navigateToScreen(const AdminPanelScreen()),
+              ),
+            ],
+          ],
+        );
+      },
     );
   }
 

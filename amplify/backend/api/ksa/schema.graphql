@@ -1,11 +1,258 @@
-# 카테고리 (Excel 파일 단위) - 소유자만 접근 가능
+# ==========================================
+# 조직 구조 모델
+# ==========================================
+
+# 부서 (Division) - 최상위 조직 단위
+type Division @model @auth(rules: [
+  { allow: groups, groups: ["SuperAdmin"], operations: [create, read, update, delete] }
+  { allow: groups, groupsField: "adminGroup", operations: [read, update] }
+  { allow: groups, groupsField: "memberGroup", operations: [read] }
+]) {
+  id: ID!
+  name: String!                    # 부서명 (예: 혁신팀, 품개팀)
+  code: String! @index(name: "byCode", queryField: "divisionByCode")
+  description: String
+  adminGroup: String!              # Cognito 그룹명 (예: Division_혁신팀_Admin)
+  memberGroup: String!             # Cognito 그룹명 (예: Division_혁신팀_Member)
+  teams: [Team] @hasMany(indexName: "byDivision", fields: ["id"])
+  createdAt: AWSDateTime
+  updatedAt: AWSDateTime
+}
+
+# 팀 (Team) - 부서 하위 조직 단위
+type Team @model @auth(rules: [
+  { allow: groups, groups: ["SuperAdmin"], operations: [create, read, update, delete] }
+  { allow: groups, groupsField: "divisionAdminGroup", operations: [read, update] }
+  { allow: groups, groupsField: "adminGroup", operations: [read, update] }
+  { allow: groups, groupsField: "memberGroup", operations: [read] }
+]) {
+  id: ID!
+  divisionId: ID! @index(name: "byDivision", sortKeyFields: ["name"])
+  division: Division @belongsTo(fields: ["divisionId"])
+  name: String!                    # 팀명
+  code: String! @index(name: "byTeamCode", queryField: "teamByCode")
+  description: String
+  divisionAdminGroup: String!      # 상위 부서 관리자 그룹
+  adminGroup: String!              # Cognito 그룹명 (예: Team_혁신팀_1팀_Admin)
+  memberGroup: String!             # Cognito 그룹명 (예: Team_혁신팀_1팀_Member)
+  members: [UserProfile] @hasMany(indexName: "byTeam", fields: ["id"])
+  inspectionData: [TeamInspectionData] @hasMany(indexName: "byTeamInspection", fields: ["id"])
+  categories: [Category] @hasMany(indexName: "byCategoryTeam", fields: ["id"])
+  createdAt: AWSDateTime
+  updatedAt: AWSDateTime
+}
+
+# ==========================================
+# 사용자 프로필 (승인 관리)
+# ==========================================
+
+enum UserStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  SUSPENDED
+}
+
+enum UserRole {
+  SUPER_ADMIN
+  DIVISION_ADMIN
+  TEAM_ADMIN
+  MEMBER
+}
+
+type UserProfile @model @auth(rules: [
+  { allow: groups, groups: ["SuperAdmin"], operations: [create, read, update, delete] }
+  { allow: groups, groupsField: "teamAdminGroup", operations: [read, update] }
+  { allow: owner, ownerField: "cognitoUserId", operations: [create, read] }
+]) {
+  id: ID!
+  cognitoUserId: String! @index(name: "byCognitoId", queryField: "userProfileByCognitoId")
+  email: String! @index(name: "byEmail", queryField: "userProfileByEmail")
+  name: String
+  phoneNumber: String
+
+  # 조직 정보
+  teamId: ID @index(name: "byTeam", sortKeyFields: ["createdAt"])
+  team: Team @belongsTo(fields: ["teamId"])
+  divisionId: ID @index(name: "byDivision")
+
+  # 승인 상태
+  status: UserStatus! @default(value: "PENDING")
+  approvedBy: String                # 승인한 관리자 ID
+  approvedAt: AWSDateTime
+  rejectionReason: String
+
+  # 권한 정보
+  role: UserRole! @default(value: "MEMBER")
+  teamAdminGroup: String            # 소속 팀의 관리자 그룹 (권한 체크용)
+
+  createdAt: AWSDateTime
+  updatedAt: AWSDateTime
+}
+
+# ==========================================
+# 마스터 무선국 (공유 기본 데이터)
+# ==========================================
+
+type MasterStation @model @auth(rules: [
+  { allow: groups, groups: ["SuperAdmin"], operations: [create, read, update, delete] }
+  { allow: groups, groups: ["DivisionAdmins"], operations: [create, read, update] }
+  { allow: groups, groups: ["AllMembers"], operations: [read] }
+]) {
+  id: ID!
+
+  # 고유 식별자
+  callSign: String @index(name: "byCallSign", queryField: "masterStationByCallSign")
+  licenseNumber: String! @index(name: "byLicenseNumber", queryField: "masterStationByLicenseNumber")
+
+  # 기본 정보 (공식 데이터)
+  stationName: String!
+  address: String!
+  latitude: Float
+  longitude: Float
+  frequency: String
+  stationType: String
+  stationOwner: String
+
+  # 추가 기본 정보
+  gain: String
+  antennaCount: String
+  typeApprovalNumber: String
+  installationType: String         # 설치대 (철탑형태)
+  remarks: String
+
+  # 메타데이터
+  sourceCategory: String           # 원본 카테고리 (Import 출처)
+  lastVerifiedAt: AWSDateTime      # 마지막 검증 일시
+  lastVerifiedBy: String           # 마지막 검증자
+
+  # 팀별 검사 데이터 연결
+  teamInspections: [TeamInspectionData] @hasMany(indexName: "byMasterStation", fields: ["id"])
+
+  createdAt: AWSDateTime
+  updatedAt: AWSDateTime
+}
+
+# ==========================================
+# 팀별 검사 데이터 (팀 소유 데이터)
+# ==========================================
+
+type TeamInspectionData @model @auth(rules: [
+  { allow: groups, groups: ["SuperAdmin"], operations: [create, read, update, delete] }
+  { allow: groups, groupsField: "divisionGroup", operations: [read] }
+  { allow: groups, groupsField: "teamGroup", operations: [create, read, update, delete] }
+]) {
+  id: ID!
+
+  # 연결 정보
+  masterStationId: ID! @index(name: "byMasterStation", sortKeyFields: ["createdAt"])
+  masterStation: MasterStation @belongsTo(fields: ["masterStationId"])
+  teamId: ID! @index(name: "byTeamInspection", sortKeyFields: ["createdAt"])
+  team: Team @belongsTo(fields: ["teamId"])
+
+  # 권한 그룹 필드
+  divisionGroup: String!           # 부서 그룹 (읽기 권한)
+  teamGroup: String!               # 팀 그룹 (전체 권한)
+
+  # 검사 정보
+  isInspected: Boolean @default(value: "false")
+  inspectionDate: AWSDateTime
+  scheduledDate: AWSDateTime       # 검사 예정일
+  inspectedBy: String              # 검사 수행자 ID
+  inspectorName: String            # 검사 수행자 이름
+
+  # 검사 결과
+  memo: String
+  remarks: String
+  photoKeys: [String]              # S3 사진 키
+
+  # 카테고리 정보 (팀 내부 분류용)
+  categoryId: ID @index(name: "byInspectionCategory")
+  categoryName: String
+
+  createdAt: AWSDateTime
+  updatedAt: AWSDateTime
+}
+
+# ==========================================
+# 감사 로그 (모든 CRUD 작업 추적)
+# ==========================================
+
+enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  APPROVE
+  REJECT
+  SUSPEND
+  RESTORE
+  ROLLBACK
+  LOGIN
+  LOGOUT
+}
+
+type AuditLog @model @auth(rules: [
+  { allow: groups, groups: ["SuperAdmin"], operations: [create, read] }
+  { allow: groups, groups: ["DivisionAdmins"], operations: [read] }
+]) {
+  id: ID!
+
+  # 작업 정보
+  action: AuditAction!
+  entityType: String!              # MasterStation, TeamInspectionData, UserProfile, etc.
+  entityId: String!
+
+  # 사용자 정보
+  userId: String! @index(name: "byUser", sortKeyFields: ["timestamp"])
+  userEmail: String
+  userName: String
+  userTeamId: String
+  userTeamName: String
+
+  # 타임스탬프
+  timestamp: AWSDateTime! @index(name: "byTimestamp", queryField: "auditLogsByTimestamp")
+
+  # 변경 내용
+  previousData: AWSJSON            # 변경 전 데이터 (JSON)
+  newData: AWSJSON                 # 변경 후 데이터 (JSON)
+  changedFields: [String]          # 변경된 필드 목록
+
+  # 컨텍스트
+  ipAddress: String
+  userAgent: String
+  requestId: String
+
+  # 롤백 정보
+  canRollback: Boolean @default(value: "true")
+  rolledBackAt: AWSDateTime
+  rolledBackBy: String
+
+  createdAt: AWSDateTime
+}
+
+# ==========================================
+# 기존 모델 (하위 호환성 유지 + 팀 연동 추가)
+# ==========================================
+
+# 카테고리 (Excel 파일 단위) - 팀 소유로 변경
 type Category @model @auth(rules: [
+  { allow: groups, groups: ["SuperAdmin"], operations: [create, read, update, delete] }
+  { allow: groups, groupsField: "teamGroup", operations: [create, read, update, delete] }
+  { allow: groups, groupsField: "divisionGroup", operations: [read] }
   { allow: owner, operations: [create, read, update, delete] }
 ]) {
   id: ID!
   name: String!
   originalExcelKey: String    # 원본 Excel 파일 S3 키 (서식 유지 export용)
+
+  # 팀 연결 (새로 추가)
+  teamId: ID @index(name: "byCategoryTeam", sortKeyFields: ["createdAt"])
+  team: Team @belongsTo(fields: ["teamId"])
+  teamGroup: String               # 팀 그룹
+  divisionGroup: String           # 부서 그룹 (읽기용)
+
   stations: [Station] @hasMany(indexName: "byCategory", fields: ["id"])
+  inspectionData: [TeamInspectionData] @hasMany(indexName: "byInspectionCategory", fields: ["id"])
   createdAt: AWSDateTime
   updatedAt: AWSDateTime
 }
