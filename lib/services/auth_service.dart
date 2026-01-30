@@ -304,6 +304,20 @@ class AuthService extends ChangeNotifier {
     }
 
     for (final group in groups) {
+      // DivisionAdmins 그룹 (전체 본부 관리자)
+      if (group == 'DivisionAdmins') {
+        _userRole = AppUserRole.divisionAdmin;
+        debugPrint('역할 설정: DivisionAdmin (그룹: $group)');
+        return;
+      }
+
+      // TeamAdmins 그룹 (전체 팀 관리자)
+      if (group == 'TeamAdmins') {
+        _userRole = AppUserRole.teamAdmin;
+        debugPrint('역할 설정: TeamAdmin (그룹: $group)');
+        return;
+      }
+
       // Division Admin 그룹: Division_경기_Admin 또는 경기Access_Admin 형태
       if (group.contains('Admin')) {
         if (group.startsWith('Division_') || group.contains('Access_Admin')) {
