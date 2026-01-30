@@ -7,6 +7,7 @@ import '../services/weather_service.dart';
 import 'map_screen.dart';
 import 'login_screen.dart';
 import 'schedule_screen.dart';
+import 'division_management_screen.dart';
 import 'admin/admin_panel_screen.dart';
 
 /// 메인 홈 화면 - 메뉴 선택 인터페이스
@@ -202,6 +203,21 @@ class _HomeScreenState extends State<HomeScreen> {
                   subtitle: '검사 일정 관리 및 진도율 확인',
                   color: _greenColor,
                   onTap: () => _navigateFromDrawer(const ScheduleScreen()),
+                ),
+                // 전체 대상 관리 (본부 담당자만 표시)
+                Consumer<AuthService>(
+                  builder: (context, auth, _) {
+                    if (auth.isDivisionAdmin) {
+                      return _buildDrawerItem(
+                        icon: Icons.business,
+                        title: '전체 대상 관리',
+                        subtitle: '본부 수검 대상 등록 및 관리',
+                        color: const Color(0xFF7B1FA2),
+                        onTap: () => _navigateFromDrawer(const DivisionManagementScreen()),
+                      );
+                    }
+                    return const SizedBox.shrink();
+                  },
                 ),
                 // 관리자 메뉴 (관리자만 표시)
                 Consumer<AuthService>(

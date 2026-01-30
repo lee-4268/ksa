@@ -408,7 +408,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
           TextFormField(
             controller: _confirmPasswordController,
             obscureText: _obscureConfirmPassword,
-            obscuringCharacter: '•',
+            obscuringCharacter: '*',
             textInputAction: TextInputAction.done,
             onFieldSubmitted: (_) => _handleSignUp(),
             style: _inputTextStyle,

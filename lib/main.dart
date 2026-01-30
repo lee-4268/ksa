@@ -18,6 +18,7 @@ import 'services/photo_storage_service.dart';
 import 'services/audit_service.dart';
 import 'services/team_context_service.dart';
 import 'services/admin_service.dart';
+import 'services/division_data_service.dart';
 
 // 모바일용 조건부 import
 import 'main_init_stub.dart' if (dart.library.io) 'main_init_mobile.dart'
@@ -90,6 +91,7 @@ class MyApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => CloudDataService()),
         ChangeNotifierProvider(create: (_) => TeamContextService()),
         ChangeNotifierProvider(create: (_) => AuditService()),
+        ChangeNotifierProvider(create: (_) => DivisionDataService()),
         ChangeNotifierProxyProvider<AuditService, AdminService>(
           create: (ctx) => AdminService(ctx.read<AuditService>()),
           update: (_, auditService, adminService) =>

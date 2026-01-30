@@ -3,6 +3,8 @@ import 'package:provider/provider.dart';
 import 'package:table_calendar/table_calendar.dart';
 import '../models/radio_station.dart';
 import '../providers/station_provider.dart';
+import '../services/division_data_service.dart';
+import '../services/auth_service.dart';
 
 /// 일정 관리 및 통계 대시보드 화면
 class ScheduleScreen extends StatefulWidget {
@@ -37,6 +39,24 @@ class _ScheduleScreenState extends State<ScheduleScreen>
     super.initState();
     _selectedDay = DateTime.now();
     _tabController = TabController(length: 2, vsync: this);
+
+    // 본부 데이터 로드
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _loadDivisionData();
+    });
+  }
+
+  void _loadDivisionData() {
+    final authService = context.read<AuthService>();
+    final divisionService = context.read<DivisionDataService>();
+
+    if (authService.currentDivisionId != null) {
+      divisionService.setDivision(
+        authService.currentDivisionId!,
+        authService.currentDivisionName ?? '본부',
+      );
+      divisionService.loadFromCloud();
+    }
   }
 
   @override
@@ -50,28 +70,278 @@ class _ScheduleScreenState extends State<ScheduleScreen>
     return Scaffold(
       backgroundColor: Colors.grey.shade50,
       appBar: _buildAppBar(),
-      body: Consumer<StationProvider>(
-        builder: (context, provider, _) {
+      body: Consumer2<StationProvider, DivisionDataService>(
+        builder: (context, stationProvider, divisionService, _) {
           return SingleChildScrollView(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // 통계 대시보드 (예상 완료일 포함)
-                _buildStatsDashboard(provider),
+                // 본부 전체 진행률 + 이번주 진행률
+                _buildDivisionStatsDashboard(divisionService),
+                const SizedBox(height: 16),
+                // 팀별 진행률
+                _buildTeamProgressSection(divisionService),
                 const SizedBox(height: 16),
                 // 탭 (카테고리별 진도율 / 날짜별 통계)
-                _buildTabSection(provider),
+                _buildTabSection(stationProvider),
                 const SizedBox(height: 16),
                 // 달력 (예정일 + 완료일)
-                _buildCalendar(provider),
+                _buildCalendar(stationProvider),
                 const SizedBox(height: 16),
                 // 선택된 날짜의 검사 목록
-                _buildSelectedDayInspections(provider),
+                _buildSelectedDayInspections(stationProvider),
                 const SizedBox(height: 24),
               ],
             ),
           );
         },
+      ),
+    );
+  }
+
+  /// 본부 전체 진행률 대시보드
+  Widget _buildDivisionStatsDashboard(DivisionDataService service) {
+    final stats = service.stats;
+    final weeklyStats = service.weeklyStats;
+    final divisionName = service.currentDivisionName ?? '본부';
+
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.05),
+            blurRadius: 10,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // 본부 전체 진행률
+          Row(
+            children: [
+              const Icon(Icons.business, color: _blueAccent, size: 22),
+              const SizedBox(width: 8),
+              Text(
+                '$divisionName 전체 진행률',
+                style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          // 진행률 바
+          ClipRRect(
+            borderRadius: BorderRadius.circular(8),
+            child: TweenAnimationBuilder<double>(
+              tween: Tween(begin: 0, end: stats.progressRate),
+              duration: const Duration(milliseconds: 800),
+              curve: Curves.easeOutCubic,
+              builder: (context, value, _) {
+                return LinearProgressIndicator(
+                  value: value,
+                  minHeight: 14,
+                  backgroundColor: Colors.grey.shade200,
+                  valueColor: AlwaysStoppedAnimation<Color>(
+                    stats.progressRate >= 0.8 ? _greenColor : _blueAccent,
+                  ),
+                );
+              },
+            ),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                '${stats.inspected}/${stats.total}',
+                style: TextStyle(
+                  color: Colors.grey.shade600,
+                  fontSize: 14,
+                ),
+              ),
+              Text(
+                '${(stats.progressRate * 100).toStringAsFixed(1)}%',
+                style: const TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 18,
+                ),
+              ),
+            ],
+          ),
+          const Divider(height: 32),
+          // 이번 주 진행률
+          Row(
+            children: [
+              const Icon(Icons.date_range, color: _greenColor, size: 20),
+              const SizedBox(width: 8),
+              Text(
+                '이번주 진행률 (${DateTime.now().month}월 ${weeklyStats.weekNumber}주차)',
+                style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(6),
+            child: TweenAnimationBuilder<double>(
+              tween: Tween(begin: 0, end: weeklyStats.progressRate),
+              duration: const Duration(milliseconds: 800),
+              curve: Curves.easeOutCubic,
+              builder: (context, value, _) {
+                return LinearProgressIndicator(
+                  value: value,
+                  minHeight: 10,
+                  backgroundColor: Colors.grey.shade200,
+                  valueColor: AlwaysStoppedAnimation<Color>(
+                    weeklyStats.progressRate >= 0.8 ? _greenColor : _orangeColor,
+                  ),
+                );
+              },
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            '${weeklyStats.completed}/${weeklyStats.scheduled} (${(weeklyStats.progressRate * 100).toStringAsFixed(0)}%)',
+            style: TextStyle(
+              color: Colors.grey.shade600,
+              fontSize: 13,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 팀별 진행률 섹션
+  Widget _buildTeamProgressSection(DivisionDataService service) {
+    final teamStats = service.teamStats;
+
+    if (teamStats.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    // 진행률 기준 정렬
+    final sortedTeams = teamStats.entries.toList()
+      ..sort((a, b) => b.value.progressRate.compareTo(a.value.progressRate));
+
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 16),
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.05),
+            blurRadius: 10,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Row(
+            children: [
+              Icon(Icons.groups, color: _purpleColor, size: 22),
+              SizedBox(width: 8),
+              Text(
+                '팀별 진행률',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          ...sortedTeams.map((entry) => _buildTeamProgressRow(entry.key, entry.value)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTeamProgressRow(String teamName, TeamStats stats) {
+    Color progressColor;
+    if (stats.progressRate >= 0.8) {
+      progressColor = _greenColor;
+    } else if (stats.progressRate >= 0.5) {
+      progressColor = _orangeColor;
+    } else {
+      progressColor = _primaryColor;
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                teamName,
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+              if (stats.total == 0)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: Colors.grey.shade200,
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: const Text(
+                    '대상 없음',
+                    style: TextStyle(
+                      color: Colors.grey,
+                      fontSize: 11,
+                    ),
+                  ),
+                )
+              else
+                Text(
+                  '${stats.inspected}/${stats.total} (${(stats.progressRate * 100).toStringAsFixed(0)}%)',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Colors.grey.shade600,
+                  ),
+                ),
+            ],
+          ),
+          if (stats.total > 0) ...[
+            const SizedBox(height: 6),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(4),
+              child: TweenAnimationBuilder<double>(
+                tween: Tween(begin: 0, end: stats.progressRate),
+                duration: const Duration(milliseconds: 800),
+                curve: Curves.easeOutCubic,
+                builder: (context, value, _) {
+                  return LinearProgressIndicator(
+                    value: value,
+                    minHeight: 8,
+                    backgroundColor: Colors.grey.shade200,
+                    valueColor: AlwaysStoppedAnimation<Color>(progressColor),
+                  );
+                },
+              ),
+            ),
+          ],
+        ],
       ),
     );
   }
@@ -100,234 +370,6 @@ class _ScheduleScreenState extends State<ScheduleScreen>
         ],
       ),
       centerTitle: true,
-    );
-  }
-
-  /// 통계 대시보드 (예상 완료일 포함)
-  Widget _buildStatsDashboard(StationProvider provider) {
-    final stations = provider.stations;
-    final total = stations.length;
-    final inspected = stations.where((s) => s.isInspected).length;
-    final pending = total - inspected;
-    final progressRate = total > 0 ? (inspected / total * 100) : 0.0;
-
-    // 예상 완료일 계산
-    final estimatedDate = provider.getEstimatedCompletionDate();
-    final dailyRate = provider.getDailyInspectionRate();
-
-    return Container(
-      margin: const EdgeInsets.fromLTRB(16, 16, 16, 0),
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.05),
-            blurRadius: 10,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Row(
-            children: [
-              Icon(Icons.analytics_outlined, color: _blueAccent, size: 22),
-              SizedBox(width: 8),
-              Text(
-                '전체 진도율',
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.black87,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 20),
-          // 진도율 원형 그래프
-          Row(
-            children: [
-              // 원형 진도율
-              SizedBox(
-                width: 100,
-                height: 100,
-                child: Stack(
-                  children: [
-                    SizedBox(
-                      width: 100,
-                      height: 100,
-                      child: TweenAnimationBuilder<double>(
-                        tween: Tween(begin: 0, end: progressRate / 100),
-                        duration: const Duration(milliseconds: 800),
-                        curve: Curves.easeOutCubic,
-                        builder: (context, value, _) {
-                          return CircularProgressIndicator(
-                            value: value,
-                            strokeWidth: 10,
-                            backgroundColor: Colors.grey.shade200,
-                            valueColor: AlwaysStoppedAnimation<Color>(
-                              progressRate >= 80
-                                  ? _greenColor
-                                  : progressRate >= 50
-                                      ? _orangeColor
-                                      : _primaryColor,
-                            ),
-                          );
-                        },
-                      ),
-                    ),
-                    Center(
-                      child: Text(
-                        '${progressRate.toStringAsFixed(1)}%',
-                        style: const TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.black87,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 24),
-              // 통계 수치
-              Expanded(
-                child: Column(
-                  children: [
-                    _buildStatRow(
-                      icon: Icons.cell_tower,
-                      label: '전체 무선국',
-                      value: '$total',
-                      color: _blueAccent,
-                    ),
-                    const SizedBox(height: 12),
-                    _buildStatRow(
-                      icon: Icons.check_circle,
-                      label: '검사 완료',
-                      value: '$inspected',
-                      color: _greenColor,
-                    ),
-                    const SizedBox(height: 12),
-                    _buildStatRow(
-                      icon: Icons.pending,
-                      label: '검사 대기',
-                      value: '$pending',
-                      color: _orangeColor,
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          // 예상 완료일 섹션
-          if (pending > 0) ...[
-            const SizedBox(height: 20),
-            const Divider(height: 1),
-            const SizedBox(height: 16),
-            Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: _purpleColor.withValues(alpha: 0.1),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: const Icon(Icons.event_available, color: _purpleColor, size: 20),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        '예상 완료일',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: Colors.grey.shade600,
-                        ),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        estimatedDate != null
-                            ? '${estimatedDate.year}년 ${estimatedDate.month}월 ${estimatedDate.day}일'
-                            : '데이터 부족',
-                        style: const TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.black87,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                  decoration: BoxDecoration(
-                    color: _blueAccent.withValues(alpha: 0.1),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Icon(Icons.speed, color: _blueAccent, size: 16),
-                      const SizedBox(width: 4),
-                      Text(
-                        '일 ${dailyRate.toStringAsFixed(1)}건',
-                        style: const TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                          color: _blueAccent,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-
-  Widget _buildStatRow({
-    required IconData icon,
-    required String label,
-    required String value,
-    required Color color,
-  }) {
-    return Row(
-      children: [
-        Container(
-          padding: const EdgeInsets.all(6),
-          decoration: BoxDecoration(
-            color: color.withValues(alpha: 0.1),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Icon(icon, color: color, size: 16),
-        ),
-        const SizedBox(width: 10),
-        Expanded(
-          child: Text(
-            label,
-            style: TextStyle(
-              fontSize: 13,
-              color: Colors.grey.shade600,
-            ),
-          ),
-        ),
-        Text(
-          value,
-          style: const TextStyle(
-            fontSize: 16,
-            fontWeight: FontWeight.bold,
-            color: Colors.black87,
-          ),
-        ),
-      ],
     );
   }
 

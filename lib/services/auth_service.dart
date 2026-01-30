@@ -228,6 +228,19 @@ class AuthService extends ChangeNotifier {
         }
 
         debugPrint('프로필 로드 완료: status=$_approvalStatus, role=$_userRole, team=$_currentTeamName');
+
+        // Cognito 그룹에 속해있으면 PENDING 상태여도 자동 승인 처리
+        if (_approvalStatus == UserApprovalStatus.pending) {
+          final isInGroup = await _checkUserInCognitoGroup();
+          if (isInGroup) {
+            debugPrint('Cognito 그룹에 속해있음 - 자동 승인 처리');
+            // Cognito 그룹 멤버십이 확인되면 즉시 로컬 상태를 APPROVED로 변경
+            // (DB 업데이트는 백그라운드에서 시도, 실패해도 로컬 상태는 유지)
+            _approvalStatus = UserApprovalStatus.approved;
+            // DB 업데이트 시도 (실패해도 무시 - 로컬 상태가 이미 APPROVED)
+            _autoApproveUserProfile();
+          }
+        }
       }
 
       notifyListeners();
@@ -235,6 +248,176 @@ class AuthService extends ChangeNotifier {
       debugPrint('프로필 로드 예외: $e');
       _approvalStatus = UserApprovalStatus.noProfile;
       notifyListeners();
+    }
+  }
+
+  /// Cognito 그룹 멤버십 확인 및 역할/소속 정보 추출
+  Future<bool> _checkUserInCognitoGroup() async {
+    try {
+      // JWT 토큰에서 그룹 정보 추출
+      final session = await Amplify.Auth.fetchAuthSession(
+        options: const FetchAuthSessionOptions(forceRefresh: true),
+      );
+
+      // CognitoAuthSession으로 캐스팅하여 토큰 접근
+      if (session is CognitoAuthSession) {
+        final idToken = session.userPoolTokensResult.valueOrNull?.idToken;
+        if (idToken != null) {
+          // JWT 토큰 디코딩 (페이로드 부분)
+          final parts = idToken.raw.split('.');
+          if (parts.length == 3) {
+            final payload = parts[1];
+            // Base64 패딩 추가
+            final normalizedPayload = base64.normalize(payload);
+            final decoded = utf8.decode(base64.decode(normalizedPayload));
+            final claims = jsonDecode(decoded) as Map<String, dynamic>;
+
+            // cognito:groups 클레임 확인
+            final groups = claims['cognito:groups'] as List<dynamic>?;
+            if (groups != null && groups.isNotEmpty) {
+              debugPrint('사용자 Cognito 그룹: $groups');
+
+              // 그룹 이름에서 역할 및 소속 정보 추출
+              _extractRoleFromGroups(groups.cast<String>());
+
+              return true;
+            }
+          }
+        }
+      }
+      return false;
+    } catch (e) {
+      debugPrint('Cognito 그룹 확인 오류: $e');
+      return false;
+    }
+  }
+
+  /// Cognito 그룹 이름에서 역할 및 소속 정보 추출
+  void _extractRoleFromGroups(List<String> groups) {
+    for (final group in groups) {
+      // SuperAdmin 그룹 확인
+      if (group == 'SuperAdmin' || group == 'SuperAdmins') {
+        _userRole = AppUserRole.superAdmin;
+        debugPrint('역할 설정: SuperAdmin (그룹: $group)');
+        return;
+      }
+    }
+
+    for (final group in groups) {
+      // Division Admin 그룹: Division_경기_Admin 또는 경기Access_Admin 형태
+      if (group.contains('Admin')) {
+        if (group.startsWith('Division_') || group.contains('Access_Admin')) {
+          _userRole = AppUserRole.divisionAdmin;
+          // 본부 이름 추출 (예: Division_경기_Admin -> 경기, 경기Access_Admin -> 경기Access)
+          final divisionName = _extractDivisionName(group);
+          if (divisionName != null) {
+            _currentDivisionName = divisionName;
+          }
+          debugPrint('역할 설정: DivisionAdmin, 본부: $_currentDivisionName (그룹: $group)');
+          return;
+        } else if (group.startsWith('Team_') || group.contains('팀')) {
+          _userRole = AppUserRole.teamAdmin;
+          debugPrint('역할 설정: TeamAdmin (그룹: $group)');
+          return;
+        }
+      }
+
+      // Division/Team Member 그룹
+      if (group.startsWith('Division_') || group.contains('Access')) {
+        final divisionName = _extractDivisionName(group);
+        if (divisionName != null && _currentDivisionName == null) {
+          _currentDivisionName = divisionName;
+          debugPrint('본부 설정: $_currentDivisionName (그룹: $group)');
+        }
+      }
+
+      if (group.startsWith('Team_') || group.contains('팀')) {
+        final teamName = _extractTeamName(group);
+        if (teamName != null && _currentTeamName == null) {
+          _currentTeamName = teamName;
+          debugPrint('팀 설정: $_currentTeamName (그룹: $group)');
+        }
+      }
+    }
+  }
+
+  /// 그룹 이름에서 본부명 추출
+  String? _extractDivisionName(String group) {
+    // Division_경기_Admin -> 경기
+    // Division_경기_Member -> 경기
+    // 경기Access -> 경기Access
+    // 경기Access_Admin -> 경기Access
+    if (group.startsWith('Division_')) {
+      final parts = group.split('_');
+      if (parts.length >= 2) {
+        return parts[1];
+      }
+    } else if (group.contains('Access')) {
+      // 경기Access_Admin -> 경기Access
+      // 경기Access -> 경기Access
+      final idx = group.indexOf('_');
+      if (idx > 0) {
+        return group.substring(0, idx);
+      }
+      return group;
+    }
+    return null;
+  }
+
+  /// 그룹 이름에서 팀명 추출
+  String? _extractTeamName(String group) {
+    // Team_경기_품질개선팀_Admin -> 품질개선팀
+    // Team_경기_품질개선팀 -> 품질개선팀
+    // NW혁신팀 -> NW혁신팀
+    if (group.startsWith('Team_')) {
+      final parts = group.split('_');
+      if (parts.length >= 3) {
+        return parts[2];
+      }
+    } else if (group.contains('팀')) {
+      // 단순 팀명 (NW혁신팀, 품질개선팀 등)
+      return group.replaceAll('_Admin', '').replaceAll('_Member', '');
+    }
+    return null;
+  }
+
+  /// UserProfile 자동 승인 업데이트
+  Future<void> _autoApproveUserProfile() async {
+    if (_profileId == null) return;
+
+    const mutation = '''
+      mutation UpdateUserProfileStatus(\$input: UpdateUserProfileInput!) {
+        updateUserProfile(input: \$input) {
+          id
+          status
+        }
+      }
+    ''';
+
+    try {
+      final request = GraphQLRequest<String>(
+        document: mutation,
+        variables: {
+          'input': {
+            'id': _profileId,
+            'status': 'APPROVED',
+            'approvedAt': DateTime.now().toUtc().toIso8601String(),
+            'approvedBy': 'AUTO_COGNITO_GROUP',
+          }
+        },
+        authorizationMode: APIAuthorizationType.userPools,
+      );
+
+      final response = await Amplify.API.mutate(request: request).response;
+
+      if (response.errors.isEmpty) {
+        _approvalStatus = UserApprovalStatus.approved;
+        debugPrint('UserProfile 자동 승인 완료');
+      } else {
+        debugPrint('UserProfile 자동 승인 실패: ${response.errors}');
+      }
+    } catch (e) {
+      debugPrint('UserProfile 자동 승인 예외: $e');
     }
   }
 
