@@ -124,6 +124,17 @@ class AuthService extends ChangeNotifier {
   Future<void> loadUserProfile() async {
     if (_currentUser == null) return;
 
+    // ★ 핵심 최적화: Cognito 그룹을 먼저 빠르게 확인
+    // Cognito 그룹에 속해있으면 DB 상태와 관계없이 즉시 승인 처리
+    // 이렇게 하면 "승인 대기중" 화면이 잠시 뜨는 현상 방지
+    final isInCognitoGroup = await _checkUserInCognitoGroup();
+    if (isInCognitoGroup) {
+      debugPrint('Cognito 그룹 확인 완료 - 즉시 승인 상태로 설정');
+      _approvalStatus = UserApprovalStatus.approved;
+      // UI 먼저 업데이트 (빠른 응답)
+      notifyListeners();
+    }
+
     const query = '''
       query GetUserProfile(\$cognitoUserId: String!) {
         userProfileByCognitoId(cognitoUserId: \$cognitoUserId) {
@@ -173,74 +184,69 @@ class AuthService extends ChangeNotifier {
       final items = data['userProfileByCognitoId']['items'] as List<dynamic>;
 
       if (items.isEmpty) {
-        _approvalStatus = UserApprovalStatus.noProfile;
+        // Cognito 그룹에 속해있으면 프로필이 없어도 승인 상태 유지
+        if (!isInCognitoGroup) {
+          _approvalStatus = UserApprovalStatus.noProfile;
+        }
         debugPrint('사용자 프로필 없음 - 생성 필요');
       } else {
         final profile = items.first as Map<String, dynamic>;
         _profileId = profile['id'] as String?;
 
-        // 상태 파싱
+        // DB 상태 파싱 (Cognito 그룹으로 이미 승인된 경우 무시)
         final statusStr = profile['status'] as String?;
-        switch (statusStr?.toUpperCase()) {
-          case 'PENDING':
-            _approvalStatus = UserApprovalStatus.pending;
-            break;
-          case 'APPROVED':
-            _approvalStatus = UserApprovalStatus.approved;
-            break;
-          case 'REJECTED':
-            _approvalStatus = UserApprovalStatus.rejected;
-            break;
-          case 'SUSPENDED':
-            _approvalStatus = UserApprovalStatus.suspended;
-            break;
-          default:
-            _approvalStatus = UserApprovalStatus.pending;
+        final dbStatus = switch (statusStr?.toUpperCase()) {
+          'PENDING' => UserApprovalStatus.pending,
+          'APPROVED' => UserApprovalStatus.approved,
+          'REJECTED' => UserApprovalStatus.rejected,
+          'SUSPENDED' => UserApprovalStatus.suspended,
+          _ => UserApprovalStatus.pending,
+        };
+
+        // Cognito 그룹으로 이미 승인된 경우 DB 상태 무시 (단, SUSPENDED/REJECTED는 예외)
+        if (!isInCognitoGroup) {
+          _approvalStatus = dbStatus;
+        } else if (dbStatus == UserApprovalStatus.suspended) {
+          // 정지된 계정은 Cognito 그룹에 있어도 정지 상태 유지
+          _approvalStatus = UserApprovalStatus.suspended;
+        }
+        // rejected는 Cognito 그룹에 있으면 무시 (그룹에 추가됐으면 승인된 것)
+
+        // 역할 파싱 (Cognito 그룹에서 이미 설정된 경우 덮어쓰지 않음 - 그룹 기반 역할이 우선)
+        if (!isInCognitoGroup) {
+          final roleStr = profile['role'] as String?;
+          _userRole = switch (roleStr?.toUpperCase().replaceAll('_', '')) {
+            'SUPERADMIN' => AppUserRole.superAdmin,
+            'DIVISIONADMIN' => AppUserRole.divisionAdmin,
+            'TEAMADMIN' => AppUserRole.teamAdmin,
+            _ => AppUserRole.member,
+          };
         }
 
-        // 역할 파싱
-        final roleStr = profile['role'] as String?;
-        switch (roleStr?.toUpperCase().replaceAll('_', '')) {
-          case 'SUPERADMIN':
-            _userRole = AppUserRole.superAdmin;
-            break;
-          case 'DIVISIONADMIN':
-            _userRole = AppUserRole.divisionAdmin;
-            break;
-          case 'TEAMADMIN':
-            _userRole = AppUserRole.teamAdmin;
-            break;
-          default:
-            _userRole = AppUserRole.member;
-        }
-
-        // 팀/부서 정보
+        // 팀/본부 정보 (DB에서 가져온 정보 사용, Cognito에서 설정 안된 경우)
         _currentTeamId = profile['teamId'] as String?;
         _currentDivisionId = profile['divisionId'] as String?;
 
         final team = profile['team'] as Map<String, dynamic>?;
         if (team != null) {
-          _currentTeamName = team['name'] as String?;
+          if (_currentTeamName == null) {
+            _currentTeamName = team['name'] as String?;
+          }
           final division = team['division'] as Map<String, dynamic>?;
-          if (division != null) {
+          if (division != null && _currentDivisionName == null) {
             _currentDivisionName = division['name'] as String?;
           }
         }
 
-        debugPrint('프로필 로드 완료: status=$_approvalStatus, role=$_userRole, team=$_currentTeamName');
+        debugPrint('프로필 로드 완료 (DB): dbStatus=$dbStatus, finalStatus=$_approvalStatus, role=$_userRole, team=$_currentTeamName');
 
-        // Cognito 그룹에 속해있으면 PENDING 상태여도 자동 승인 처리
-        if (_approvalStatus == UserApprovalStatus.pending) {
-          final isInGroup = await _checkUserInCognitoGroup();
-          if (isInGroup) {
-            debugPrint('Cognito 그룹에 속해있음 - 자동 승인 처리');
-            // Cognito 그룹 멤버십이 확인되면 즉시 로컬 상태를 APPROVED로 변경
-            // (DB 업데이트는 백그라운드에서 시도, 실패해도 로컬 상태는 유지)
-            _approvalStatus = UserApprovalStatus.approved;
-            // DB 업데이트 시도 (실패해도 무시 - 로컬 상태가 이미 APPROVED)
-            _autoApproveUserProfile();
-          }
+        // DB가 PENDING인데 Cognito 그룹에 있으면 DB 업데이트
+        if (isInCognitoGroup && dbStatus == UserApprovalStatus.pending) {
+          debugPrint('DB 상태가 PENDING이지만 Cognito 그룹에 있음 - DB 자동 업데이트');
+          await _autoApproveUserProfile();
         }
+
+        debugPrint('프로필 로드 완료 (최종): status=$_approvalStatus, role=$_userRole, division=$_currentDivisionName, team=$_currentTeamName');
       }
 
       notifyListeners();
@@ -254,10 +260,9 @@ class AuthService extends ChangeNotifier {
   /// Cognito 그룹 멤버십 확인 및 역할/소속 정보 추출
   Future<bool> _checkUserInCognitoGroup() async {
     try {
-      // JWT 토큰에서 그룹 정보 추출
-      final session = await Amplify.Auth.fetchAuthSession(
-        options: const FetchAuthSessionOptions(forceRefresh: true),
-      );
+      // JWT 토큰에서 그룹 정보 추출 (캐시된 세션 사용 - 빠름)
+      // forceRefresh 제거: JWT 토큰에 이미 그룹 정보가 포함되어 있음
+      final session = await Amplify.Auth.fetchAuthSession();
 
       // CognitoAuthSession으로 캐스팅하여 토큰 접근
       if (session is CognitoAuthSession) {
@@ -292,10 +297,14 @@ class AuthService extends ChangeNotifier {
     }
   }
 
-  /// Cognito 그룹 이름에서 역할 및 소속 정보 추출
+  /// Cognito 그룹 이름에서 역할 추출 (단순화된 3그룹 구조)
+  /// - SuperAdmin: 시스템 전체 관리
+  /// - DivisionAdmins: 본부 관리자
+  /// - AllMembers: 승인된 일반 사용자
+  /// 세부 권한(divisionId, teamId)은 DB UserProfile에서 관리
   void _extractRoleFromGroups(List<String> groups) {
+    // 우선순위: SuperAdmin > DivisionAdmins > AllMembers
     for (final group in groups) {
-      // SuperAdmin 그룹 확인
       if (group == 'SuperAdmin' || group == 'SuperAdmins') {
         _userRole = AppUserRole.superAdmin;
         debugPrint('역할 설정: SuperAdmin (그룹: $group)');
@@ -304,95 +313,18 @@ class AuthService extends ChangeNotifier {
     }
 
     for (final group in groups) {
-      // DivisionAdmins 그룹 (전체 본부 관리자)
       if (group == 'DivisionAdmins') {
         _userRole = AppUserRole.divisionAdmin;
         debugPrint('역할 설정: DivisionAdmin (그룹: $group)');
         return;
       }
-
-      // TeamAdmins 그룹 (전체 팀 관리자)
-      if (group == 'TeamAdmins') {
-        _userRole = AppUserRole.teamAdmin;
-        debugPrint('역할 설정: TeamAdmin (그룹: $group)');
-        return;
-      }
-
-      // Division Admin 그룹: Division_경기_Admin 또는 경기Access_Admin 형태
-      if (group.contains('Admin')) {
-        if (group.startsWith('Division_') || group.contains('Access_Admin')) {
-          _userRole = AppUserRole.divisionAdmin;
-          // 본부 이름 추출 (예: Division_경기_Admin -> 경기, 경기Access_Admin -> 경기Access)
-          final divisionName = _extractDivisionName(group);
-          if (divisionName != null) {
-            _currentDivisionName = divisionName;
-          }
-          debugPrint('역할 설정: DivisionAdmin, 본부: $_currentDivisionName (그룹: $group)');
-          return;
-        } else if (group.startsWith('Team_') || group.contains('팀')) {
-          _userRole = AppUserRole.teamAdmin;
-          debugPrint('역할 설정: TeamAdmin (그룹: $group)');
-          return;
-        }
-      }
-
-      // Division/Team Member 그룹
-      if (group.startsWith('Division_') || group.contains('Access')) {
-        final divisionName = _extractDivisionName(group);
-        if (divisionName != null && _currentDivisionName == null) {
-          _currentDivisionName = divisionName;
-          debugPrint('본부 설정: $_currentDivisionName (그룹: $group)');
-        }
-      }
-
-      if (group.startsWith('Team_') || group.contains('팀')) {
-        final teamName = _extractTeamName(group);
-        if (teamName != null && _currentTeamName == null) {
-          _currentTeamName = teamName;
-          debugPrint('팀 설정: $_currentTeamName (그룹: $group)');
-        }
-      }
     }
-  }
 
-  /// 그룹 이름에서 본부명 추출
-  String? _extractDivisionName(String group) {
-    // Division_경기_Admin -> 경기
-    // Division_경기_Member -> 경기
-    // 경기Access -> 경기Access
-    // 경기Access_Admin -> 경기Access
-    if (group.startsWith('Division_')) {
-      final parts = group.split('_');
-      if (parts.length >= 2) {
-        return parts[1];
-      }
-    } else if (group.contains('Access')) {
-      // 경기Access_Admin -> 경기Access
-      // 경기Access -> 경기Access
-      final idx = group.indexOf('_');
-      if (idx > 0) {
-        return group.substring(0, idx);
-      }
-      return group;
+    // AllMembers 또는 기타 그룹에 속해있으면 일반 멤버
+    if (groups.isNotEmpty) {
+      _userRole = AppUserRole.member;
+      debugPrint('역할 설정: Member (그룹: ${groups.join(", ")})');
     }
-    return null;
-  }
-
-  /// 그룹 이름에서 팀명 추출
-  String? _extractTeamName(String group) {
-    // Team_경기_품질개선팀_Admin -> 품질개선팀
-    // Team_경기_품질개선팀 -> 품질개선팀
-    // NW혁신팀 -> NW혁신팀
-    if (group.startsWith('Team_')) {
-      final parts = group.split('_');
-      if (parts.length >= 3) {
-        return parts[2];
-      }
-    } else if (group.contains('팀')) {
-      // 단순 팀명 (NW혁신팀, 품질개선팀 등)
-      return group.replaceAll('_Admin', '').replaceAll('_Member', '');
-    }
-    return null;
   }
 
   /// UserProfile 자동 승인 업데이트

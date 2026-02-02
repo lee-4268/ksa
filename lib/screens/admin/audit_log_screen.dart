@@ -46,6 +46,7 @@ class _AuditLogScreenState extends State<AuditLogScreen> {
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
+        backgroundColor: Colors.white,
         title: const Text('롤백 확인'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
@@ -103,6 +104,7 @@ class _AuditLogScreenState extends State<AuditLogScreen> {
   void _showFilterDialog() {
     showModalBottomSheet(
       context: context,
+      backgroundColor: Colors.white,
       builder: (ctx) => Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
@@ -127,7 +129,7 @@ class _AuditLogScreenState extends State<AuditLogScreen> {
                 DropdownMenuItem(value: 'UserProfile', child: Text('사용자')),
                 DropdownMenuItem(value: 'TeamInspectionData', child: Text('검사 데이터')),
                 DropdownMenuItem(value: 'MasterStation', child: Text('무선국')),
-                DropdownMenuItem(value: 'Division', child: Text('부서')),
+                DropdownMenuItem(value: 'Division', child: Text('본부')),
                 DropdownMenuItem(value: 'Team', child: Text('팀')),
               ],
               onChanged: (value) {
@@ -191,7 +193,7 @@ class _AuditLogScreenState extends State<AuditLogScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('감사 로그'),
-        backgroundColor: Colors.indigo,
+        backgroundColor: const Color(0xFFE53935),
         foregroundColor: Colors.white,
         actions: [
           IconButton(

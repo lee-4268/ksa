@@ -38,69 +38,109 @@ class _TeamManagementScreenState extends State<TeamManagementScreen>
     final nameController = TextEditingController();
     final codeController = TextEditingController();
     final descController = TextEditingController();
+    String? errorMessage;
+    bool isLoading = false;
 
     final result = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('부서 생성'),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: nameController,
-                decoration: const InputDecoration(
-                  labelText: '부서명',
-                  hintText: '예: 혁신팀',
-                  border: OutlineInputBorder(),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          backgroundColor: Colors.white,
+          title: const Text('본부 생성'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (errorMessage != null) ...[
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.red.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      errorMessage!,
+                      style: const TextStyle(color: Colors.red, fontSize: 12),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                ],
+                TextField(
+                  controller: nameController,
+                  decoration: const InputDecoration(
+                    labelText: '본부명',
+                    hintText: '예: 혁신팀',
+                    border: OutlineInputBorder(),
+                  ),
                 ),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: codeController,
-                decoration: const InputDecoration(
-                  labelText: '부서 코드',
-                  hintText: '예: INNOVATION (영문, 그룹명에 사용)',
-                  border: OutlineInputBorder(),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: codeController,
+                  decoration: const InputDecoration(
+                    labelText: '본부 코드',
+                    hintText: '예: INNOVATION (영문, 그룹명에 사용)',
+                    border: OutlineInputBorder(),
+                  ),
                 ),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: descController,
-                decoration: const InputDecoration(
-                  labelText: '설명 (선택)',
-                  border: OutlineInputBorder(),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: descController,
+                  decoration: const InputDecoration(
+                    labelText: '설명 (선택)',
+                    border: OutlineInputBorder(),
+                  ),
+                  maxLines: 2,
                 ),
-                maxLines: 2,
-              ),
-            ],
+              ],
+            ),
           ),
+          actions: [
+            TextButton(
+              onPressed: isLoading ? null : () => Navigator.pop(ctx, false),
+              child: const Text('취소'),
+            ),
+            ElevatedButton(
+              onPressed: isLoading
+                  ? null
+                  : () async {
+                      if (nameController.text.isEmpty || codeController.text.isEmpty) {
+                        setDialogState(() {
+                          errorMessage = '본부명과 본부 코드를 모두 입력해주세요.';
+                        });
+                        return;
+                      }
+
+                      setDialogState(() {
+                        isLoading = true;
+                        errorMessage = null;
+                      });
+
+                      final adminService = context.read<AdminService>();
+                      final divisionId = await adminService.createDivision(
+                        name: nameController.text,
+                        code: codeController.text.toUpperCase(),
+                        description: descController.text.isEmpty ? null : descController.text,
+                      );
+
+                      if (divisionId != null) {
+                        Navigator.pop(ctx, true);
+                      } else {
+                        setDialogState(() {
+                          isLoading = false;
+                          errorMessage = adminService.errorMessage ?? '본부 생성에 실패했습니다.';
+                        });
+                      }
+                    },
+              child: isLoading
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Text('생성'),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('취소'),
-          ),
-          ElevatedButton(
-            onPressed: () async {
-              if (nameController.text.isEmpty || codeController.text.isEmpty) {
-                return;
-              }
-
-              final adminService = context.read<AdminService>();
-              final divisionId = await adminService.createDivision(
-                name: nameController.text,
-                code: codeController.text.toUpperCase(),
-                description: descController.text.isEmpty ? null : descController.text,
-              );
-
-              if (divisionId != null) {
-                Navigator.pop(ctx, true);
-              }
-            },
-            child: const Text('생성'),
-          ),
-        ],
       ),
     );
 
@@ -109,7 +149,7 @@ class _TeamManagementScreenState extends State<TeamManagementScreen>
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('부서가 생성되었습니다.'),
+            content: Text('본부가 생성되었습니다.'),
             backgroundColor: Colors.green,
           ),
         );
@@ -121,71 +161,110 @@ class _TeamManagementScreenState extends State<TeamManagementScreen>
     final nameController = TextEditingController();
     final codeController = TextEditingController();
     final descController = TextEditingController();
+    String? errorMessage;
+    bool isLoading = false;
 
     final result = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text('${division.name} 팀 생성'),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: nameController,
-                decoration: const InputDecoration(
-                  labelText: '팀명',
-                  hintText: '예: 1팀',
-                  border: OutlineInputBorder(),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          backgroundColor: Colors.white,
+          title: Text('${division.name} 팀 생성'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (errorMessage != null) ...[
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.red.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      errorMessage!,
+                      style: const TextStyle(color: Colors.red, fontSize: 12),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                ],
+                TextField(
+                  controller: nameController,
+                  decoration: const InputDecoration(
+                    labelText: '팀명',
+                    hintText: '예: 1팀',
+                    border: OutlineInputBorder(),
+                  ),
                 ),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: codeController,
-                decoration: const InputDecoration(
-                  labelText: '팀 코드',
-                  hintText: '예: TEAM1 (영문, 그룹명에 사용)',
-                  border: OutlineInputBorder(),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: codeController,
+                  decoration: const InputDecoration(
+                    labelText: '팀 코드',
+                    hintText: '예: TEAM1 (영문, 그룹명에 사용)',
+                    border: OutlineInputBorder(),
+                  ),
                 ),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: descController,
-                decoration: const InputDecoration(
-                  labelText: '설명 (선택)',
-                  border: OutlineInputBorder(),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: descController,
+                  decoration: const InputDecoration(
+                    labelText: '설명 (선택)',
+                    border: OutlineInputBorder(),
+                  ),
+                  maxLines: 2,
                 ),
-                maxLines: 2,
-              ),
-            ],
+              ],
+            ),
           ),
+          actions: [
+            TextButton(
+              onPressed: isLoading ? null : () => Navigator.pop(ctx, false),
+              child: const Text('취소'),
+            ),
+            ElevatedButton(
+              onPressed: isLoading
+                  ? null
+                  : () async {
+                      if (nameController.text.isEmpty || codeController.text.isEmpty) {
+                        setDialogState(() {
+                          errorMessage = '팀명과 팀 코드를 모두 입력해주세요.';
+                        });
+                        return;
+                      }
+
+                      setDialogState(() {
+                        isLoading = true;
+                        errorMessage = null;
+                      });
+
+                      final adminService = context.read<AdminService>();
+                      final teamId = await adminService.createTeam(
+                        divisionId: division.id,
+                        name: nameController.text,
+                        code: codeController.text.toUpperCase(),
+                        description: descController.text.isEmpty ? null : descController.text,
+                      );
+
+                      if (teamId != null) {
+                        Navigator.pop(ctx, true);
+                      } else {
+                        setDialogState(() {
+                          isLoading = false;
+                          errorMessage = adminService.errorMessage ?? '팀 생성에 실패했습니다.';
+                        });
+                      }
+                    },
+              child: isLoading
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Text('생성'),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('취소'),
-          ),
-          ElevatedButton(
-            onPressed: () async {
-              if (nameController.text.isEmpty || codeController.text.isEmpty) {
-                return;
-              }
-
-              final adminService = context.read<AdminService>();
-              final teamId = await adminService.createTeam(
-                divisionId: division.id,
-                divisionCode: division.code,
-                name: nameController.text,
-                code: codeController.text.toUpperCase(),
-                description: descController.text.isEmpty ? null : descController.text,
-              );
-
-              if (teamId != null) {
-                Navigator.pop(ctx, true);
-              }
-            },
-            child: const Text('생성'),
-          ),
-        ],
       ),
     );
 
@@ -207,7 +286,7 @@ class _TeamManagementScreenState extends State<TeamManagementScreen>
     return Scaffold(
       appBar: AppBar(
         title: const Text('팀 관리'),
-        backgroundColor: Colors.indigo,
+        backgroundColor: const Color(0xFFE53935),
         foregroundColor: Colors.white,
         bottom: TabBar(
           controller: _tabController,
@@ -215,7 +294,7 @@ class _TeamManagementScreenState extends State<TeamManagementScreen>
           unselectedLabelColor: Colors.white70,
           indicatorColor: Colors.white,
           tabs: const [
-            Tab(text: '부서'),
+            Tab(text: '본부'),
             Tab(text: '팀'),
           ],
         ),
@@ -247,7 +326,7 @@ class _TeamManagementScreenState extends State<TeamManagementScreen>
     if (divisions.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('먼저 부서를 생성해주세요.'),
+          content: Text('먼저 본부를 생성해주세요.'),
           backgroundColor: Colors.orange,
         ),
       );
@@ -256,6 +335,7 @@ class _TeamManagementScreenState extends State<TeamManagementScreen>
 
     showModalBottomSheet(
       context: context,
+      backgroundColor: Colors.white,
       builder: (ctx) => ListView.builder(
         shrinkWrap: true,
         itemCount: divisions.length,
@@ -291,12 +371,12 @@ class _TeamManagementScreenState extends State<TeamManagementScreen>
             Icon(Icons.business, size: 64, color: Colors.grey[400]),
             const SizedBox(height: 16),
             Text(
-              '등록된 부서가 없습니다.',
+              '등록된 본부가 없습니다.',
               style: TextStyle(fontSize: 16, color: Colors.grey[600]),
             ),
             const SizedBox(height: 8),
             const Text(
-              '+ 버튼을 눌러 부서를 생성하세요.',
+              '+ 버튼을 눌러 본부를 생성하세요.',
               style: TextStyle(color: Colors.grey),
             ),
           ],
@@ -345,10 +425,18 @@ class _TeamManagementScreenState extends State<TeamManagementScreen>
               ),
           ],
         ),
-        trailing: IconButton(
-          icon: const Icon(Icons.add),
-          onPressed: () => _showCreateTeamDialog(division),
-          tooltip: '팀 추가',
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            IconButton(
+              icon: const Icon(Icons.add, color: Colors.blue),
+              onPressed: () => _showCreateTeamDialog(division),
+            ),
+            IconButton(
+              icon: const Icon(Icons.delete_outline, color: Colors.red),
+              onPressed: () => _showDeleteDivisionDialog(division),
+            ),
+          ],
         ),
       ),
     );
@@ -375,7 +463,7 @@ class _TeamManagementScreenState extends State<TeamManagementScreen>
             ),
             const SizedBox(height: 8),
             const Text(
-              '먼저 부서를 생성한 후 팀을 추가하세요.',
+              '먼저 본부를 생성한 후 팀을 추가하세요.',
               style: TextStyle(color: Colors.grey),
             ),
           ],
@@ -383,7 +471,7 @@ class _TeamManagementScreenState extends State<TeamManagementScreen>
       );
     }
 
-    // 부서별로 팀 그룹핑
+    // 본부별로 팀 그룹핑
     final teamsByDivision = <String, List<Team>>{};
     for (final team in teams) {
       final divisionName = team.division?.name ?? '미지정';
@@ -434,14 +522,91 @@ class _TeamManagementScreenState extends State<TeamManagementScreen>
         ),
         title: Text(team.name),
         subtitle: Text('코드: ${team.code}'),
-        trailing: const Icon(Icons.chevron_right),
-        onTap: () {
-          // 팀 상세 보기 (추후 구현)
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('${team.name} 상세 보기 (추후 구현)')),
-          );
-        },
+        trailing: IconButton(
+          icon: const Icon(Icons.delete_outline, color: Colors.red),
+          onPressed: () => _showDeleteTeamDialog(team),
+        ),
       ),
     );
+  }
+
+  Future<void> _showDeleteTeamDialog(Team team) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Colors.white,
+        title: const Text('팀 삭제'),
+        content: Text('${team.name}을(를) 삭제하시겠습니까?\n\n이 작업은 되돌릴 수 없습니다.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('취소'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            child: const Text('삭제'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm != true) return;
+
+    final adminService = context.read<AdminService>();
+    final success = await adminService.deleteTeam(team.id);
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(success ? '${team.name} 삭제됨' : '삭제 실패: ${adminService.errorMessage}'),
+          backgroundColor: success ? Colors.green : Colors.red,
+        ),
+      );
+
+      if (success) {
+        _loadData();
+      }
+    }
+  }
+
+  Future<void> _showDeleteDivisionDialog(Division division) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Colors.white,
+        title: const Text('본부 삭제'),
+        content: Text('${division.name}을(를) 삭제하시겠습니까?\n\n이 작업은 되돌릴 수 없습니다.\n하위 팀도 모두 삭제됩니다.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('취소'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            child: const Text('삭제'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm != true) return;
+
+    final adminService = context.read<AdminService>();
+    final success = await adminService.deleteDivision(division.id);
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(success ? '${division.name} 삭제됨' : '삭제 실패: ${adminService.errorMessage}'),
+          backgroundColor: success ? Colors.green : Colors.red,
+        ),
+      );
+
+      if (success) {
+        _loadData();
+      }
+    }
   }
 }

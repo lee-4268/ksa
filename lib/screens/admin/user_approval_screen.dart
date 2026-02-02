@@ -18,7 +18,8 @@ class UserApprovalScreen extends StatefulWidget {
 }
 
 class _UserApprovalScreenState extends State<UserApprovalScreen> {
-  String? _selectedTeamId;
+  // 각 사용자별 선택된 팀 ID를 저장하는 Map
+  final Map<String, String?> _selectedTeamIds = {};
   List<Team> _teams = [];
   bool _isLoadingTeams = false;
 
@@ -48,7 +49,8 @@ class _UserApprovalScreenState extends State<UserApprovalScreen> {
   }
 
   Future<void> _approveUser(AppUserProfile user) async {
-    if (_selectedTeamId == null) {
+    final selectedTeamId = _selectedTeamIds[user.id];
+    if (selectedTeamId == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('팀을 선택해주세요.'),
@@ -58,7 +60,7 @@ class _UserApprovalScreenState extends State<UserApprovalScreen> {
       return;
     }
 
-    final selectedTeam = _teams.firstWhere((t) => t.id == _selectedTeamId);
+    final selectedTeam = _teams.firstWhere((t) => t.id == selectedTeamId);
     final divisionId = selectedTeam.divisionId;
 
     final adminService = context.read<AdminService>();
@@ -66,7 +68,7 @@ class _UserApprovalScreenState extends State<UserApprovalScreen> {
 
     final success = await adminService.approveUser(
       profileId: user.id,
-      teamId: _selectedTeamId!,
+      teamId: selectedTeamId,
       divisionId: divisionId,
       approverUserId: authService.userId ?? '',
     );
@@ -80,7 +82,10 @@ class _UserApprovalScreenState extends State<UserApprovalScreen> {
       );
     }
 
-    _selectedTeamId = null;
+    // 승인 후 해당 사용자의 선택 상태 초기화
+    setState(() {
+      _selectedTeamIds.remove(user.id);
+    });
   }
 
   Future<void> _rejectUser(AppUserProfile user) async {
@@ -108,6 +113,7 @@ class _UserApprovalScreenState extends State<UserApprovalScreen> {
     return showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
+        backgroundColor: Colors.white,
         title: const Text('거부 사유'),
         content: TextField(
           controller: controller,
@@ -140,6 +146,7 @@ class _UserApprovalScreenState extends State<UserApprovalScreen> {
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
+        backgroundColor: Colors.white,
         title: const Text('사용자 정지'),
         content: Text('${user.name ?? user.email}님을 정지하시겠습니까?'),
         actions: [
@@ -189,6 +196,8 @@ class _UserApprovalScreenState extends State<UserApprovalScreen> {
   Widget build(BuildContext context) {
     final adminService = context.watch<AdminService>();
 
+    // 미승인 목록은 DB에서 status=PENDING인 사용자만 조회
+    // Cognito 그룹에 속한 사용자는 auth_service에서 자동으로 DB를 APPROVED로 업데이트
     final users = widget.showAllUsers
         ? adminService.allUsers
         : adminService.pendingUsers;
@@ -196,7 +205,7 @@ class _UserApprovalScreenState extends State<UserApprovalScreen> {
     return Scaffold(
       appBar: AppBar(
         title: Text(widget.showAllUsers ? '사용자 관리' : '사용자 승인'),
-        backgroundColor: Colors.indigo,
+        backgroundColor: const Color(0xFFE53935),
         foregroundColor: Colors.white,
       ),
       body: adminService.isLoading
@@ -299,10 +308,13 @@ class _UserApprovalScreenState extends State<UserApprovalScreen> {
               _isLoadingTeams
                   ? const Center(child: CircularProgressIndicator())
                   : DropdownButtonFormField<String>(
-                      value: _selectedTeamId,
+                      value: _selectedTeamIds[user.id],
+                      dropdownColor: Colors.white,
                       decoration: const InputDecoration(
                         labelText: '배정할 팀 선택',
                         border: OutlineInputBorder(),
+                        filled: true,
+                        fillColor: Colors.white,
                         contentPadding: EdgeInsets.symmetric(
                           horizontal: 12,
                           vertical: 8,
@@ -317,7 +329,7 @@ class _UserApprovalScreenState extends State<UserApprovalScreen> {
                         );
                       }).toList(),
                       onChanged: (value) {
-                        setState(() => _selectedTeamId = value);
+                        setState(() => _selectedTeamIds[user.id] = value);
                       },
                     ),
             ],
@@ -446,7 +458,7 @@ class _UserApprovalScreenState extends State<UserApprovalScreen> {
       case UserRole.superAdmin:
         return '최고 관리자';
       case UserRole.divisionAdmin:
-        return '부서 관리자';
+        return '본부 관리자';
       case UserRole.teamAdmin:
         return '팀 관리자';
       case UserRole.member:

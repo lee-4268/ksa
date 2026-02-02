@@ -19,22 +19,18 @@ enum UserStatus {
   suspended,
 }
 
-/// 부서 모델
+/// 본부 모델
 class Division {
   final String id;
   final String name;
   final String code;
   final String? description;
-  final String adminGroup;
-  final String memberGroup;
 
   Division({
     required this.id,
     required this.name,
     required this.code,
     this.description,
-    required this.adminGroup,
-    required this.memberGroup,
   });
 
   factory Division.fromJson(Map<String, dynamic> json) {
@@ -43,8 +39,6 @@ class Division {
       name: json['name'] as String,
       code: json['code'] as String,
       description: json['description'] as String?,
-      adminGroup: json['adminGroup'] as String,
-      memberGroup: json['memberGroup'] as String,
     );
   }
 }
@@ -56,8 +50,6 @@ class Team {
   final String name;
   final String code;
   final String? description;
-  final String adminGroup;
-  final String memberGroup;
   final Division? division;
 
   Team({
@@ -66,8 +58,6 @@ class Team {
     required this.name,
     required this.code,
     this.description,
-    required this.adminGroup,
-    required this.memberGroup,
     this.division,
   });
 
@@ -78,8 +68,6 @@ class Team {
       name: json['name'] as String,
       code: json['code'] as String,
       description: json['description'] as String?,
-      adminGroup: json['adminGroup'] as String,
-      memberGroup: json['memberGroup'] as String,
       division: json['division'] != null
           ? Division.fromJson(json['division'] as Map<String, dynamic>)
           : null,
@@ -153,7 +141,7 @@ class AppUserProfile {
   bool get isSuspended => status == UserStatus.suspended;
 }
 
-/// 팀 컨텍스트 서비스 - 현재 사용자의 팀/부서 정보 관리
+/// 팀 컨텍스트 서비스 - 현재 사용자의 팀/본부 정보 관리
 class TeamContextService extends ChangeNotifier {
   AppUserProfile? _currentProfile;
   Team? _currentTeam;
@@ -176,8 +164,6 @@ class TeamContextService extends ChangeNotifier {
   String? get currentTeamName => _currentTeam?.name;
   String? get currentDivisionId => _currentDivision?.id;
   String? get currentDivisionName => _currentDivision?.name;
-  String? get currentTeamGroup => _currentTeam?.memberGroup;
-  String? get currentDivisionGroup => _currentDivision?.memberGroup;
 
   UserRole get currentRole => _currentProfile?.role ?? UserRole.member;
   UserStatus get currentStatus => _currentProfile?.status ?? UserStatus.pending;
@@ -223,15 +209,11 @@ class TeamContextService extends ChangeNotifier {
               name
               code
               description
-              adminGroup
-              memberGroup
               division {
                 id
                 name
                 code
                 description
-                adminGroup
-                memberGroup
               }
             }
           }
@@ -338,8 +320,11 @@ class TeamContextService extends ChangeNotifier {
     }
   }
 
-  /// 모든 부서 목록 조회 (관리자용)
+  /// 모든 본부 목록 조회 (관리자용)
   Future<void> loadDivisions() async {
+    _isLoading = true;
+    notifyListeners();
+
     const query = '''
       query ListDivisions {
         listDivisions(limit: 100) {
@@ -348,8 +333,6 @@ class TeamContextService extends ChangeNotifier {
             name
             code
             description
-            adminGroup
-            memberGroup
           }
         }
       }
@@ -364,7 +347,9 @@ class TeamContextService extends ChangeNotifier {
       final response = await Amplify.API.query(request: request).response;
 
       if (response.errors.isNotEmpty) {
-        debugPrint('부서 목록 로드 실패: ${response.errors}');
+        debugPrint('본부 목록 로드 실패: ${response.errors}');
+        _isLoading = false;
+        notifyListeners();
         return;
       }
 
@@ -372,16 +357,21 @@ class TeamContextService extends ChangeNotifier {
       final items = data['listDivisions']['items'] as List<dynamic>;
 
       _availableDivisions = items
+          .where((item) => item != null)
           .map((item) => Division.fromJson(item as Map<String, dynamic>))
           .toList();
 
+      debugPrint('본부 목록 로드 완료: ${_availableDivisions.length}개');
+      _isLoading = false;
       notifyListeners();
     } catch (e) {
-      debugPrint('부서 목록 로드 오류: $e');
+      debugPrint('본부 목록 로드 오류: $e');
+      _isLoading = false;
+      notifyListeners();
     }
   }
 
-  /// 특정 부서의 팀 목록 조회
+  /// 특정 본부의 팀 목록 조회
   Future<void> loadTeamsByDivision(String divisionId) async {
     const query = '''
       query ListTeamsByDivision(\$divisionId: ID!) {
@@ -392,8 +382,6 @@ class TeamContextService extends ChangeNotifier {
             name
             code
             description
-            adminGroup
-            memberGroup
           }
         }
       }
@@ -428,6 +416,9 @@ class TeamContextService extends ChangeNotifier {
 
   /// 모든 팀 목록 조회
   Future<void> loadAllTeams() async {
+    _isLoading = true;
+    notifyListeners();
+
     const query = '''
       query ListTeams {
         listTeams(limit: 100) {
@@ -437,12 +428,11 @@ class TeamContextService extends ChangeNotifier {
             name
             code
             description
-            adminGroup
-            memberGroup
             division {
               id
               name
               code
+              description
             }
           }
         }
@@ -459,6 +449,8 @@ class TeamContextService extends ChangeNotifier {
 
       if (response.errors.isNotEmpty) {
         debugPrint('팀 목록 로드 실패: ${response.errors}');
+        _isLoading = false;
+        notifyListeners();
         return;
       }
 
@@ -466,12 +458,17 @@ class TeamContextService extends ChangeNotifier {
       final items = data['listTeams']['items'] as List<dynamic>;
 
       _availableTeams = items
+          .where((item) => item != null)
           .map((item) => Team.fromJson(item as Map<String, dynamic>))
           .toList();
 
+      debugPrint('팀 목록 로드 완료: ${_availableTeams.length}개');
+      _isLoading = false;
       notifyListeners();
     } catch (e) {
       debugPrint('팀 목록 로드 오류: $e');
+      _isLoading = false;
+      notifyListeners();
     }
   }
 

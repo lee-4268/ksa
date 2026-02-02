@@ -34,7 +34,7 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('관리자 패널'),
-        backgroundColor: Colors.indigo,
+        backgroundColor: const Color(0xFFE53935),
         foregroundColor: Colors.white,
       ),
       body: RefreshIndicator(
@@ -73,13 +73,13 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
               },
             ),
 
-            // 팀 관리 (부서 관리자 이상만)
-            if (authService.isDivisionAdmin)
+            // 팀 관리 (최고 관리자만)
+            if (authService.isSuperAdmin)
               _buildMenuCard(
                 icon: Icons.groups,
                 iconColor: Colors.blue,
                 title: '팀 관리',
-                subtitle: '부서 및 팀 생성, 멤버 관리',
+                subtitle: '본부 및 팀 생성, 멤버 관리',
                 onTap: () {
                   Navigator.push(
                     context,
@@ -106,7 +106,7 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
               },
             ),
 
-            // 전체 사용자 관리 (부서 관리자 이상만)
+            // 전체 사용자 관리 (본부 관리자 이상만)
             if (authService.isDivisionAdmin)
               _buildMenuCard(
                 icon: Icons.manage_accounts,
@@ -137,11 +137,11 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
           children: [
             CircleAvatar(
               radius: 30,
-              backgroundColor: Colors.indigo.withValues(alpha: 0.1),
+              backgroundColor: const Color(0xFFE53935).withValues(alpha: 0.1),
               child: const Icon(
                 Icons.admin_panel_settings,
                 size: 32,
-                color: Colors.indigo,
+                color: Color(0xFFE53935),
               ),
             ),
             const SizedBox(width: 16),
@@ -245,7 +245,7 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
       case AppUserRole.superAdmin:
         return '최고 관리자';
       case AppUserRole.divisionAdmin:
-        return '부서 관리자';
+        return '본부 관리자';
       case AppUserRole.teamAdmin:
         return '팀 관리자';
       case AppUserRole.member:

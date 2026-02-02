@@ -1,30 +1,37 @@
 # ==========================================
+# 단순화된 Cognito 그룹 구조
+# ==========================================
+# SuperAdmin    - 시스템 전체 관리 (생성/삭제/수정/읽기)
+# DivisionAdmins - 본부 관리자 (수정/읽기) - 세부 권한은 앱 레벨에서 divisionId로 체크
+# AllMembers    - 승인된 모든 사용자 (읽기)
+#
+# 세밀한 권한 제어는 앱 레벨에서 UserProfile의 divisionId, teamId, role로 처리
+# ==========================================
+
+# ==========================================
 # 조직 구조 모델
 # ==========================================
 
-# 부서 (Division) - 최상위 조직 단위
+# 본부 (Division) - 최상위 조직 단위
 type Division @model @auth(rules: [
   { allow: groups, groups: ["SuperAdmin"], operations: [create, read, update, delete] }
-  { allow: groups, groupsField: "adminGroup", operations: [read, update] }
-  { allow: groups, groupsField: "memberGroup", operations: [read] }
+  { allow: groups, groups: ["DivisionAdmins"], operations: [read, update] }
+  { allow: groups, groups: ["AllMembers"], operations: [read] }
 ]) {
   id: ID!
-  name: String!                    # 부서명 (예: 혁신팀, 품개팀)
+  name: String!                    # 본부명 (예: 경기, 서울)
   code: String! @index(name: "byCode", queryField: "divisionByCode")
   description: String
-  adminGroup: String!              # Cognito 그룹명 (예: Division_혁신팀_Admin)
-  memberGroup: String!             # Cognito 그룹명 (예: Division_혁신팀_Member)
   teams: [Team] @hasMany(indexName: "byDivision", fields: ["id"])
   createdAt: AWSDateTime
   updatedAt: AWSDateTime
 }
 
-# 팀 (Team) - 부서 하위 조직 단위
+# 팀 (Team) - 본부 하위 조직 단위
 type Team @model @auth(rules: [
   { allow: groups, groups: ["SuperAdmin"], operations: [create, read, update, delete] }
-  { allow: groups, groupsField: "divisionAdminGroup", operations: [read, update] }
-  { allow: groups, groupsField: "adminGroup", operations: [read, update] }
-  { allow: groups, groupsField: "memberGroup", operations: [read] }
+  { allow: groups, groups: ["DivisionAdmins"], operations: [read, update] }
+  { allow: groups, groups: ["AllMembers"], operations: [read] }
 ]) {
   id: ID!
   divisionId: ID! @index(name: "byDivision", sortKeyFields: ["name"])
@@ -32,9 +39,6 @@ type Team @model @auth(rules: [
   name: String!                    # 팀명
   code: String! @index(name: "byTeamCode", queryField: "teamByCode")
   description: String
-  divisionAdminGroup: String!      # 상위 부서 관리자 그룹
-  adminGroup: String!              # Cognito 그룹명 (예: Team_혁신팀_1팀_Admin)
-  memberGroup: String!             # Cognito 그룹명 (예: Team_혁신팀_1팀_Member)
   members: [UserProfile] @hasMany(indexName: "byTeam", fields: ["id"])
   inspectionData: [TeamInspectionData] @hasMany(indexName: "byTeamInspection", fields: ["id"])
   categories: [Category] @hasMany(indexName: "byCategoryTeam", fields: ["id"])
@@ -43,7 +47,7 @@ type Team @model @auth(rules: [
 }
 
 # ==========================================
-# 사용자 프로필 (승인 관리)
+# 사용자 프로필 (승인 관리 + 앱 레벨 권한 제어)
 # ==========================================
 
 enum UserStatus {
@@ -62,7 +66,7 @@ enum UserRole {
 
 type UserProfile @model @auth(rules: [
   { allow: groups, groups: ["SuperAdmin"], operations: [create, read, update, delete] }
-  { allow: groups, groupsField: "teamAdminGroup", operations: [read, update] }
+  { allow: groups, groups: ["DivisionAdmins"], operations: [read, update] }
   { allow: owner, ownerField: "cognitoUserId", operations: [create, read] }
 ]) {
   id: ID!
@@ -71,7 +75,7 @@ type UserProfile @model @auth(rules: [
   name: String
   phoneNumber: String
 
-  # 조직 정보
+  # 조직 정보 (앱 레벨 권한 제어용)
   teamId: ID @index(name: "byTeam", sortKeyFields: ["createdAt"])
   team: Team @belongsTo(fields: ["teamId"])
   divisionId: ID @index(name: "byDivision")
@@ -82,9 +86,8 @@ type UserProfile @model @auth(rules: [
   approvedAt: AWSDateTime
   rejectionReason: String
 
-  # 권한 정보
+  # 권한 정보 (앱 레벨 체크용)
   role: UserRole! @default(value: "MEMBER")
-  teamAdminGroup: String            # 소속 팀의 관리자 그룹 (권한 체크용)
 
   createdAt: AWSDateTime
   updatedAt: AWSDateTime
@@ -139,8 +142,8 @@ type MasterStation @model @auth(rules: [
 
 type TeamInspectionData @model @auth(rules: [
   { allow: groups, groups: ["SuperAdmin"], operations: [create, read, update, delete] }
-  { allow: groups, groupsField: "divisionGroup", operations: [read] }
-  { allow: groups, groupsField: "teamGroup", operations: [create, read, update, delete] }
+  { allow: groups, groups: ["DivisionAdmins"], operations: [create, read, update, delete] }
+  { allow: groups, groups: ["AllMembers"], operations: [create, read, update] }
 ]) {
   id: ID!
 
@@ -150,9 +153,8 @@ type TeamInspectionData @model @auth(rules: [
   teamId: ID! @index(name: "byTeamInspection", sortKeyFields: ["createdAt"])
   team: Team @belongsTo(fields: ["teamId"])
 
-  # 권한 그룹 필드
-  divisionGroup: String!           # 부서 그룹 (읽기 권한)
-  teamGroup: String!               # 팀 그룹 (전체 권한)
+  # 본부 ID (앱 레벨 권한 체크용)
+  divisionId: ID @index(name: "byDivisionInspection")
 
   # 검사 정보
   isInspected: Boolean @default(value: "false")
@@ -193,7 +195,8 @@ enum AuditAction {
 
 type AuditLog @model @auth(rules: [
   { allow: groups, groups: ["SuperAdmin"], operations: [create, read] }
-  { allow: groups, groups: ["DivisionAdmins"], operations: [read] }
+  { allow: groups, groups: ["DivisionAdmins"], operations: [create, read] }
+  { allow: groups, groups: ["AllMembers"], operations: [create] }
 ]) {
   id: ID!
 
@@ -208,6 +211,7 @@ type AuditLog @model @auth(rules: [
   userName: String
   userTeamId: String
   userTeamName: String
+  userDivisionId: String
 
   # 타임스탬프
   timestamp: AWSDateTime! @index(name: "byTimestamp", queryField: "auditLogsByTimestamp")
@@ -231,25 +235,24 @@ type AuditLog @model @auth(rules: [
 }
 
 # ==========================================
-# 기존 모델 (하위 호환성 유지 + 팀 연동 추가)
+# 기존 모델 (하위 호환성 유지)
 # ==========================================
 
-# 카테고리 (Excel 파일 단위) - 팀 소유로 변경
+# 카테고리 (Excel 파일 단위)
 type Category @model @auth(rules: [
   { allow: groups, groups: ["SuperAdmin"], operations: [create, read, update, delete] }
-  { allow: groups, groupsField: "teamGroup", operations: [create, read, update, delete] }
-  { allow: groups, groupsField: "divisionGroup", operations: [read] }
+  { allow: groups, groups: ["DivisionAdmins"], operations: [create, read, update, delete] }
+  { allow: groups, groups: ["AllMembers"], operations: [create, read, update, delete] }
   { allow: owner, operations: [create, read, update, delete] }
 ]) {
   id: ID!
   name: String!
   originalExcelKey: String    # 원본 Excel 파일 S3 키 (서식 유지 export용)
 
-  # 팀 연결 (새로 추가)
+  # 팀/본부 연결 (앱 레벨 권한 체크용)
   teamId: ID @index(name: "byCategoryTeam", sortKeyFields: ["createdAt"])
   team: Team @belongsTo(fields: ["teamId"])
-  teamGroup: String               # 팀 그룹
-  divisionGroup: String           # 부서 그룹 (읽기용)
+  divisionId: ID @index(name: "byCategoryDivision")
 
   stations: [Station] @hasMany(indexName: "byCategory", fields: ["id"])
   inspectionData: [TeamInspectionData] @hasMany(indexName: "byInspectionCategory", fields: ["id"])

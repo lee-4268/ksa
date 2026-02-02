@@ -110,7 +110,7 @@ class MyApp extends StatelessWidget {
             brightness: Brightness.light,
           ),
           useMaterial3: true,
-          fontFamily: 'BMJUA',
+          fontFamily: 'SamsungOne',
           scaffoldBackgroundColor: Colors.white,
           appBarTheme: const AppBarTheme(
             centerTitle: true,

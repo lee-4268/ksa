@@ -75,6 +75,6 @@ flutter:
     - image/
 
   fonts:
-    - family: BMJUA
+    - family: SamsungOne
       fonts:
-        - asset: assets/fonts/BMJUA_ttf.ttf
+        - asset: assets/fonts/SamsungOne-700.ttf

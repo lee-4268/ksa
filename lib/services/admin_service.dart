@@ -66,8 +66,18 @@ class AdminService extends ChangeNotifier {
       final data = jsonDecode(response.data!) as Map<String, dynamic>;
       final items = data['listUserProfiles']['items'] as List<dynamic>;
 
+      // null 필터링 및 중복 제거 (cognitoUserId 기준)
+      final seen = <String>{};
       _pendingUsers = items
+          .where((item) => item != null)
           .map((item) => AppUserProfile.fromJson(item as Map<String, dynamic>))
+          .where((user) {
+            if (seen.contains(user.cognitoUserId)) {
+              return false;
+            }
+            seen.add(user.cognitoUserId);
+            return true;
+          })
           .toList();
 
       _isLoading = false;
@@ -132,8 +142,18 @@ class AdminService extends ChangeNotifier {
       final data = jsonDecode(response.data!) as Map<String, dynamic>;
       final items = data['listUserProfiles']['items'] as List<dynamic>;
 
+      // null 필터링 및 중복 제거 (cognitoUserId 기준)
+      final seen = <String>{};
       _allUsers = items
+          .where((item) => item != null)
           .map((item) => AppUserProfile.fromJson(item as Map<String, dynamic>))
+          .where((user) {
+            if (seen.contains(user.cognitoUserId)) {
+              return false;
+            }
+            seen.add(user.cognitoUserId);
+            return true;
+          })
           .toList();
 
       _isLoading = false;
@@ -145,7 +165,7 @@ class AdminService extends ChangeNotifier {
     }
   }
 
-  /// 사용자 승인
+  /// 사용자 승인 (단순화된 구조 - 그룹 필드 없음, divisionId/teamId로 앱 레벨 권한 관리)
   Future<bool> approveUser({
     required String profileId,
     required String teamId,
@@ -153,14 +173,6 @@ class AdminService extends ChangeNotifier {
     required String approverUserId,
     UserRole role = UserRole.member,
   }) async {
-    // 팀 정보 조회 (그룹명 가져오기)
-    final team = await _getTeam(teamId);
-    if (team == null) {
-      _errorMessage = '팀 정보를 찾을 수 없습니다';
-      notifyListeners();
-      return false;
-    }
-
     const mutation = '''
       mutation ApproveUser(\$input: UpdateUserProfileInput!) {
         updateUserProfile(input: \$input) {
@@ -171,7 +183,6 @@ class AdminService extends ChangeNotifier {
           divisionId
           approvedBy
           approvedAt
-          teamAdminGroup
         }
       }
     ''';
@@ -187,7 +198,6 @@ class AdminService extends ChangeNotifier {
       'divisionId': divisionId,
       'approvedBy': approverUserId,
       'approvedAt': DateTime.now().toUtc().toIso8601String(),
-      'teamAdminGroup': team.adminGroup,
     };
 
     try {
@@ -443,15 +453,12 @@ class AdminService extends ChangeNotifier {
     }
   }
 
-  /// 부서 생성
+  /// 본부 생성 (단순화된 구조 - 그룹 필드 없음)
   Future<String?> createDivision({
     required String name,
     required String code,
     String? description,
   }) async {
-    final adminGroup = 'Division_${code}_Admin';
-    final memberGroup = 'Division_${code}_Member';
-
     const mutation = '''
       mutation CreateDivision(\$input: CreateDivisionInput!) {
         createDivision(input: \$input) {
@@ -470,8 +477,6 @@ class AdminService extends ChangeNotifier {
             'name': name,
             'code': code,
             'description': description,
-            'adminGroup': adminGroup,
-            'memberGroup': memberGroup,
           }
         },
         authorizationMode: APIAuthorizationType.userPools,
@@ -480,7 +485,7 @@ class AdminService extends ChangeNotifier {
       final response = await Amplify.API.mutate(request: request).response;
 
       if (response.errors.isNotEmpty) {
-        _errorMessage = '부서 생성 실패: ${response.errors.first.message}';
+        _errorMessage = '본부 생성 실패: ${response.errors.first.message}';
         notifyListeners();
         return null;
       }
@@ -498,24 +503,19 @@ class AdminService extends ChangeNotifier {
 
       return divisionId;
     } catch (e) {
-      _errorMessage = '부서 생성 오류: $e';
+      _errorMessage = '본부 생성 오류: $e';
       notifyListeners();
       return null;
     }
   }
 
-  /// 팀 생성
+  /// 팀 생성 (단순화된 구조 - 그룹 필드 없음)
   Future<String?> createTeam({
     required String divisionId,
-    required String divisionCode,
     required String name,
     required String code,
     String? description,
   }) async {
-    final divisionAdminGroup = 'Division_${divisionCode}_Admin';
-    final adminGroup = 'Team_${divisionCode}_${code}_Admin';
-    final memberGroup = 'Team_${divisionCode}_${code}_Member';
-
     const mutation = '''
       mutation CreateTeam(\$input: CreateTeamInput!) {
         createTeam(input: \$input) {
@@ -535,9 +535,6 @@ class AdminService extends ChangeNotifier {
             'name': name,
             'code': code,
             'description': description,
-            'divisionAdminGroup': divisionAdminGroup,
-            'adminGroup': adminGroup,
-            'memberGroup': memberGroup,
           }
         },
         authorizationMode: APIAuthorizationType.userPools,
@@ -579,8 +576,7 @@ class AdminService extends ChangeNotifier {
           divisionId
           name
           code
-          adminGroup
-          memberGroup
+          description
         }
       }
     ''';
@@ -642,6 +638,96 @@ class AdminService extends ChangeNotifier {
     } catch (e) {
       debugPrint('프로필 조회 오류: $e');
       return null;
+    }
+  }
+
+  /// 팀 삭제
+  Future<bool> deleteTeam(String teamId) async {
+    const mutation = '''
+      mutation DeleteTeam(\$input: DeleteTeamInput!) {
+        deleteTeam(input: \$input) {
+          id
+        }
+      }
+    ''';
+
+    try {
+      // 팀 정보 조회 (감사 로그용)
+      final team = await _getTeam(teamId);
+
+      final request = GraphQLRequest<String>(
+        document: mutation,
+        variables: {
+          'input': {'id': teamId}
+        },
+        authorizationMode: APIAuthorizationType.userPools,
+      );
+
+      final response = await Amplify.API.mutate(request: request).response;
+
+      if (response.errors.isNotEmpty) {
+        _errorMessage = '팀 삭제 실패: ${response.errors.first.message}';
+        notifyListeners();
+        return false;
+      }
+
+      // 감사 로그 기록
+      await _auditService.log(
+        action: AuditAction.delete,
+        entityType: 'Team',
+        entityId: teamId,
+        previousData: team != null
+            ? {'name': team.name, 'code': team.code}
+            : null,
+      );
+
+      return true;
+    } catch (e) {
+      _errorMessage = '팀 삭제 오류: $e';
+      notifyListeners();
+      return false;
+    }
+  }
+
+  /// 본부 삭제
+  Future<bool> deleteDivision(String divisionId) async {
+    const mutation = '''
+      mutation DeleteDivision(\$input: DeleteDivisionInput!) {
+        deleteDivision(input: \$input) {
+          id
+        }
+      }
+    ''';
+
+    try {
+      final request = GraphQLRequest<String>(
+        document: mutation,
+        variables: {
+          'input': {'id': divisionId}
+        },
+        authorizationMode: APIAuthorizationType.userPools,
+      );
+
+      final response = await Amplify.API.mutate(request: request).response;
+
+      if (response.errors.isNotEmpty) {
+        _errorMessage = '본부 삭제 실패: ${response.errors.first.message}';
+        notifyListeners();
+        return false;
+      }
+
+      // 감사 로그 기록
+      await _auditService.log(
+        action: AuditAction.delete,
+        entityType: 'Division',
+        entityId: divisionId,
+      );
+
+      return true;
+    } catch (e) {
+      _errorMessage = '본부 삭제 오류: $e';
+      notifyListeners();
+      return false;
     }
   }
 
