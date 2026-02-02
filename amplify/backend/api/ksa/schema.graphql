@@ -67,7 +67,8 @@ enum UserRole {
 type UserProfile @model @auth(rules: [
   { allow: groups, groups: ["SuperAdmin"], operations: [create, read, update, delete] }
   { allow: groups, groups: ["DivisionAdmins"], operations: [read, update] }
-  { allow: owner, ownerField: "cognitoUserId", operations: [create, read] }
+  { allow: groups, groups: ["AllMembers"], operations: [read] }
+  { allow: owner, ownerField: "cognitoUserId", operations: [create, read, update] }
 ]) {
   id: ID!
   cognitoUserId: String! @index(name: "byCognitoId", queryField: "userProfileByCognitoId")
