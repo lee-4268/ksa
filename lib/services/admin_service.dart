@@ -736,4 +736,106 @@ class AdminService extends ChangeNotifier {
     _errorMessage = null;
     notifyListeners();
   }
+
+  /// PENDING 사용자 일괄 자동 승인 (Cognito 그룹 기반)
+  /// 이미 Cognito 그룹에 있는 사용자들의 DB 상태를 APPROVED로 업데이트
+  /// @param currentUserId 현재 로그인한 사용자의 Cognito ID (자신의 계정 우선 처리)
+  /// @param teamId 기본 배정할 팀 ID (선택사항)
+  /// @param divisionId 기본 배정할 본부 ID (선택사항)
+  Future<int> autoApprovePendingUsers({
+    required String currentUserId,
+    String? teamId,
+    String? divisionId,
+  }) async {
+    int approvedCount = 0;
+
+    // 1. 현재 사용자의 프로필 찾기 및 우선 처리
+    for (final user in _pendingUsers) {
+      if (user.cognitoUserId == currentUserId) {
+        final success = await _forceApproveUser(
+          profileId: user.id,
+          teamId: teamId ?? user.teamId,
+          divisionId: divisionId ?? user.divisionId,
+        );
+        if (success) {
+          approvedCount++;
+          debugPrint('현재 사용자 자동 승인 완료: ${user.email}');
+        }
+        break;
+      }
+    }
+
+    // 목록 새로고침
+    await loadPendingUsers();
+
+    return approvedCount;
+  }
+
+  /// 사용자 강제 승인 (관리자 권한으로 DB 직접 업데이트)
+  Future<bool> _forceApproveUser({
+    required String profileId,
+    String? teamId,
+    String? divisionId,
+  }) async {
+    const mutation = '''
+      mutation ForceApproveUser(\$input: UpdateUserProfileInput!) {
+        updateUserProfile(input: \$input) {
+          id
+          status
+        }
+      }
+    ''';
+
+    final input = <String, dynamic>{
+      'id': profileId,
+      'status': 'APPROVED',
+      'approvedBy': 'AUTO_MIGRATION',
+      'approvedAt': DateTime.now().toUtc().toIso8601String(),
+    };
+
+    if (teamId != null) input['teamId'] = teamId;
+    if (divisionId != null) input['divisionId'] = divisionId;
+
+    try {
+      final request = GraphQLRequest<String>(
+        document: mutation,
+        variables: {'input': input},
+        authorizationMode: APIAuthorizationType.userPools,
+      );
+
+      final response = await Amplify.API.mutate(request: request).response;
+
+      if (response.errors.isNotEmpty) {
+        debugPrint('강제 승인 실패: ${response.errors.first.message}');
+        return false;
+      }
+
+      return true;
+    } catch (e) {
+      debugPrint('강제 승인 오류: $e');
+      return false;
+    }
+  }
+
+  /// 특정 사용자 목록 일괄 승인
+  Future<int> batchApproveUsers({
+    required List<String> profileIds,
+    required String teamId,
+    required String divisionId,
+    required String approverUserId,
+  }) async {
+    int successCount = 0;
+
+    for (final profileId in profileIds) {
+      final success = await approveUser(
+        profileId: profileId,
+        teamId: teamId,
+        divisionId: divisionId,
+        approverUserId: approverUserId,
+      );
+      if (success) successCount++;
+    }
+
+    return successCount;
+  }
 }

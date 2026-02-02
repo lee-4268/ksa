@@ -122,6 +122,26 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
                   );
                 },
               ),
+
+            // 데이터 정리 (최고 관리자만)
+            if (authService.isSuperAdmin) ...[
+              const SizedBox(height: 24),
+              const Text(
+                '시스템 관리',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 12),
+              _buildMenuCard(
+                icon: Icons.sync,
+                iconColor: Colors.deepOrange,
+                title: '기존 데이터 정리',
+                subtitle: 'PENDING 상태 사용자 자동 승인 처리',
+                onTap: () => _showDataCleanupDialog(authService, adminService),
+              ),
+            ],
           ],
         ),
       ),
@@ -250,6 +270,125 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
         return '팀 관리자';
       case AppUserRole.member:
         return '일반 멤버';
+    }
+  }
+
+  Future<void> _showDataCleanupDialog(
+    AuthService authService,
+    AdminService adminService,
+  ) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Colors.white,
+        title: const Row(
+          children: [
+            Icon(Icons.warning_amber, color: Colors.orange),
+            SizedBox(width: 8),
+            Text('기존 데이터 정리'),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              '다음 작업을 수행합니다:',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 12),
+            const Text('• 현재 계정(관리자)의 DB 상태를 APPROVED로 업데이트'),
+            const SizedBox(height: 8),
+            Text(
+              '현재 PENDING 상태 사용자: ${adminService.pendingCount}명',
+              style: TextStyle(color: Colors.grey[600]),
+            ),
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.blue[50],
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Row(
+                children: [
+                  Icon(Icons.info_outline, color: Colors.blue, size: 20),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'amplify push 실행 후 이 작업을 수행하세요.',
+                      style: TextStyle(fontSize: 13, color: Colors.blue),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('취소'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.deepOrange,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('정리 실행'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm != true) return;
+
+    // 데이터 정리 실행
+    if (!mounted) return;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => const AlertDialog(
+        backgroundColor: Colors.white,
+        content: Row(
+          children: [
+            CircularProgressIndicator(),
+            SizedBox(width: 16),
+            Text('처리 중...'),
+          ],
+        ),
+      ),
+    );
+
+    try {
+      final count = await adminService.autoApprovePendingUsers(
+        currentUserId: authService.userId ?? '',
+      );
+
+      if (!mounted) return;
+      Navigator.pop(context); // 로딩 다이얼로그 닫기
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('$count명의 사용자가 자동 승인되었습니다.'),
+          backgroundColor: Colors.green,
+        ),
+      );
+
+      // 데이터 새로고침
+      await _loadData();
+    } catch (e) {
+      if (!mounted) return;
+      Navigator.pop(context); // 로딩 다이얼로그 닫기
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('오류 발생: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
     }
   }
 }

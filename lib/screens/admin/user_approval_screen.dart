@@ -18,10 +18,13 @@ class UserApprovalScreen extends StatefulWidget {
 }
 
 class _UserApprovalScreenState extends State<UserApprovalScreen> {
-  // 각 사용자별 선택된 팀 ID를 저장하는 Map
+  // 각 사용자별 선택된 본부/팀 ID를 저장하는 Map
+  final Map<String, String?> _selectedDivisionIds = {};
   final Map<String, String?> _selectedTeamIds = {};
-  List<Team> _teams = [];
-  bool _isLoadingTeams = false;
+
+  List<Division> _divisions = [];
+  Map<String, List<Team>> _teamsByDivision = {};  // divisionId -> teams
+  bool _isLoadingData = false;
 
   @override
   void initState() {
@@ -39,17 +42,55 @@ class _UserApprovalScreenState extends State<UserApprovalScreen> {
       await adminService.loadPendingUsers();
     }
 
-    // 팀 목록 로드
-    setState(() => _isLoadingTeams = true);
+    // 본부 및 팀 목록 로드
+    setState(() => _isLoadingData = true);
+    await teamContext.loadDivisions();
     await teamContext.loadAllTeams();
+
+    // 본부별 팀 그룹핑
+    final allTeams = teamContext.availableTeams;
+    final groupedTeams = <String, List<Team>>{};
+    for (final team in allTeams) {
+      groupedTeams.putIfAbsent(team.divisionId, () => []);
+      groupedTeams[team.divisionId]!.add(team);
+    }
+
     setState(() {
-      _teams = teamContext.availableTeams;
-      _isLoadingTeams = false;
+      _divisions = teamContext.availableDivisions;
+      _teamsByDivision = groupedTeams;
+      _isLoadingData = false;
     });
   }
 
+  /// 특정 사용자의 본부 선택 시 호출
+  void _onDivisionSelected(String userId, String? divisionId) {
+    setState(() {
+      _selectedDivisionIds[userId] = divisionId;
+      // 본부 변경 시 팀 선택 초기화
+      _selectedTeamIds[userId] = null;
+    });
+  }
+
+  /// 선택된 본부에 속한 팀 목록 반환
+  List<Team> _getTeamsForDivision(String? divisionId) {
+    if (divisionId == null) return [];
+    return _teamsByDivision[divisionId] ?? [];
+  }
+
   Future<void> _approveUser(AppUserProfile user) async {
+    final selectedDivisionId = _selectedDivisionIds[user.id];
     final selectedTeamId = _selectedTeamIds[user.id];
+
+    if (selectedDivisionId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('본부를 선택해주세요.'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
     if (selectedTeamId == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -60,16 +101,13 @@ class _UserApprovalScreenState extends State<UserApprovalScreen> {
       return;
     }
 
-    final selectedTeam = _teams.firstWhere((t) => t.id == selectedTeamId);
-    final divisionId = selectedTeam.divisionId;
-
     final adminService = context.read<AdminService>();
     final authService = context.read<AuthService>();
 
     final success = await adminService.approveUser(
       profileId: user.id,
       teamId: selectedTeamId,
-      divisionId: divisionId,
+      divisionId: selectedDivisionId,
       approverUserId: authService.userId ?? '',
     );
 
@@ -84,6 +122,7 @@ class _UserApprovalScreenState extends State<UserApprovalScreen> {
 
     // 승인 후 해당 사용자의 선택 상태 초기화
     setState(() {
+      _selectedDivisionIds.remove(user.id);
       _selectedTeamIds.remove(user.id);
     });
   }
@@ -302,35 +341,72 @@ class _UserApprovalScreenState extends State<UserApprovalScreen> {
               _buildInfoRow('소속', '${user.team!.division?.name ?? ''} - ${user.team!.name}'),
             _buildInfoRow('역할', _getRoleName(user.role)),
 
-            // 승인 대기 중인 경우 팀 선택
+            // 승인 대기 중인 경우 본부 및 팀 선택
             if (isPending) ...[
               const SizedBox(height: 16),
-              _isLoadingTeams
+              _isLoadingData
                   ? const Center(child: CircularProgressIndicator())
-                  : DropdownButtonFormField<String>(
-                      value: _selectedTeamIds[user.id],
-                      dropdownColor: Colors.white,
-                      decoration: const InputDecoration(
-                        labelText: '배정할 팀 선택',
-                        border: OutlineInputBorder(),
-                        filled: true,
-                        fillColor: Colors.white,
-                        contentPadding: EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 8,
-                        ),
-                      ),
-                      items: _teams.map((team) {
-                        return DropdownMenuItem(
-                          value: team.id,
-                          child: Text(
-                            '${team.division?.name ?? ''} - ${team.name}',
+                  : Column(
+                      children: [
+                        // 본부 선택
+                        DropdownButtonFormField<String>(
+                          value: _selectedDivisionIds[user.id],
+                          dropdownColor: Colors.white,
+                          decoration: const InputDecoration(
+                            labelText: '배정할 본부 선택',
+                            border: OutlineInputBorder(),
+                            filled: true,
+                            fillColor: Colors.white,
+                            contentPadding: EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 8,
+                            ),
                           ),
-                        );
-                      }).toList(),
-                      onChanged: (value) {
-                        setState(() => _selectedTeamIds[user.id] = value);
-                      },
+                          items: _divisions.map((division) {
+                            return DropdownMenuItem(
+                              value: division.id,
+                              child: Text(division.name),
+                            );
+                          }).toList(),
+                          onChanged: (value) => _onDivisionSelected(user.id, value),
+                        ),
+                        const SizedBox(height: 12),
+                        // 팀 선택 (본부 선택 후에만 활성화)
+                        DropdownButtonFormField<String>(
+                          value: _selectedTeamIds[user.id],
+                          dropdownColor: Colors.white,
+                          decoration: InputDecoration(
+                            labelText: '배정할 팀 선택',
+                            border: const OutlineInputBorder(),
+                            filled: true,
+                            fillColor: _selectedDivisionIds[user.id] != null
+                                ? Colors.white
+                                : Colors.grey[100],
+                            contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 8,
+                            ),
+                          ),
+                          items: _getTeamsForDivision(_selectedDivisionIds[user.id])
+                              .map((team) {
+                            return DropdownMenuItem(
+                              value: team.id,
+                              child: Text(team.name),
+                            );
+                          }).toList(),
+                          onChanged: _selectedDivisionIds[user.id] != null
+                              ? (value) {
+                                  setState(() => _selectedTeamIds[user.id] = value);
+                                }
+                              : null,
+                          hint: Text(
+                            _selectedDivisionIds[user.id] == null
+                                ? '본부를 먼저 선택하세요'
+                                : '팀을 선택하세요',
+                            style: TextStyle(color: Colors.grey[500]),
+                          ),
+                        ),
+                      ],
                     ),
             ],
 
