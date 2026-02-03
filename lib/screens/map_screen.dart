@@ -8,6 +8,7 @@ import '../services/cloud_data_service.dart';
 import '../widgets/station_detail_sheet.dart';
 import 'roadview_screen.dart';
 import 'login_screen.dart';
+import '../widgets/user_profile_button.dart';
 
 // 조건부 import
 import 'map_screen_web.dart' if (dart.library.io) 'map_screen_mobile.dart'
@@ -59,7 +60,7 @@ class _MapScreenState extends State<MapScreen>
 
       // 사용자가 로그인되어 있을 때만 CloudDataService 연결
       if (authService.isSignedIn) {
-        provider.setCloudDataService(cloudService);
+        provider.setCloudDataService(cloudService, userId: authService.userId);
       }
       provider.loadStations();
     });
@@ -2422,16 +2423,10 @@ class _WelcomeHeaderWidgetState extends State<_WelcomeHeaderWidget> {
                   ],
                 ),
               ),
-              // 로그아웃 버튼
-              TextButton.icon(
-                onPressed: widget.onLogout,
-                icon: const Icon(Icons.logout, size: 16, color: Colors.red),
-                label: const Text('로그아웃', style: TextStyle(color: Colors.red, fontSize: 12)),
-                style: TextButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-                  minimumSize: Size.zero,
-                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                ),
+              // 사용자 프로필 버튼
+              UserProfileButton(
+                onLogout: widget.onLogout,
+                fontSize: 12,
               ),
             ],
           );

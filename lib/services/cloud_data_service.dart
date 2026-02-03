@@ -43,7 +43,7 @@ class CloudDataService extends ChangeNotifier {
             if (originalExcelKey != null) 'originalExcelKey': originalExcelKey,
           },
         },
-        authorizationMode: APIAuthorizationType.userPools,
+        authorizationMode: APIAuthorizationType.apiKey,
       );
 
       final response = await Amplify.API.mutate(request: request).response;
@@ -150,7 +150,7 @@ class CloudDataService extends ChangeNotifier {
             'limit': 1000, // 한 번에 최대 1000개 요청
             if (nextToken != null) 'nextToken': nextToken,
           },
-          authorizationMode: APIAuthorizationType.userPools,
+          authorizationMode: APIAuthorizationType.apiKey,
         );
 
         final response = await Amplify.API.query(request: request).response;
@@ -206,7 +206,7 @@ class CloudDataService extends ChangeNotifier {
         variables: {
           'input': {'id': categoryId},
         },
-        authorizationMode: APIAuthorizationType.userPools,
+        authorizationMode: APIAuthorizationType.apiKey,
       );
 
       final response = await Amplify.API.mutate(request: request).response;
@@ -291,7 +291,7 @@ class CloudDataService extends ChangeNotifier {
             'photoKeys': station.photoPaths,
           },
         },
-        authorizationMode: APIAuthorizationType.userPools,
+        authorizationMode: APIAuthorizationType.apiKey,
       );
 
       final response = await Amplify.API.mutate(request: request).response;
@@ -375,7 +375,7 @@ class CloudDataService extends ChangeNotifier {
             'limit': 1000, // 한 번에 최대 1000개 요청
             if (nextToken != null) 'nextToken': nextToken,
           },
-          authorizationMode: APIAuthorizationType.userPools,
+          authorizationMode: APIAuthorizationType.apiKey,
         );
 
         final response = await Amplify.API.query(request: request).response;
@@ -458,7 +458,7 @@ class CloudDataService extends ChangeNotifier {
             'limit': 1000, // 한 번에 최대 1000개 요청
             if (nextToken != null) 'nextToken': nextToken,
           },
-          authorizationMode: APIAuthorizationType.userPools,
+          authorizationMode: APIAuthorizationType.apiKey,
         );
 
         final response = await Amplify.API.query(request: request).response;
@@ -536,7 +536,7 @@ class CloudDataService extends ChangeNotifier {
             'photoKeys': station.photoPaths,
           },
         },
-        authorizationMode: APIAuthorizationType.userPools,
+        authorizationMode: APIAuthorizationType.apiKey,
       );
 
       final response = await Amplify.API.mutate(request: request).response;
@@ -581,7 +581,7 @@ class CloudDataService extends ChangeNotifier {
         variables: {
           'input': {'id': stationId},
         },
-        authorizationMode: APIAuthorizationType.userPools,
+        authorizationMode: APIAuthorizationType.apiKey,
       );
 
       final response = await Amplify.API.mutate(request: request).response;
@@ -811,7 +811,7 @@ class CloudDataService extends ChangeNotifier {
             if (processingTimeMs != null) 'processingTimeMs': processingTimeMs,
           },
         },
-        authorizationMode: APIAuthorizationType.userPools,
+        authorizationMode: APIAuthorizationType.apiKey,
       );
 
       final response = await Amplify.API.mutate(request: request).response;
@@ -868,7 +868,7 @@ class CloudDataService extends ChangeNotifier {
         variables: {
           'limit': limit,
         },
-        authorizationMode: APIAuthorizationType.userPools,
+        authorizationMode: APIAuthorizationType.apiKey,
       );
 
       final response = await Amplify.API.query(request: request).response;
@@ -910,7 +910,7 @@ class CloudDataService extends ChangeNotifier {
         variables: {
           'input': {'id': id},
         },
-        authorizationMode: APIAuthorizationType.userPools,
+        authorizationMode: APIAuthorizationType.apiKey,
       );
 
       final response = await Amplify.API.mutate(request: request).response;
@@ -930,16 +930,15 @@ class CloudDataService extends ChangeNotifier {
   // ==================== 원본 Excel 관리 ====================
 
   /// 원본 Excel 파일을 S3에 업로드
-  Future<String?> uploadOriginalExcel(Uint8List bytes, String categoryName) async {
+  Future<String?> uploadOriginalExcel(Uint8List bytes, String categoryName, {String? userId}) async {
     try {
       final timestamp = DateTime.now().millisecondsSinceEpoch;
-      final fileKey = 'original-excel/$categoryName-$timestamp.xlsx';
+      final userPrefix = userId ?? 'unknown';
+      final fileKey = 'public/users/$userPrefix/original-excel/$categoryName-$timestamp.xlsx';
 
       final result = await Amplify.Storage.uploadData(
         data: StorageDataPayload.bytes(bytes),
-        path: StoragePath.fromIdentityId(
-          (identityId) => 'private/$identityId/$fileKey',
-        ),
+        path: StoragePath.fromString(fileKey),
       ).result;
 
       final uploadedPath = result.uploadedItem.path;
@@ -1007,7 +1006,7 @@ class CloudDataService extends ChangeNotifier {
             'originalExcelKey': originalExcelKey,
           },
         },
-        authorizationMode: APIAuthorizationType.userPools,
+        authorizationMode: APIAuthorizationType.apiKey,
       );
 
       final response = await Amplify.API.mutate(request: request).response;

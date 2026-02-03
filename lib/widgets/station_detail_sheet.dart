@@ -8,6 +8,7 @@ import 'package:provider/provider.dart';
 import '../models/radio_station.dart';
 import '../providers/station_provider.dart';
 import '../screens/tower_classification_screen.dart';
+import '../services/auth_service.dart';
 import '../services/photo_storage_service.dart';
 
 class StationDetailSheet extends StatefulWidget {
@@ -466,6 +467,7 @@ class _StationDetailSheetState extends State<StationDetailSheet> {
 
   /// 철탑형태 분류 화면 열기
   Future<void> _openTowerClassification(BuildContext context) async {
+    final userId = context.read<AuthService>().userId;
     final result = await Navigator.push<TowerClassificationResult>(
       context,
       MaterialPageRoute(
@@ -486,6 +488,7 @@ class _StationDetailSheetState extends State<StationDetailSheet> {
             bytes: result.imageBytes!,
             fileName: 'tower_${DateTime.now().millisecondsSinceEpoch}.jpg',
             stationId: widget.station.id,
+            userId: userId,
           );
           if (savedPath != null) {
             setState(() {
@@ -933,6 +936,7 @@ class _StationDetailSheetState extends State<StationDetailSheet> {
   }
 
   Future<void> _takePhoto(ImageSource source) async {
+    final userId = context.read<AuthService>().userId;
     try {
       final XFile? pickedFile = await _imagePicker.pickImage(
         source: source,
@@ -952,6 +956,7 @@ class _StationDetailSheetState extends State<StationDetailSheet> {
           bytes: bytes,
           fileName: pickedFile.name,
           stationId: widget.station.id,
+          userId: userId,
         );
 
         if (result == null) {

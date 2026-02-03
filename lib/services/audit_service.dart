@@ -155,7 +155,7 @@ class AuditService extends ChangeNotifier {
       final request = GraphQLRequest<String>(
         document: mutation,
         variables: {'input': input},
-        authorizationMode: APIAuthorizationType.userPools,
+        authorizationMode: APIAuthorizationType.apiKey,
       );
 
       final response = await Amplify.API.mutate(request: request).response;
@@ -295,7 +295,7 @@ class AuditService extends ChangeNotifier {
           if (filter.isNotEmpty) 'filter': filter,
           'limit': limit,
         },
-        authorizationMode: APIAuthorizationType.userPools,
+        authorizationMode: APIAuthorizationType.apiKey,
       );
 
       final response = await Amplify.API.query(request: request).response;
@@ -352,7 +352,7 @@ class AuditService extends ChangeNotifier {
       final getRequest = GraphQLRequest<String>(
         document: getQuery,
         variables: {'id': auditLogId},
-        authorizationMode: APIAuthorizationType.userPools,
+        authorizationMode: APIAuthorizationType.apiKey,
       );
 
       final getResponse = await Amplify.API.query(request: getRequest).response;
@@ -431,7 +431,7 @@ class AuditService extends ChangeNotifier {
             'canRollback': false,
           }
         },
-        authorizationMode: APIAuthorizationType.userPools,
+        authorizationMode: APIAuthorizationType.apiKey,
       );
 
       await Amplify.API.mutate(request: updateRequest).response;
@@ -489,7 +489,7 @@ class AuditService extends ChangeNotifier {
       final request = GraphQLRequest<String>(
         document: mutation,
         variables: {'input': input},
-        authorizationMode: APIAuthorizationType.userPools,
+        authorizationMode: APIAuthorizationType.apiKey,
       );
 
       final response = await Amplify.API.mutate(request: request).response;
@@ -536,7 +536,7 @@ class AuditService extends ChangeNotifier {
       final request = GraphQLRequest<String>(
         document: mutation,
         variables: {'input': input},
-        authorizationMode: APIAuthorizationType.userPools,
+        authorizationMode: APIAuthorizationType.apiKey,
       );
 
       final response = await Amplify.API.mutate(request: request).response;
@@ -578,7 +578,7 @@ class AuditService extends ChangeNotifier {
       final request = GraphQLRequest<String>(
         document: mutation,
         variables: {'input': input},
-        authorizationMode: APIAuthorizationType.userPools,
+        authorizationMode: APIAuthorizationType.apiKey,
       );
 
       final response = await Amplify.API.mutate(request: request).response;

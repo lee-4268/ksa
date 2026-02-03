@@ -256,7 +256,7 @@ class DivisionDataService extends ChangeNotifier {
             'originalExcelKey': _originalFileName,
           }
         },
-        authorizationMode: APIAuthorizationType.userPools,
+        authorizationMode: APIAuthorizationType.apiKey,
       );
 
       await Amplify.API.mutate(request: request).response;
@@ -283,7 +283,7 @@ class DivisionDataService extends ChangeNotifier {
         variables: {
           'input': target.toJson(),
         },
-        authorizationMode: APIAuthorizationType.userPools,
+        authorizationMode: APIAuthorizationType.apiKey,
       );
 
       await Amplify.API.mutate(request: request).response;
@@ -334,7 +334,7 @@ class DivisionDataService extends ChangeNotifier {
           'divisionId': _currentDivisionId,
           'year': DateTime.now().year,
         },
-        authorizationMode: APIAuthorizationType.userPools,
+        authorizationMode: APIAuthorizationType.apiKey,
       );
 
       final response = await Amplify.API.query(request: request).response;

@@ -9,6 +9,7 @@ import 'login_screen.dart';
 import 'schedule_screen.dart';
 import 'division_management_screen.dart';
 import 'admin/admin_panel_screen.dart';
+import '../widgets/user_profile_button.dart';
 
 /// 메인 홈 화면 - 메뉴 선택 인터페이스
 class HomeScreen extends StatefulWidget {
@@ -46,7 +47,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
     // 사용자가 로그인되어 있을 때만 CloudDataService 연결 및 데이터 로드
     if (authService.isSignedIn) {
-      provider.setCloudDataService(cloudService);
+      provider.setCloudDataService(cloudService, userId: authService.userId);
       await provider.loadStations();
     }
   }
@@ -118,11 +119,8 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
       centerTitle: true,
       actions: [
-        IconButton(
-          icon: const Icon(Icons.logout_outlined, color: Colors.black54),
-          tooltip: '로그아웃',
-          onPressed: _handleLogout,
-        ),
+        UserProfileButton(onLogout: _handleLogout),
+        const SizedBox(width: 4),
       ],
     );
   }
@@ -172,12 +170,39 @@ class _HomeScreenState extends State<HomeScreen> {
                 const SizedBox(height: 4),
                 Consumer<AuthService>(
                   builder: (context, auth, _) {
-                    return Text(
-                      auth.userEmail ?? '',
-                      style: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.9),
-                        fontSize: 13,
-                      ),
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          auth.userName ?? auth.userId ?? '',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 15,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        if (auth.userDepartment != null ||
+                            auth.userTeam != null) ...[
+                          const SizedBox(height: 4),
+                          Text(
+                            [auth.userDepartment, auth.userTeam]
+                                .where((s) => s != null)
+                                .join(' / '),
+                            style: TextStyle(
+                              color: Colors.white.withValues(alpha: 0.85),
+                              fontSize: 12,
+                            ),
+                          ),
+                        ],
+                        const SizedBox(height: 2),
+                        Text(
+                          auth.userId ?? '',
+                          style: TextStyle(
+                            color: Colors.white.withValues(alpha: 0.7),
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
                     );
                   },
                 ),
@@ -330,11 +355,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
     return Consumer<AuthService>(
       builder: (context, auth, _) {
-        // AuthService의 userName 사용 (없으면 이메일에서 추출)
-        String displayName = auth.userName ?? '사용자';
-        if (displayName == '사용자' && auth.userEmail != null && auth.userEmail!.contains('@')) {
-          displayName = auth.userEmail!.split('@')[0];
-        }
+        // AuthService의 userName 사용 (실명)
+        final displayName = auth.userName ?? auth.userId ?? '사용자';
 
         // 날씨 및 지역 정보 텍스트 구성
         String weatherText = '';

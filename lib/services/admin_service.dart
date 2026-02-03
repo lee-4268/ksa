@@ -52,7 +52,7 @@ class AdminService extends ChangeNotifier {
     try {
       final request = GraphQLRequest<String>(
         document: query,
-        authorizationMode: APIAuthorizationType.userPools,
+        authorizationMode: APIAuthorizationType.apiKey,
       );
 
       final response = await Amplify.API.query(request: request).response;
@@ -139,7 +139,7 @@ class AdminService extends ChangeNotifier {
       debugPrint('=== loadAllUsers 시작 ===');
       final request = GraphQLRequest<String>(
         document: query,
-        authorizationMode: APIAuthorizationType.userPools,
+        authorizationMode: APIAuthorizationType.apiKey,
       );
 
       final response = await Amplify.API.query(request: request).response;
@@ -234,7 +234,7 @@ class AdminService extends ChangeNotifier {
       final request = GraphQLRequest<String>(
         document: mutation,
         variables: {'input': input},
-        authorizationMode: APIAuthorizationType.userPools,
+        authorizationMode: APIAuthorizationType.apiKey,
       );
 
       final response = await Amplify.API.mutate(request: request).response;
@@ -317,7 +317,7 @@ class AdminService extends ChangeNotifier {
       final request = GraphQLRequest<String>(
         document: mutation,
         variables: {'input': input},
-        authorizationMode: APIAuthorizationType.userPools,
+        authorizationMode: APIAuthorizationType.apiKey,
       );
 
       final response = await Amplify.API.mutate(request: request).response;
@@ -373,7 +373,7 @@ class AdminService extends ChangeNotifier {
             'status': 'SUSPENDED',
           }
         },
-        authorizationMode: APIAuthorizationType.userPools,
+        authorizationMode: APIAuthorizationType.apiKey,
       );
 
       final response = await Amplify.API.mutate(request: request).response;
@@ -422,7 +422,7 @@ class AdminService extends ChangeNotifier {
             'status': 'APPROVED',
           }
         },
-        authorizationMode: APIAuthorizationType.userPools,
+        authorizationMode: APIAuthorizationType.apiKey,
       );
 
       final response = await Amplify.API.mutate(request: request).response;
@@ -477,7 +477,7 @@ class AdminService extends ChangeNotifier {
             'role': roleString,
           }
         },
-        authorizationMode: APIAuthorizationType.userPools,
+        authorizationMode: APIAuthorizationType.apiKey,
       );
 
       final response = await Amplify.API.mutate(request: request).response;
@@ -533,7 +533,7 @@ class AdminService extends ChangeNotifier {
             'description': description,
           }
         },
-        authorizationMode: APIAuthorizationType.userPools,
+        authorizationMode: APIAuthorizationType.apiKey,
       );
 
       final response = await Amplify.API.mutate(request: request).response;
@@ -591,7 +591,7 @@ class AdminService extends ChangeNotifier {
             'description': description,
           }
         },
-        authorizationMode: APIAuthorizationType.userPools,
+        authorizationMode: APIAuthorizationType.apiKey,
       );
 
       final response = await Amplify.API.mutate(request: request).response;
@@ -639,7 +639,7 @@ class AdminService extends ChangeNotifier {
       final request = GraphQLRequest<String>(
         document: query,
         variables: {'id': teamId},
-        authorizationMode: APIAuthorizationType.userPools,
+        authorizationMode: APIAuthorizationType.apiKey,
       );
 
       final response = await Amplify.API.query(request: request).response;
@@ -678,7 +678,7 @@ class AdminService extends ChangeNotifier {
       final request = GraphQLRequest<String>(
         document: query,
         variables: {'id': profileId},
-        authorizationMode: APIAuthorizationType.userPools,
+        authorizationMode: APIAuthorizationType.apiKey,
       );
 
       final response = await Amplify.API.query(request: request).response;
@@ -714,7 +714,7 @@ class AdminService extends ChangeNotifier {
         variables: {
           'input': {'id': teamId}
         },
-        authorizationMode: APIAuthorizationType.userPools,
+        authorizationMode: APIAuthorizationType.apiKey,
       );
 
       final response = await Amplify.API.mutate(request: request).response;
@@ -759,7 +759,7 @@ class AdminService extends ChangeNotifier {
         variables: {
           'input': {'id': divisionId}
         },
-        authorizationMode: APIAuthorizationType.userPools,
+        authorizationMode: APIAuthorizationType.apiKey,
       );
 
       final response = await Amplify.API.mutate(request: request).response;
@@ -854,7 +854,7 @@ class AdminService extends ChangeNotifier {
       final request = GraphQLRequest<String>(
         document: mutation,
         variables: {'input': input},
-        authorizationMode: APIAuthorizationType.userPools,
+        authorizationMode: APIAuthorizationType.apiKey,
       );
 
       final response = await Amplify.API.mutate(request: request).response;

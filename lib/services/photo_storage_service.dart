@@ -27,42 +27,42 @@ class PhotoStorageService {
   /// [bytes] - 이미지 바이트 데이터
   /// [fileName] - 파일명 (확장자 포함)
   /// [stationId] - 스테이션 ID (S3 경로용)
+  /// [userId] - 사용자 ID (사번, 앱 레벨 격리용)
   /// 반환: S3 키 (s3://...) 또는 base64 data URL
   static Future<String?> uploadPhoto({
     required Uint8List bytes,
     required String fileName,
     required String stationId,
+    String? userId,
   }) async {
     // S3가 설정되어 있으면 S3에 업로드
     if (_isStorageConfigured) {
-      return await _uploadToS3(bytes, fileName, stationId);
+      return await _uploadToS3(bytes, fileName, stationId, userId);
     }
 
     // S3가 없으면 base64로 인코딩
     return _encodeToBase64(bytes, fileName);
   }
 
-  /// S3에 업로드
+  /// S3에 업로드 (guest 접근 + userId 경로 분리)
   static Future<String?> _uploadToS3(
     Uint8List bytes,
     String fileName,
     String stationId,
+    String? userId,
   ) async {
     try {
       final timestamp = DateTime.now().millisecondsSinceEpoch;
-      // 파일명만 지정 (private 접근 레벨 사용 - Amplify가 자동으로 사용자 ID 추가)
-      final fileKey = 'photos/$stationId/${timestamp}_$fileName';
+      final userPrefix = userId ?? 'unknown';
+      final fileKey = 'public/users/$userPrefix/photos/$stationId/${timestamp}_$fileName';
 
       final result = await Amplify.Storage.uploadData(
         data: StorageDataPayload.bytes(bytes),
-        path: StoragePath.fromIdentityId(
-          (identityId) => 'private/$identityId/$fileKey',
-        ),
+        path: StoragePath.fromString(fileKey),
       ).result;
 
       final uploadedPath = result.uploadedItem.path;
       debugPrint('S3 업로드 완료: $uploadedPath');
-      // S3 키 반환 (나중에 getUrl로 URL 생성)
       return 's3://$uploadedPath';
     } catch (e) {
       debugPrint('S3 업로드 오류: $e');
@@ -127,33 +127,14 @@ class PhotoStorageService {
 
     try {
       final fullPath = photoPath.substring(5); // 's3://' 제거
-      // fullPath 형식: 'private/{identityId}/photos/{stationId}/{timestamp}_{fileName}'
 
-      // 경로에서 identityId 이후의 상대 경로 추출
-      // 'private/{identityId}/photos/...' -> 'photos/...'
-      final pathParts = fullPath.split('/');
-      if (pathParts.length >= 3 && pathParts[0] == 'private') {
-        // pathParts[0] = 'private'
-        // pathParts[1] = identityId
-        // pathParts[2...] = 실제 파일 경로 (photos/stationId/file)
-        final relativePath = pathParts.sublist(2).join('/');
-
-        await Amplify.Storage.remove(
-          path: StoragePath.fromIdentityId(
-            (identityId) => 'private/$identityId/$relativePath',
-          ),
-        ).result;
-        debugPrint('S3 사진 삭제 완료: $relativePath');
-      } else {
-        // 예상치 못한 경로 형식인 경우 기존 방식 시도
-        await Amplify.Storage.remove(
-          path: StoragePath.fromString(fullPath),
-        ).result;
-        debugPrint('S3 사진 삭제 완료 (fromString): $fullPath');
-      }
+      await Amplify.Storage.remove(
+        path: StoragePath.fromString(fullPath),
+      ).result;
+      debugPrint('S3 사진 삭제 완료: $fullPath');
     } catch (e) {
       debugPrint('S3 사진 삭제 오류: $e');
-      rethrow; // 호출자에게 오류 전파
+      rethrow;
     }
   }
 

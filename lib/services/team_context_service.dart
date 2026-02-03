@@ -225,7 +225,7 @@ class TeamContextService extends ChangeNotifier {
       final request = GraphQLRequest<String>(
         document: query,
         variables: {'cognitoUserId': cognitoUserId},
-        authorizationMode: APIAuthorizationType.userPools,
+        authorizationMode: APIAuthorizationType.apiKey,
       );
 
       final response = await Amplify.API.query(request: request).response;
@@ -297,7 +297,7 @@ class TeamContextService extends ChangeNotifier {
       final request = GraphQLRequest<String>(
         document: mutation,
         variables: {'input': input},
-        authorizationMode: APIAuthorizationType.userPools,
+        authorizationMode: APIAuthorizationType.apiKey,
       );
 
       final response = await Amplify.API.mutate(request: request).response;
@@ -341,7 +341,7 @@ class TeamContextService extends ChangeNotifier {
     try {
       final request = GraphQLRequest<String>(
         document: query,
-        authorizationMode: APIAuthorizationType.userPools,
+        authorizationMode: APIAuthorizationType.apiKey,
       );
 
       final response = await Amplify.API.query(request: request).response;
@@ -391,7 +391,7 @@ class TeamContextService extends ChangeNotifier {
       final request = GraphQLRequest<String>(
         document: query,
         variables: {'divisionId': divisionId},
-        authorizationMode: APIAuthorizationType.userPools,
+        authorizationMode: APIAuthorizationType.apiKey,
       );
 
       final response = await Amplify.API.query(request: request).response;
@@ -442,7 +442,7 @@ class TeamContextService extends ChangeNotifier {
     try {
       final request = GraphQLRequest<String>(
         document: query,
-        authorizationMode: APIAuthorizationType.userPools,
+        authorizationMode: APIAuthorizationType.apiKey,
       );
 
       final response = await Amplify.API.query(request: request).response;

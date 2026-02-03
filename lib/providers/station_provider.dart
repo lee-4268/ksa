@@ -10,6 +10,7 @@ class StationProvider extends ChangeNotifier {
   final ExcelService _excelService = ExcelService();
   final GeocodingService _geocodingService = GeocodingService();
   CloudDataService? _cloudDataService;
+  String? _userId;
 
   List<RadioStation> _stations = [];
   bool _isLoading = false;
@@ -438,6 +439,7 @@ class StationProvider extends ChangeNotifier {
                 final originalExcelPath = await _cloudDataService!.uploadOriginalExcel(
                   result.originalBytes!,
                   categoryName,
+                  userId: _userId,
                 );
                 if (originalExcelPath != null) {
                   await _cloudDataService!.updateCategoryOriginalExcelKey(
@@ -891,6 +893,7 @@ class StationProvider extends ChangeNotifier {
     _categoryOriginalExcelKeyMap.clear();
     _isDataLoaded = false;
     _cloudDataService = null;
+    _userId = null;
     notifyListeners();
   }
 
@@ -901,8 +904,9 @@ class StationProvider extends ChangeNotifier {
   }
 
   /// CloudDataService 설정
-  void setCloudDataService(CloudDataService service) {
+  void setCloudDataService(CloudDataService service, {String? userId}) {
     _cloudDataService = service;
+    _userId = userId;
     debugPrint('========== 클라우드 서비스 연결 상태 ==========');
     debugPrint('CloudDataService 연결됨: ${_cloudDataService != null}');
     debugPrint('===============================================');
