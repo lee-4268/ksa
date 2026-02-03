@@ -1,35 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../services/auth_service.dart';
-import '../../services/admin_service.dart';
-import 'user_approval_screen.dart';
+import 'user_management_screen.dart';
 import 'audit_log_screen.dart';
-import 'team_management_screen.dart';
 
-/// 관리자 패널 화면
-class AdminPanelScreen extends StatefulWidget {
+/// 관리자 패널 화면 (간소화됨 - 사내 계정 DB 연동 대비)
+class AdminPanelScreen extends StatelessWidget {
   const AdminPanelScreen({super.key});
-
-  @override
-  State<AdminPanelScreen> createState() => _AdminPanelScreenState();
-}
-
-class _AdminPanelScreenState extends State<AdminPanelScreen> {
-  @override
-  void initState() {
-    super.initState();
-    _loadData();
-  }
-
-  Future<void> _loadData() async {
-    final adminService = context.read<AdminService>();
-    await adminService.loadPendingUsers();
-  }
 
   @override
   Widget build(BuildContext context) {
     final authService = context.watch<AuthService>();
-    final adminService = context.watch<AdminService>();
 
     return Scaffold(
       appBar: AppBar(
@@ -37,113 +18,55 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
         backgroundColor: const Color(0xFFE53935),
         foregroundColor: Colors.white,
       ),
-      body: RefreshIndicator(
-        onRefresh: _loadData,
-        child: ListView(
-          padding: const EdgeInsets.all(16),
-          children: [
-            // 현재 관리자 정보
-            _buildAdminInfoCard(authService),
-            const SizedBox(height: 24),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          // 현재 관리자 정보
+          _buildAdminInfoCard(authService),
+          const SizedBox(height: 24),
 
-            // 메뉴 섹션
-            const Text(
-              '관리 메뉴',
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-              ),
+          // 메뉴 섹션
+          const Text(
+            '관리 메뉴',
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
             ),
-            const SizedBox(height: 12),
+          ),
+          const SizedBox(height: 12),
 
-            // 사용자 승인 관리
-            _buildMenuCard(
-              icon: Icons.person_add,
-              iconColor: Colors.orange,
-              title: '사용자 승인 관리',
-              subtitle: '승인 대기 중인 사용자: ${adminService.pendingCount}명',
-              badge: adminService.pendingCount > 0 ? adminService.pendingCount : null,
-              onTap: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => const UserApprovalScreen(),
-                  ),
-                );
-              },
-            ),
-
-            // 팀 관리 (최고 관리자만)
-            if (authService.isSuperAdmin)
-              _buildMenuCard(
-                icon: Icons.groups,
-                iconColor: Colors.blue,
-                title: '팀 관리',
-                subtitle: '본부 및 팀 생성, 멤버 관리',
-                onTap: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => const TeamManagementScreen(),
-                    ),
-                  );
-                },
-              ),
-
-            // 감사 로그
-            _buildMenuCard(
-              icon: Icons.history,
-              iconColor: Colors.purple,
-              title: '감사 로그',
-              subtitle: '데이터 변경 이력 조회',
-              onTap: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => const AuditLogScreen(),
-                  ),
-                );
-              },
-            ),
-
-            // 전체 사용자 관리 (본부 관리자 이상만)
-            if (authService.isDivisionAdmin)
-              _buildMenuCard(
-                icon: Icons.manage_accounts,
-                iconColor: Colors.teal,
-                title: '사용자 관리',
-                subtitle: '전체 사용자 목록 및 권한 관리',
-                onTap: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => const UserApprovalScreen(showAllUsers: true),
-                    ),
-                  );
-                },
-              ),
-
-            // 데이터 정리 (최고 관리자만)
-            if (authService.isSuperAdmin) ...[
-              const SizedBox(height: 24),
-              const Text(
-                '시스템 관리',
-                style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
+          // 사용자 관리 (권한 설정)
+          _buildMenuCard(
+            icon: Icons.manage_accounts,
+            iconColor: Colors.teal,
+            title: '사용자 관리',
+            subtitle: '사용자 권한 설정 및 관리',
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => const UserManagementScreen(),
                 ),
-              ),
-              const SizedBox(height: 12),
-              _buildMenuCard(
-                icon: Icons.sync,
-                iconColor: Colors.deepOrange,
-                title: '기존 데이터 정리',
-                subtitle: 'PENDING 상태 사용자 자동 승인 처리',
-                onTap: () => _showDataCleanupDialog(authService, adminService),
-              ),
-            ],
-          ],
-        ),
+              );
+            },
+          ),
+
+          // 감사 로그
+          _buildMenuCard(
+            icon: Icons.history,
+            iconColor: Colors.purple,
+            title: '감사 로그',
+            subtitle: '데이터 변경 이력 조회',
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => const AuditLogScreen(),
+                ),
+              );
+            },
+          ),
+        ],
       ),
     );
   }
@@ -207,47 +130,20 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
     required Color iconColor,
     required String title,
     required String subtitle,
-    int? badge,
     required VoidCallback onTap,
   }) {
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
       child: ListTile(
         contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        leading: Stack(
-          children: [
-            Container(
-              width: 48,
-              height: 48,
-              decoration: BoxDecoration(
-                color: iconColor.withValues(alpha: 0.1),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Icon(icon, color: iconColor),
-            ),
-            if (badge != null && badge > 0)
-              Positioned(
-                right: 0,
-                top: 0,
-                child: Container(
-                  padding: const EdgeInsets.all(4),
-                  decoration: const BoxDecoration(
-                    color: Colors.red,
-                    shape: BoxShape.circle,
-                  ),
-                  constraints: const BoxConstraints(minWidth: 20, minHeight: 20),
-                  child: Text(
-                    badge > 99 ? '99+' : badge.toString(),
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 10,
-                      fontWeight: FontWeight.bold,
-                    ),
-                    textAlign: TextAlign.center,
-                  ),
-                ),
-              ),
-          ],
+        leading: Container(
+          width: 48,
+          height: 48,
+          decoration: BoxDecoration(
+            color: iconColor.withValues(alpha: 0.1),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Icon(icon, color: iconColor),
         ),
         title: Text(
           title,
@@ -270,125 +166,6 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
         return '팀 관리자';
       case AppUserRole.member:
         return '일반 멤버';
-    }
-  }
-
-  Future<void> _showDataCleanupDialog(
-    AuthService authService,
-    AdminService adminService,
-  ) async {
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: Colors.white,
-        title: const Row(
-          children: [
-            Icon(Icons.warning_amber, color: Colors.orange),
-            SizedBox(width: 8),
-            Text('기존 데이터 정리'),
-          ],
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              '다음 작업을 수행합니다:',
-              style: TextStyle(fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 12),
-            const Text('• 현재 계정(관리자)의 DB 상태를 APPROVED로 업데이트'),
-            const SizedBox(height: 8),
-            Text(
-              '현재 PENDING 상태 사용자: ${adminService.pendingCount}명',
-              style: TextStyle(color: Colors.grey[600]),
-            ),
-            const SizedBox(height: 16),
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.blue[50],
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: const Row(
-                children: [
-                  Icon(Icons.info_outline, color: Colors.blue, size: 20),
-                  SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      'amplify push 실행 후 이 작업을 수행하세요.',
-                      style: TextStyle(fontSize: 13, color: Colors.blue),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('취소'),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.deepOrange,
-              foregroundColor: Colors.white,
-            ),
-            child: const Text('정리 실행'),
-          ),
-        ],
-      ),
-    );
-
-    if (confirm != true) return;
-
-    // 데이터 정리 실행
-    if (!mounted) return;
-
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) => const AlertDialog(
-        backgroundColor: Colors.white,
-        content: Row(
-          children: [
-            CircularProgressIndicator(),
-            SizedBox(width: 16),
-            Text('처리 중...'),
-          ],
-        ),
-      ),
-    );
-
-    try {
-      final count = await adminService.autoApprovePendingUsers(
-        currentUserId: authService.userId ?? '',
-      );
-
-      if (!mounted) return;
-      Navigator.pop(context); // 로딩 다이얼로그 닫기
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('$count명의 사용자가 자동 승인되었습니다.'),
-          backgroundColor: Colors.green,
-        ),
-      );
-
-      // 데이터 새로고침
-      await _loadData();
-    } catch (e) {
-      if (!mounted) return;
-      Navigator.pop(context); // 로딩 다이얼로그 닫기
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('오류 발생: $e'),
-          backgroundColor: Colors.red,
-        ),
-      );
     }
   }
 }

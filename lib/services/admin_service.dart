@@ -25,6 +25,7 @@ class AdminService extends ChangeNotifier {
 
   /// 승인 대기 중인 사용자 목록 조회
   Future<void> loadPendingUsers() async {
+    debugPrint('=== loadPendingUsers 시작 ===');
     _isLoading = true;
     _errorMessage = null;
     notifyListeners();
@@ -58,13 +59,16 @@ class AdminService extends ChangeNotifier {
 
       if (response.errors.isNotEmpty) {
         _errorMessage = '목록 로드 실패: ${response.errors.first.message}';
+        debugPrint('loadPendingUsers 오류: ${response.errors}');
         _isLoading = false;
         notifyListeners();
         return;
       }
 
+      debugPrint('loadPendingUsers 응답: ${response.data}');
       final data = jsonDecode(response.data!) as Map<String, dynamic>;
       final items = data['listUserProfiles']['items'] as List<dynamic>;
+      debugPrint('조회된 PENDING 사용자 수: ${items.length}');
 
       // null 필터링 및 중복 제거 (cognitoUserId 기준)
       final seen = <String>{};
@@ -80,10 +84,17 @@ class AdminService extends ChangeNotifier {
           })
           .toList();
 
+      debugPrint('최종 PENDING 사용자 수: ${_pendingUsers.length}');
+      for (final user in _pendingUsers) {
+        debugPrint('  PENDING: ${user.email} (id: ${user.id}, status: ${user.status})');
+      }
+
       _isLoading = false;
       notifyListeners();
+      debugPrint('=== loadPendingUsers 완료 ===');
     } catch (e) {
       _errorMessage = '목록 로드 오류: $e';
+      debugPrint('loadPendingUsers 예외: $e');
       _isLoading = false;
       notifyListeners();
     }
@@ -125,22 +136,27 @@ class AdminService extends ChangeNotifier {
     ''';
 
     try {
+      debugPrint('=== loadAllUsers 시작 ===');
       final request = GraphQLRequest<String>(
         document: query,
         authorizationMode: APIAuthorizationType.userPools,
       );
 
       final response = await Amplify.API.query(request: request).response;
+      debugPrint('GraphQL 응답 수신');
 
       if (response.errors.isNotEmpty) {
         _errorMessage = '목록 로드 실패: ${response.errors.first.message}';
+        debugPrint('GraphQL 오류: ${response.errors}');
         _isLoading = false;
         notifyListeners();
         return;
       }
 
+      debugPrint('응답 데이터: ${response.data}');
       final data = jsonDecode(response.data!) as Map<String, dynamic>;
       final items = data['listUserProfiles']['items'] as List<dynamic>;
+      debugPrint('조회된 UserProfile 수: ${items.length}');
 
       // null 필터링 및 중복 제거 (cognitoUserId 기준)
       final seen = <String>{};
@@ -156,10 +172,16 @@ class AdminService extends ChangeNotifier {
           })
           .toList();
 
+      debugPrint('최종 사용자 수: ${_allUsers.length}');
+      for (final user in _allUsers) {
+        debugPrint('  - ${user.email} (${user.status}, ${user.role})');
+      }
+
       _isLoading = false;
       notifyListeners();
     } catch (e) {
       _errorMessage = '목록 로드 오류: $e';
+      debugPrint('loadAllUsers 예외: $e');
       _isLoading = false;
       notifyListeners();
     }
@@ -173,6 +195,10 @@ class AdminService extends ChangeNotifier {
     required String approverUserId,
     UserRole role = UserRole.member,
   }) async {
+    debugPrint('=== approveUser 시작 ===');
+    debugPrint('profileId: $profileId');
+    debugPrint('teamId: $teamId, divisionId: $divisionId');
+
     const mutation = '''
       mutation ApproveUser(\$input: UpdateUserProfileInput!) {
         updateUserProfile(input: \$input) {
@@ -187,18 +213,22 @@ class AdminService extends ChangeNotifier {
       }
     ''';
 
+    final roleString = role.name.toUpperCase().replaceAllMapped(
+          RegExp(r'([a-z])([A-Z])'),
+          (m) => '${m[1]}_${m[2]}',
+        );
+
     final input = {
       'id': profileId,
       'status': 'APPROVED',
-      'role': role.name.toUpperCase().replaceAllMapped(
-            RegExp(r'([a-z])([A-Z])'),
-            (m) => '${m[1]}_${m[2]}',
-          ),
+      'role': roleString,
       'teamId': teamId,
       'divisionId': divisionId,
       'approvedBy': approverUserId,
       'approvedAt': DateTime.now().toUtc().toIso8601String(),
     };
+
+    debugPrint('Mutation input: $input');
 
     try {
       final request = GraphQLRequest<String>(
@@ -209,10 +239,30 @@ class AdminService extends ChangeNotifier {
 
       final response = await Amplify.API.mutate(request: request).response;
 
+      debugPrint('Mutation 응답 데이터: ${response.data}');
+      debugPrint('Mutation 에러: ${response.errors}');
+
       if (response.errors.isNotEmpty) {
         _errorMessage = '승인 실패: ${response.errors.first.message}';
+        debugPrint('승인 실패: $_errorMessage');
         notifyListeners();
         return false;
+      }
+
+      // 응답에서 실제 업데이트된 데이터 확인
+      if (response.data != null) {
+        final data = jsonDecode(response.data!) as Map<String, dynamic>;
+        final updatedProfile = data['updateUserProfile'];
+        debugPrint('업데이트된 프로필: $updatedProfile');
+
+        if (updatedProfile != null) {
+          final updatedStatus = updatedProfile['status'];
+          debugPrint('업데이트된 status: $updatedStatus');
+
+          if (updatedStatus != 'APPROVED') {
+            debugPrint('경고: status가 APPROVED로 변경되지 않음!');
+          }
+        }
       }
 
       // 감사 로그 기록
@@ -227,12 +277,16 @@ class AdminService extends ChangeNotifier {
         },
       );
 
+      debugPrint('감사 로그 기록 완료, 목록 새로고침 시작...');
+
       // 목록 새로고침
       await loadPendingUsers();
 
+      debugPrint('=== approveUser 완료 ===');
       return true;
     } catch (e) {
       _errorMessage = '승인 오류: $e';
+      debugPrint('승인 예외: $e');
       notifyListeners();
       return false;
     }
