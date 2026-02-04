@@ -5,7 +5,6 @@ import '../services/auth_service.dart';
 import '../services/cloud_data_service.dart';
 import '../services/weather_service.dart';
 import 'map_screen.dart';
-import 'login_screen.dart';
 import 'schedule_screen.dart';
 import 'division_management_screen.dart';
 import 'admin/admin_panel_screen.dart';
@@ -619,11 +618,8 @@ class _HomeScreenState extends State<HomeScreen> {
     if (confirmed == true && mounted) {
       await context.read<AuthService>().signOut();
       if (mounted) {
-        Navigator.pushAndRemoveUntil(
-          context,
-          MaterialPageRoute(builder: (_) => const LoginScreen()),
-          (route) => false,
-        );
+        // AuthWrapper(초기 라우트)로 복귀 → Consumer가 LoginScreen 표시
+        Navigator.of(context).popUntil((route) => route.isFirst);
       }
     }
   }

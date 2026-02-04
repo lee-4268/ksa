@@ -946,7 +946,9 @@ class CloudDataService extends ChangeNotifier {
     try {
       final timestamp = DateTime.now().millisecondsSinceEpoch;
       final userPrefix = userId ?? 'unknown';
-      final fileKey = 'public/users/$userPrefix/original-excel/$categoryName-$timestamp.xlsx';
+      // 카테고리명에 한글/특수문자가 포함될 수 있으므로 URI 인코딩
+      final safeCategoryName = Uri.encodeComponent(categoryName);
+      final fileKey = 'public/users/$userPrefix/original-excel/$safeCategoryName-$timestamp.xlsx';
 
       final result = await Amplify.Storage.uploadData(
         data: StorageDataPayload.bytes(bytes),
