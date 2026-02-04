@@ -142,28 +142,18 @@ class AuthService extends ChangeNotifier {
         final result = data['result'] as String?;
 
         if (result == 'ok') {
-          // 2. SSO 인증 성공 → AppSync(DynamoDB)에서 사용자 정보 조회
+          // 2. SSO 인증 성공 → 즉시 로그인 상태 반영
           _isSignedIn = true;
           _userId = username;
-
-          final userInfo = await _lookupUserFromApi(username);
-          if (userInfo != null) {
-            _userName = userInfo['name'] as String? ?? username;
-            _userDepartment = userInfo['region'] as String?;
-            _userTeam = userInfo['team'] as String?;
-            _userJobTitle = userInfo['job_title'] as String?;
-          } else {
-            _userName = username;
-            debugPrint('API에서 사용자 정보를 찾지 못함: $username');
-          }
-
-          debugPrint('로그인 성공: $_userId (이름: $_userName, 본부: $_userDepartment, 팀: $_userTeam, 직책: $_userJobTitle)');
-
+          _userName = username; // 임시로 사번 표시
           _isLoading = false;
-          notifyListeners();
+          notifyListeners(); // 즉시 UI 갱신 → HomeScreen 전환
 
           _saveLoginState();
           _startSessionTimerBackground();
+
+          // 3. 사용자 상세 정보 비동기 조회 (화면 전환 후 백그라운드)
+          _lookupAndUpdateUserInfo(username);
 
           return true;
         } else {
@@ -197,6 +187,20 @@ class AuthService extends ChangeNotifier {
   /// FastAPI 서버(API Gateway)에서 사번으로 사용자 정보 조회
   static const String _userApiBaseUrl =
       'https://c3jictzagh.execute-api.ap-northeast-2.amazonaws.com';
+
+  /// 사용자 상세 정보를 비동기로 조회하여 UI 갱신
+  void _lookupAndUpdateUserInfo(String empno) async {
+    final userInfo = await _lookupUserFromApi(empno);
+    if (userInfo != null && _isSignedIn && _userId == empno) {
+      _userName = userInfo['name'] as String? ?? empno;
+      _userDepartment = userInfo['region'] as String?;
+      _userTeam = userInfo['team'] as String?;
+      _userJobTitle = userInfo['job_title'] as String?;
+      debugPrint('사용자 정보 업데이트: $_userName (본부: $_userDepartment, 팀: $_userTeam)');
+      notifyListeners();
+      _saveLoginState();
+    }
+  }
 
   Future<Map<String, dynamic>?> _lookupUserFromApi(String empno) async {
     try {

@@ -904,6 +904,8 @@ class StationProvider extends ChangeNotifier {
     _userId = userId;
     // CloudDataService에도 userId 설정 (owner 필터링용)
     service.setUserId(userId);
+    // 재로그인 시 클라우드에서 새로 로드하도록 리셋
+    _isDataLoaded = false;
     debugPrint('========== 클라우드 서비스 연결 상태 ==========');
     debugPrint('CloudDataService 연결됨: ${_cloudDataService != null}');
     debugPrint('userId: $userId');
