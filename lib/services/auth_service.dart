@@ -112,9 +112,9 @@ class AuthService extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// SKons SSO 로그인 API URL
+  /// SSO 로그인 프록시 URL (CORS 우회를 위해 API Gateway 경유)
   static const String _loginUrl =
-      'https://auth.skons.net/accounts/sko/sso/login/';
+      'https://c3jictzagh.execute-api.ap-northeast-2.amazonaws.com/auth/login';
 
   /// 로그인 (SKons SSO 인증 + AppSync에서 사용자 정보 조회)
   Future<bool> signIn(String username, String password) async {

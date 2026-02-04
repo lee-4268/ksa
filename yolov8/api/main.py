@@ -12,6 +12,7 @@ from typing import List, Optional, Dict
 from datetime import datetime
 import logging
 
+import httpx
 import boto3
 from botocore.exceptions import ClientError
 import numpy as np
@@ -145,6 +146,11 @@ class UserInfoResponse(BaseModel):
     job_title: Optional[str] = None
     email: Optional[str] = None
     phone: Optional[str] = None
+
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
 
 
 # ============================================================
@@ -666,6 +672,44 @@ async def get_feedback_stats():
             "message": str(e),
             "timestamp": datetime.now().isoformat()
         }
+
+
+# ============================================================
+# Auth Proxy Endpoint (CORS 우회용)
+# ============================================================
+
+SSO_LOGIN_URL = "https://auth.skons.net/accounts/sko/sso/login/"
+
+
+@app.post("/auth/login")
+async def proxy_sso_login(req: LoginRequest):
+    """
+    SKons SSO 로그인 프록시
+
+    브라우저 CORS 제약 우회를 위해 서버에서 SSO 요청을 대신 수행합니다.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(
+                SSO_LOGIN_URL,
+                json={"username": req.username, "password": req.password},
+                headers={"Content-Type": "application/json"},
+            )
+        return JSONResponse(
+            status_code=response.status_code,
+            content=response.json(),
+        )
+    except httpx.TimeoutException:
+        return JSONResponse(
+            status_code=504,
+            content={"result": "fail", "message": "SSO 서버 응답 시간 초과"},
+        )
+    except Exception as e:
+        logger.error(f"SSO proxy error: {e}")
+        return JSONResponse(
+            status_code=502,
+            content={"result": "fail", "message": "SSO 서버 연결 실패"},
+        )
 
 
 # ============================================================
