@@ -14,6 +14,7 @@
 
 # 본부 (Division) - 최상위 조직 단위
 type Division @model @auth(rules: [
+  { allow: public, provider: apiKey }
   { allow: groups, groups: ["SuperAdmin"], operations: [create, read, update, delete] }
   { allow: groups, groups: ["DivisionAdmins"], operations: [read, update] }
   { allow: groups, groups: ["AllMembers"], operations: [read] }
@@ -29,6 +30,7 @@ type Division @model @auth(rules: [
 
 # 팀 (Team) - 본부 하위 조직 단위
 type Team @model @auth(rules: [
+  { allow: public, provider: apiKey }
   { allow: groups, groups: ["SuperAdmin"], operations: [create, read, update, delete] }
   { allow: groups, groups: ["DivisionAdmins"], operations: [read, update] }
   { allow: groups, groups: ["AllMembers"], operations: [read] }
@@ -65,6 +67,7 @@ enum UserRole {
 }
 
 type UserProfile @model @auth(rules: [
+  { allow: public, provider: apiKey }
   { allow: groups, groups: ["SuperAdmin"], operations: [create, read, update, delete] }
   { allow: groups, groups: ["DivisionAdmins"], operations: [read, update] }
   { allow: groups, groups: ["AllMembers"], operations: [read] }
@@ -99,6 +102,7 @@ type UserProfile @model @auth(rules: [
 # ==========================================
 
 type MasterStation @model @auth(rules: [
+  { allow: public, provider: apiKey }
   { allow: groups, groups: ["SuperAdmin"], operations: [create, read, update, delete] }
   { allow: groups, groups: ["DivisionAdmins"], operations: [create, read, update] }
   { allow: groups, groups: ["AllMembers"], operations: [read] }
@@ -142,6 +146,7 @@ type MasterStation @model @auth(rules: [
 # ==========================================
 
 type TeamInspectionData @model @auth(rules: [
+  { allow: public, provider: apiKey }
   { allow: groups, groups: ["SuperAdmin"], operations: [create, read, update, delete] }
   { allow: groups, groups: ["DivisionAdmins"], operations: [create, read, update, delete] }
   { allow: groups, groups: ["AllMembers"], operations: [create, read, update] }
@@ -195,6 +200,7 @@ enum AuditAction {
 }
 
 type AuditLog @model @auth(rules: [
+  { allow: public, provider: apiKey }
   { allow: groups, groups: ["SuperAdmin"], operations: [create, read] }
   { allow: groups, groups: ["DivisionAdmins"], operations: [create, read] }
   { allow: groups, groups: ["AllMembers"], operations: [create] }
@@ -261,6 +267,7 @@ type InetUser @model @auth(rules: [
 
 # 카테고리 (Excel 파일 단위)
 type Category @model @auth(rules: [
+  { allow: public, provider: apiKey }
   { allow: groups, groups: ["SuperAdmin"], operations: [create, read, update, delete] }
   { allow: groups, groups: ["DivisionAdmins"], operations: [create, read, update, delete] }
   { allow: groups, groups: ["AllMembers"], operations: [create, read, update, delete] }
@@ -281,8 +288,9 @@ type Category @model @auth(rules: [
   updatedAt: AWSDateTime
 }
 
-# 철탑형태 분류 결과 - 소유자만 접근 가능
+# 철탑형태 분류 결과
 type TowerClassification @model @auth(rules: [
+  { allow: public, provider: apiKey }
   { allow: owner, operations: [create, read, update, delete] }
 ]) {
   id: ID!
@@ -310,8 +318,9 @@ type TowerClassification @model @auth(rules: [
   updatedAt: AWSDateTime
 }
 
-# 무선국 데이터 - 소유자만 접근 가능
+# 무선국 데이터
 type Station @model @auth(rules: [
+  { allow: public, provider: apiKey }
   { allow: owner, operations: [create, read, update, delete] }
 ]) {
   id: ID!
