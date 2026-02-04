@@ -4,10 +4,11 @@ Flutter PWA + Mobile Web Support
 """
 
 import os
+import json
 import uuid
 import shutil
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Dict
 from datetime import datetime
 import logging
 
@@ -133,6 +134,46 @@ class FeedbackResponse(BaseModel):
     original_class: str
     corrected_class: str
     timestamp: str
+
+
+class UserInfoResponse(BaseModel):
+    success: bool
+    empno: str
+    name: Optional[str] = None
+    region: Optional[str] = None
+    team: Optional[str] = None
+    job_title: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+
+
+# ============================================================
+# User Data Loading (JSON file)
+# ============================================================
+
+USERS_DATA_PATH = os.getenv("USERS_DATA_PATH", "data/users.json")
+_users_cache: Optional[Dict[str, dict]] = None
+
+
+def load_users() -> Dict[str, dict]:
+    """Load user data from JSON file (cached)"""
+    global _users_cache
+    if _users_cache is not None:
+        return _users_cache
+
+    data_path = Path(USERS_DATA_PATH)
+    if not data_path.exists():
+        logger.warning(f"Users data file not found: {data_path}")
+        _users_cache = {}
+        return _users_cache
+
+    with open(data_path, "r", encoding="utf-8") as f:
+        users_list = json.load(f)
+
+    # empno를 키로 하는 딕셔너리로 변환
+    _users_cache = {user["empno"]: user for user in users_list if "empno" in user}
+    logger.info(f"Loaded {len(_users_cache)} users from {data_path}")
+    return _users_cache
 
 
 # ============================================================
@@ -625,6 +666,50 @@ async def get_feedback_stats():
             "message": str(e),
             "timestamp": datetime.now().isoformat()
         }
+
+
+# ============================================================
+# User Info Endpoint
+# ============================================================
+
+@app.get("/users/{empno}", response_model=UserInfoResponse)
+async def get_user_info(empno: str):
+    """
+    사번으로 사용자 정보 조회
+
+    - empno: 사번 (예: N1012345)
+    - Returns: 이름, 본부, 팀, 직책, 이메일, 전화번호
+    """
+    users = load_users()
+    user = users.get(empno)
+
+    if user is None:
+        return {
+            "success": False,
+            "empno": empno,
+        }
+
+    return {
+        "success": True,
+        "empno": empno,
+        "name": user.get("name"),
+        "region": user.get("region"),
+        "team": user.get("DeptName"),
+        "job_title": user.get("jobGdName"),
+        "email": user.get("Email"),
+        "phone": user.get("MobilePhone"),
+    }
+
+
+@app.get("/users")
+async def list_users_count():
+    """사용자 데이터 통계"""
+    users = load_users()
+    return {
+        "success": True,
+        "total_users": len(users),
+        "timestamp": datetime.now().isoformat()
+    }
 
 
 # ============================================================

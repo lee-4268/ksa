@@ -236,6 +236,26 @@ type AuditLog @model @auth(rules: [
 }
 
 # ==========================================
+# i-NET 사용자 정보 (DynamoDB + API_KEY 인증)
+# ==========================================
+
+type InetUser @model @auth(rules: [
+  { allow: public, provider: apiKey }
+]) {
+  id: ID!
+  empno: String! @index(name: "byEmpno", queryField: "inetUserByEmpno")
+  name: String!                    # 실명
+  region: String                   # 본부 (예: Access망운용담당)
+  team: String                     # 팀 (예: ○○품질개선팀)
+  jobTitle: String                 # 직책 (예: 매니저)
+  phoneNumber: String              # 전화번호
+  email: String                    # 이메일
+  isActive: Boolean @default(value: "true")
+  createdAt: AWSDateTime
+  updatedAt: AWSDateTime
+}
+
+# ==========================================
 # 기존 모델 (하위 호환성 유지)
 # ==========================================
 

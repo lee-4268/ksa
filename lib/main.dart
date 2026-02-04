@@ -13,11 +13,11 @@ import 'screens/login_screen.dart';
 import 'services/storage_service.dart';
 import 'services/auth_service.dart';
 import 'services/cloud_data_service.dart';
-import 'services/photo_storage_service.dart';
 import 'services/audit_service.dart';
 import 'services/team_context_service.dart';
 import 'services/admin_service.dart';
 import 'services/division_data_service.dart';
+import 'services/photo_storage_service.dart';
 
 // 모바일용 조건부 import
 import 'main_init_stub.dart' if (dart.library.io) 'main_init_mobile.dart'
@@ -54,10 +54,10 @@ Future<void> _configureAmplify() async {
     // Amplify 구성
     await Amplify.configure(amplifyconfig);
 
+    debugPrint('Amplify 초기화 완료');
+
     // S3 Storage 설정 확인
     await PhotoStorageService.checkStorageConfiguration();
-
-    debugPrint('Amplify 초기화 완료');
   } on AmplifyAlreadyConfiguredException {
     debugPrint('Amplify가 이미 구성되어 있습니다.');
   } catch (e) {

@@ -112,17 +112,18 @@ class AuthService extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Django 백엔드 로그인 API URL
+  /// SKons SSO 로그인 API URL
   static const String _loginUrl =
-      'https://dev-monitoring-api.skons.net/accounts/login/';
+      'https://auth.skons.net/accounts/sko/sso/login/';
 
-  /// 로그인 (Django LoginView → SKons SSO 인증 + UserProfile 반환)
+  /// 로그인 (SKons SSO 인증 + AppSync에서 사용자 정보 조회)
   Future<bool> signIn(String username, String password) async {
     _isLoading = true;
     _errorMessage = null;
     notifyListeners();
 
     try {
+      // 1. SKons SSO 인증
       final response = await http.post(
         Uri.parse(_loginUrl),
         headers: {
@@ -134,47 +135,44 @@ class AuthService extends ChangeNotifier {
         }),
       );
 
-      debugPrint('로그인 응답 [${response.statusCode}]: ${response.body}');
+      debugPrint('SSO 응답 [${response.statusCode}]: ${response.body}');
 
       if (response.statusCode == 200) {
-        // 성공: UserProfile 데이터 반환
         final data = jsonDecode(response.body) as Map<String, dynamic>;
+        final result = data['result'] as String?;
 
-        _isSignedIn = true;
-        _userId = data['username'] as String? ?? username;
-        _userName = data['first_name'] as String? ?? username;
-        _userDepartment = data['region'] as String?;
-        _userJobTitle = data['job_title'] as String?;
+        if (result == 'ok') {
+          // 2. SSO 인증 성공 → AppSync(DynamoDB)에서 사용자 정보 조회
+          _isSignedIn = true;
+          _userId = username;
 
-        // team 필드에 본부+팀명이 합쳐져 있으므로 본부(region) 부분 제거
-        final rawTeam = data['team'] as String?;
-        if (rawTeam != null && _userDepartment != null && rawTeam.contains(_userDepartment!)) {
-          _userTeam = rawTeam.replaceFirst(_userDepartment!, '').trim();
-          if (_userTeam!.isEmpty) _userTeam = rawTeam;
+          final userInfo = await _lookupUserFromApi(username);
+          if (userInfo != null) {
+            _userName = userInfo['name'] as String? ?? username;
+            _userDepartment = userInfo['region'] as String?;
+            _userTeam = userInfo['team'] as String?;
+            _userJobTitle = userInfo['job_title'] as String?;
+          } else {
+            _userName = username;
+            debugPrint('API에서 사용자 정보를 찾지 못함: $username');
+          }
+
+          debugPrint('로그인 성공: $_userId (이름: $_userName, 본부: $_userDepartment, 팀: $_userTeam, 직책: $_userJobTitle)');
+
+          _isLoading = false;
+          notifyListeners();
+
+          _saveLoginState();
+          _startSessionTimerBackground();
+
+          return true;
         } else {
-          _userTeam = rawTeam;
+          _errorMessage = '아이디 또는 비밀번호가 올바르지 않습니다.';
+          debugPrint('SSO 인증 실패: result=$result');
         }
-
-        debugPrint('로그인 성공: $_userId (이름: $_userName, 본부: $_userDepartment, 팀: $_userTeam, 직책: $_userJobTitle)');
-
-        // UI를 먼저 갱신 (페이지 전환)
-        _isLoading = false;
-        notifyListeners();
-
-        // 백그라운드에서 상태 저장 (await 하지 않음)
-        _saveLoginState();
-        _startSessionTimerBackground();
-
-        return true;
-      } else if (response.statusCode == 401) {
-        _errorMessage = '아이디 또는 비밀번호가 올바르지 않습니다.';
-        debugPrint('로그인 실패: 인증 실패');
-      } else if (response.statusCode == 404) {
-        _errorMessage = '등록되지 않은 사용자입니다.\n관리자에게 문의하세요.';
-        debugPrint('로그인 실패: UserProfile 없음');
       } else {
         _errorMessage = '로그인 중 오류가 발생했습니다. (${response.statusCode})';
-        debugPrint('로그인 실패: ${response.statusCode}');
+        debugPrint('SSO 요청 실패: ${response.statusCode}');
       }
 
       _isLoading = false;
@@ -193,6 +191,33 @@ class AuthService extends ChangeNotifier {
       _isLoading = false;
       notifyListeners();
       return false;
+    }
+  }
+
+  /// FastAPI 서버(API Gateway)에서 사번으로 사용자 정보 조회
+  static const String _userApiBaseUrl =
+      'https://c3jictzagh.execute-api.ap-northeast-2.amazonaws.com';
+
+  Future<Map<String, dynamic>?> _lookupUserFromApi(String empno) async {
+    try {
+      final response = await http.get(
+        Uri.parse('$_userApiBaseUrl/users/$empno'),
+        headers: {'Content-Type': 'application/json'},
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body) as Map<String, dynamic>;
+        if (data['success'] == true) {
+          debugPrint('사용자 정보 조회 성공: $empno');
+          return data;
+        }
+      }
+
+      debugPrint('사용자 정보 조회 실패: ${response.statusCode}');
+      return null;
+    } catch (e) {
+      debugPrint('사용자 정보 조회 예외: $e');
+      return null;
     }
   }
 

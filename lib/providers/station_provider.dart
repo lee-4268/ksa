@@ -169,17 +169,12 @@ class StationProvider extends ChangeNotifier {
         }
       }
 
-      // 클라우드 실패 시 처리
-      if (_cloudDataService != null) {
-        // 클라우드 서비스가 연결되어 있으면 오류 메시지 표시
-        debugPrint('클라우드 로드 실패! 오류 발생');
+      // 클라우드 실패 시 로컬 캐시에서 로드 (fallback)
+      debugPrint('클라우드 로드 실패 → 로컬 캐시에서 로드 시도');
+      _stations = _storageService.getAllStations();
+      debugPrint('로컬 캐시에서 ${_stations.length}개 로드');
+      if (_stations.isEmpty && _cloudDataService != null) {
         _errorMessage = '클라우드 연결 오류가 발생했습니다. 네트워크를 확인하세요.';
-        _stations = [];
-      } else {
-        // 클라우드 서비스가 없으면 로컬에서 로드 (오프라인 모드)
-        debugPrint('오프라인 모드: 로컬에서 데이터 로드 시도');
-        _stations = _storageService.getAllStations();
-        debugPrint('로컬에서 로드 완료: ${_stations.length}개');
       }
       _isDataLoaded = true;
     } catch (e) {
@@ -907,8 +902,11 @@ class StationProvider extends ChangeNotifier {
   void setCloudDataService(CloudDataService service, {String? userId}) {
     _cloudDataService = service;
     _userId = userId;
+    // CloudDataService에도 userId 설정 (owner 필터링용)
+    service.setUserId(userId);
     debugPrint('========== 클라우드 서비스 연결 상태 ==========');
     debugPrint('CloudDataService 연결됨: ${_cloudDataService != null}');
+    debugPrint('userId: $userId');
     debugPrint('===============================================');
   }
 

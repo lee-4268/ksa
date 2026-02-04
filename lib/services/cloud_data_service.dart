@@ -9,6 +9,14 @@ class CloudDataService extends ChangeNotifier {
   String? _errorMessage;
   bool _isSyncing = false;
 
+  /// 앱 레벨 사용자 격리용 userId (사번)
+  String? _userId;
+  String? get userId => _userId;
+  void setUserId(String? userId) {
+    _userId = userId;
+    debugPrint('CloudDataService userId 설정: $userId');
+  }
+
   bool get isLoading => _isLoading;
   String? get errorMessage => _errorMessage;
   bool get isSyncing => _isSyncing;
@@ -41,6 +49,7 @@ class CloudDataService extends ChangeNotifier {
           'input': {
             'name': name,
             if (originalExcelKey != null) 'originalExcelKey': originalExcelKey,
+            if (_userId != null) 'owner': _userId,
           },
         },
         authorizationMode: APIAuthorizationType.apiKey,
@@ -100,8 +109,8 @@ class CloudDataService extends ChangeNotifier {
   /// originalExcelKey 포함 카테고리 조회
   Future<List<Map<String, dynamic>>> _listCategoriesWithOriginalExcelKey() async {
     const query = '''
-      query ListCategories(\$limit: Int, \$nextToken: String) {
-        listCategories(limit: \$limit, nextToken: \$nextToken) {
+      query ListCategories(\$filter: ModelCategoryFilterInput, \$limit: Int, \$nextToken: String) {
+        listCategories(filter: \$filter, limit: \$limit, nextToken: \$nextToken) {
           items {
             id
             name
@@ -120,8 +129,8 @@ class CloudDataService extends ChangeNotifier {
   /// 기본 카테고리 조회 (originalExcelKey 미포함 - 하위 호환성)
   Future<List<Map<String, dynamic>>> _listCategoriesBasic() async {
     const query = '''
-      query ListCategories(\$limit: Int, \$nextToken: String) {
-        listCategories(limit: \$limit, nextToken: \$nextToken) {
+      query ListCategories(\$filter: ModelCategoryFilterInput, \$limit: Int, \$nextToken: String) {
+        listCategories(filter: \$filter, limit: \$limit, nextToken: \$nextToken) {
           items {
             id
             name
@@ -147,6 +156,7 @@ class CloudDataService extends ChangeNotifier {
         final request = GraphQLRequest<String>(
           document: query,
           variables: {
+            if (_userId != null) 'filter': {'owner': {'eq': _userId}},
             'limit': 1000, // 한 번에 최대 1000개 요청
             if (nextToken != null) 'nextToken': nextToken,
           },
@@ -289,6 +299,7 @@ class CloudDataService extends ChangeNotifier {
             'inspectionDate': station.inspectionDate?.toUtc().toIso8601String(),
             'memo': station.memo,
             'photoKeys': station.photoPaths,
+            if (_userId != null) 'owner': _userId,
           },
         },
         authorizationMode: APIAuthorizationType.apiKey,
@@ -371,6 +382,7 @@ class CloudDataService extends ChangeNotifier {
           variables: {
             'filter': {
               'categoryId': {'eq': categoryId},
+              if (_userId != null) 'owner': {'eq': _userId},
             },
             'limit': 1000, // 한 번에 최대 1000개 요청
             if (nextToken != null) 'nextToken': nextToken,
