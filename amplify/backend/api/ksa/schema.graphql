@@ -71,7 +71,6 @@ type UserProfile @model @auth(rules: [
   { allow: groups, groups: ["SuperAdmin"], operations: [create, read, update, delete] }
   { allow: groups, groups: ["DivisionAdmins"], operations: [read, update] }
   { allow: groups, groups: ["AllMembers"], operations: [read] }
-  { allow: owner, ownerField: "cognitoUserId", operations: [create, read, update] }
 ]) {
   id: ID!
   cognitoUserId: String! @index(name: "byCognitoId", queryField: "userProfileByCognitoId")
@@ -271,10 +270,10 @@ type Category @model @auth(rules: [
   { allow: groups, groups: ["SuperAdmin"], operations: [create, read, update, delete] }
   { allow: groups, groups: ["DivisionAdmins"], operations: [create, read, update, delete] }
   { allow: groups, groups: ["AllMembers"], operations: [create, read, update, delete] }
-  { allow: owner, operations: [create, read, update, delete] }
 ]) {
   id: ID!
   name: String!
+  owner: String               # 소유자 사번 (앱 레벨 데이터 격리용)
   originalExcelKey: String    # 원본 Excel 파일 S3 키 (서식 유지 export용)
 
   # 팀/본부 연결 (앱 레벨 권한 체크용)
@@ -291,9 +290,9 @@ type Category @model @auth(rules: [
 # 철탑형태 분류 결과
 type TowerClassification @model @auth(rules: [
   { allow: public, provider: apiKey }
-  { allow: owner, operations: [create, read, update, delete] }
 ]) {
   id: ID!
+  owner: String               # 소유자 사번 (앱 레벨 데이터 격리용)
 
   # 이미지 정보
   imageKey: String!           # S3 이미지 키
@@ -321,9 +320,9 @@ type TowerClassification @model @auth(rules: [
 # 무선국 데이터
 type Station @model @auth(rules: [
   { allow: public, provider: apiKey }
-  { allow: owner, operations: [create, read, update, delete] }
 ]) {
   id: ID!
+  owner: String               # 소유자 사번 (앱 레벨 데이터 격리용)
   categoryId: ID! @index(name: "byCategory", sortKeyFields: ["createdAt"])
 
   # 기본 정보
