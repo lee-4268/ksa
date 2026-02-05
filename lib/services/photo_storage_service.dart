@@ -119,34 +119,16 @@ class PhotoStorageService {
   }
 
   /// 사진 URL 가져오기
-  /// S3 키인 경우 presigned URL 생성, 그 외에는 그대로 반환
+  /// S3 키인 경우 EC2 프록시 URL 반환, 그 외에는 그대로 반환
   static Future<String> getPhotoUrl(String photoPath) async {
-    // S3 키인 경우
+    // S3 키인 경우 → EC2 경유 프록시 URL
     if (photoPath.startsWith('s3://')) {
       if (!_isStorageConfigured) {
         throw Exception('EC2 API가 설정되지 않았습니다.');
       }
 
-      try {
-        final key = photoPath.substring(5); // 's3://' 제거
-
-        final response = await http.get(
-          Uri.parse('$_baseUrl/download/presigned?key=${Uri.encodeComponent(key)}'),
-        );
-
-        if (response.statusCode == 200) {
-          final data = jsonDecode(response.body);
-          if (data['success'] == true) {
-            return data['url'] as String;
-          }
-        }
-
-        debugPrint('Presigned URL 생성 실패: ${response.body}');
-        throw Exception('사진을 불러올 수 없습니다.');
-      } catch (e) {
-        debugPrint('S3 URL 생성 오류: $e');
-        throw Exception('사진을 불러올 수 없습니다: $e');
-      }
+      final key = photoPath.substring(5); // 's3://' 제거
+      return '$_baseUrl/download/photo?key=${Uri.encodeComponent(key)}';
     }
 
     // base64 data URL 또는 일반 URL은 그대로 반환

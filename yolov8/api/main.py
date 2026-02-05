@@ -10,6 +10,7 @@ import shutil
 from pathlib import Path
 from typing import List, Optional, Dict
 from datetime import datetime
+from decimal import Decimal
 import logging
 
 import httpx
@@ -18,7 +19,7 @@ from botocore.exceptions import ClientError
 import numpy as np
 from fastapi import FastAPI, File, UploadFile, HTTPException, Query, Form
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 from ultralytics import YOLO
 
@@ -47,9 +48,9 @@ S3_REGION = os.getenv("AWS_REGION", "ap-northeast-2")
 # DynamoDB Table Names (새 계정에서 생성할 테이블)
 DYNAMODB_TABLES = {
     "users": os.getenv("DYNAMODB_USERS_TABLE", "Users"),
-    "categories": os.getenv("DYNAMODB_CATEGORIES_TABLE", "ksa-categories"),
-    "stations": os.getenv("DYNAMODB_STATIONS_TABLE", "ksa-stations"),
-    "classifications": os.getenv("DYNAMODB_CLASSIFICATIONS_TABLE", "ksa-classifications"),
+    "categories": os.getenv("DYNAMODB_CATEGORIES_TABLE", "kca-categories"),
+    "stations": os.getenv("DYNAMODB_STATIONS_TABLE", "kca-stations"),
+    "classifications": os.getenv("DYNAMODB_CLASSIFICATIONS_TABLE", "kca-classifications"),
 }
 
 # Logger setup
@@ -348,6 +349,19 @@ def cleanup_file(file_path: Path):
             file_path.unlink()
     except Exception:
         pass
+
+
+def decimal_to_native(obj):
+    """DynamoDB Decimal 타입을 Python 기본 타입으로 변환 (JSON 직렬화용)"""
+    if isinstance(obj, Decimal):
+        if obj % 1 == 0:
+            return int(obj)
+        return float(obj)
+    if isinstance(obj, dict):
+        return {k: decimal_to_native(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [decimal_to_native(v) for v in obj]
+    return obj
 
 
 def get_s3_client():
@@ -855,7 +869,8 @@ async def list_categories(owner: str = Query(..., description="소유자 사번"
 
         # Scan with filter (GSI 없이 간단하게 처리)
         response = table.scan(
-            FilterExpression="owner = :owner",
+            FilterExpression="#owner = :owner",
+            ExpressionAttributeNames={"#owner": "owner"},
             ExpressionAttributeValues={":owner": owner}
         )
 
@@ -864,13 +879,14 @@ async def list_categories(owner: str = Query(..., description="소유자 사번"
         # 페이지네이션 처리
         while "LastEvaluatedKey" in response:
             response = table.scan(
-                FilterExpression="owner = :owner",
+                FilterExpression="#owner = :owner",
+                ExpressionAttributeNames={"#owner": "owner"},
                 ExpressionAttributeValues={":owner": owner},
                 ExclusiveStartKey=response["LastEvaluatedKey"]
             )
             items.extend(response.get("Items", []))
 
-        return {"success": True, "categories": items, "count": len(items)}
+        return {"success": True, "categories": decimal_to_native(items), "count": len(items)}
     except ClientError as e:
         logger.error(f"DynamoDB error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -889,7 +905,7 @@ async def get_category(category_id: str):
         if not item:
             raise HTTPException(status_code=404, detail="Category not found")
 
-        return {"success": True, "category": item}
+        return {"success": True, "category": decimal_to_native(item)}
     except ClientError as e:
         logger.error(f"DynamoDB error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -912,17 +928,18 @@ async def update_category(category_id: str, name: str = None, originalExcelKey: 
             update_expr += ", originalExcelKey = :key"
             expr_values[":key"] = originalExcelKey
 
-        expr_names = {"#n": "name"} if name else None
+        update_kwargs = {
+            "Key": {"id": category_id},
+            "UpdateExpression": update_expr,
+            "ExpressionAttributeValues": expr_values,
+            "ReturnValues": "ALL_NEW",
+        }
+        if name:
+            update_kwargs["ExpressionAttributeNames"] = {"#n": "name"}
 
-        response = table.update_item(
-            Key={"id": category_id},
-            UpdateExpression=update_expr,
-            ExpressionAttributeValues=expr_values,
-            ExpressionAttributeNames=expr_names if expr_names else None,
-            ReturnValues="ALL_NEW"
-        )
+        response = table.update_item(**update_kwargs)
 
-        return {"success": True, "category": response.get("Attributes")}
+        return {"success": True, "category": decimal_to_native(response.get("Attributes"))}
     except ClientError as e:
         logger.error(f"DynamoDB error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -976,11 +993,15 @@ async def create_station(station: StationCreate):
         for field in optional_fields:
             value = getattr(station, field)
             if value is not None:
-                item[field] = value
+                # DynamoDB는 Python float를 지원하지 않으므로 Decimal로 변환
+                if isinstance(value, float):
+                    item[field] = Decimal(str(value))
+                else:
+                    item[field] = value
 
         table.put_item(Item=item)
 
-        return {"success": True, "station": item}
+        return {"success": True, "station": decimal_to_native(item)}
     except ClientError as e:
         logger.error(f"DynamoDB error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -996,7 +1017,8 @@ async def list_stations(
         dynamodb = get_dynamodb_resource()
         table = dynamodb.Table(DYNAMODB_TABLES["stations"])
 
-        filter_expr = "owner = :owner"
+        filter_expr = "#owner = :owner"
+        expr_names = {"#owner": "owner"}
         expr_values = {":owner": owner}
 
         if categoryId:
@@ -1005,6 +1027,7 @@ async def list_stations(
 
         response = table.scan(
             FilterExpression=filter_expr,
+            ExpressionAttributeNames=expr_names,
             ExpressionAttributeValues=expr_values
         )
 
@@ -1013,12 +1036,13 @@ async def list_stations(
         while "LastEvaluatedKey" in response:
             response = table.scan(
                 FilterExpression=filter_expr,
+                ExpressionAttributeNames=expr_names,
                 ExpressionAttributeValues=expr_values,
                 ExclusiveStartKey=response["LastEvaluatedKey"]
             )
             items.extend(response.get("Items", []))
 
-        return {"success": True, "stations": items, "count": len(items)}
+        return {"success": True, "stations": decimal_to_native(items), "count": len(items)}
     except ClientError as e:
         logger.error(f"DynamoDB error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1037,7 +1061,7 @@ async def get_station(station_id: str):
         if not item:
             raise HTTPException(status_code=404, detail="Station not found")
 
-        return {"success": True, "station": item}
+        return {"success": True, "station": decimal_to_native(item)}
     except ClientError as e:
         logger.error(f"DynamoDB error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1054,26 +1078,35 @@ async def update_station(station_id: str, station: StationUpdate):
         expr_values = {":now": datetime.now().isoformat()}
         expr_names = {}
 
+        # DynamoDB reserved keywords
+        reserved_words = {"name", "owner", "status", "address", "comment", "type", "key", "value", "data", "source", "role", "user", "size", "time", "date"}
+
         update_fields = station.dict(exclude_unset=True)
         for field, value in update_fields.items():
             if value is not None:
-                # Reserved words handling
-                if field == "name":
-                    expr_names["#n"] = "name"
-                    update_expr += f", #n = :{field}"
+                # DynamoDB는 Python float를 지원하지 않으므로 Decimal로 변환
+                if isinstance(value, float):
+                    value = Decimal(str(value))
+                if field.lower() in reserved_words:
+                    alias = f"#{field}"
+                    expr_names[alias] = field
+                    update_expr += f", {alias} = :{field}"
                 else:
                     update_expr += f", {field} = :{field}"
                 expr_values[f":{field}"] = value
 
-        response = table.update_item(
-            Key={"id": station_id},
-            UpdateExpression=update_expr,
-            ExpressionAttributeValues=expr_values,
-            ExpressionAttributeNames=expr_names if expr_names else None,
-            ReturnValues="ALL_NEW"
-        )
+        update_kwargs = {
+            "Key": {"id": station_id},
+            "UpdateExpression": update_expr,
+            "ExpressionAttributeValues": expr_values,
+            "ReturnValues": "ALL_NEW",
+        }
+        if expr_names:
+            update_kwargs["ExpressionAttributeNames"] = expr_names
 
-        return {"success": True, "station": response.get("Attributes")}
+        response = table.update_item(**update_kwargs)
+
+        return {"success": True, "station": decimal_to_native(response.get("Attributes"))}
     except ClientError as e:
         logger.error(f"DynamoDB error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1175,6 +1208,34 @@ async def get_presigned_url(key: str = Query(..., description="S3 object key")):
         return {"success": True, "url": url, "expires_in": 3600}
     except ClientError as e:
         logger.error(f"Presigned URL error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/download/photo")
+async def download_photo(key: str = Query(..., description="S3 object key")):
+    """S3 이미지를 EC2 경유로 스트리밍 (CORS 우회)"""
+    try:
+        s3_client = get_s3_client()
+        response = s3_client.get_object(Bucket=S3_BUCKET_NAME, Key=key)
+
+        # Content-Type 추정
+        content_type = response.get("ContentType", "image/jpeg")
+        if key.lower().endswith(".png"):
+            content_type = "image/png"
+        elif key.lower().endswith(".webp"):
+            content_type = "image/webp"
+        elif key.lower().endswith(".gif"):
+            content_type = "image/gif"
+
+        return StreamingResponse(
+            response["Body"],
+            media_type=content_type,
+            headers={
+                "Cache-Control": "public, max-age=86400",
+            },
+        )
+    except ClientError as e:
+        logger.error(f"S3 download error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

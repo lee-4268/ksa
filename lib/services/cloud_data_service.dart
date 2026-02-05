@@ -566,29 +566,13 @@ class CloudDataService extends ChangeNotifier {
     }
   }
 
-  /// S3에서 원본 Excel 파일 다운로드 (Presigned URL 경유)
+  /// S3에서 원본 Excel 파일 다운로드 (EC2 프록시 경유)
   Future<Uint8List?> downloadOriginalExcel(String storedPath) async {
     try {
-      // Presigned URL 획득
-      final presignedResponse = await http.get(
-        Uri.parse('$_baseUrl/download/presigned?key=${Uri.encodeComponent(storedPath)}'),
-        headers: _headers,
+      // EC2 프록시를 통해 S3 파일 다운로드
+      final downloadResponse = await http.get(
+        Uri.parse('$_baseUrl/download/photo?key=${Uri.encodeComponent(storedPath)}'),
       );
-
-      if (presignedResponse.statusCode != 200) {
-        debugPrint('Presigned URL 획득 실패: ${presignedResponse.body}');
-        return null;
-      }
-
-      final presignedData = jsonDecode(presignedResponse.body);
-      if (presignedData['success'] != true) {
-        return null;
-      }
-
-      final presignedUrl = presignedData['url'] as String;
-
-      // S3에서 직접 다운로드
-      final downloadResponse = await http.get(Uri.parse(presignedUrl));
 
       if (downloadResponse.statusCode == 200) {
         debugPrint('원본 Excel 다운로드 완료: ${downloadResponse.bodyBytes.length} bytes');
