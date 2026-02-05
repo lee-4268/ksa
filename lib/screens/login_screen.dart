@@ -35,7 +35,9 @@ class _LoginScreenState extends State<LoginScreen> {
       _passwordController.text,
     );
 
-    if (!success && mounted && authService.errorMessage != null) {
+    if (!mounted) return;
+
+    if (!success && authService.errorMessage != null) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(authService.errorMessage!),
@@ -43,6 +45,7 @@ class _LoginScreenState extends State<LoginScreen> {
         ),
       );
     }
+    // 로그인 성공 시 AuthWrapper의 리스너가 감지하여 HomeScreen으로 자동 전환됨
   }
 
   /// 비밀번호 입력 필드

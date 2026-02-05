@@ -147,7 +147,14 @@ class AuthService extends ChangeNotifier {
           _userId = username;
           _userName = username; // 임시로 사번 표시
           _isLoading = false;
-          notifyListeners(); // 즉시 UI 갱신 → HomeScreen 전환
+
+          debugPrint('로그인 성공: $_userId, isSignedIn=$_isSignedIn');
+
+          // 즉시 UI 갱신
+          notifyListeners();
+
+          // 웹 환경에서 확실한 UI 업데이트를 위해 다음 프레임에서 한 번 더 알림
+          Future.microtask(() => notifyListeners());
 
           _saveLoginState();
           _startSessionTimerBackground();
@@ -160,6 +167,16 @@ class AuthService extends ChangeNotifier {
           _errorMessage = '아이디 또는 비밀번호가 올바르지 않습니다.';
           debugPrint('SSO 인증 실패: result=$result');
         }
+      } else if (response.statusCode == 400 || response.statusCode == 401) {
+        // 400 Bad Request, 401 Unauthorized → 인증 실패
+        _errorMessage = '아이디 또는 비밀번호가 올바르지 않습니다.';
+        debugPrint('SSO 인증 실패: ${response.statusCode}');
+      } else if (response.statusCode == 403) {
+        _errorMessage = '접근 권한이 없습니다.';
+        debugPrint('SSO 접근 거부: ${response.statusCode}');
+      } else if (response.statusCode >= 500) {
+        _errorMessage = '서버 오류가 발생했습니다. 잠시 후 다시 시도해주세요.';
+        debugPrint('SSO 서버 오류: ${response.statusCode}');
       } else {
         _errorMessage = '로그인 중 오류가 발생했습니다. (${response.statusCode})';
         debugPrint('SSO 요청 실패: ${response.statusCode}');

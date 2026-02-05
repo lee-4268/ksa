@@ -138,63 +138,91 @@ class AuthWrapper extends StatefulWidget {
 }
 
 class _AuthWrapperState extends State<AuthWrapper> {
+  bool _sessionExpiredShown = false;
+  AuthService? _authService;
+
   @override
   void initState() {
     super.initState();
     // AuthService 초기화 (로그인 상태 확인)
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      context.read<AuthService>().init();
+      _authService = context.read<AuthService>();
+      _authService!.addListener(_onAuthStateChanged);
+      _authService!.init();
     });
   }
 
   @override
+  void dispose() {
+    _authService?.removeListener(_onAuthStateChanged);
+    super.dispose();
+  }
+
+  void _onAuthStateChanged() {
+    // AuthService 상태 변화 시 강제 rebuild
+    if (mounted) {
+      debugPrint('AuthWrapper: AuthService 상태 변경 감지, rebuild 트리거');
+      setState(() {});
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return Consumer<AuthService>(
-      builder: (context, authService, child) {
-        // 초기화 중
-        if (!authService.isInitialized) {
-          return const Scaffold(
-            body: Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  CircularProgressIndicator(),
-                  SizedBox(height: 16),
-                  Text('로딩 중...'),
-                ],
-              ),
+    // context.watch로도 감지하되, 명시적 리스너로도 백업
+    final authService = context.watch<AuthService>();
+
+    debugPrint('AuthWrapper rebuild: isInitialized=${authService.isInitialized}, isSignedIn=${authService.isSignedIn}');
+
+    // 초기화 중
+    if (!authService.isInitialized) {
+      return const Scaffold(
+        body: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              CircularProgressIndicator(),
+              SizedBox(height: 16),
+              Text('로딩 중...'),
+            ],
+          ),
+        ),
+      );
+    }
+
+    // 세션 만료 시 메시지 표시 (한 번만)
+    if (authService.isSessionExpired && !_sessionExpiredShown) {
+      _sessionExpiredShown = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('세션이 만료되어 자동 로그아웃되었습니다.'),
+              backgroundColor: Colors.orange,
+              duration: Duration(seconds: 3),
             ),
           );
         }
+      });
+    }
 
-        // 세션 만료 시 메시지 표시
-        if (authService.isSessionExpired) {
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('세션이 만료되어 자동 로그아웃되었습니다.'),
-                backgroundColor: Colors.orange,
-                duration: Duration(seconds: 3),
-              ),
-            );
-          });
-        }
+    // 세션 만료가 아닐 때 플래그 리셋
+    if (!authService.isSessionExpired) {
+      _sessionExpiredShown = false;
+    }
 
-        // 로그인 상태에 따라 화면 분기
-        if (authService.isSignedIn) {
-          // AuditService 사용자 컨텍스트 설정
-          final auditService = context.read<AuditService>();
-          auditService.setUserContext(
-            userId: authService.userId ?? '',
-            email: authService.userEmail,
-            name: authService.userName,
-          );
+    // 로그인 상태에 따라 화면 분기
+    if (authService.isSignedIn) {
+      // AuditService 사용자 컨텍스트 설정
+      final auditService = context.read<AuditService>();
+      auditService.setUserContext(
+        userId: authService.userId ?? '',
+        email: authService.userEmail,
+        name: authService.userName,
+      );
 
-          return const HomeScreen();
-        } else {
-          return const LoginScreen();
-        }
-      },
-    );
+      return const HomeScreen();
+    } else {
+      return const LoginScreen();
+    }
   }
 }
