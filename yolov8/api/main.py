@@ -40,9 +40,17 @@ UPLOAD_DIR.mkdir(exist_ok=True)
 # Allowed image extensions
 ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 
-# S3 Configuration for feedback storage
-S3_BUCKET_NAME = os.getenv("FEEDBACK_S3_BUCKET", "tower-classification-feedback")
+# S3 Configuration
+S3_BUCKET_NAME = os.getenv("S3_BUCKET_NAME", "sko-kca-s3")
 S3_REGION = os.getenv("AWS_REGION", "ap-northeast-2")
+
+# DynamoDB Table Names (새 계정에서 생성할 테이블)
+DYNAMODB_TABLES = {
+    "users": os.getenv("DYNAMODB_USERS_TABLE", "Users"),
+    "categories": os.getenv("DYNAMODB_CATEGORIES_TABLE", "ksa-categories"),
+    "stations": os.getenv("DYNAMODB_STATIONS_TABLE", "ksa-stations"),
+    "classifications": os.getenv("DYNAMODB_CLASSIFICATIONS_TABLE", "ksa-classifications"),
+}
 
 # Logger setup
 logging.basicConfig(level=logging.INFO)
@@ -151,6 +159,81 @@ class UserInfoResponse(BaseModel):
 class LoginRequest(BaseModel):
     username: str
     password: str
+
+
+# ============================================================
+# DynamoDB CRUD Models
+# ============================================================
+
+class CategoryCreate(BaseModel):
+    name: str
+    owner: str
+    originalExcelKey: Optional[str] = None
+
+
+class CategoryResponse(BaseModel):
+    id: str
+    name: str
+    owner: str
+    originalExcelKey: Optional[str] = None
+    createdAt: str
+    updatedAt: str
+
+
+class StationCreate(BaseModel):
+    categoryId: str
+    owner: str
+    stationName: str
+    address: str
+    licenseNumber: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    callSign: Optional[str] = None
+    gain: Optional[str] = None
+    antennaCount: Optional[str] = None
+    remarks: Optional[str] = None
+    typeApprovalNumber: Optional[str] = None
+    frequency: Optional[str] = None
+    stationType: Optional[str] = None
+    stationOwner: Optional[str] = None
+    installationType: Optional[str] = None
+    isInspected: bool = False
+    inspectionDate: Optional[str] = None
+    memo: Optional[str] = None
+    photoKeys: Optional[List[str]] = None
+
+
+class StationUpdate(BaseModel):
+    stationName: Optional[str] = None
+    address: Optional[str] = None
+    licenseNumber: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    callSign: Optional[str] = None
+    gain: Optional[str] = None
+    antennaCount: Optional[str] = None
+    remarks: Optional[str] = None
+    typeApprovalNumber: Optional[str] = None
+    frequency: Optional[str] = None
+    stationType: Optional[str] = None
+    stationOwner: Optional[str] = None
+    installationType: Optional[str] = None
+    isInspected: Optional[bool] = None
+    inspectionDate: Optional[str] = None
+    memo: Optional[str] = None
+    photoKeys: Optional[List[str]] = None
+
+
+class S3UploadResponse(BaseModel):
+    success: bool
+    key: str
+    url: Optional[str] = None
+
+
+class S3PresignedUrlResponse(BaseModel):
+    success: bool
+    url: str
+    expires_in: int
 
 
 # ============================================================
@@ -270,6 +353,16 @@ def cleanup_file(file_path: Path):
 def get_s3_client():
     """Get boto3 S3 client"""
     return boto3.client('s3', region_name=S3_REGION)
+
+
+def get_dynamodb_resource():
+    """Get boto3 DynamoDB resource"""
+    return boto3.resource('dynamodb', region_name=S3_REGION)
+
+
+def get_dynamodb_client():
+    """Get boto3 DynamoDB client"""
+    return boto3.client('dynamodb', region_name=S3_REGION)
 
 
 def upload_to_s3(file_path: Path, s3_key: str) -> bool:
@@ -712,39 +805,6 @@ async def proxy_sso_login(req: LoginRequest):
         )
 
 
-# ============================================================
-# User Info Endpoint
-# ============================================================
-
-@app.get("/users/{empno}", response_model=UserInfoResponse)
-async def get_user_info(empno: str):
-    """
-    사번으로 사용자 정보 조회
-
-    - empno: 사번 (예: N1012345)
-    - Returns: 이름, 본부, 팀, 직책, 이메일, 전화번호
-    """
-    users = load_users()
-    user = users.get(empno)
-
-    if user is None:
-        return {
-            "success": False,
-            "empno": empno,
-        }
-
-    return {
-        "success": True,
-        "empno": empno,
-        "name": user.get("name"),
-        "region": user.get("region"),
-        "team": user.get("DeptName"),
-        "job_title": user.get("jobGdName"),
-        "email": user.get("Email"),
-        "phone": user.get("MobilePhone"),
-    }
-
-
 @app.get("/users")
 async def list_users_count():
     """사용자 데이터 통계"""
@@ -754,6 +814,427 @@ async def list_users_count():
         "total_users": len(users),
         "timestamp": datetime.now().isoformat()
     }
+
+
+# ============================================================
+# DynamoDB CRUD Endpoints - Categories
+# ============================================================
+
+@app.post("/categories")
+async def create_category(category: CategoryCreate):
+    """카테고리 생성"""
+    try:
+        dynamodb = get_dynamodb_resource()
+        table = dynamodb.Table(DYNAMODB_TABLES["categories"])
+
+        now = datetime.now().isoformat()
+        item = {
+            "id": str(uuid.uuid4()),
+            "name": category.name,
+            "owner": category.owner,
+            "createdAt": now,
+            "updatedAt": now,
+        }
+        if category.originalExcelKey:
+            item["originalExcelKey"] = category.originalExcelKey
+
+        table.put_item(Item=item)
+
+        return {"success": True, "category": item}
+    except ClientError as e:
+        logger.error(f"DynamoDB error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/categories")
+async def list_categories(owner: str = Query(..., description="소유자 사번")):
+    """카테고리 목록 조회 (owner 필터)"""
+    try:
+        dynamodb = get_dynamodb_resource()
+        table = dynamodb.Table(DYNAMODB_TABLES["categories"])
+
+        # Scan with filter (GSI 없이 간단하게 처리)
+        response = table.scan(
+            FilterExpression="owner = :owner",
+            ExpressionAttributeValues={":owner": owner}
+        )
+
+        items = response.get("Items", [])
+
+        # 페이지네이션 처리
+        while "LastEvaluatedKey" in response:
+            response = table.scan(
+                FilterExpression="owner = :owner",
+                ExpressionAttributeValues={":owner": owner},
+                ExclusiveStartKey=response["LastEvaluatedKey"]
+            )
+            items.extend(response.get("Items", []))
+
+        return {"success": True, "categories": items, "count": len(items)}
+    except ClientError as e:
+        logger.error(f"DynamoDB error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/categories/{category_id}")
+async def get_category(category_id: str):
+    """카테고리 단일 조회"""
+    try:
+        dynamodb = get_dynamodb_resource()
+        table = dynamodb.Table(DYNAMODB_TABLES["categories"])
+
+        response = table.get_item(Key={"id": category_id})
+        item = response.get("Item")
+
+        if not item:
+            raise HTTPException(status_code=404, detail="Category not found")
+
+        return {"success": True, "category": item}
+    except ClientError as e:
+        logger.error(f"DynamoDB error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/categories/{category_id}")
+async def update_category(category_id: str, name: str = None, originalExcelKey: str = None):
+    """카테고리 업데이트"""
+    try:
+        dynamodb = get_dynamodb_resource()
+        table = dynamodb.Table(DYNAMODB_TABLES["categories"])
+
+        update_expr = "SET updatedAt = :now"
+        expr_values = {":now": datetime.now().isoformat()}
+
+        if name:
+            update_expr += ", #n = :name"
+            expr_values[":name"] = name
+        if originalExcelKey:
+            update_expr += ", originalExcelKey = :key"
+            expr_values[":key"] = originalExcelKey
+
+        expr_names = {"#n": "name"} if name else None
+
+        response = table.update_item(
+            Key={"id": category_id},
+            UpdateExpression=update_expr,
+            ExpressionAttributeValues=expr_values,
+            ExpressionAttributeNames=expr_names if expr_names else None,
+            ReturnValues="ALL_NEW"
+        )
+
+        return {"success": True, "category": response.get("Attributes")}
+    except ClientError as e:
+        logger.error(f"DynamoDB error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/categories/{category_id}")
+async def delete_category(category_id: str):
+    """카테고리 삭제"""
+    try:
+        dynamodb = get_dynamodb_resource()
+        table = dynamodb.Table(DYNAMODB_TABLES["categories"])
+
+        table.delete_item(Key={"id": category_id})
+
+        return {"success": True, "message": "Category deleted"}
+    except ClientError as e:
+        logger.error(f"DynamoDB error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================
+# DynamoDB CRUD Endpoints - Stations
+# ============================================================
+
+@app.post("/stations")
+async def create_station(station: StationCreate):
+    """무선국 생성"""
+    try:
+        dynamodb = get_dynamodb_resource()
+        table = dynamodb.Table(DYNAMODB_TABLES["stations"])
+
+        now = datetime.now().isoformat()
+        item = {
+            "id": str(uuid.uuid4()),
+            "categoryId": station.categoryId,
+            "owner": station.owner,
+            "stationName": station.stationName,
+            "address": station.address,
+            "isInspected": station.isInspected,
+            "createdAt": now,
+            "updatedAt": now,
+        }
+
+        # Optional fields
+        optional_fields = [
+            "licenseNumber", "latitude", "longitude", "callSign", "gain",
+            "antennaCount", "remarks", "typeApprovalNumber", "frequency",
+            "stationType", "stationOwner", "installationType", "inspectionDate",
+            "memo", "photoKeys"
+        ]
+        for field in optional_fields:
+            value = getattr(station, field)
+            if value is not None:
+                item[field] = value
+
+        table.put_item(Item=item)
+
+        return {"success": True, "station": item}
+    except ClientError as e:
+        logger.error(f"DynamoDB error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/stations")
+async def list_stations(
+    owner: str = Query(..., description="소유자 사번"),
+    categoryId: str = Query(None, description="카테고리 ID (선택)")
+):
+    """무선국 목록 조회"""
+    try:
+        dynamodb = get_dynamodb_resource()
+        table = dynamodb.Table(DYNAMODB_TABLES["stations"])
+
+        filter_expr = "owner = :owner"
+        expr_values = {":owner": owner}
+
+        if categoryId:
+            filter_expr += " AND categoryId = :catId"
+            expr_values[":catId"] = categoryId
+
+        response = table.scan(
+            FilterExpression=filter_expr,
+            ExpressionAttributeValues=expr_values
+        )
+
+        items = response.get("Items", [])
+
+        while "LastEvaluatedKey" in response:
+            response = table.scan(
+                FilterExpression=filter_expr,
+                ExpressionAttributeValues=expr_values,
+                ExclusiveStartKey=response["LastEvaluatedKey"]
+            )
+            items.extend(response.get("Items", []))
+
+        return {"success": True, "stations": items, "count": len(items)}
+    except ClientError as e:
+        logger.error(f"DynamoDB error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/stations/{station_id}")
+async def get_station(station_id: str):
+    """무선국 단일 조회"""
+    try:
+        dynamodb = get_dynamodb_resource()
+        table = dynamodb.Table(DYNAMODB_TABLES["stations"])
+
+        response = table.get_item(Key={"id": station_id})
+        item = response.get("Item")
+
+        if not item:
+            raise HTTPException(status_code=404, detail="Station not found")
+
+        return {"success": True, "station": item}
+    except ClientError as e:
+        logger.error(f"DynamoDB error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/stations/{station_id}")
+async def update_station(station_id: str, station: StationUpdate):
+    """무선국 업데이트"""
+    try:
+        dynamodb = get_dynamodb_resource()
+        table = dynamodb.Table(DYNAMODB_TABLES["stations"])
+
+        update_expr = "SET updatedAt = :now"
+        expr_values = {":now": datetime.now().isoformat()}
+        expr_names = {}
+
+        update_fields = station.dict(exclude_unset=True)
+        for field, value in update_fields.items():
+            if value is not None:
+                # Reserved words handling
+                if field == "name":
+                    expr_names["#n"] = "name"
+                    update_expr += f", #n = :{field}"
+                else:
+                    update_expr += f", {field} = :{field}"
+                expr_values[f":{field}"] = value
+
+        response = table.update_item(
+            Key={"id": station_id},
+            UpdateExpression=update_expr,
+            ExpressionAttributeValues=expr_values,
+            ExpressionAttributeNames=expr_names if expr_names else None,
+            ReturnValues="ALL_NEW"
+        )
+
+        return {"success": True, "station": response.get("Attributes")}
+    except ClientError as e:
+        logger.error(f"DynamoDB error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/stations/{station_id}")
+async def delete_station(station_id: str):
+    """무선국 삭제"""
+    try:
+        dynamodb = get_dynamodb_resource()
+        table = dynamodb.Table(DYNAMODB_TABLES["stations"])
+
+        table.delete_item(Key={"id": station_id})
+
+        return {"success": True, "message": "Station deleted"}
+    except ClientError as e:
+        logger.error(f"DynamoDB error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================
+# S3 Upload/Download Endpoints
+# ============================================================
+
+@app.post("/upload/photo")
+async def upload_photo(
+    file: UploadFile = File(...),
+    owner: str = Form(...),
+    stationId: str = Form(...)
+):
+    """사진 S3 업로드"""
+    if not validate_image(file):
+        raise HTTPException(status_code=400, detail="Invalid image format")
+
+    try:
+        s3_client = get_s3_client()
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        ext = Path(file.filename).suffix.lower()
+        s3_key = f"photos/{owner}/{stationId}/{timestamp}{ext}"
+
+        content = await file.read()
+        s3_client.put_object(
+            Bucket=S3_BUCKET_NAME,
+            Key=s3_key,
+            Body=content,
+            ContentType=file.content_type
+        )
+
+        return {"success": True, "key": s3_key}
+    except ClientError as e:
+        logger.error(f"S3 upload error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/upload/excel")
+async def upload_excel(
+    file: UploadFile = File(...),
+    owner: str = Form(...),
+    categoryName: str = Form(...)
+):
+    """원본 Excel S3 업로드"""
+    if not file.filename.endswith(('.xlsx', '.xls')):
+        raise HTTPException(status_code=400, detail="Invalid Excel format")
+
+    try:
+        s3_client = get_s3_client()
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        safe_name = categoryName.replace("/", "_").replace("\\", "_")
+        s3_key = f"excel/{owner}/{safe_name}_{timestamp}.xlsx"
+
+        content = await file.read()
+        s3_client.put_object(
+            Bucket=S3_BUCKET_NAME,
+            Key=s3_key,
+            Body=content,
+            ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+
+        return {"success": True, "key": s3_key}
+    except ClientError as e:
+        logger.error(f"S3 upload error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/download/presigned")
+async def get_presigned_url(key: str = Query(..., description="S3 object key")):
+    """S3 Presigned URL 생성 (다운로드용)"""
+    try:
+        s3_client = get_s3_client()
+
+        url = s3_client.generate_presigned_url(
+            'get_object',
+            Params={'Bucket': S3_BUCKET_NAME, 'Key': key},
+            ExpiresIn=3600  # 1시간
+        )
+
+        return {"success": True, "url": url, "expires_in": 3600}
+    except ClientError as e:
+        logger.error(f"Presigned URL error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/storage/{key:path}")
+async def delete_s3_object(key: str):
+    """S3 객체 삭제"""
+    try:
+        s3_client = get_s3_client()
+        s3_client.delete_object(Bucket=S3_BUCKET_NAME, Key=key)
+        return {"success": True, "message": f"Deleted: {key}"}
+    except ClientError as e:
+        logger.error(f"S3 delete error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================
+# DynamoDB Users (i-NET 사용자 - 기존 테이블 사용)
+# ============================================================
+
+@app.get("/users/{empno}")
+async def get_user_by_empno(empno: str):
+    """
+    사번으로 사용자 정보 조회 (DynamoDB)
+
+    기존 i-NET 사용자 테이블에서 조회
+    """
+    try:
+        dynamodb = get_dynamodb_resource()
+        table = dynamodb.Table(DYNAMODB_TABLES["users"])
+
+        # user_id가 PK
+        response = table.get_item(Key={"user_id": empno})
+        user = response.get("Item")
+
+        if not user:
+            return {"success": False, "empno": empno, "message": "User not found"}
+
+        return {
+            "success": True,
+            "empno": empno,
+            "name": user.get("name"),
+            "region": user.get("region"),
+            "team": user.get("team"),
+            "email": user.get("email"),
+            "phone": user.get("phone_number"),
+        }
+    except ClientError as e:
+        logger.error(f"DynamoDB error: {e}")
+        # Fallback to JSON file
+        users = load_users()
+        user = users.get(empno)
+        if user:
+            return {
+                "success": True,
+                "empno": empno,
+                "name": user.get("name"),
+                "region": user.get("region"),
+                "team": user.get("DeptName"),
+            }
+        return {"success": False, "empno": empno}
 
 
 # ============================================================

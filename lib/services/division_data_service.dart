@@ -1,10 +1,8 @@
-import 'dart:convert';
 import 'package:flutter/foundation.dart';
-import 'package:amplify_flutter/amplify_flutter.dart';
 import '../models/radio_station.dart';
 import 'excel_service.dart';
 
-/// 본부별 수검 대상 데이터 관리 서비스
+/// 본부별 수검 대상 데이터 관리 서비스 (EC2 REST API 사용)
 class DivisionDataService extends ChangeNotifier {
   final ExcelService _excelService = ExcelService();
 
@@ -229,70 +227,21 @@ class DivisionDataService extends ChangeNotifier {
     }
   }
 
-  /// 클라우드에 저장
+  /// 클라우드에 저장 (현재 stub - EC2 API 추가 필요)
   Future<void> _saveToCloud() async {
     if (_currentDivisionId == null) return;
 
-    const mutation = '''
-      mutation CreateDivisionInspectionBatch(\$input: CreateDivisionInspectionBatchInput!) {
-        createDivisionInspectionBatch(input: \$input) {
-          success
-          count
-        }
-      }
-    ''';
-
-    try {
-      // 배치로 저장 (실제 구현 시 pagination 필요)
-      final targetsJson = _targets.map((t) => t.toJson()).toList();
-
-      final request = GraphQLRequest<String>(
-        document: mutation,
-        variables: {
-          'input': {
-            'divisionId': _currentDivisionId,
-            'year': DateTime.now().year,
-            'targets': targetsJson,
-            'originalExcelKey': _originalFileName,
-          }
-        },
-        authorizationMode: APIAuthorizationType.apiKey,
-      );
-
-      await Amplify.API.mutate(request: request).response;
-      debugPrint('클라우드 저장 완료: ${_targets.length}개');
-    } catch (e) {
-      debugPrint('클라우드 저장 실패 (로컬만 유지): $e');
-    }
+    // EC2 API에 division inspection batch 엔드포인트 추가 필요
+    debugPrint('_saveToCloud: EC2 API 구현 필요 (${_targets.length}개 대상)');
   }
 
-  /// 단일 대상 클라우드 동기화
+  /// 단일 대상 클라우드 동기화 (현재 stub - EC2 API 추가 필요)
   Future<void> _syncTargetToCloud(DivisionInspectionTarget target) async {
-    // 백그라운드에서 동기화
-    try {
-      const mutation = '''
-        mutation UpdateInspectionTarget(\$input: UpdateInspectionTargetInput!) {
-          updateInspectionTarget(input: \$input) {
-            id
-          }
-        }
-      ''';
-
-      final request = GraphQLRequest<String>(
-        document: mutation,
-        variables: {
-          'input': target.toJson(),
-        },
-        authorizationMode: APIAuthorizationType.apiKey,
-      );
-
-      await Amplify.API.mutate(request: request).response;
-    } catch (e) {
-      debugPrint('동기화 실패: $e');
-    }
+    // EC2 API에 inspection target update 엔드포인트 추가 필요
+    debugPrint('_syncTargetToCloud: EC2 API 구현 필요');
   }
 
-  /// 클라우드에서 데이터 로드
+  /// 클라우드에서 데이터 로드 (현재 stub - EC2 API 추가 필요)
   Future<void> loadFromCloud() async {
     if (_currentDivisionId == null) return;
 
@@ -300,65 +249,12 @@ class DivisionDataService extends ChangeNotifier {
     _loadingStatus = '데이터 로드 중...';
     notifyListeners();
 
-    try {
-      const query = '''
-        query GetDivisionTargets(\$divisionId: ID!, \$year: Int!) {
-          divisionInspectionTargets(divisionId: \$divisionId, year: \$year) {
-            items {
-              id
-              stationName
-              licenseNumber
-              address
-              latitude
-              longitude
-              callSign
-              gain
-              antennaCount
-              remarks
-              installationType
-              assignedTeamId
-              assignedTeamName
-              isInspected
-              inspectionDate
-              scheduledDate
-              memo
-              photoKeys
-            }
-          }
-        }
-      ''';
+    // EC2 API에 division inspection targets 엔드포인트 추가 필요
+    debugPrint('loadFromCloud: EC2 API 구현 필요');
 
-      final request = GraphQLRequest<String>(
-        document: query,
-        variables: {
-          'divisionId': _currentDivisionId,
-          'year': DateTime.now().year,
-        },
-        authorizationMode: APIAuthorizationType.apiKey,
-      );
-
-      final response = await Amplify.API.query(request: request).response;
-
-      if (response.data != null) {
-        final data = jsonDecode(response.data!) as Map<String, dynamic>;
-        final items = data['divisionInspectionTargets']['items'] as List<dynamic>;
-
-        _targets = items.map((item) =>
-          DivisionInspectionTarget.fromJson(item as Map<String, dynamic>)
-        ).toList();
-
-        _organizeByTeam();
-      }
-
-      _isLoading = false;
-      _loadingStatus = '';
-      notifyListeners();
-    } catch (e) {
-      _errorMessage = '데이터 로드 실패: $e';
-      _isLoading = false;
-      _loadingStatus = '';
-      notifyListeners();
-    }
+    _isLoading = false;
+    _loadingStatus = '';
+    notifyListeners();
   }
 
   /// 원본 서식 유지 Excel Export

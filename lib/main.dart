@@ -1,12 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:amplify_flutter/amplify_flutter.dart';
-import 'package:amplify_api/amplify_api.dart';
-import 'package:amplify_auth_cognito/amplify_auth_cognito.dart';
-import 'package:amplify_storage_s3/amplify_storage_s3.dart';
 import 'package:intl/date_symbol_data_local.dart';
 
-import 'amplifyconfiguration.dart';
 import 'providers/station_provider.dart';
 import 'screens/home_screen.dart';
 import 'screens/login_screen.dart';
@@ -17,7 +12,6 @@ import 'services/audit_service.dart';
 import 'services/team_context_service.dart';
 import 'services/admin_service.dart';
 import 'services/division_data_service.dart';
-import 'services/photo_storage_service.dart';
 
 // 모바일용 조건부 import
 import 'main_init_stub.dart' if (dart.library.io) 'main_init_mobile.dart'
@@ -36,33 +30,7 @@ void main() async {
   final storageService = StorageService();
   await storageService.init();
 
-  // Amplify 초기화 (API, Storage)
-  await _configureAmplify();
-
   runApp(MyApp(storageService: storageService));
-}
-
-Future<void> _configureAmplify() async {
-  try {
-    final apiPlugin = AmplifyAPI();
-    final authPlugin = AmplifyAuthCognito();
-    final storagePlugin = AmplifyStorageS3();
-
-    await Amplify.addPlugins([apiPlugin, authPlugin, storagePlugin]);
-    debugPrint('Amplify 초기화: API, Auth(Identity Pool), Storage 플러그인 추가');
-
-    // Amplify 구성
-    await Amplify.configure(amplifyconfig);
-
-    debugPrint('Amplify 초기화 완료');
-
-    // S3 Storage 설정 확인
-    await PhotoStorageService.checkStorageConfiguration();
-  } on AmplifyAlreadyConfiguredException {
-    debugPrint('Amplify가 이미 구성되어 있습니다.');
-  } catch (e) {
-    debugPrint('Amplify 초기화 오류: $e');
-  }
 }
 
 class MyApp extends StatelessWidget {

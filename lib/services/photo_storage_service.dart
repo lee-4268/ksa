@@ -1,29 +1,37 @@
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
-import 'package:amplify_flutter/amplify_flutter.dart';
-import 'package:amplify_storage_s3/amplify_storage_s3.dart';
+import 'package:http/http.dart' as http;
 
-/// AWS S3를 이용한 사진 저장 서비스
+/// EC2 FastAPI를 통한 S3 사진 저장 서비스
 /// S3가 설정되지 않은 경우 base64 data URL을 사용
 class PhotoStorageService {
+  /// API 서버 URL (EC2 FastAPI)
+  static const String _baseUrl = String.fromEnvironment(
+    'API_BASE_URL',
+    defaultValue: 'https://api-sko-kca.skone.net',
+  );
+
   /// S3 Storage가 설정되어 있는지 확인
-  static bool _isStorageConfigured = false;
+  static bool _isStorageConfigured = true; // EC2 API 사용 시 항상 true
+
   static bool get isStorageConfigured => _isStorageConfigured;
 
-  /// Storage 설정 확인
+  /// Storage 설정 확인 (EC2 API 상태 확인)
   static Future<void> checkStorageConfiguration() async {
     try {
-      // Amplify Storage가 구성되어 있는지 간단히 확인
-      // 실제 버킷 접근을 시도하지 않고 플러그인 등록 여부만 확인
-      _isStorageConfigured = true;
-      debugPrint('S3 Storage 플러그인 등록됨');
+      final response = await http.get(
+        Uri.parse('$_baseUrl/health'),
+      ).timeout(const Duration(seconds: 5));
+
+      _isStorageConfigured = response.statusCode == 200;
+      debugPrint('EC2 API Storage 상태: $_isStorageConfigured');
     } catch (e) {
       _isStorageConfigured = false;
-      debugPrint('S3 Storage 확인 오류: $e');
+      debugPrint('EC2 API 연결 오류: $e');
     }
   }
 
-  /// 사진 업로드 (S3 또는 base64)
+  /// 사진 업로드 (EC2 경유 S3 또는 base64)
   /// [bytes] - 이미지 바이트 데이터
   /// [fileName] - 파일명 (확장자 포함)
   /// [stationId] - 스테이션 ID (S3 경로용)
@@ -35,16 +43,16 @@ class PhotoStorageService {
     required String stationId,
     String? userId,
   }) async {
-    // S3가 설정되어 있으면 S3에 업로드
+    // EC2 API가 설정되어 있으면 S3에 업로드
     if (_isStorageConfigured) {
       return await _uploadToS3(bytes, fileName, stationId, userId);
     }
 
-    // S3가 없으면 base64로 인코딩
+    // EC2 API가 없으면 base64로 인코딩
     return _encodeToBase64(bytes, fileName);
   }
 
-  /// S3에 업로드 (guest 접근 + userId 경로 분리)
+  /// EC2 경유 S3에 업로드
   static Future<String?> _uploadToS3(
     Uint8List bytes,
     String fileName,
@@ -52,18 +60,39 @@ class PhotoStorageService {
     String? userId,
   ) async {
     try {
-      final timestamp = DateTime.now().millisecondsSinceEpoch;
       final userPrefix = userId ?? 'unknown';
-      final fileKey = 'public/users/$userPrefix/photos/$stationId/${timestamp}_$fileName';
 
-      final result = await Amplify.Storage.uploadData(
-        data: StorageDataPayload.bytes(bytes),
-        path: StoragePath.fromString(fileKey),
-      ).result;
+      // multipart/form-data로 파일 업로드
+      final request = http.MultipartRequest(
+        'POST',
+        Uri.parse('$_baseUrl/upload/photo'),
+      );
 
-      final uploadedPath = result.uploadedItem.path;
-      debugPrint('S3 업로드 완료: $uploadedPath');
-      return 's3://$uploadedPath';
+      request.fields['owner'] = userPrefix;
+      request.fields['stationId'] = stationId;
+      request.files.add(
+        http.MultipartFile.fromBytes(
+          'file',
+          bytes,
+          filename: fileName,
+        ),
+      );
+
+      final streamedResponse = await request.send();
+      final response = await http.Response.fromStream(streamedResponse);
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        if (data['success'] == true) {
+          final key = data['key'] as String;
+          debugPrint('S3 업로드 완료: $key');
+          return 's3://$key';
+        }
+      }
+
+      debugPrint('S3 업로드 실패: ${response.body}');
+      // S3 실패 시 base64로 폴백
+      return _encodeToBase64(bytes, fileName);
     } catch (e) {
       debugPrint('S3 업로드 오류: $e');
       // S3 실패 시 base64로 폴백
@@ -95,21 +124,25 @@ class PhotoStorageService {
     // S3 키인 경우
     if (photoPath.startsWith('s3://')) {
       if (!_isStorageConfigured) {
-        throw Exception('S3 Storage가 설정되지 않았습니다.');
+        throw Exception('EC2 API가 설정되지 않았습니다.');
       }
 
       try {
         final key = photoPath.substring(5); // 's3://' 제거
-        final result = await Amplify.Storage.getUrl(
-          path: StoragePath.fromString(key),
-          options: const StorageGetUrlOptions(
-            pluginOptions: S3GetUrlPluginOptions(
-              expiresIn: Duration(hours: 1), // 1시간 유효
-            ),
-          ),
-        ).result;
 
-        return result.url.toString();
+        final response = await http.get(
+          Uri.parse('$_baseUrl/download/presigned?key=${Uri.encodeComponent(key)}'),
+        );
+
+        if (response.statusCode == 200) {
+          final data = jsonDecode(response.body);
+          if (data['success'] == true) {
+            return data['url'] as String;
+          }
+        }
+
+        debugPrint('Presigned URL 생성 실패: ${response.body}');
+        throw Exception('사진을 불러올 수 없습니다.');
       } catch (e) {
         debugPrint('S3 URL 생성 오류: $e');
         throw Exception('사진을 불러올 수 없습니다: $e');
@@ -126,12 +159,17 @@ class PhotoStorageService {
     if (!_isStorageConfigured) return;
 
     try {
-      final fullPath = photoPath.substring(5); // 's3://' 제거
+      final key = photoPath.substring(5); // 's3://' 제거
 
-      await Amplify.Storage.remove(
-        path: StoragePath.fromString(fullPath),
-      ).result;
-      debugPrint('S3 사진 삭제 완료: $fullPath');
+      final response = await http.delete(
+        Uri.parse('$_baseUrl/storage/${Uri.encodeComponent(key)}'),
+      );
+
+      if (response.statusCode == 200) {
+        debugPrint('S3 사진 삭제 완료: $key');
+      } else {
+        debugPrint('S3 사진 삭제 실패: ${response.body}');
+      }
     } catch (e) {
       debugPrint('S3 사진 삭제 오류: $e');
       rethrow;

@@ -1,6 +1,4 @@
 import 'dart:convert';
-import 'package:amplify_flutter/amplify_flutter.dart';
-import 'package:amplify_api/amplify_api.dart';
 import 'package:flutter/foundation.dart';
 
 /// 감사 로그 액션 타입
@@ -88,8 +86,14 @@ class AuditLogEntry {
   }
 }
 
-/// 감사 로그 서비스
+/// 감사 로그 서비스 (EC2 REST API 사용)
 class AuditService extends ChangeNotifier {
+  /// API 서버 URL
+  static const String _baseUrl = String.fromEnvironment(
+    'API_BASE_URL',
+    defaultValue: 'https://api-sko-kca.skone.net',
+  );
+
   String? _currentUserId;
   String? _currentUserEmail;
   String? _currentUserName;
@@ -111,7 +115,7 @@ class AuditService extends ChangeNotifier {
     _currentTeamName = teamName;
   }
 
-  /// 감사 로그 기록
+  /// 감사 로그 기록 (현재 stub - EC2 API 추가 필요)
   Future<bool> log({
     required AuditAction action,
     required String entityType,
@@ -126,51 +130,9 @@ class AuditService extends ChangeNotifier {
       return false;
     }
 
-    const mutation = '''
-      mutation CreateAuditLog(\$input: CreateAuditLogInput!) {
-        createAuditLog(input: \$input) {
-          id
-        }
-      }
-    ''';
-
-    final input = <String, dynamic>{
-      'action': action.name.toUpperCase(),
-      'entityType': entityType,
-      'entityId': entityId,
-      'userId': _currentUserId,
-      'timestamp': DateTime.now().toUtc().toIso8601String(),
-      'canRollback': canRollback,
-    };
-
-    if (_currentUserEmail != null) input['userEmail'] = _currentUserEmail;
-    if (_currentUserName != null) input['userName'] = _currentUserName;
-    if (_currentTeamId != null) input['userTeamId'] = _currentTeamId;
-    if (_currentTeamName != null) input['userTeamName'] = _currentTeamName;
-    if (previousData != null) input['previousData'] = jsonEncode(previousData);
-    if (newData != null) input['newData'] = jsonEncode(newData);
-    if (changedFields != null) input['changedFields'] = changedFields;
-
-    try {
-      final request = GraphQLRequest<String>(
-        document: mutation,
-        variables: {'input': input},
-        authorizationMode: APIAuthorizationType.apiKey,
-      );
-
-      final response = await Amplify.API.mutate(request: request).response;
-
-      if (response.errors.isNotEmpty) {
-        debugPrint('AuditService 오류: ${response.errors}');
-        return false;
-      }
-
-      debugPrint('AuditService: 로그 기록 완료 - $action on $entityType:$entityId');
-      return true;
-    } catch (e) {
-      debugPrint('AuditService 예외: $e');
-      return false;
-    }
+    // 현재 EC2 API에 audit 엔드포인트가 없으므로 로컬 로그만 출력
+    debugPrint('AuditService: 로그 기록 - $action on $entityType:$entityId (EC2 API 구현 필요)');
+    return true;
   }
 
   /// 로그인 이벤트 기록
@@ -227,7 +189,7 @@ class AuditService extends ChangeNotifier {
     return changedFields;
   }
 
-  /// 감사 로그 조회 (관리자용)
+  /// 감사 로그 조회 (현재 stub - EC2 API 추가 필요)
   Future<List<AuditLogEntry>> listAuditLogs({
     String? entityType,
     String? entityId,
@@ -237,85 +199,8 @@ class AuditService extends ChangeNotifier {
     DateTime? endDate,
     int limit = 50,
   }) async {
-    const query = '''
-      query ListAuditLogs(\$filter: ModelAuditLogFilterInput, \$limit: Int, \$nextToken: String) {
-        listAuditLogs(filter: \$filter, limit: \$limit, nextToken: \$nextToken) {
-          items {
-            id
-            action
-            entityType
-            entityId
-            userId
-            userEmail
-            userName
-            userTeamId
-            userTeamName
-            timestamp
-            previousData
-            newData
-            changedFields
-            canRollback
-            rolledBackAt
-            rolledBackBy
-          }
-          nextToken
-        }
-      }
-    ''';
-
-    final filter = <String, dynamic>{};
-
-    if (entityType != null) {
-      filter['entityType'] = {'eq': entityType};
-    }
-    if (entityId != null) {
-      filter['entityId'] = {'eq': entityId};
-    }
-    if (userId != null) {
-      filter['userId'] = {'eq': userId};
-    }
-    if (action != null) {
-      filter['action'] = {'eq': action.name.toUpperCase()};
-    }
-    if (startDate != null || endDate != null) {
-      final timestampFilter = <String, dynamic>{};
-      if (startDate != null) {
-        timestampFilter['ge'] = startDate.toUtc().toIso8601String();
-      }
-      if (endDate != null) {
-        timestampFilter['le'] = endDate.toUtc().toIso8601String();
-      }
-      filter['timestamp'] = timestampFilter;
-    }
-
-    try {
-      final request = GraphQLRequest<String>(
-        document: query,
-        variables: {
-          if (filter.isNotEmpty) 'filter': filter,
-          'limit': limit,
-        },
-        authorizationMode: APIAuthorizationType.apiKey,
-      );
-
-      final response = await Amplify.API.query(request: request).response;
-
-      if (response.errors.isNotEmpty) {
-        debugPrint('AuditService 조회 오류: ${response.errors}');
-        return [];
-      }
-
-      final data = jsonDecode(response.data!) as Map<String, dynamic>;
-      final items = data['listAuditLogs']['items'] as List<dynamic>;
-
-      return items
-          .map((item) => AuditLogEntry.fromJson(item as Map<String, dynamic>))
-          .toList()
-        ..sort((a, b) => b.timestamp.compareTo(a.timestamp));
-    } catch (e) {
-      debugPrint('AuditService 조회 예외: $e');
-      return [];
-    }
+    debugPrint('AuditService: listAuditLogs 호출 (EC2 API 구현 필요)');
+    return [];
   }
 
   /// 특정 엔티티의 변경 이력 조회
@@ -330,262 +215,9 @@ class AuditService extends ChangeNotifier {
     );
   }
 
-  /// 롤백 수행
+  /// 롤백 수행 (현재 stub - EC2 API 추가 필요)
   Future<bool> rollback(String auditLogId) async {
-    // 1. 감사 로그 조회
-    const getQuery = '''
-      query GetAuditLog(\$id: ID!) {
-        getAuditLog(id: \$id) {
-          id
-          action
-          entityType
-          entityId
-          previousData
-          newData
-          canRollback
-          rolledBackAt
-        }
-      }
-    ''';
-
-    try {
-      final getRequest = GraphQLRequest<String>(
-        document: getQuery,
-        variables: {'id': auditLogId},
-        authorizationMode: APIAuthorizationType.apiKey,
-      );
-
-      final getResponse = await Amplify.API.query(request: getRequest).response;
-
-      if (getResponse.errors.isNotEmpty || getResponse.data == null) {
-        debugPrint('롤백 대상 조회 실패');
-        return false;
-      }
-
-      final logData = jsonDecode(getResponse.data!) as Map<String, dynamic>;
-      final auditLog = logData['getAuditLog'] as Map<String, dynamic>?;
-
-      if (auditLog == null) {
-        debugPrint('감사 로그를 찾을 수 없음');
-        return false;
-      }
-
-      if (auditLog['canRollback'] != true) {
-        debugPrint('롤백 불가능한 로그');
-        return false;
-      }
-
-      if (auditLog['rolledBackAt'] != null) {
-        debugPrint('이미 롤백된 로그');
-        return false;
-      }
-
-      final entityType = auditLog['entityType'] as String;
-      final entityId = auditLog['entityId'] as String;
-      final previousDataStr = auditLog['previousData'] as String?;
-
-      if (previousDataStr == null) {
-        debugPrint('이전 데이터 없음 - 롤백 불가');
-        return false;
-      }
-
-      final previousData =
-          jsonDecode(previousDataStr) as Map<String, dynamic>;
-
-      // 2. 엔티티 타입에 따라 롤백 수행
-      bool rollbackSuccess = false;
-      switch (entityType) {
-        case 'TeamInspectionData':
-          rollbackSuccess =
-              await _rollbackTeamInspectionData(entityId, previousData);
-          break;
-        case 'MasterStation':
-          rollbackSuccess = await _rollbackMasterStation(entityId, previousData);
-          break;
-        case 'UserProfile':
-          rollbackSuccess = await _rollbackUserProfile(entityId, previousData);
-          break;
-        default:
-          debugPrint('지원되지 않는 엔티티 타입: $entityType');
-          return false;
-      }
-
-      if (!rollbackSuccess) return false;
-
-      // 3. 원본 로그의 롤백 상태 업데이트
-      const updateMutation = '''
-        mutation UpdateAuditLog(\$input: UpdateAuditLogInput!) {
-          updateAuditLog(input: \$input) {
-            id
-          }
-        }
-      ''';
-
-      final updateRequest = GraphQLRequest<String>(
-        document: updateMutation,
-        variables: {
-          'input': {
-            'id': auditLogId,
-            'rolledBackAt': DateTime.now().toUtc().toIso8601String(),
-            'rolledBackBy': _currentUserId,
-            'canRollback': false,
-          }
-        },
-        authorizationMode: APIAuthorizationType.apiKey,
-      );
-
-      await Amplify.API.mutate(request: updateRequest).response;
-
-      // 4. 롤백 감사 로그 기록
-      await log(
-        action: AuditAction.rollback,
-        entityType: entityType,
-        entityId: entityId,
-        previousData: auditLog['newData'] != null
-            ? jsonDecode(auditLog['newData'] as String)
-            : null,
-        newData: previousData,
-        canRollback: false,
-      );
-
-      return true;
-    } catch (e) {
-      debugPrint('롤백 예외: $e');
-      return false;
-    }
-  }
-
-  Future<bool> _rollbackTeamInspectionData(
-    String entityId,
-    Map<String, dynamic> previousData,
-  ) async {
-    const mutation = '''
-      mutation UpdateTeamInspectionData(\$input: UpdateTeamInspectionDataInput!) {
-        updateTeamInspectionData(input: \$input) {
-          id
-        }
-      }
-    ''';
-
-    final input = <String, dynamic>{'id': entityId};
-
-    // 롤백 가능한 필드들만 복원
-    final rollbackFields = [
-      'isInspected',
-      'inspectionDate',
-      'scheduledDate',
-      'memo',
-      'remarks',
-      'photoKeys',
-    ];
-
-    for (final field in rollbackFields) {
-      if (previousData.containsKey(field)) {
-        input[field] = previousData[field];
-      }
-    }
-
-    try {
-      final request = GraphQLRequest<String>(
-        document: mutation,
-        variables: {'input': input},
-        authorizationMode: APIAuthorizationType.apiKey,
-      );
-
-      final response = await Amplify.API.mutate(request: request).response;
-      return response.errors.isEmpty;
-    } catch (e) {
-      debugPrint('TeamInspectionData 롤백 실패: $e');
-      return false;
-    }
-  }
-
-  Future<bool> _rollbackMasterStation(
-    String entityId,
-    Map<String, dynamic> previousData,
-  ) async {
-    const mutation = '''
-      mutation UpdateMasterStation(\$input: UpdateMasterStationInput!) {
-        updateMasterStation(input: \$input) {
-          id
-        }
-      }
-    ''';
-
-    final input = <String, dynamic>{'id': entityId};
-
-    final rollbackFields = [
-      'stationName',
-      'address',
-      'latitude',
-      'longitude',
-      'frequency',
-      'stationType',
-      'stationOwner',
-      'installationType',
-      'remarks',
-    ];
-
-    for (final field in rollbackFields) {
-      if (previousData.containsKey(field)) {
-        input[field] = previousData[field];
-      }
-    }
-
-    try {
-      final request = GraphQLRequest<String>(
-        document: mutation,
-        variables: {'input': input},
-        authorizationMode: APIAuthorizationType.apiKey,
-      );
-
-      final response = await Amplify.API.mutate(request: request).response;
-      return response.errors.isEmpty;
-    } catch (e) {
-      debugPrint('MasterStation 롤백 실패: $e');
-      return false;
-    }
-  }
-
-  Future<bool> _rollbackUserProfile(
-    String entityId,
-    Map<String, dynamic> previousData,
-  ) async {
-    const mutation = '''
-      mutation UpdateUserProfile(\$input: UpdateUserProfileInput!) {
-        updateUserProfile(input: \$input) {
-          id
-        }
-      }
-    ''';
-
-    final input = <String, dynamic>{'id': entityId};
-
-    final rollbackFields = [
-      'status',
-      'role',
-      'teamId',
-      'divisionId',
-    ];
-
-    for (final field in rollbackFields) {
-      if (previousData.containsKey(field)) {
-        input[field] = previousData[field];
-      }
-    }
-
-    try {
-      final request = GraphQLRequest<String>(
-        document: mutation,
-        variables: {'input': input},
-        authorizationMode: APIAuthorizationType.apiKey,
-      );
-
-      final response = await Amplify.API.mutate(request: request).response;
-      return response.errors.isEmpty;
-    } catch (e) {
-      debugPrint('UserProfile 롤백 실패: $e');
-      return false;
-    }
+    debugPrint('AuditService: rollback 호출 (EC2 API 구현 필요)');
+    return false;
   }
 }

@@ -24,7 +24,6 @@ class AuthService extends ChangeNotifier {
   String? _userName;
   String? _userDepartment; // 본부/부서
   String? _userTeam; // 팀
-  String? _userJobTitle; // 직책
 
   /// 세션 타임아웃 (2시간)
   static const Duration sessionTimeout = Duration(hours: 2);
@@ -36,7 +35,6 @@ class AuthService extends ChangeNotifier {
   static const String _userNameKey = 'user_name';
   static const String _userDepartmentKey = 'user_department';
   static const String _userTeamKey = 'user_team';
-  static const String _userJobTitleKey = 'user_job_title';
 
   /// 세션 타이머
   Timer? _sessionTimer;
@@ -56,7 +54,6 @@ class AuthService extends ChangeNotifier {
   String? get userName => _userName;
   String? get userDepartment => _userDepartment;
   String? get userTeam => _userTeam;
-  String? get userJobTitle => _userJobTitle;
 
   // 호환성 유지 - 역할/승인 관련 (기본값 반환)
   AppUserRole get userRole => AppUserRole.member;
@@ -96,7 +93,6 @@ class AuthService extends ChangeNotifier {
           _userName = prefs.getString(_userNameKey);
           _userDepartment = prefs.getString(_userDepartmentKey);
           _userTeam = prefs.getString(_userTeamKey);
-          _userJobTitle = prefs.getString(_userJobTitleKey);
           debugPrint('로그인 상태 복원: $_userId ($_userName)');
           _startSessionTimerWithExistingExpiry();
         }
@@ -112,9 +108,12 @@ class AuthService extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// SSO 로그인 프록시 URL (CORS 우회를 위해 API Gateway 경유)
-  static const String _loginUrl =
-      'https://c3jictzagh.execute-api.ap-northeast-2.amazonaws.com/auth/login';
+  /// SSO 로그인 프록시 URL (EC2 FastAPI 경유)
+  static const String _loginUrl = String.fromEnvironment(
+    'API_BASE_URL',
+    defaultValue: 'https://api-sko-kca.skone.net',
+  );
+  String get _loginEndpoint => '$_loginUrl/auth/login';
 
   /// 로그인 (SKons SSO 인증 + AppSync에서 사용자 정보 조회)
   Future<bool> signIn(String username, String password) async {
@@ -125,7 +124,7 @@ class AuthService extends ChangeNotifier {
     try {
       // 1. SKons SSO 인증
       final response = await http.post(
-        Uri.parse(_loginUrl),
+        Uri.parse(_loginEndpoint),
         headers: {
           'Content-Type': 'application/json',
         },
@@ -201,9 +200,7 @@ class AuthService extends ChangeNotifier {
     }
   }
 
-  /// FastAPI 서버(API Gateway)에서 사번으로 사용자 정보 조회
-  static const String _userApiBaseUrl =
-      'https://c3jictzagh.execute-api.ap-northeast-2.amazonaws.com';
+  /// FastAPI 서버(EC2)에서 사번으로 사용자 정보 조회
 
   /// 사용자 상세 정보를 비동기로 조회하여 UI 갱신
   void _lookupAndUpdateUserInfo(String empno) async {
@@ -212,7 +209,6 @@ class AuthService extends ChangeNotifier {
       _userName = userInfo['name'] as String? ?? empno;
       _userDepartment = userInfo['region'] as String?;
       _userTeam = userInfo['team'] as String?;
-      _userJobTitle = userInfo['job_title'] as String?;
       debugPrint('사용자 정보 업데이트: $_userName (본부: $_userDepartment, 팀: $_userTeam)');
       notifyListeners();
       _saveLoginState();
@@ -222,7 +218,7 @@ class AuthService extends ChangeNotifier {
   Future<Map<String, dynamic>?> _lookupUserFromApi(String empno) async {
     try {
       final response = await http.get(
-        Uri.parse('$_userApiBaseUrl/users/$empno'),
+        Uri.parse('$_loginUrl/users/$empno'),
         headers: {'Content-Type': 'application/json'},
       );
 
@@ -253,7 +249,6 @@ class AuthService extends ChangeNotifier {
     _userName = null;
     _userDepartment = null;
     _userTeam = null;
-    _userJobTitle = null;
 
     notifyListeners();
 
@@ -281,9 +276,6 @@ class AuthService extends ChangeNotifier {
       if (_userTeam != null) {
         await prefs.setString(_userTeamKey, _userTeam!);
       }
-      if (_userJobTitle != null) {
-        await prefs.setString(_userJobTitleKey, _userJobTitle!);
-      }
     } catch (e) {
       debugPrint('로그인 상태 저장 오류: $e');
     }
@@ -297,7 +289,6 @@ class AuthService extends ChangeNotifier {
       await prefs.remove(_userNameKey);
       await prefs.remove(_userDepartmentKey);
       await prefs.remove(_userTeamKey);
-      await prefs.remove(_userJobTitleKey);
       await _clearSessionExpiry();
     } catch (e) {
       debugPrint('로그인 상태 삭제 오류: $e');
@@ -399,7 +390,6 @@ class AuthService extends ChangeNotifier {
     _userName = null;
     _userDepartment = null;
     _userTeam = null;
-    _userJobTitle = null;
 
     notifyListeners();
 

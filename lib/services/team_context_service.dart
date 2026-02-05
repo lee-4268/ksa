@@ -1,7 +1,6 @@
 import 'dart:convert';
-import 'package:amplify_flutter/amplify_flutter.dart';
-import 'package:amplify_api/amplify_api.dart';
 import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
 
 /// 사용자 역할
 enum UserRole {
@@ -110,15 +109,15 @@ class AppUserProfile {
   factory AppUserProfile.fromJson(Map<String, dynamic> json) {
     return AppUserProfile(
       id: json['id'] as String,
-      cognitoUserId: json['cognitoUserId'] as String,
-      email: json['email'] as String,
+      cognitoUserId: json['cognitoUserId'] as String? ?? json['empno'] as String? ?? '',
+      email: json['email'] as String? ?? '',
       name: json['name'] as String?,
       phoneNumber: json['phoneNumber'] as String?,
       teamId: json['teamId'] as String?,
       divisionId: json['divisionId'] as String?,
       status: UserStatus.values.firstWhere(
         (s) => s.name.toUpperCase() == json['status'],
-        orElse: () => UserStatus.pending,
+        orElse: () => UserStatus.approved, // i-NET 사용자는 기본 APPROVED
       ),
       role: UserRole.values.firstWhere(
         (r) => r.name.toUpperCase() == (json['role'] as String?)?.replaceAll('_', ''),
@@ -141,8 +140,14 @@ class AppUserProfile {
   bool get isSuspended => status == UserStatus.suspended;
 }
 
-/// 팀 컨텍스트 서비스 - 현재 사용자의 팀/본부 정보 관리
+/// 팀 컨텍스트 서비스 - 현재 사용자의 팀/본부 정보 관리 (EC2 REST API 사용)
 class TeamContextService extends ChangeNotifier {
+  /// API 서버 URL
+  static const String _baseUrl = String.fromEnvironment(
+    'API_BASE_URL',
+    defaultValue: 'https://api-sko-kca.skone.net',
+  );
+
   AppUserProfile? _currentProfile;
   Team? _currentTeam;
   Division? _currentDivision;
@@ -166,7 +171,7 @@ class TeamContextService extends ChangeNotifier {
   String? get currentDivisionName => _currentDivision?.name;
 
   UserRole get currentRole => _currentProfile?.role ?? UserRole.member;
-  UserStatus get currentStatus => _currentProfile?.status ?? UserStatus.pending;
+  UserStatus get currentStatus => _currentProfile?.status ?? UserStatus.approved;
 
   bool get isSuperAdmin => currentRole == UserRole.superAdmin;
   bool get isDivisionAdmin => currentRole == UserRole.divisionAdmin || isSuperAdmin;
@@ -178,78 +183,62 @@ class TeamContextService extends ChangeNotifier {
   bool get canViewAuditLogs => isTeamAdmin;
   bool get canApproveUsers => isTeamAdmin;
 
-  bool get isPending => _currentProfile?.isPending ?? true;
-  bool get isApproved => _currentProfile?.isApproved ?? false;
+  bool get isPending => _currentProfile?.isPending ?? false;
+  bool get isApproved => _currentProfile?.isApproved ?? true; // i-NET 사용자는 기본 승인
 
-  /// Cognito 사용자 ID로 프로필 로드
-  Future<void> loadUserProfile(String cognitoUserId) async {
+  /// 사번으로 사용자 프로필 로드 (EC2 경유 DynamoDB)
+  Future<void> loadUserProfile(String empno) async {
     _isLoading = true;
     _errorMessage = null;
     notifyListeners();
 
-    const query = '''
-      query GetUserProfile(\$cognitoUserId: String!) {
-        userProfileByCognitoId(cognitoUserId: \$cognitoUserId) {
-          items {
-            id
-            cognitoUserId
-            email
-            name
-            phoneNumber
-            teamId
-            divisionId
-            status
-            role
-            approvedBy
-            approvedAt
-            rejectionReason
-            team {
-              id
-              divisionId
-              name
-              code
-              description
-              division {
-                id
-                name
-                code
-                description
-              }
-            }
-          }
-        }
-      }
-    ''';
-
     try {
-      final request = GraphQLRequest<String>(
-        document: query,
-        variables: {'cognitoUserId': cognitoUserId},
-        authorizationMode: APIAuthorizationType.apiKey,
+      final response = await http.get(
+        Uri.parse('$_baseUrl/users/$empno'),
+        headers: {'Accept': 'application/json'},
       );
 
-      final response = await Amplify.API.query(request: request).response;
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        if (data['success'] == true) {
+          // 사용자 정보를 AppUserProfile로 변환
+          _currentProfile = AppUserProfile(
+            id: empno,
+            cognitoUserId: empno,
+            email: data['email'] as String? ?? '',
+            name: data['name'] as String?,
+            phoneNumber: data['phone'] as String?,
+            teamId: null, // i-NET 테이블에서 team 필드명 확인 필요
+            divisionId: null,
+            status: UserStatus.approved, // i-NET 사용자는 자동 승인
+            role: UserRole.member,
+          );
 
-      if (response.errors.isNotEmpty) {
-        _errorMessage = '프로필 로드 실패: ${response.errors.first.message}';
-        _isLoading = false;
-        notifyListeners();
-        return;
-      }
+          // 본부/팀 정보 설정 (i-NET 테이블 구조에 따라 수정 필요)
+          if (data['region'] != null) {
+            _currentDivision = Division(
+              id: data['region'] as String,
+              name: data['region'] as String,
+              code: data['region'] as String,
+            );
+          }
+          if (data['team'] != null) {
+            _currentTeam = Team(
+              id: data['team'] as String,
+              divisionId: _currentDivision?.id ?? '',
+              name: data['team'] as String,
+              code: data['team'] as String,
+              division: _currentDivision,
+            );
+          }
 
-      final data = jsonDecode(response.data!) as Map<String, dynamic>;
-      final items = data['userProfileByCognitoId']['items'] as List<dynamic>;
-
-      if (items.isEmpty) {
-        // 프로필이 없으면 새로 생성 필요
-        _currentProfile = null;
-        _currentTeam = null;
-        _currentDivision = null;
+          debugPrint('사용자 프로필 로드 완료: ${_currentProfile?.name}');
+        } else {
+          debugPrint('사용자 정보 없음: $empno');
+          _currentProfile = null;
+        }
       } else {
-        final profileData = items.first as Map<String, dynamic>;
-        _currentProfile = AppUserProfile.fromJson(profileData);
-        _currentTeam = _currentProfile?.team;
-        _currentDivision = _currentTeam?.division;
+        debugPrint('사용자 프로필 로드 실패: ${response.statusCode}');
       }
 
       _isLoading = false;
@@ -261,215 +250,46 @@ class TeamContextService extends ChangeNotifier {
     }
   }
 
-  /// 새 사용자 프로필 생성 (회원가입 시)
+  /// 새 사용자 프로필 생성 (i-NET 인증에서는 불필요)
   Future<AppUserProfile?> createUserProfile({
     required String cognitoUserId,
     required String email,
     String? name,
     String? phoneNumber,
   }) async {
-    const mutation = '''
-      mutation CreateUserProfile(\$input: CreateUserProfileInput!) {
-        createUserProfile(input: \$input) {
-          id
-          cognitoUserId
-          email
-          name
-          phoneNumber
-          status
-          role
-          createdAt
-        }
-      }
-    ''';
-
-    final input = <String, dynamic>{
-      'cognitoUserId': cognitoUserId,
-      'email': email,
-      'status': 'PENDING',
-      'role': 'MEMBER',
-    };
-
-    if (name != null) input['name'] = name;
-    if (phoneNumber != null) input['phoneNumber'] = phoneNumber;
-
-    try {
-      final request = GraphQLRequest<String>(
-        document: mutation,
-        variables: {'input': input},
-        authorizationMode: APIAuthorizationType.apiKey,
-      );
-
-      final response = await Amplify.API.mutate(request: request).response;
-
-      if (response.errors.isNotEmpty) {
-        debugPrint('프로필 생성 실패: ${response.errors}');
-        return null;
-      }
-
-      final data = jsonDecode(response.data!) as Map<String, dynamic>;
-      final profileData = data['createUserProfile'] as Map<String, dynamic>;
-
-      _currentProfile = AppUserProfile.fromJson(profileData);
-      notifyListeners();
-
-      return _currentProfile;
-    } catch (e) {
-      debugPrint('프로필 생성 오류: $e');
-      return null;
-    }
+    // i-NET 인증에서는 프로필 생성 불필요 (이미 존재함)
+    debugPrint('createUserProfile: i-NET 인증에서는 불필요');
+    return null;
   }
 
-  /// 모든 본부 목록 조회 (관리자용)
+  /// 모든 본부 목록 조회 (현재 stub - EC2 API 추가 필요)
   Future<void> loadDivisions() async {
     _isLoading = true;
     notifyListeners();
 
-    const query = '''
-      query ListDivisions {
-        listDivisions(limit: 100) {
-          items {
-            id
-            name
-            code
-            description
-          }
-        }
-      }
-    ''';
+    // EC2 API에 divisions 엔드포인트 추가 필요
+    debugPrint('loadDivisions: EC2 API 구현 필요');
 
-    try {
-      final request = GraphQLRequest<String>(
-        document: query,
-        authorizationMode: APIAuthorizationType.apiKey,
-      );
-
-      final response = await Amplify.API.query(request: request).response;
-
-      if (response.errors.isNotEmpty) {
-        debugPrint('본부 목록 로드 실패: ${response.errors}');
-        _isLoading = false;
-        notifyListeners();
-        return;
-      }
-
-      final data = jsonDecode(response.data!) as Map<String, dynamic>;
-      final items = data['listDivisions']['items'] as List<dynamic>;
-
-      _availableDivisions = items
-          .where((item) => item != null)
-          .map((item) => Division.fromJson(item as Map<String, dynamic>))
-          .toList();
-
-      debugPrint('본부 목록 로드 완료: ${_availableDivisions.length}개');
-      _isLoading = false;
-      notifyListeners();
-    } catch (e) {
-      debugPrint('본부 목록 로드 오류: $e');
-      _isLoading = false;
-      notifyListeners();
-    }
+    _isLoading = false;
+    notifyListeners();
   }
 
-  /// 특정 본부의 팀 목록 조회
+  /// 특정 본부의 팀 목록 조회 (현재 stub - EC2 API 추가 필요)
   Future<void> loadTeamsByDivision(String divisionId) async {
-    const query = '''
-      query ListTeamsByDivision(\$divisionId: ID!) {
-        teamsByDivisionIdAndName(divisionId: \$divisionId, limit: 100) {
-          items {
-            id
-            divisionId
-            name
-            code
-            description
-          }
-        }
-      }
-    ''';
-
-    try {
-      final request = GraphQLRequest<String>(
-        document: query,
-        variables: {'divisionId': divisionId},
-        authorizationMode: APIAuthorizationType.apiKey,
-      );
-
-      final response = await Amplify.API.query(request: request).response;
-
-      if (response.errors.isNotEmpty) {
-        debugPrint('팀 목록 로드 실패: ${response.errors}');
-        return;
-      }
-
-      final data = jsonDecode(response.data!) as Map<String, dynamic>;
-      final items = data['teamsByDivisionIdAndName']['items'] as List<dynamic>;
-
-      _availableTeams = items
-          .map((item) => Team.fromJson(item as Map<String, dynamic>))
-          .toList();
-
-      notifyListeners();
-    } catch (e) {
-      debugPrint('팀 목록 로드 오류: $e');
-    }
+    // EC2 API에 teams 엔드포인트 추가 필요
+    debugPrint('loadTeamsByDivision: EC2 API 구현 필요');
   }
 
-  /// 모든 팀 목록 조회
+  /// 모든 팀 목록 조회 (현재 stub - EC2 API 추가 필요)
   Future<void> loadAllTeams() async {
     _isLoading = true;
     notifyListeners();
 
-    const query = '''
-      query ListTeams {
-        listTeams(limit: 100) {
-          items {
-            id
-            divisionId
-            name
-            code
-            description
-            division {
-              id
-              name
-              code
-              description
-            }
-          }
-        }
-      }
-    ''';
+    // EC2 API에 teams 엔드포인트 추가 필요
+    debugPrint('loadAllTeams: EC2 API 구현 필요');
 
-    try {
-      final request = GraphQLRequest<String>(
-        document: query,
-        authorizationMode: APIAuthorizationType.apiKey,
-      );
-
-      final response = await Amplify.API.query(request: request).response;
-
-      if (response.errors.isNotEmpty) {
-        debugPrint('팀 목록 로드 실패: ${response.errors}');
-        _isLoading = false;
-        notifyListeners();
-        return;
-      }
-
-      final data = jsonDecode(response.data!) as Map<String, dynamic>;
-      final items = data['listTeams']['items'] as List<dynamic>;
-
-      _availableTeams = items
-          .where((item) => item != null)
-          .map((item) => Team.fromJson(item as Map<String, dynamic>))
-          .toList();
-
-      debugPrint('팀 목록 로드 완료: ${_availableTeams.length}개');
-      _isLoading = false;
-      notifyListeners();
-    } catch (e) {
-      debugPrint('팀 목록 로드 오류: $e');
-      _isLoading = false;
-      notifyListeners();
-    }
+    _isLoading = false;
+    notifyListeners();
   }
 
   /// 승인 상태 새로고침
