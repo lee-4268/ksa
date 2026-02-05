@@ -8,7 +8,7 @@ class PhotoStorageService {
   /// API 서버 URL (EC2 FastAPI)
   static const String _baseUrl = String.fromEnvironment(
     'API_BASE_URL',
-    defaultValue: 'https://api-sko-kca.skone.net',
+    defaultValue: 'https://api-sko-kca.skons.net',
   );
 
   /// S3 Storage가 설정되어 있는지 확인

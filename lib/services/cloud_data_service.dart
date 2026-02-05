@@ -12,7 +12,7 @@ class CloudDataService extends ChangeNotifier {
   /// API 서버 URL (EC2 FastAPI)
   static const String _baseUrl = String.fromEnvironment(
     'API_BASE_URL',
-    defaultValue: 'https://api-sko-kca.skone.net',
+    defaultValue: 'https://api-sko-kca.skons.net',
   );
 
   /// 앱 레벨 사용자 격리용 userId (사번)

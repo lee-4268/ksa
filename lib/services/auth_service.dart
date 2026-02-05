@@ -111,7 +111,7 @@ class AuthService extends ChangeNotifier {
   /// SSO 로그인 프록시 URL (EC2 FastAPI 경유)
   static const String _loginUrl = String.fromEnvironment(
     'API_BASE_URL',
-    defaultValue: 'https://api-sko-kca.skone.net',
+    defaultValue: 'https://api-sko-kca.skons.net',
   );
   String get _loginEndpoint => '$_loginUrl/auth/login';
 

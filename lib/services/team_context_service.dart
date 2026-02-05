@@ -145,7 +145,7 @@ class TeamContextService extends ChangeNotifier {
   /// API 서버 URL
   static const String _baseUrl = String.fromEnvironment(
     'API_BASE_URL',
-    defaultValue: 'https://api-sko-kca.skone.net',
+    defaultValue: 'https://api-sko-kca.skons.net',
   );
 
   AppUserProfile? _currentProfile;
