@@ -79,8 +79,6 @@ class UserProfileButton extends StatelessWidget {
                       _buildInfoRow('사번', auth.userId),
                       _buildInfoRow('본부', auth.userDepartment),
                       _buildInfoRow('팀', auth.userTeam),
-                      if (auth.userJobTitle != null)
-                        _buildInfoRow('직책', auth.userJobTitle),
                       const SizedBox(height: 16),
                       // 로그아웃 버튼
                       SizedBox(
