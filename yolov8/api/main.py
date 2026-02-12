@@ -199,6 +199,7 @@ class StationCreate(BaseModel):
     stationOwner: Optional[str] = None
     installationType: Optional[str] = None
     isInspected: bool = False
+    inspectionStatus: Optional[str] = None  # pending, passed, failed
     inspectionDate: Optional[str] = None
     memo: Optional[str] = None
     photoKeys: Optional[List[str]] = None
@@ -220,6 +221,7 @@ class StationUpdate(BaseModel):
     stationOwner: Optional[str] = None
     installationType: Optional[str] = None
     isInspected: Optional[bool] = None
+    inspectionStatus: Optional[str] = None  # pending, passed, failed
     inspectionDate: Optional[str] = None
     memo: Optional[str] = None
     photoKeys: Optional[List[str]] = None
@@ -987,8 +989,8 @@ async def create_station(station: StationCreate):
         optional_fields = [
             "licenseNumber", "latitude", "longitude", "callSign", "gain",
             "antennaCount", "remarks", "typeApprovalNumber", "frequency",
-            "stationType", "stationOwner", "installationType", "inspectionDate",
-            "memo", "photoKeys"
+            "stationType", "stationOwner", "installationType", "inspectionStatus",
+            "inspectionDate", "memo", "photoKeys"
         ]
         for field in optional_fields:
             value = getattr(station, field)

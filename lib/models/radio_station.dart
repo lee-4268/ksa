@@ -2,6 +2,19 @@ import 'package:hive/hive.dart';
 
 part 'radio_station.g.dart';
 
+/// 검사 상태 enum
+@HiveType(typeId: 1)
+enum InspectionStatus {
+  @HiveField(0)
+  pending,    // 검사 대기
+
+  @HiveField(1)
+  passed,     // 합격
+
+  @HiveField(2)
+  failed,     // 불합격
+}
+
 @HiveType(typeId: 0)
 class RadioStation extends HiveObject {
   @HiveField(0)
@@ -38,7 +51,7 @@ class RadioStation extends HiveObject {
   DateTime? inspectionDate; // 검사일
 
   @HiveField(11)
-  bool isInspected; // 검사 완료 여부
+  InspectionStatus inspectionStatus; // 검사 상태 (대기/합격/불합격)
 
   @HiveField(12)
   DateTime createdAt;
@@ -88,7 +101,7 @@ class RadioStation extends HiveObject {
     this.stationType,
     this.owner,
     this.inspectionDate,
-    this.isInspected = false,
+    this.inspectionStatus = InspectionStatus.pending,
     DateTime? createdAt,
     DateTime? updatedAt,
     this.callSign,
@@ -116,7 +129,7 @@ class RadioStation extends HiveObject {
     String? stationType,
     String? owner,
     DateTime? inspectionDate,
-    bool? isInspected,
+    InspectionStatus? inspectionStatus,
     DateTime? createdAt,
     DateTime? updatedAt,
     String? callSign,
@@ -142,7 +155,7 @@ class RadioStation extends HiveObject {
       stationType: stationType ?? this.stationType,
       owner: owner ?? this.owner,
       inspectionDate: inspectionDate ?? this.inspectionDate,
-      isInspected: isInspected ?? this.isInspected,
+      inspectionStatus: inspectionStatus ?? this.inspectionStatus,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? DateTime.now(),
       callSign: callSign ?? this.callSign,
@@ -171,7 +184,7 @@ class RadioStation extends HiveObject {
       'stationType': stationType,
       'owner': owner,
       'inspectionDate': inspectionDate?.toIso8601String(),
-      'isInspected': isInspected,
+      'inspectionStatus': inspectionStatus.name, // enum을 문자열로 저장
       'createdAt': createdAt.toIso8601String(),
       'updatedAt': updatedAt.toIso8601String(),
       'callSign': callSign,
@@ -188,6 +201,19 @@ class RadioStation extends HiveObject {
   }
 
   factory RadioStation.fromJson(Map<String, dynamic> json) {
+    // 기존 isInspected 필드와의 호환성 처리
+    InspectionStatus status = InspectionStatus.pending;
+    if (json['inspectionStatus'] != null) {
+      final statusStr = json['inspectionStatus'] as String;
+      status = InspectionStatus.values.firstWhere(
+        (e) => e.name == statusStr,
+        orElse: () => InspectionStatus.pending,
+      );
+    } else if (json['isInspected'] == true) {
+      // 기존 데이터 마이그레이션: isInspected가 true면 passed로 처리
+      status = InspectionStatus.passed;
+    }
+
     return RadioStation(
       id: json['id'] as String,
       stationName: json['stationName'] as String,
@@ -202,7 +228,7 @@ class RadioStation extends HiveObject {
       inspectionDate: json['inspectionDate'] != null
           ? DateTime.parse(json['inspectionDate'] as String)
           : null,
-      isInspected: json['isInspected'] as bool? ?? false,
+      inspectionStatus: status,
       createdAt: json['createdAt'] != null
           ? DateTime.parse(json['createdAt'] as String)
           : DateTime.now(),
@@ -228,4 +254,20 @@ class RadioStation extends HiveObject {
   String get displayName => callSign?.isNotEmpty == true ? callSign! : stationName;
 
   bool get hasCoordinates => latitude != null && longitude != null;
+
+  /// 검사 완료 여부 (합격 또는 불합격이면 검사 완료)
+  /// 기존 코드와의 호환성을 위한 헬퍼 getter
+  bool get isInspected => inspectionStatus != InspectionStatus.pending;
+
+  /// 검사 상태 표시 텍스트
+  String get inspectionStatusText {
+    switch (inspectionStatus) {
+      case InspectionStatus.pending:
+        return '검사 대기';
+      case InspectionStatus.passed:
+        return '합격';
+      case InspectionStatus.failed:
+        return '불합격';
+    }
+  }
 }

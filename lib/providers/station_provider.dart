@@ -541,15 +541,16 @@ class StationProvider extends ChangeNotifier {
     }
   }
 
-  /// 검사 완료 상태 업데이트 (자동 클라우드 동기화)
-  Future<void> updateInspectionStatus(String id, bool isInspected) async {
+  /// 검사 상태 업데이트 (자동 클라우드 동기화)
+  /// status: InspectionStatus.pending (대기), InspectionStatus.passed (합격), InspectionStatus.failed (불합격)
+  Future<void> updateInspectionStatus(String id, InspectionStatus status) async {
     try {
-      await _storageService.updateInspectionStatus(id, isInspected);
+      await _storageService.updateInspectionStatus(id, status);
       final index = _stations.indexWhere((s) => s.id == id);
       if (index != -1) {
         _stations[index] = _stations[index].copyWith(
-          isInspected: isInspected,
-          inspectionDate: isInspected ? DateTime.now() : null,
+          inspectionStatus: status,
+          inspectionDate: status != InspectionStatus.pending ? DateTime.now() : null,
         );
         if (_selectedStation?.id == id) {
           _selectedStation = _stations[index];

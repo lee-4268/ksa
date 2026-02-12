@@ -1422,18 +1422,18 @@ class _MapScreenState extends State<MapScreen>
                     spacing: 4,
                     runSpacing: 4,
                     children: [
-                      // 검사 상태 태그
+                      // 검사 상태 태그 (3가지 상태)
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                         decoration: BoxDecoration(
-                          color: station.isInspected ? Colors.green.shade50 : Colors.orange.shade50,
+                          color: _getStatusColor(station.inspectionStatus).withValues(alpha: 0.15),
                           borderRadius: BorderRadius.circular(4),
                         ),
                         child: Text(
-                          station.isInspected ? '검사완료' : '검사대기',
+                          station.inspectionStatusText,
                           style: TextStyle(
                             fontSize: 10,
-                            color: station.isInspected ? Colors.green[700] : Colors.orange[700],
+                            color: _getStatusColor(station.inspectionStatus),
                             fontWeight: FontWeight.w500,
                           ),
                         ),
@@ -1459,6 +1459,18 @@ class _MapScreenState extends State<MapScreen>
         ),
       ),
     );
+  }
+
+  /// 검사 상태별 색상
+  Color _getStatusColor(InspectionStatus status) {
+    switch (status) {
+      case InspectionStatus.pending:
+        return Colors.orange;
+      case InspectionStatus.passed:
+        return Colors.green;
+      case InspectionStatus.failed:
+        return Colors.red;
+    }
   }
 
   Widget _buildSmallTag(String text) {

@@ -165,7 +165,8 @@ class CloudDataService extends ChangeNotifier {
         'stationType': station.stationType,
         'stationOwner': station.owner,
         'installationType': station.installationType,
-        'isInspected': station.isInspected,
+        'isInspected': station.isInspected, // 하위 호환성
+        'inspectionStatus': station.inspectionStatus.name, // 3가지 상태 (pending/passed/failed)
         'inspectionDate': station.inspectionDate?.toUtc().toIso8601String(),
         'memo': station.memo,
         'photoKeys': station.photoPaths,
@@ -286,11 +287,15 @@ class CloudDataService extends ChangeNotifier {
         'stationType': station.stationType,
         'stationOwner': station.owner,
         'installationType': station.installationType,
-        'isInspected': station.isInspected,
+        'isInspected': station.isInspected, // 하위 호환성
+        'inspectionStatus': station.inspectionStatus.name, // 3가지 상태 (pending/passed/failed)
         'inspectionDate': station.inspectionDate?.toUtc().toIso8601String(),
         'memo': station.memo,
         'photoKeys': station.photoPaths,
       };
+
+      // 디버그: 서버로 전송하는 검사 상태 확인
+      debugPrint('서버 전송 - id: ${station.id}, inspectionStatus: ${station.inspectionStatus.name}, isInspected: ${station.isInspected}');
 
       final response = await http.put(
         Uri.parse('$_baseUrl/stations/${station.id}'),
@@ -303,6 +308,7 @@ class CloudDataService extends ChangeNotifier {
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
+        debugPrint('서버 응답: ${response.body}');
         if (data['success'] == true) {
           debugPrint('무선국 업데이트 완료: ${station.id}');
           return true;
@@ -451,6 +457,26 @@ class CloudDataService extends ChangeNotifier {
 
   RadioStation _mapToRadioStation(Map<String, dynamic> data) {
     final installationType = data['installationType'] as String?;
+
+    // inspectionStatus 파싱 (3가지 상태 지원)
+    InspectionStatus inspectionStatus = InspectionStatus.pending;
+
+    // 디버그: 서버에서 받은 검사 상태 필드 확인
+    debugPrint('서버 응답 - id: ${data['id']}, inspectionStatus: ${data['inspectionStatus']}, isInspected: ${data['isInspected']}');
+
+    if (data['inspectionStatus'] != null) {
+      final statusStr = data['inspectionStatus'] as String;
+      inspectionStatus = InspectionStatus.values.firstWhere(
+        (e) => e.name == statusStr,
+        orElse: () => InspectionStatus.pending,
+      );
+      debugPrint('  -> inspectionStatus 필드 사용: $statusStr -> $inspectionStatus');
+    } else if (data['isInspected'] == true) {
+      // 기존 데이터 마이그레이션: isInspected가 true면 passed로 처리
+      inspectionStatus = InspectionStatus.passed;
+      debugPrint('  -> ⚠️ isInspected 폴백 사용: passed로 설정됨 (서버에서 inspectionStatus 필드 미반환!)');
+    }
+
     return RadioStation(
       id: data['id'] as String? ?? '',
       stationName: data['stationName'] as String? ?? '',
@@ -468,7 +494,7 @@ class CloudDataService extends ChangeNotifier {
       owner: data['stationOwner'] as String?,
       installationType: installationType,
       originalInstallationType: installationType,
-      isInspected: data['isInspected'] as bool? ?? false,
+      inspectionStatus: inspectionStatus,
       inspectionDate: data['inspectionDate'] != null
           ? DateTime.tryParse(data['inspectionDate'] as String)
           : null,

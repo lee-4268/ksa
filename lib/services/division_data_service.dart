@@ -439,7 +439,7 @@ class DivisionInspectionTarget {
       remarks: remarks,
       installationType: installationType,
       originalInstallationType: originalInstallationType,
-      isInspected: isInspected,
+      inspectionStatus: isInspected ? InspectionStatus.passed : InspectionStatus.pending,
       inspectionDate: inspectionDate,
       scheduledDate: scheduledDate,
       memo: memo,

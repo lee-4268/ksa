@@ -74,6 +74,30 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
     html.document.body?.append(html.ScriptElement()..text = jsCode);
   }
 
+  /// 검사 상태별 색상
+  Color _getStatusColor(InspectionStatus status) {
+    switch (status) {
+      case InspectionStatus.pending:
+        return Colors.blue;
+      case InspectionStatus.passed:
+        return Colors.green;
+      case InspectionStatus.failed:
+        return Colors.red;
+    }
+  }
+
+  /// 검사 상태별 아이콘
+  IconData _getStatusIcon(InspectionStatus status) {
+    switch (status) {
+      case InspectionStatus.pending:
+        return Icons.hourglass_empty;
+      case InspectionStatus.passed:
+        return Icons.check_circle;
+      case InspectionStatus.failed:
+        return Icons.cancel;
+    }
+  }
+
   /// GPS 현재 위치 가져오기 및 맵 중앙 이동
   void moveToCurrentLocation({Function(double lat, double lng)? onSuccess, Function(String error)? onError}) {
     final jsCode = '''
@@ -380,23 +404,42 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
             separatorBuilder: (_, _) => const Divider(height: 1),
             itemBuilder: (context, index) {
               final station = stations[index];
+              final statusColor = _getStatusColor(station.inspectionStatus);
               return ListTile(
                 leading: Icon(
                   Icons.location_on,
-                  color: station.isInspected ? Colors.red : Colors.blue,
+                  color: statusColor,
                 ),
                 title: Text(
                   station.displayName,
                   style: const TextStyle(fontWeight: FontWeight.w600),
                 ),
-                subtitle: Text(
-                  station.address,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                subtitle: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                      decoration: BoxDecoration(
+                        color: statusColor.withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(3),
+                      ),
+                      child: Text(
+                        station.inspectionStatusText,
+                        style: TextStyle(fontSize: 10, color: statusColor, fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        station.address,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+                      ),
+                    ),
+                  ],
                 ),
-                trailing: station.isInspected
-                    ? const Icon(Icons.check_circle, color: Colors.green, size: 20)
+                trailing: station.inspectionStatus != InspectionStatus.pending
+                    ? Icon(_getStatusIcon(station.inspectionStatus), color: statusColor, size: 20)
                     : null,
                 onTap: () {
                   stationSelected = true; // 국소 선택됨
@@ -632,8 +675,28 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
     final escapedAddress = _escapeJs(station.address);
     final escapedId = _escapeJs(station.id);
     final isInspected = station.isInspected;
+    final inspectionStatus = station.inspectionStatus;
+    final inspectionStatusText = station.inspectionStatusText;
     final markerImagePath = isInspected ? _inspectedMarkerPath : _pendingMarkerPath;
     final labelColor = isInspected ? '#FF0000' : '#0066CC';
+
+    // 검사 상태별 색상 및 아이콘 (InfoWindow용)
+    String statusColor;
+    String statusIcon;
+    switch (inspectionStatus) {
+      case InspectionStatus.passed:
+        statusColor = '#4CAF50'; // 녹색
+        statusIcon = '✓';
+        break;
+      case InspectionStatus.failed:
+        statusColor = '#F44336'; // 빨강
+        statusIcon = '✗';
+        break;
+      case InspectionStatus.pending:
+        statusColor = '#FF9800'; // 주황
+        statusIcon = '○';
+        break;
+    }
 
     final addMarkerJs = '''
       (function() {
@@ -703,11 +766,10 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
         }
         window['kakaoMapMarkers_$_containerId'].push(marker);
 
-        var isInspectedFlag = ${isInspected ? 'true' : 'false'};
         var iwContent = '<div style="padding:12px 16px;width:250px;font-size:13px;box-sizing:border-box;">' +
           '<div style="color:#333;font-weight:bold;margin-bottom:8px;word-break:keep-all;line-height:1.4;">$escapedName</div>' +
           '<div style="color:#666;font-size:12px;line-height:1.5;word-wrap:break-word;white-space:pre-wrap;">$escapedAddress</div>' +
-          (isInspectedFlag ? '<div style="color:#FF0000;font-size:11px;font-weight:bold;margin-top:8px;">✓ 검사완료</div>' : '') +
+          '<div style="color:$statusColor;font-size:11px;font-weight:bold;margin-top:8px;">$statusIcon $inspectionStatusText</div>' +
           '</div>';
 
         kakao.maps.event.addListener(marker, 'click', function() {

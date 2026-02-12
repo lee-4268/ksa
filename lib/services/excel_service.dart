@@ -1436,10 +1436,9 @@ class ExcelService {
         sheet.cell(excel_pkg.CellIndex.indexByColumnRow(columnIndex: 9, rowIndex: rowIndex))
             .value = excel_pkg.TextCellValue(station.memo ?? '');
 
-        // 검사상태
-        final inspectionStatus = station.isInspected ? '검사완료' : '검사대기';
+        // 검사상태 (3가지: 검사 대기, 합격, 불합격)
         sheet.cell(excel_pkg.CellIndex.indexByColumnRow(columnIndex: 10, rowIndex: rowIndex))
-            .value = excel_pkg.TextCellValue(inspectionStatus);
+            .value = excel_pkg.TextCellValue(station.inspectionStatusText);
 
         // 사진 파일 정보 수집 (국소명 폴더/파일명 구조)
         if (station.photoPaths != null && station.photoPaths!.isNotEmpty) {
@@ -2160,8 +2159,8 @@ class ExcelService {
               newCell1 = '<c r="$col1Letter$rowNum"$styleAttr><v></v></c>';
             }
 
-            // 2. 수검여부 - 항상 값 출력
-            final inspectionText = matchedStation.isInspected ? '검사완료' : '검사대기';
+            // 2. 수검여부 - 항상 값 출력 (3가지: 검사 대기, 합격, 불합격)
+            final inspectionText = matchedStation.inspectionStatusText;
             final inspectionIdx = getOrAddStringIndex(inspectionText);
             newCell2 = '<c r="$col2Letter$rowNum"$styleAttr t="s"><v>$inspectionIdx</v></c>';
 

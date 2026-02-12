@@ -16,6 +16,19 @@ class RadioStationAdapter extends TypeAdapter<RadioStation> {
     final fields = <int, dynamic>{
       for (int i = 0; i < numOfFields; i++) reader.readByte(): reader.read(),
     };
+
+    // 기존 bool 데이터와의 호환성 처리 (마이그레이션)
+    InspectionStatus inspectionStatus;
+    final field11 = fields[11];
+    if (field11 is InspectionStatus) {
+      inspectionStatus = field11;
+    } else if (field11 is bool) {
+      // 기존 isInspected boolean -> InspectionStatus 변환
+      inspectionStatus = field11 ? InspectionStatus.passed : InspectionStatus.pending;
+    } else {
+      inspectionStatus = InspectionStatus.pending;
+    }
+
     return RadioStation(
       id: fields[0] as String,
       stationName: fields[1] as String,
@@ -28,7 +41,7 @@ class RadioStationAdapter extends TypeAdapter<RadioStation> {
       stationType: fields[8] as String?,
       owner: fields[9] as String?,
       inspectionDate: fields[10] as DateTime?,
-      isInspected: fields[11] as bool,
+      inspectionStatus: inspectionStatus,
       createdAt: fields[12] as DateTime?,
       updatedAt: fields[13] as DateTime?,
       callSign: fields[14] as String?,
@@ -71,7 +84,7 @@ class RadioStationAdapter extends TypeAdapter<RadioStation> {
       ..writeByte(10)
       ..write(obj.inspectionDate)
       ..writeByte(11)
-      ..write(obj.isInspected)
+      ..write(obj.inspectionStatus)
       ..writeByte(12)
       ..write(obj.createdAt)
       ..writeByte(13)
@@ -105,6 +118,50 @@ class RadioStationAdapter extends TypeAdapter<RadioStation> {
   bool operator ==(Object other) =>
       identical(this, other) ||
       other is RadioStationAdapter &&
+          runtimeType == other.runtimeType &&
+          typeId == other.typeId;
+}
+
+class InspectionStatusAdapter extends TypeAdapter<InspectionStatus> {
+  @override
+  final int typeId = 1;
+
+  @override
+  InspectionStatus read(BinaryReader reader) {
+    switch (reader.readByte()) {
+      case 0:
+        return InspectionStatus.pending;
+      case 1:
+        return InspectionStatus.passed;
+      case 2:
+        return InspectionStatus.failed;
+      default:
+        return InspectionStatus.pending;
+    }
+  }
+
+  @override
+  void write(BinaryWriter writer, InspectionStatus obj) {
+    switch (obj) {
+      case InspectionStatus.pending:
+        writer.writeByte(0);
+        break;
+      case InspectionStatus.passed:
+        writer.writeByte(1);
+        break;
+      case InspectionStatus.failed:
+        writer.writeByte(2);
+        break;
+    }
+  }
+
+  @override
+  int get hashCode => typeId.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is InspectionStatusAdapter &&
           runtimeType == other.runtimeType &&
           typeId == other.typeId;
 }

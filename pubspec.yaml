@@ -40,6 +40,9 @@ dependencies:
   # URL 런처 (로드뷰)
   url_launcher: ^6.3.1
 
+  # 한국 지도
+  countries_world_map: ^1.2.1
+
   # 파일 저장 및 공유
   path_provider: ^2.1.5
   share_plus: ^10.1.4

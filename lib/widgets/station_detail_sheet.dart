@@ -120,28 +120,7 @@ class _StationDetailSheetState extends State<StationDetailSheet> {
                                     widget.station.categoryName!,
                                     Colors.blue,
                                   ),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 8,
-                                    vertical: 4,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: widget.station.isInspected
-                                        ? Colors.green.shade100
-                                        : Colors.orange.shade100,
-                                    borderRadius: BorderRadius.circular(4),
-                                  ),
-                                  child: Text(
-                                    widget.station.isInspected ? '검사 완료' : '검사 대기',
-                                    style: TextStyle(
-                                      color: widget.station.isInspected
-                                          ? Colors.green.shade700
-                                          : Colors.orange.shade700,
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 12,
-                                    ),
-                                  ),
-                                ),
+                                _buildInspectionStatusTag(widget.station.inspectionStatus),
                               ],
                             ),
                           ],
@@ -246,6 +225,47 @@ class _StationDetailSheetState extends State<StationDetailSheet> {
         style: TextStyle(
           color: color,
           fontWeight: FontWeight.w500,
+          fontSize: 12,
+        ),
+      ),
+    );
+  }
+
+  /// 검사 상태 태그 (3가지 상태)
+  Widget _buildInspectionStatusTag(InspectionStatus status) {
+    Color bgColor;
+    Color textColor;
+    String text;
+
+    switch (status) {
+      case InspectionStatus.pending:
+        bgColor = Colors.orange.shade100;
+        textColor = Colors.orange.shade700;
+        text = '검사 대기';
+        break;
+      case InspectionStatus.passed:
+        bgColor = Colors.green.shade100;
+        textColor = Colors.green.shade700;
+        text = '합격';
+        break;
+      case InspectionStatus.failed:
+        bgColor = Colors.red.shade100;
+        textColor = Colors.red.shade700;
+        text = '불합격';
+        break;
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: bgColor,
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Text(
+        text,
+        style: TextStyle(
+          color: textColor,
+          fontWeight: FontWeight.bold,
           fontSize: 12,
         ),
       ),
@@ -1075,36 +1095,54 @@ class _StationDetailSheetState extends State<StationDetailSheet> {
   }
 
   Widget _buildActionButtons(BuildContext context) {
-    return Row(
+    final currentStatus = widget.station.inspectionStatus;
+
+    return Column(
       children: [
-        Expanded(
-          child: ElevatedButton.icon(
-            onPressed: () => _toggleInspectionStatus(context),
-            icon: Icon(
-              widget.station.isInspected
-                  ? Icons.cancel_outlined
-                  : Icons.check_circle_outline,
-            ),
-            label: Text(
-              widget.station.isInspected ? '검사 취소' : '검사 완료',
-            ),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: widget.station.isInspected
-                  ? Colors.grey[200]
-                  : Colors.green,
-              foregroundColor: widget.station.isInspected
-                  ? Colors.grey[700]
-                  : Colors.white,
-              padding: const EdgeInsets.symmetric(vertical: 14),
-              elevation: 0,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(8),
+        // 검사 상태 선택 버튼들
+        Row(
+          children: [
+            // 검사 대기 버튼
+            Expanded(
+              child: _buildStatusButton(
+                context,
+                status: InspectionStatus.pending,
+                icon: Icons.hourglass_empty,
+                label: '검사 대기',
+                isSelected: currentStatus == InspectionStatus.pending,
+                color: Colors.orange,
               ),
             ),
-          ),
+            const SizedBox(width: 8),
+            // 합격 버튼
+            Expanded(
+              child: _buildStatusButton(
+                context,
+                status: InspectionStatus.passed,
+                icon: Icons.check_circle_outline,
+                label: '합격',
+                isSelected: currentStatus == InspectionStatus.passed,
+                color: Colors.green,
+              ),
+            ),
+            const SizedBox(width: 8),
+            // 불합격 버튼
+            Expanded(
+              child: _buildStatusButton(
+                context,
+                status: InspectionStatus.failed,
+                icon: Icons.cancel_outlined,
+                label: '불합격',
+                isSelected: currentStatus == InspectionStatus.failed,
+                color: Colors.red,
+              ),
+            ),
+          ],
         ),
-        const SizedBox(width: 12),
-        Expanded(
+        const SizedBox(height: 12),
+        // 삭제 버튼
+        SizedBox(
+          width: double.infinity,
           child: OutlinedButton.icon(
             onPressed: () => _deleteStation(context),
             icon: Icon(Icons.delete_outline, color: _primaryColor),
@@ -1119,6 +1157,46 @@ class _StationDetailSheetState extends State<StationDetailSheet> {
           ),
         ),
       ],
+    );
+  }
+
+  /// 검사 상태 선택 버튼
+  Widget _buildStatusButton(
+    BuildContext context, {
+    required InspectionStatus status,
+    required IconData icon,
+    required String label,
+    required bool isSelected,
+    required Color color,
+  }) {
+    return ElevatedButton(
+      onPressed: isSelected ? null : () => _setInspectionStatus(context, status),
+      style: ElevatedButton.styleFrom(
+        backgroundColor: isSelected ? color : Colors.grey[100],
+        foregroundColor: isSelected ? Colors.white : Colors.grey[600],
+        disabledBackgroundColor: color,
+        disabledForegroundColor: Colors.white,
+        padding: const EdgeInsets.symmetric(vertical: 12),
+        elevation: 0,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(8),
+          side: BorderSide(
+            color: isSelected ? color : Colors.grey[300]!,
+            width: isSelected ? 2 : 1,
+          ),
+        ),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 20),
+          const SizedBox(height: 4),
+          Text(
+            label,
+            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+          ),
+        ],
+      ),
     );
   }
 
@@ -1137,24 +1215,30 @@ class _StationDetailSheetState extends State<StationDetailSheet> {
     );
   }
 
-  Future<void> _toggleInspectionStatus(BuildContext context) async {
+  Future<void> _setInspectionStatus(BuildContext context, InspectionStatus status) async {
     final provider = context.read<StationProvider>();
-    final wasInspected = widget.station.isInspected;
 
     // 상태 업데이트 완료까지 대기
-    await provider.updateInspectionStatus(
-      widget.station.id,
-      !wasInspected,
-    );
+    await provider.updateInspectionStatus(widget.station.id, status);
 
     if (context.mounted) {
       Navigator.pop(context);
+
+      String message;
+      switch (status) {
+        case InspectionStatus.pending:
+          message = '검사 대기로 변경되었습니다.';
+          break;
+        case InspectionStatus.passed:
+          message = '합격으로 표시되었습니다.';
+          break;
+        case InspectionStatus.failed:
+          message = '불합격으로 표시되었습니다.';
+          break;
+      }
+
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            wasInspected ? '검사 완료가 취소되었습니다.' : '검사 완료로 표시되었습니다.',
-          ),
-        ),
+        SnackBar(content: Text(message)),
       );
     }
   }

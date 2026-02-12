@@ -7,6 +7,7 @@ import '../services/weather_service.dart';
 import 'map_screen.dart';
 import 'schedule_screen.dart';
 import 'division_management_screen.dart';
+import 'dashboard_screen.dart';
 import 'admin/admin_panel_screen.dart';
 import '../widgets/user_profile_button.dart';
 
@@ -227,6 +228,13 @@ class _HomeScreenState extends State<HomeScreen> {
                   subtitle: '검사 일정 관리 및 진도율 확인',
                   color: _greenColor,
                   onTap: () => _navigateFromDrawer(const ScheduleScreen()),
+                ),
+                _buildDrawerItem(
+                  icon: Icons.dashboard_rounded,
+                  title: '전국 현황',
+                  subtitle: '본부별 수검 진행률 및 로드맵',
+                  color: const Color(0xFF00897B),
+                  onTap: () => _navigateFromDrawer(const DashboardScreen()),
                 ),
                 // 전체 대상 관리 (본부 담당자만 표시)
                 Consumer<AuthService>(
@@ -461,6 +469,17 @@ class _HomeScreenState extends State<HomeScreen> {
               iconBackgroundColor: _greenColor.withValues(alpha: 0.1),
               iconColor: _greenColor,
               onTap: () => _navigateToScreen(const ScheduleScreen()),
+            ),
+            const SizedBox(height: 16),
+            _buildMenuCard(
+              icon: Icons.dashboard_rounded,
+              title: '전국 현황',
+              description: '전국 본부별 수검 진행률을 지도로 확인하고, 개발 로드맵을 살펴봅니다.',
+              buttonText: '현황보기',
+              buttonIcon: Icons.arrow_forward,
+              iconBackgroundColor: const Color(0xFF00897B).withValues(alpha: 0.1),
+              iconColor: const Color(0xFF00897B),
+              onTap: () => _navigateToScreen(const DashboardScreen()),
             ),
             // 관리자 패널 카드 (관리자만 표시)
             if (auth.isAdmin) ...[

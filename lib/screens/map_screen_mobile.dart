@@ -61,6 +61,18 @@ class PlatformMapWidgetState extends State<PlatformMapWidget>
   /// 맵 상호작용 활성화 상태 (드래그, 줌 등)
   bool _isMapInteractionEnabled = true;
 
+  /// 검사 상태별 색상
+  Color _getStatusColor(InspectionStatus status) {
+    switch (status) {
+      case InspectionStatus.pending:
+        return Colors.blue;
+      case InspectionStatus.passed:
+        return Colors.green;
+      case InspectionStatus.failed:
+        return Colors.red;
+    }
+  }
+
   /// 맵 드래그/줌 활성화/비활성화 (웹 버전과 동일한 인터페이스)
   void setMapDraggable(bool draggable) {
     if (_isMapInteractionEnabled == draggable) return;
@@ -278,10 +290,11 @@ class PlatformMapWidgetState extends State<PlatformMapWidget>
                         style: const TextStyle(fontWeight: FontWeight.w500),
                       ),
                       subtitle: Text(
-                        station.isInspected ? '검사완료' : '검사대기',
+                        station.inspectionStatusText,
                         style: TextStyle(
-                          color: station.isInspected ? Colors.red : Colors.blue,
+                          color: _getStatusColor(station.inspectionStatus),
                           fontSize: 12,
+                          fontWeight: FontWeight.w500,
                         ),
                       ),
                       trailing: const Icon(Icons.chevron_right),

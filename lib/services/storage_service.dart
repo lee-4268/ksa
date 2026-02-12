@@ -8,6 +8,7 @@ class StorageService {
   /// Hive 초기화
   Future<void> init() async {
     await Hive.initFlutter();
+    Hive.registerAdapter(InspectionStatusAdapter());
     Hive.registerAdapter(RadioStationAdapter());
     _box = await Hive.openBox<RadioStation>(_boxName);
   }
@@ -55,12 +56,12 @@ class StorageService {
     }
   }
 
-  /// 검사 완료 상태 업데이트
-  Future<void> updateInspectionStatus(String id, bool isInspected) async {
+  /// 검사 상태 업데이트 (대기/합격/불합격)
+  Future<void> updateInspectionStatus(String id, InspectionStatus status) async {
     final station = _box.get(id);
     if (station != null) {
-      station.isInspected = isInspected;
-      station.inspectionDate = isInspected ? DateTime.now() : null;
+      station.inspectionStatus = status;
+      station.inspectionDate = status != InspectionStatus.pending ? DateTime.now() : null;
       station.updatedAt = DateTime.now();
       await station.save();
     }

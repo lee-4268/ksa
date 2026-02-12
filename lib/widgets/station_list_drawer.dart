@@ -74,14 +74,19 @@ class _StationListDrawerState extends State<StationListDrawer> {
             // 필터 버튼
             Padding(
               padding: const EdgeInsets.all(8),
-              child: Row(
-                children: [
-                  _buildFilterChip('전체', 'all'),
-                  const SizedBox(width: 8),
-                  _buildFilterChip('검사 대기', 'pending'),
-                  const SizedBox(width: 8),
-                  _buildFilterChip('검사 완료', 'completed'),
-                ],
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: [
+                    _buildFilterChip('전체', 'all'),
+                    const SizedBox(width: 6),
+                    _buildFilterChip('대기', 'pending', Colors.orange),
+                    const SizedBox(width: 6),
+                    _buildFilterChip('합격', 'passed', Colors.green),
+                    const SizedBox(width: 6),
+                    _buildFilterChip('불합격', 'failed', Colors.red),
+                  ],
+                ),
               ),
             ),
 
@@ -137,11 +142,12 @@ class _StationListDrawerState extends State<StationListDrawer> {
             Consumer<StationProvider>(
               builder: (context, provider, child) {
                 final total = provider.stations.length;
-                final completed = provider.stations.where((s) => s.isInspected).length;
-                final pending = total - completed;
+                final pending = provider.stations.where((s) => s.inspectionStatus == InspectionStatus.pending).length;
+                final passed = provider.stations.where((s) => s.inspectionStatus == InspectionStatus.passed).length;
+                final failed = provider.stations.where((s) => s.inspectionStatus == InspectionStatus.failed).length;
 
                 return Container(
-                  padding: const EdgeInsets.all(16),
+                  padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
                     color: Colors.grey[100],
                     border: Border(
@@ -153,7 +159,8 @@ class _StationListDrawerState extends State<StationListDrawer> {
                     children: [
                       _buildStatItem('전체', total, Colors.blue),
                       _buildStatItem('대기', pending, Colors.orange),
-                      _buildStatItem('완료', completed, Colors.green),
+                      _buildStatItem('합격', passed, Colors.green),
+                      _buildStatItem('불합격', failed, Colors.red),
                     ],
                   ),
                 );
@@ -165,25 +172,34 @@ class _StationListDrawerState extends State<StationListDrawer> {
     );
   }
 
-  Widget _buildFilterChip(String label, String value) {
+  Widget _buildFilterChip(String label, String value, [Color? color]) {
     final isSelected = _filterStatus == value;
     return FilterChip(
-      label: Text(label),
+      label: Text(
+        label,
+        style: TextStyle(
+          color: isSelected ? Colors.white : (color ?? Colors.grey[700]),
+          fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+        ),
+      ),
       selected: isSelected,
       onSelected: (selected) {
         setState(() {
           _filterStatus = value;
         });
       },
-      selectedColor: Theme.of(context).colorScheme.primaryContainer,
+      selectedColor: color ?? Theme.of(context).colorScheme.primary,
+      backgroundColor: color?.withValues(alpha: 0.1),
+      checkmarkColor: Colors.white,
     );
   }
 
   List<RadioStation> _filterStations(List<RadioStation> stations) {
     return stations.where((station) {
-      // 상태 필터
-      if (_filterStatus == 'pending' && station.isInspected) return false;
-      if (_filterStatus == 'completed' && !station.isInspected) return false;
+      // 상태 필터 (3가지 상태)
+      if (_filterStatus == 'pending' && station.inspectionStatus != InspectionStatus.pending) return false;
+      if (_filterStatus == 'passed' && station.inspectionStatus != InspectionStatus.passed) return false;
+      if (_filterStatus == 'failed' && station.inspectionStatus != InspectionStatus.failed) return false;
 
       // 검색 필터
       if (_searchQuery.isNotEmpty) {
@@ -197,14 +213,40 @@ class _StationListDrawerState extends State<StationListDrawer> {
     }).toList();
   }
 
+  /// 검사 상태별 색상
+  Color _getStatusColor(InspectionStatus status) {
+    switch (status) {
+      case InspectionStatus.pending:
+        return Colors.orange;
+      case InspectionStatus.passed:
+        return Colors.green;
+      case InspectionStatus.failed:
+        return Colors.red;
+    }
+  }
+
+  /// 검사 상태별 아이콘
+  IconData _getStatusIcon(InspectionStatus status) {
+    switch (status) {
+      case InspectionStatus.pending:
+        return Icons.hourglass_empty;
+      case InspectionStatus.passed:
+        return Icons.check_circle;
+      case InspectionStatus.failed:
+        return Icons.cancel;
+    }
+  }
+
   Widget _buildStationCard(BuildContext context, RadioStation station) {
+    final statusColor = _getStatusColor(station.inspectionStatus);
+    final statusIcon = _getStatusIcon(station.inspectionStatus);
+
     return Card(
       child: ListTile(
         leading: CircleAvatar(
-          backgroundColor:
-              station.isInspected ? Colors.green : Colors.orange,
+          backgroundColor: statusColor,
           child: Icon(
-            station.isInspected ? Icons.check : Icons.pending,
+            statusIcon,
             color: Colors.white,
           ),
         ),
@@ -215,13 +257,37 @@ class _StationListDrawerState extends State<StationListDrawer> {
         subtitle: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              station.licenseNumber,
-              style: TextStyle(color: Colors.grey[600], fontSize: 12),
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: statusColor.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Text(
+                    station.inspectionStatusText,
+                    style: TextStyle(
+                      color: statusColor,
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    station.licenseNumber,
+                    style: TextStyle(color: Colors.grey[600], fontSize: 11),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
             ),
+            const SizedBox(height: 2),
             Text(
               station.address,
-              style: TextStyle(color: Colors.grey[600], fontSize: 12),
+              style: TextStyle(color: Colors.grey[600], fontSize: 11),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
             ),
@@ -230,11 +296,11 @@ class _StationListDrawerState extends State<StationListDrawer> {
         trailing: Icon(
           station.hasCoordinates ? Icons.location_on : Icons.location_off,
           color: station.hasCoordinates ? Colors.green : Colors.grey,
+          size: 20,
         ),
         onTap: () {
           Navigator.pop(context);
           context.read<StationProvider>().selectStation(station);
-          // TODO: 지도에서 해당 마커로 이동
         },
       ),
     );
