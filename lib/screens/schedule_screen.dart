@@ -67,9 +67,13 @@ class _ScheduleScreenState extends State<ScheduleScreen>
 
   @override
   Widget build(BuildContext context) {
+    final authService = context.watch<AuthService>();
+    final divisionId = authService.currentDivisionId;
+    final divisionName = authService.currentDivisionName ?? '본부';
+
     return Scaffold(
       backgroundColor: Colors.grey.shade50,
-      appBar: _buildAppBar(),
+      appBar: _buildAppBar(divisionName),
       body: Consumer2<StationProvider, DivisionDataService>(
         builder: (context, stationProvider, divisionService, _) {
           return SingleChildScrollView(
@@ -77,19 +81,19 @@ class _ScheduleScreenState extends State<ScheduleScreen>
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 // 본부 전체 진행률 + 이번주 진행률
-                _buildDivisionStatsDashboard(divisionService),
+                _buildDivisionStatsDashboard(stationProvider, divisionId, divisionName),
                 const SizedBox(height: 16),
-                // 팀별 진행률
+                // 팀별 진행률 (DivisionDataService 사용 - Excel import 데이터)
                 _buildTeamProgressSection(divisionService),
                 const SizedBox(height: 16),
                 // 탭 (카테고리별 진도율 / 날짜별 통계)
-                _buildTabSection(stationProvider),
+                _buildTabSection(stationProvider, divisionId),
                 const SizedBox(height: 16),
                 // 달력 (예정일 + 완료일)
-                _buildCalendar(stationProvider),
+                _buildCalendar(stationProvider, divisionId),
                 const SizedBox(height: 16),
                 // 선택된 날짜의 검사 목록
-                _buildSelectedDayInspections(stationProvider),
+                _buildSelectedDayInspections(stationProvider, divisionId),
                 const SizedBox(height: 24),
               ],
             ),
@@ -100,10 +104,30 @@ class _ScheduleScreenState extends State<ScheduleScreen>
   }
 
   /// 본부 전체 진행률 대시보드
-  Widget _buildDivisionStatsDashboard(DivisionDataService service) {
-    final stats = service.stats;
-    final weeklyStats = service.weeklyStats;
-    final divisionName = service.currentDivisionName ?? '본부';
+  Widget _buildDivisionStatsDashboard(StationProvider provider, String? divisionId, String divisionName) {
+    // 본부 필터링된 스테이션
+    final divisionStations = provider.getStationsByDivision(divisionId);
+    final total = divisionStations.length;
+    final inspected = divisionStations.where((s) => s.isInspected).length;
+    final progressRate = total > 0 ? inspected / total : 0.0;
+
+    // 이번 주 통계 계산
+    final now = DateTime.now();
+    final weekStart = now.subtract(Duration(days: now.weekday - 1));
+    final weekEnd = weekStart.add(const Duration(days: 6));
+
+    final scheduledThisWeek = divisionStations.where((s) {
+      if (s.scheduledDate == null) return false;
+      return s.scheduledDate!.isAfter(weekStart.subtract(const Duration(days: 1))) &&
+             s.scheduledDate!.isBefore(weekEnd.add(const Duration(days: 1)));
+    }).toList();
+
+    final completedThisWeek = scheduledThisWeek.where((s) => s.isInspected).length;
+    final weeklyProgressRate = scheduledThisWeek.isNotEmpty
+        ? completedThisWeek / scheduledThisWeek.length
+        : 0.0;
+    final weekNumber = ((now.difference(DateTime(now.year, 1, 1)).inDays +
+        DateTime(now.year, 1, 1).weekday - 1) / 7).ceil();
 
     return Container(
       margin: const EdgeInsets.fromLTRB(16, 16, 16, 0),
@@ -141,7 +165,7 @@ class _ScheduleScreenState extends State<ScheduleScreen>
           ClipRRect(
             borderRadius: BorderRadius.circular(8),
             child: TweenAnimationBuilder<double>(
-              tween: Tween(begin: 0, end: stats.progressRate),
+              tween: Tween(begin: 0, end: progressRate),
               duration: const Duration(milliseconds: 800),
               curve: Curves.easeOutCubic,
               builder: (context, value, _) {
@@ -150,7 +174,7 @@ class _ScheduleScreenState extends State<ScheduleScreen>
                   minHeight: 14,
                   backgroundColor: Colors.grey.shade200,
                   valueColor: AlwaysStoppedAnimation<Color>(
-                    stats.progressRate >= 0.8 ? _greenColor : _blueAccent,
+                    progressRate >= 0.8 ? _greenColor : _blueAccent,
                   ),
                 );
               },
@@ -161,14 +185,14 @@ class _ScheduleScreenState extends State<ScheduleScreen>
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Text(
-                '${stats.inspected}/${stats.total}',
+                '$inspected/$total',
                 style: TextStyle(
                   color: Colors.grey.shade600,
                   fontSize: 14,
                 ),
               ),
               Text(
-                '${(stats.progressRate * 100).toStringAsFixed(1)}%',
+                '${(progressRate * 100).toStringAsFixed(1)}%',
                 style: const TextStyle(
                   fontWeight: FontWeight.bold,
                   fontSize: 18,
@@ -183,7 +207,7 @@ class _ScheduleScreenState extends State<ScheduleScreen>
               const Icon(Icons.date_range, color: _greenColor, size: 20),
               const SizedBox(width: 8),
               Text(
-                '이번주 진행률 (${DateTime.now().month}월 ${weeklyStats.weekNumber}주차)',
+                '이번주 진행률 (${DateTime.now().month}월 $weekNumber주차)',
                 style: const TextStyle(
                   fontSize: 14,
                   fontWeight: FontWeight.w500,
@@ -195,7 +219,7 @@ class _ScheduleScreenState extends State<ScheduleScreen>
           ClipRRect(
             borderRadius: BorderRadius.circular(6),
             child: TweenAnimationBuilder<double>(
-              tween: Tween(begin: 0, end: weeklyStats.progressRate),
+              tween: Tween(begin: 0, end: weeklyProgressRate),
               duration: const Duration(milliseconds: 800),
               curve: Curves.easeOutCubic,
               builder: (context, value, _) {
@@ -204,7 +228,7 @@ class _ScheduleScreenState extends State<ScheduleScreen>
                   minHeight: 10,
                   backgroundColor: Colors.grey.shade200,
                   valueColor: AlwaysStoppedAnimation<Color>(
-                    weeklyStats.progressRate >= 0.8 ? _greenColor : _orangeColor,
+                    weeklyProgressRate >= 0.8 ? _greenColor : _orangeColor,
                   ),
                 );
               },
@@ -212,7 +236,7 @@ class _ScheduleScreenState extends State<ScheduleScreen>
           ),
           const SizedBox(height: 6),
           Text(
-            '${weeklyStats.completed}/${weeklyStats.scheduled} (${(weeklyStats.progressRate * 100).toStringAsFixed(0)}%)',
+            '$completedThisWeek/${scheduledThisWeek.length} (${(weeklyProgressRate * 100).toStringAsFixed(0)}%)',
             style: TextStyle(
               color: Colors.grey.shade600,
               fontSize: 13,
@@ -346,7 +370,7 @@ class _ScheduleScreenState extends State<ScheduleScreen>
     );
   }
 
-  PreferredSizeWidget _buildAppBar() {
+  PreferredSizeWidget _buildAppBar(String divisionName) {
     return AppBar(
       backgroundColor: Colors.white,
       elevation: 0,
@@ -354,14 +378,14 @@ class _ScheduleScreenState extends State<ScheduleScreen>
         icon: const Icon(Icons.arrow_back, color: Colors.black87),
         onPressed: () => Navigator.pop(context),
       ),
-      title: const Row(
+      title: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(Icons.calendar_month, color: _primaryColor, size: 24),
-          SizedBox(width: 8),
+          const Icon(Icons.calendar_month, color: _primaryColor, size: 24),
+          const SizedBox(width: 8),
           Text(
-            '일정 및 통계',
-            style: TextStyle(
+            '$divisionName 일정 및 통계',
+            style: const TextStyle(
               color: Colors.black87,
               fontSize: 18,
               fontWeight: FontWeight.w600,
@@ -374,7 +398,7 @@ class _ScheduleScreenState extends State<ScheduleScreen>
   }
 
   /// 탭 섹션 (카테고리별 진도율 / 날짜별 통계)
-  Widget _buildTabSection(StationProvider provider) {
+  Widget _buildTabSection(StationProvider provider, String? divisionId) {
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16),
       decoration: BoxDecoration(
@@ -426,12 +450,12 @@ class _ScheduleScreenState extends State<ScheduleScreen>
           ),
           // 탭 콘텐츠
           SizedBox(
-            height: _calculateTabHeight(provider),
+            height: _calculateTabHeight(provider, divisionId),
             child: TabBarView(
               controller: _tabController,
               children: [
-                _buildCategoryProgress(provider),
-                _buildDateStats(provider),
+                _buildCategoryProgress(provider, divisionId),
+                _buildDateStats(provider, divisionId),
               ],
             ),
           ),
@@ -440,28 +464,30 @@ class _ScheduleScreenState extends State<ScheduleScreen>
     );
   }
 
-  double _calculateTabHeight(StationProvider provider) {
-    final categories = provider.categories;
+  double _calculateTabHeight(StationProvider provider, String? divisionId) {
+    final categories = provider.getCategoriesForDivision(divisionId);
     // 기본 높이 + 카테고리 수에 따른 높이
     final categoryHeight = categories.length * 60.0;
     return categoryHeight.clamp(200.0, 400.0);
   }
 
   /// 카테고리별 진도율
-  Widget _buildCategoryProgress(StationProvider provider) {
-    final categories = provider.categories;
+  Widget _buildCategoryProgress(StationProvider provider, String? divisionId) {
+    final categories = provider.getCategoriesForDivision(divisionId);
     if (categories.isEmpty) {
       return const Center(
         child: Text('데이터가 없습니다', style: TextStyle(color: Colors.grey)),
       );
     }
 
+    final stationsByCategory = provider.getStationsByCategoryForDivision(divisionId);
+
     return ListView.builder(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
       itemCount: categories.length,
       itemBuilder: (context, index) {
         final category = categories[index];
-        final categoryStations = provider.stationsByCategory[category] ?? [];
+        final categoryStations = stationsByCategory[category] ?? [];
         final total = categoryStations.length;
         final inspected = categoryStations.where((s) => s.isInspected).length;
         final rate = total > 0 ? (inspected / total) : 0.0;
@@ -545,14 +571,16 @@ class _ScheduleScreenState extends State<ScheduleScreen>
   }
 
   /// 날짜별 완료 통계
-  Widget _buildDateStats(StationProvider provider) {
-    final categoryDateStats = provider.getCategoryDateStats();
+  Widget _buildDateStats(StationProvider provider, String? divisionId) {
+    final categoryDateStats = provider.getCategoryDateStatsForDivision(divisionId);
 
     if (categoryDateStats.isEmpty) {
       return const Center(
         child: Text('완료된 검사가 없습니다', style: TextStyle(color: Colors.grey)),
       );
     }
+
+    final stationsByCategory = provider.getStationsByCategoryForDivision(divisionId);
 
     return ListView.builder(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
@@ -567,7 +595,7 @@ class _ScheduleScreenState extends State<ScheduleScreen>
           ..sort((a, b) => b.compareTo(a));
 
         final totalCompleted = dateStats.values.fold(0, (sum, count) => sum + count);
-        final categoryStations = provider.stationsByCategory[category] ?? [];
+        final categoryStations = stationsByCategory[category] ?? [];
         final totalInCategory = categoryStations.length;
 
         return Container(
@@ -770,9 +798,9 @@ class _ScheduleScreenState extends State<ScheduleScreen>
   }
 
   /// 달력 위젯 (예정일 + 완료일)
-  Widget _buildCalendar(StationProvider provider) {
-    final inspectionDates = provider.inspectionDateMap;
-    final scheduledDates = provider.scheduledDateMap;
+  Widget _buildCalendar(StationProvider provider, String? divisionId) {
+    final inspectionDates = provider.getInspectionDateMapForDivision(divisionId);
+    final scheduledDates = provider.getScheduledDateMapForDivision(divisionId);
 
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16),
@@ -981,12 +1009,12 @@ class _ScheduleScreenState extends State<ScheduleScreen>
   }
 
   /// 선택된 날짜의 검사 목록
-  Widget _buildSelectedDayInspections(StationProvider provider) {
+  Widget _buildSelectedDayInspections(StationProvider provider, String? divisionId) {
     if (_selectedDay == null) return const SizedBox.shrink();
 
     final dateKey = DateTime(_selectedDay!.year, _selectedDay!.month, _selectedDay!.day);
-    final inspectionMap = provider.inspectionDateMap;
-    final scheduledMap = provider.scheduledDateMap;
+    final inspectionMap = provider.getInspectionDateMapForDivision(divisionId);
+    final scheduledMap = provider.getScheduledDateMapForDivision(divisionId);
 
     final inspectedStations = inspectionMap[dateKey] ?? [];
     final scheduledStations = scheduledMap[dateKey] ?? [];

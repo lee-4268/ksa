@@ -55,13 +55,41 @@ class AuthService extends ChangeNotifier {
   String? get userDepartment => _userDepartment;
   String? get userTeam => _userTeam;
 
+  // 본부명 → 본부 ID 매핑
+  static const Map<String, String> _divisionNameToId = {
+    '강남본부': 'gangnam',
+    '강남': 'gangnam',
+    '강북본부': 'gangbuk',
+    '강북': 'gangbuk',
+    '인천본부': 'incheon',
+    '인천': 'incheon',
+    '경기본부': 'gyeonggi',
+    '경기': 'gyeonggi',
+    '강원본부': 'gangwon',
+    '강원': 'gangwon',
+    '충청본부': 'chungcheong',
+    '충청': 'chungcheong',
+    '경북본부': 'gyeongbuk',
+    '경북': 'gyeongbuk',
+    '경남본부': 'gyeongnam',
+    '경남': 'gyeongnam',
+    '서부본부': 'seobu',
+    '서부': 'seobu',
+  };
+
   // 호환성 유지 - 역할/승인 관련 (기본값 반환)
   AppUserRole get userRole => AppUserRole.member;
   String? get profileId => null;
   String? get currentTeamId => null;
   String? get currentTeamName => _userTeam;
-  String? get currentDivisionId => null;
+  String? get currentDivisionId => _getDivisionIdFromName(_userDepartment);
   String? get currentDivisionName => _userDepartment;
+
+  /// 본부명으로부터 본부 ID 추출
+  static String? _getDivisionIdFromName(String? departmentName) {
+    if (departmentName == null) return null;
+    return _divisionNameToId[departmentName];
+  }
   bool get isPendingApproval => false;
   bool get isApproved => _isSignedIn;
   bool get isRejected => false;

@@ -103,6 +103,59 @@ class StationProvider extends ChangeNotifier {
 
   List<RadioStation> get filteredStations => _filteredStations;
 
+  // 본부(division) ID에 해당하는 지역명 매핑
+  static const Map<String, List<String>> _divisionToRegions = {
+    'gangnam': ['강남', '관악', '강동', '양천', '서초', '송파'],
+    'gangbuk': ['용산', '종로', '성수', '수유', '성북', '중구', '마포', '서대문', '노원', '도봉'],
+    'incheon': ['인천', '부천', '일산', '남양주', '의정부', '고양', '파주', '김포'],
+    'gyeonggi': ['수원', '평택', '하남', '분당', '용인', '성남', '안양', '안산', '화성', '광명', '시흥', '오산', '군포', '의왕', '과천', '이천', '광주시', '여주'],
+    'gangwon': ['원주', '춘천', '강릉', '속초', '동해', '삼척', '태백', '홍천', '횡성', '영월', '정선', '평창', '양양', '고성', '인제', '양구', '화천', '철원'],
+    'chungcheong': ['대전', '천안', '세종', '서산', '청주', '충주', '아산', '당진', '논산', '공주', '보령', '서천', '부여', '홍성', '예산', '태안', '제천', '단양', '음성', '진천', '괴산', '증평', '옥천', '영동', '금산'],
+    'gyeongbuk': ['대구', '경산', '포항', '안동', '구미', '김천', '영주', '문경', '상주', '경주', '영천', '칠곡', '고령', '성주', '군위', '의성', '청송', '영양', '봉화', '울진', '영덕', '청도', '울릉'],
+    'gyeongnam': ['부산', '김해', '울산', '진주', '창원', '마산', '진해', '통영', '사천', '밀양', '양산', '거제', '함안', '창녕', '합천', '의령', '함양', '산청', '거창', '하동', '남해', '고성군'],
+    'seobu': ['광주', '목포', '순천', '제주', '전주', '군산', '익산', '여수', '나주', '무안', '신안', '영광', '담양', '화순', '장성', '함평', '곡성', '구례', '보성', '고흥', '장흥', '강진', '해남', '완도', '진도', '영암', '김제', '정읍', '남원', '완주', '무주', '진안', '장수', '임실', '순창', '고창', '부안', '서귀포'],
+  };
+
+  /// 본부 ID로 해당 본부 스테이션만 필터링
+  List<RadioStation> getStationsByDivision(String? divisionId) {
+    if (divisionId == null) return _stations;
+
+    final regions = _divisionToRegions[divisionId];
+    if (regions == null) return _stations;
+
+    return _stations.where((station) {
+      final address = station.address.toLowerCase();
+      return regions.any((region) => address.contains(region.toLowerCase()));
+    }).toList();
+  }
+
+  /// 본부 ID로 필터링된 카테고리별 스테이션 맵
+  Map<String, List<RadioStation>> getStationsByCategoryForDivision(String? divisionId) {
+    final stations = getStationsByDivision(divisionId);
+    final map = <String, List<RadioStation>>{};
+    for (final station in stations) {
+      final category = station.categoryName ?? '기타';
+      map.putIfAbsent(category, () => []);
+      map[category]!.add(station);
+    }
+    // 각 카테고리의 스테이션을 createdAt 순으로 정렬
+    for (final category in map.keys) {
+      map[category]!.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+    }
+    return map;
+  }
+
+  /// 본부 ID로 필터링된 카테고리 목록
+  List<String> getCategoriesForDivision(String? divisionId) {
+    final stations = getStationsByDivision(divisionId);
+    final cats = stations
+        .map((s) => s.categoryName ?? '기타')
+        .toSet()
+        .toList();
+    cats.sort();
+    return cats;
+  }
+
   /// 검색어 설정
   void setSearchQuery(String query) {
     _searchQuery = query;
@@ -636,6 +689,42 @@ class StationProvider extends ChangeNotifier {
     return map;
   }
 
+  /// 본부별 예정일별 무선국 맵 (달력 표시용)
+  Map<DateTime, List<RadioStation>> getScheduledDateMapForDivision(String? divisionId) {
+    final stations = getStationsByDivision(divisionId);
+    final map = <DateTime, List<RadioStation>>{};
+    for (final station in stations) {
+      if (station.scheduledDate != null && !station.isInspected) {
+        final dateKey = DateTime(
+          station.scheduledDate!.year,
+          station.scheduledDate!.month,
+          station.scheduledDate!.day,
+        );
+        map.putIfAbsent(dateKey, () => []);
+        map[dateKey]!.add(station);
+      }
+    }
+    return map;
+  }
+
+  /// 본부별 검사 완료일별 무선국 맵 (달력 표시용)
+  Map<DateTime, List<RadioStation>> getInspectionDateMapForDivision(String? divisionId) {
+    final stations = getStationsByDivision(divisionId);
+    final map = <DateTime, List<RadioStation>>{};
+    for (final station in stations) {
+      if (station.isInspected && station.inspectionDate != null) {
+        final dateKey = DateTime(
+          station.inspectionDate!.year,
+          station.inspectionDate!.month,
+          station.inspectionDate!.day,
+        );
+        map.putIfAbsent(dateKey, () => []);
+        map[dateKey]!.add(station);
+      }
+    }
+    return map;
+  }
+
   /// 통계 데이터: 최근 N일간 일평균 검사 완료 수
   double getDailyInspectionRate({int days = 7}) {
     final now = DateTime.now();
@@ -670,6 +759,28 @@ class StationProvider extends ChangeNotifier {
     final stats = <String, Map<DateTime, int>>{};
 
     for (final station in _stations) {
+      if (station.isInspected && station.inspectionDate != null) {
+        final category = station.categoryName ?? '기타';
+        final dateKey = DateTime(
+          station.inspectionDate!.year,
+          station.inspectionDate!.month,
+          station.inspectionDate!.day,
+        );
+
+        stats.putIfAbsent(category, () => {});
+        stats[category]!.update(dateKey, (v) => v + 1, ifAbsent: () => 1);
+      }
+    }
+
+    return stats;
+  }
+
+  /// 본부별 카테고리별 날짜별 완료 통계
+  Map<String, Map<DateTime, int>> getCategoryDateStatsForDivision(String? divisionId) {
+    final stations = getStationsByDivision(divisionId);
+    final stats = <String, Map<DateTime, int>>{};
+
+    for (final station in stations) {
       if (station.isInspected && station.inspectionDate != null) {
         final category = station.categoryName ?? '기타';
         final dateKey = DateTime(
