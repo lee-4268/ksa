@@ -306,9 +306,9 @@ async function _mergeDsFilesFromDart(zipArrayBuffer, progressCallback, completio
       sptFmtZip = null;
     }
 
-    // (100) → 일반사항(접수번호) preamble 추출
+    // (100) → 일반사항(검사전) preamble 추출
     if (classified.skipped.length > 0) {
-      sheetOrder.push('일반사항(접수번호)');
+      sheetOrder.push('일반사항(검사전)');
       var hBytes = await zip.files[classified.skipped[0]].async('arraybuffer');
       var hWb = XLSX.read(hBytes, { type: 'array', cellStyles: true });
       var hXlsxArr = XLSX.write(hWb, { bookType: 'xlsx', type: 'array', bookSST: false });
@@ -319,7 +319,7 @@ async function _mergeDsFilesFromDart(zipArrayBuffer, progressCallback, completio
       if (hFmtZip.files[hSheetFile]) {
         var hXml = await hFmtZip.files[hSheetFile].async('string');
         var hPreambleMatch = hXml.match(/<worksheet[^>]*>([\s\S]*?)<sheetData/);
-        sheetFormats['일반사항(접수번호)'] = hPreambleMatch ? hPreambleMatch[1].trim() : '';
+        sheetFormats['일반사항(검사전)'] = hPreambleMatch ? hPreambleMatch[1].trim() : '';
         hXml = null;
       }
       hFmtZip = null;
@@ -387,7 +387,7 @@ async function _mergeDsFilesFromDart(zipArrayBuffer, progressCallback, completio
       sptWbM = null;
     }
 
-    // (100) 파일 → 일반사항(접수번호)
+    // (100) 파일 → 일반사항(검사전)
     if (classified.skipped.length > 0) {
       progressCallback('(100) 파일 읽기...', 48);
       for (var ski = 0; ski < classified.skipped.length; ski++) {
@@ -397,10 +397,10 @@ async function _mergeDsFilesFromDart(zipArrayBuffer, progressCallback, completio
 
         if (skWbM.SheetNames.indexOf('일반사항') !== -1) {
           var skRowsM = XLSX.utils.sheet_to_json(skWbM.Sheets['일반사항'], { header: 1, raw: true, defval: '' });
-          if (allMergedRows['일반사항(접수번호)'].length === 0) {
-            for (var sr3 = 0; sr3 < skRowsM.length; sr3++) allMergedRows['일반사항(접수번호)'].push(skRowsM[sr3]);
+          if (allMergedRows['일반사항(검사전)'].length === 0) {
+            for (var sr3 = 0; sr3 < skRowsM.length; sr3++) allMergedRows['일반사항(검사전)'].push(skRowsM[sr3]);
           } else {
-            for (var sr4 = 1; sr4 < skRowsM.length; sr4++) allMergedRows['일반사항(접수번호)'].push(skRowsM[sr4]);
+            for (var sr4 = 1; sr4 < skRowsM.length; sr4++) allMergedRows['일반사항(검사전)'].push(skRowsM[sr4]);
           }
           skRowsM = null;
         }
@@ -485,7 +485,7 @@ async function _mergeDsFilesFromDart(zipArrayBuffer, progressCallback, completio
 
     var resultMsg = '병합 완료! ' + outputName + '\n'
       + '시트 ' + totalSheets + '개, 총 ' + totalRows.toLocaleString() + '행'
-      + (classified.skipped.length > 0 ? '\n(100) 일반사항 → 일반사항(접수번호) 시트 포함' : '');
+      + (classified.skipped.length > 0 ? '\n(100) 일반사항 → 일반사항(검사전) 시트 포함' : '');
     completionCallback(true, resultMsg);
 
   } catch (e) {
