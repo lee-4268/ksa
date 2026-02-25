@@ -9,6 +9,7 @@ import 'schedule_screen.dart';
 import 'division_management_screen.dart';
 import 'dashboard_screen.dart';
 import 'admin/admin_panel_screen.dart';
+import 'ds_merge_screen.dart';
 import '../widgets/user_profile_button.dart';
 
 /// 메인 홈 화면 - 메뉴 선택 인터페이스
@@ -235,6 +236,13 @@ class _HomeScreenState extends State<HomeScreen> {
                   subtitle: '본부별 수검 진행률 및 로드맵',
                   color: const Color(0xFF00897B),
                   onTap: () => _navigateFromDrawer(const DashboardScreen()),
+                ),
+                _buildDrawerItem(
+                  icon: Icons.merge_type,
+                  title: 'DS 파일 병합',
+                  subtitle: '분할 DS 파일을 하나로 통합',
+                  color: const Color(0xFFFF7043),
+                  onTap: () => _navigateFromDrawer(const DsMergeScreen()),
                 ),
                 // 전체 대상 관리 (본부 담당자만 표시)
                 Consumer<AuthService>(

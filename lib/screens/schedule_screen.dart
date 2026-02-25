@@ -23,6 +23,23 @@ class _ScheduleScreenState extends State<ScheduleScreen>
   static const Color _orangeColor = Color(0xFFFF9800);
   static const Color _purpleColor = Color(0xFF7B1FA2);
 
+  // 9개 본부 목록 (id, name)
+  static const List<Map<String, String>> _divisions = [
+    {'id': 'gangnam', 'name': '강남본부'},
+    {'id': 'gangbuk', 'name': '강북본부'},
+    {'id': 'incheon', 'name': '인천본부'},
+    {'id': 'gyeonggi', 'name': '경기본부'},
+    {'id': 'gangwon', 'name': '강원본부'},
+    {'id': 'chungcheong', 'name': '충청본부'},
+    {'id': 'gyeongbuk', 'name': '경북본부'},
+    {'id': 'gyeongnam', 'name': '경남본부'},
+    {'id': 'seobu', 'name': '서부본부'},
+  ];
+
+  // 선택된 본부
+  String? _selectedDivisionId;
+  String _selectedDivisionName = '강남본부';
+
   // 달력 관련 상태
   CalendarFormat _calendarFormat = CalendarFormat.month;
   DateTime _focusedDay = DateTime.now();
@@ -40,20 +57,37 @@ class _ScheduleScreenState extends State<ScheduleScreen>
     _selectedDay = DateTime.now();
     _tabController = TabController(length: 2, vsync: this);
 
-    // 본부 데이터 로드
+    // 본부 데이터 로드 및 초기 선택 설정
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      _initSelectedDivision();
       _loadDivisionData();
     });
   }
 
-  void _loadDivisionData() {
+  /// 사용자 본부에 따라 초기 선택 설정
+  void _initSelectedDivision() {
     final authService = context.read<AuthService>();
+    final userDivisionId = authService.currentDivisionId;
+
+    // 사용자의 본부가 9개 본부 중 하나인지 확인
+    final matchingDivision = _divisions.firstWhere(
+      (d) => d['id'] == userDivisionId,
+      orElse: () => _divisions.first, // 본사 등 9개 본부에 없으면 첫 번째(강남본부) 선택
+    );
+
+    setState(() {
+      _selectedDivisionId = matchingDivision['id'];
+      _selectedDivisionName = matchingDivision['name']!;
+    });
+  }
+
+  void _loadDivisionData() {
     final divisionService = context.read<DivisionDataService>();
 
-    if (authService.currentDivisionId != null) {
+    if (_selectedDivisionId != null) {
       divisionService.setDivision(
-        authService.currentDivisionId!,
-        authService.currentDivisionName ?? '본부',
+        _selectedDivisionId!,
+        _selectedDivisionName,
       );
       divisionService.loadFromCloud();
     }
@@ -67,13 +101,13 @@ class _ScheduleScreenState extends State<ScheduleScreen>
 
   @override
   Widget build(BuildContext context) {
-    final authService = context.watch<AuthService>();
-    final divisionId = authService.currentDivisionId;
-    final divisionName = authService.currentDivisionName ?? '본부';
+    // 선택된 본부 사용 (드롭다운에서 선택)
+    final divisionId = _selectedDivisionId;
+    final divisionName = _selectedDivisionName;
 
     return Scaffold(
       backgroundColor: Colors.grey.shade50,
-      appBar: _buildAppBar(divisionName),
+      appBar: _buildAppBar(),
       body: Consumer2<StationProvider, DivisionDataService>(
         builder: (context, stationProvider, divisionService, _) {
           return SingleChildScrollView(
@@ -370,7 +404,7 @@ class _ScheduleScreenState extends State<ScheduleScreen>
     );
   }
 
-  PreferredSizeWidget _buildAppBar(String divisionName) {
+  PreferredSizeWidget _buildAppBar() {
     return AppBar(
       backgroundColor: Colors.white,
       elevation: 0,
@@ -383,11 +417,54 @@ class _ScheduleScreenState extends State<ScheduleScreen>
         children: [
           const Icon(Icons.calendar_month, color: _primaryColor, size: 24),
           const SizedBox(width: 8),
-          Text(
-            '$divisionName 일정 및 통계',
-            style: const TextStyle(
+          // 본부 선택 드롭다운
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+            decoration: BoxDecoration(
+              color: _primaryColor.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: _primaryColor.withValues(alpha: 0.3)),
+            ),
+            child: DropdownButtonHideUnderline(
+              child: DropdownButton<String>(
+                value: _selectedDivisionId,
+                icon: const Icon(Icons.arrow_drop_down, color: _primaryColor, size: 20),
+                isDense: true,
+                style: const TextStyle(
+                  color: Colors.black87,
+                  fontSize: 15,
+                  fontWeight: FontWeight.w600,
+                ),
+                items: _divisions.map((division) {
+                  return DropdownMenuItem<String>(
+                    value: division['id'],
+                    child: Text(division['name']!),
+                  );
+                }).toList(),
+                onChanged: (String? newDivisionId) {
+                  if (newDivisionId != null) {
+                    final selectedDivision = _divisions.firstWhere(
+                      (d) => d['id'] == newDivisionId,
+                    );
+                    setState(() {
+                      _selectedDivisionId = newDivisionId;
+                      _selectedDivisionName = selectedDivision['name']!;
+                    });
+                    // 본부 변경 시 DivisionDataService도 업데이트
+                    final divisionService = context.read<DivisionDataService>();
+                    divisionService.setDivision(newDivisionId, selectedDivision['name']!);
+                    divisionService.loadFromCloud();
+                  }
+                },
+              ),
+            ),
+          ),
+          const SizedBox(width: 6),
+          const Text(
+            '일정 및 통계',
+            style: TextStyle(
               color: Colors.black87,
-              fontSize: 18,
+              fontSize: 16,
               fontWeight: FontWeight.w600,
             ),
           ),
