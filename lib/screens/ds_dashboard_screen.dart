@@ -799,7 +799,7 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
 
   String _formatTime(String isoTime) {
     try {
-      final dt = DateTime.parse(isoTime);
+      final dt = DateTime.parse(isoTime).toLocal();
       return '${dt.month}/${dt.day} ${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
     } catch (_) {
       return isoTime.length > 16 ? isoTime.substring(0, 16) : isoTime;

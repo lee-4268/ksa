@@ -11,7 +11,7 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import List, Optional, Dict
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 import logging
 
@@ -551,7 +551,7 @@ async def root():
         "status": "healthy",
         "model_loaded": model is not None,
         "model_path": MODEL_PATH,
-        "timestamp": datetime.now().isoformat()
+        "timestamp": datetime.now(timezone.utc).isoformat()
     }
 
 
@@ -562,7 +562,7 @@ async def health_check():
         "status": "healthy",
         "model_loaded": model is not None,
         "model_path": MODEL_PATH,
-        "timestamp": datetime.now().isoformat()
+        "timestamp": datetime.now(timezone.utc).isoformat()
     }
 
 
@@ -764,7 +764,7 @@ async def submit_feedback(
                 "s3_key": s3_key,
                 "original_class": original_class,
                 "corrected_class": corrected_class,
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now(timezone.utc).isoformat()
             }
         else:
             # S3 upload failed - save locally as fallback
@@ -780,7 +780,7 @@ async def submit_feedback(
                 "s3_key": None,
                 "original_class": original_class,
                 "corrected_class": corrected_class,
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now(timezone.utc).isoformat()
             }
 
     except Exception as e:
@@ -828,7 +828,7 @@ async def get_feedback_stats():
             "bucket": S3_BUCKET_NAME,
             "stats": stats,
             "total_feedback": sum(s.get("count", 0) for s in stats.values()),
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
 
     except Exception as e:
@@ -836,7 +836,7 @@ async def get_feedback_stats():
         return {
             "success": False,
             "message": str(e),
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
 
 
@@ -885,7 +885,7 @@ async def list_users_count():
     return {
         "success": True,
         "total_users": len(users),
-        "timestamp": datetime.now().isoformat()
+        "timestamp": datetime.now(timezone.utc).isoformat()
     }
 
 
@@ -900,7 +900,7 @@ async def create_category(category: CategoryCreate):
         dynamodb = get_dynamodb_resource()
         table = dynamodb.Table(DYNAMODB_TABLES["categories"])
 
-        now = datetime.now().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         item = {
             "id": str(uuid.uuid4()),
             "name": category.name,
@@ -978,7 +978,7 @@ async def update_category(category_id: str, name: str = None, originalExcelKey: 
         table = dynamodb.Table(DYNAMODB_TABLES["categories"])
 
         update_expr = "SET updatedAt = :now"
-        expr_values = {":now": datetime.now().isoformat()}
+        expr_values = {":now": datetime.now(timezone.utc).isoformat()}
 
         if name:
             update_expr += ", #n = :name"
@@ -1030,7 +1030,7 @@ async def create_station(station: StationCreate):
         dynamodb = get_dynamodb_resource()
         table = dynamodb.Table(DYNAMODB_TABLES["stations"])
 
-        now = datetime.now().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         item = {
             "id": str(uuid.uuid4()),
             "categoryId": station.categoryId,
@@ -1134,7 +1134,7 @@ async def update_station(station_id: str, station: StationUpdate):
         table = dynamodb.Table(DYNAMODB_TABLES["stations"])
 
         update_expr = "SET updatedAt = :now"
-        expr_values = {":now": datetime.now().isoformat()}
+        expr_values = {":now": datetime.now(timezone.utc).isoformat()}
         expr_names = {}
 
         # DynamoDB reserved keywords
@@ -1579,7 +1579,7 @@ async def ds_upload_init(req: DsUploadInit):
             uploads_table.delete_item(Key={"divisionId": req.divisionId, "importDate": sk})
             logger.info(f"DS upload-init: 기존 {deleted}건 삭제 완료")
 
-        now = datetime.now().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         uploads_table.put_item(Item={
             "divisionId": req.divisionId,
             "importDate": sk,
@@ -1602,7 +1602,7 @@ async def ds_upload_init(req: DsUploadInit):
 def _write_chunk_sync(req: "DsUploadChunk") -> int:
     """동기 DynamoDB 청크 쓰기 — asyncio.to_thread로 호출해 이벤트 루프 비점유"""
     table = _dynamodb_resource.Table(DYNAMODB_TABLES["ds_records"])
-    now = datetime.now().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
     written = 0
     with table.batch_writer() as batch:
         for i, row in enumerate(req.rows):
