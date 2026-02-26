@@ -6,7 +6,7 @@ import 'map_screen.dart';
 import 'schedule_screen.dart';
 import 'division_management_screen.dart';
 import 'admin/admin_panel_screen.dart';
-import 'ds_merge_screen.dart';
+import 'ds_dashboard_screen.dart';
 
 /// 전국 현황 대시보드 화면
 class DashboardScreen extends StatefulWidget {
@@ -244,11 +244,11 @@ class _DashboardScreenState extends State<DashboardScreen>
                   onTap: () => _navigateFromDrawer(const ScheduleScreen()),
                 ),
                 _buildDrawerItem(
-                  icon: Icons.merge_type,
-                  title: 'DS 파일 병합',
-                  subtitle: '분할 DS 파일을 하나로 통합',
-                  color: const Color(0xFFFF7043),
-                  onTap: () => _navigateFromDrawer(const DsMergeScreen()),
+                  icon: Icons.storage,
+                  title: 'DS 데이터 관리',
+                  subtitle: '업로드, 조회, Excel Export 통합 관리',
+                  color: const Color(0xFF5C6BC0),
+                  onTap: () => _navigateFromDrawer(const DsDashboardScreen()),
                 ),
                 // 전체 대상 관리 (본부 담당자만 표시)
                 Consumer<AuthService>(
