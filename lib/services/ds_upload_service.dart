@@ -99,7 +99,9 @@ class DsUploadService {
       onProgress: onProgress,
     );
 
-    // S3에 원본 ZIP 업로드 (Export 고속화용)
+    // ─────────────────────────────────────────────────────────
+    // 1단계: S3에 원본 ZIP 업로드 (Export 고속화용)
+    // ─────────────────────────────────────────────────────────
     try {
       final tempMeta = metaJson.isNotEmpty ? jsonDecode(metaJson) : null;
       if (tempMeta != null) {
@@ -125,36 +127,12 @@ class DsUploadService {
       debugPrint('S3 ZIP 업로드 실패 (비치명적): $e');
     }
 
-    // pre-built xlsx 생성 + S3 업로드 (Export 즉시 다운로드용)
-    try {
-      final tempMeta = metaJson.isNotEmpty ? jsonDecode(metaJson) : null;
-      if (tempMeta != null) {
-        final xlsxPresignResp = await http.get(Uri.parse(
-          '$_baseUrl/ds/xlsx-upload-presign?divisionId=${tempMeta['divisionId']}'
-          '&divisionCode=${tempMeta['divisionCode']}'
-          '&importDate=${tempMeta['importDate']}',
-        ));
-        if (xlsxPresignResp.statusCode == 200) {
-          final xlsxPresignData = jsonDecode(xlsxPresignResp.body);
-          if (xlsxPresignData['success'] == true) {
-            final xlsxPutUrl = xlsxPresignData['url'] as String;
-            await platform_upload.buildDsXlsxAndUploadToS3(
-              zipBytes: bytes,
-              xlsxPutUrl: xlsxPutUrl,
-              metaJson: metaJson,
-              onProgress: (stage, percent) {
-                onProgress('xlsx 생성 중: $stage', percent);
-              },
-            );
-            debugPrint('pre-built xlsx S3 업로드 완료');
-          }
-        }
-      }
-    } catch (e) {
-      debugPrint('xlsx S3 업로드 실패 (비치명적): $e');
-    }
-
-    // upload-finalize 호출
+    // ─────────────────────────────────────────────────────────
+    // 2단계: upload-finalize 호출 (xlsx 빌드보다 반드시 먼저!)
+    // buildDsXlsxAndUploadToS3가 대용량 파일에서 브라우저 OOM으로
+    // 탭을 죽이기 때문에, finalize를 먼저 호출해야 status가
+    // "completed"로 갱신됨. xlsx 빌드 실패해도 데이터는 안전.
+    // ─────────────────────────────────────────────────────────
     if (metaJson.isNotEmpty) {
       final meta = jsonDecode(metaJson);
 
@@ -173,6 +151,7 @@ class DsUploadService {
         );
       }
 
+      onProgress('업로드 완료 처리 중...', 97);
       try {
         await http.post(
           Uri.parse('$_baseUrl/ds/upload-finalize'),
@@ -188,6 +167,44 @@ class DsUploadService {
         debugPrint('DS upload-finalize 성공');
       } catch (e) {
         debugPrint('DS upload-finalize 실패: $e');
+      }
+
+      // ─────────────────────────────────────────────────────
+      // 3단계: pre-built xlsx 생성 (소규모 파일만, 비동기)
+      // 20만행 초과 시 건너뜀: 대용량 파일은 브라우저 메모리 부족
+      // (OOM)으로 탭이 죽을 수 있음. ZIP 기반 Export로 폴백.
+      // ─────────────────────────────────────────────────────
+      final totalRowsForXlsx = meta['totalRows'] as int? ?? 0;
+      if (totalRowsForXlsx <= 200000) {
+        try {
+          final xlsxPresignResp = await http.get(Uri.parse(
+            '$_baseUrl/ds/xlsx-upload-presign?divisionId=${meta['divisionId']}'
+            '&divisionCode=${meta['divisionCode']}'
+            '&importDate=${meta['importDate']}',
+          ));
+          if (xlsxPresignResp.statusCode == 200) {
+            final xlsxPresignData = jsonDecode(xlsxPresignResp.body);
+            if (xlsxPresignData['success'] == true) {
+              final xlsxPutUrl = xlsxPresignData['url'] as String;
+              // 비동기 fire-and-forget: finalize 이미 완료됐으므로
+              // xlsx 빌드 실패해도 업로드 성공에 영향 없음
+              platform_upload.buildDsXlsxAndUploadToS3(
+                zipBytes: bytes,
+                xlsxPutUrl: xlsxPutUrl,
+                metaJson: metaJson,
+                onProgress: (stage, percent) {
+                  onProgress('xlsx 생성 중: $stage', percent);
+                },
+              ).catchError((e) {
+                debugPrint('xlsx 빌드 실패 (무시): $e');
+              });
+            }
+          }
+        } catch (e) {
+          debugPrint('xlsx presign 실패 (비치명적): $e');
+        }
+      } else {
+        debugPrint('총 $totalRowsForXlsx행 → xlsx 빌드 건너뜀 (ZIP Export 사용)');
       }
 
       final divName = meta['divisionName'] ?? meta['divisionId'];
