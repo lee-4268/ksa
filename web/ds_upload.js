@@ -37,6 +37,14 @@ function _parseDsFileName(fileName) {
  * @param {Function} progressCallback - (stage, percent) 진행률
  * @param {Function} completionCallback - (success, message, metaJson) 완료
  */
+/**
+ * DS ZIP 파싱 → 시트별 JSON 청크 콜백 (스트리밍 방식)
+ *
+ * ★ 메모리 최적화: 파일을 하나씩 읽고 즉시 청크 전송 후 메모리 해제
+ *   기존 방식(allMergedRows 전체 누적)은 1.8M행+ 파일에서 브라우저 OOM 발생
+ *   개선: 파일 1개 읽기 → 즉시 스트리밍 → 해제 → 다음 파일
+ *   최대 메모리 사용 = 단일 파일 크기 (전체 아님)
+ */
 async function _parseDsForUpload(zipArrayBuffer, chunkCallback, progressCallback, completionCallback) {
   try {
     progressCallback('ZIP 압축 해제 중...', 3);
@@ -66,7 +74,6 @@ async function _parseDsForUpload(zipArrayBuffer, chunkCallback, progressCallback
       return;
     }
 
-    // 파일명에서 지역코드/날짜 추출
     var baseName = classified.base.split('/').pop();
     var parsed = _parseDsFileName(baseName);
 
@@ -81,7 +88,6 @@ async function _parseDsForUpload(zipArrayBuffer, chunkCallback, progressCallback
       return;
     }
 
-    // 메타 정보 → Dart에서 upload-init에 사용
     var meta = {
       divisionId: regionInfo.divisionId,
       divisionName: regionInfo.divisionName,
@@ -93,192 +99,195 @@ async function _parseDsForUpload(zipArrayBuffer, chunkCallback, progressCallback
     console.log('DS 파일 메타:', meta);
 
     // ========================================================
-    // base 파일에서 시트 순서 확정
-    // ========================================================
-    progressCallback('시트 구조 분석 중...', 7);
-
-    var baseBytes = await zip.files[classified.base].async('arraybuffer');
-    var baseWb = XLSX.read(baseBytes, { type: 'array', cellDates: false });
-    var sheetOrder = baseWb.SheetNames.slice();
-    var baseSheetNames = baseWb.SheetNames.slice();
-    baseWb = null;
-    baseBytes = null;
-
-    // spt 시트 순서 추가
-    if (classified.spt) {
-      var sptBytes = await zip.files[classified.spt].async('arraybuffer');
-      var sptWb = XLSX.read(sptBytes, { type: 'array', cellDates: false });
-      for (var si = 0; si < sptWb.SheetNames.length; si++) {
-        if (sheetOrder.indexOf(sptWb.SheetNames[si]) === -1) {
-          sheetOrder.push(sptWb.SheetNames[si]);
-        }
-      }
-      sptWb = null;
-      sptBytes = null;
-    }
-
-    // (100) → 일반사항(검사전) 추가
-    if (classified.skipped.length > 0) {
-      sheetOrder.push('일반사항(검사전)');
-    }
-
-    console.log('시트 목록:', sheetOrder);
-
-    // ========================================================
-    // 데이터 병합 (파일 단위로 한 번만 읽기)
-    // ========================================================
-    var allMergedRows = {};
-    for (var initSi = 0; initSi < sheetOrder.length; initSi++) {
-      allMergedRows[sheetOrder[initSi]] = [];
-    }
-
-    // base + numbered
-    var baseAndNumbered = [classified.base];
-    for (var bni = 0; bni < classified.numbered.length; bni++) {
-      baseAndNumbered.push(classified.numbered[bni].name);
-    }
-
-    for (var bfi = 0; bfi < baseAndNumbered.length; bfi++) {
-      var bfName = baseAndNumbered[bfi];
-      progressCallback('파일 읽기 (' + (bfi + 1) + '/' + baseAndNumbered.length + '): ' + bfName.split('/').pop(),
-        10 + Math.round((bfi / baseAndNumbered.length) * 30));
-
-      var bfData = await zip.files[bfName].async('arraybuffer');
-      var bfWb = XLSX.read(bfData, { type: 'array', cellDates: false });
-      bfData = null;
-
-      for (var bsi = 0; bsi < baseSheetNames.length; bsi++) {
-        var bsn = baseSheetNames[bsi];
-        if (bfWb.SheetNames.indexOf(bsn) === -1) continue;
-
-        var bRows = XLSX.utils.sheet_to_json(bfWb.Sheets[bsn], { header: 1, raw: true, defval: '' });
-        if (allMergedRows[bsn].length === 0) {
-          for (var br = 0; br < bRows.length; br++) allMergedRows[bsn].push(bRows[br]);
-        } else if (bsn !== '부적합무선국') {
-          for (var br2 = 1; br2 < bRows.length; br2++) allMergedRows[bsn].push(bRows[br2]);
-        }
-        bRows = null;
-        bfWb.Sheets[bsn] = null;
-      }
-      bfWb = null;
-      await new Promise(function(resolve) { setTimeout(resolve, 5); });
-    }
-
-    // spt 파일
-    if (classified.spt) {
-      progressCallback('spt 파일 읽기...', 42);
-      var sptFd = await zip.files[classified.spt].async('arraybuffer');
-      var sptWbM = XLSX.read(sptFd, { type: 'array', cellDates: false });
-      sptFd = null;
-
-      for (var ssi = 0; ssi < sptWbM.SheetNames.length; ssi++) {
-        var ssn = sptWbM.SheetNames[ssi];
-        if (baseSheetNames.indexOf(ssn) !== -1) continue;
-        if (allMergedRows[ssn] === undefined) continue;
-
-        var sRows = XLSX.utils.sheet_to_json(sptWbM.Sheets[ssn], { header: 1, raw: true, defval: '' });
-        for (var sri = 0; sri < sRows.length; sri++) allMergedRows[ssn].push(sRows[sri]);
-        sRows = null;
-      }
-      sptWbM = null;
-    }
-
-    // (100) 파일 → 일반사항(검사전)
-    if (classified.skipped.length > 0) {
-      progressCallback('(100) 파일 읽기...', 44);
-      for (var ski = 0; ski < classified.skipped.length; ski++) {
-        var skFd = await zip.files[classified.skipped[ski]].async('arraybuffer');
-        var skWbM = XLSX.read(skFd, { type: 'array', cellDates: false });
-        skFd = null;
-
-        if (skWbM.SheetNames.indexOf('일반사항') !== -1) {
-          var skRowsM = XLSX.utils.sheet_to_json(skWbM.Sheets['일반사항'], { header: 1, raw: true, defval: '' });
-          if (allMergedRows['일반사항(검사전)'].length === 0) {
-            for (var sr3 = 0; sr3 < skRowsM.length; sr3++) allMergedRows['일반사항(검사전)'].push(skRowsM[sr3]);
-          } else {
-            for (var sr4 = 1; sr4 < skRowsM.length; sr4++) allMergedRows['일반사항(검사전)'].push(skRowsM[sr4]);
-          }
-          skRowsM = null;
-        }
-        skWbM = null;
-      }
-    }
-
-    zip = null;
-
-    // ========================================================
-    // 시트별 청크 생성 + 콜백
+    // 스트리밍 상태
     // ========================================================
     var CHUNK_SIZE = 500;
-    var sheetStats = {};
+    var sheetOrder = [];       // 최종 시트 순서
+    var sheetHeaders = {};     // 시트별 헤더 배열 (첫 행)
+    var sheetStats = {};       // 시트별 누적 데이터 행수
+    var sheetStartIndex = {};  // 시트별 현재 startIndex (파일 간 연속성)
     var totalRows = 0;
-    var totalSheets = sheetOrder.length;
 
-    for (var sheetIdx = 0; sheetIdx < totalSheets; sheetIdx++) {
-      var currentSheet = sheetOrder[sheetIdx];
-      var mergedRows = allMergedRows[currentSheet];
-      allMergedRows[currentSheet] = null;
-
-      if (!mergedRows || mergedRows.length === 0) {
-        sheetStats[currentSheet] = 0;
-        continue;
+    function registerSheet(name) {
+      if (sheetOrder.indexOf(name) === -1) {
+        sheetOrder.push(name);
+        sheetStats[name] = 0;
+        sheetStartIndex[name] = 0;
       }
+    }
 
-      var headers = mergedRows[0] || [];
-      var dataRows = mergedRows.slice(1);
-      mergedRows = null;
+    /**
+     * 시트 행 배열(헤더 포함)을 청크로 분할해 Dart에 즉시 전달
+     * 메모리 절약: rows를 함수 내부에서 null로 해제
+     */
+    async function streamSheetRows(sheetName, rows) {
+      var dataRows = rows.slice(1); // 헤더 행(index 0) 스킵 → 데이터만
+      rows = null;
+      if (!dataRows || dataRows.length === 0) { dataRows = null; return; }
 
+      var headers = sheetHeaders[sheetName];
       var dataCount = dataRows.length;
-      sheetStats[currentSheet] = dataCount;
-      totalRows += dataCount;
+      var totalChunks = Math.ceil(dataCount / CHUNK_SIZE) || 1;
+      var startIdx = sheetStartIndex[sheetName]; // 이 시트의 현재 전역 시작 인덱스
 
-      var totalChunks = Math.ceil(dataCount / CHUNK_SIZE);
-      if (totalChunks === 0) totalChunks = 1;
-
-      console.log('  ' + currentSheet + ': ' + dataCount.toLocaleString() + '행, ' + totalChunks + '청크');
+      console.log('  [stream] ' + sheetName + ': +' + dataCount.toLocaleString() + '행 (startIdx=' + startIdx + ')');
 
       for (var ci = 0; ci < totalChunks; ci++) {
         var start = ci * CHUNK_SIZE;
         var end = Math.min(start + CHUNK_SIZE, dataCount);
         var chunkRows = dataRows.slice(start, end);
 
-        var pct = 45 + Math.round(((sheetIdx + ci / totalChunks) / totalSheets) * 50);
-        progressCallback(currentSheet + ' 업로드 중 (' + (sheetIdx + 1) + '/' + totalSheets + ')', pct);
-
         var chunk = JSON.stringify({
           divisionId: meta.divisionId,
           divisionCode: meta.divisionCode,
           importDate: meta.importDate,
-          sheetName: currentSheet,
-          headers: headers.map(function(h) { return String(h); }),
+          sheetName: sheetName,
+          headers: headers,
           rows: chunkRows,
           chunkIndex: ci,
           totalChunks: totalChunks,
-          startIndex: start
+          startIndex: startIdx + start  // 전역 행 인덱스 (파일 간 연속)
         });
 
-        // 동기적으로 Dart에 청크 전달 (Dart가 EC2로 POST)
         chunkCallback(chunk);
-
         chunkRows = null;
         chunk = null;
 
-        // UI 업데이트를 위한 양보
         await new Promise(function(resolve) { setTimeout(resolve, 2); });
       }
 
+      // 다음 파일에서 이 시트를 이어받을 위치 갱신
+      sheetStartIndex[sheetName] += dataCount;
+      sheetStats[sheetName] += dataCount;
+      totalRows += dataCount;
       dataRows = null;
     }
 
+    // ========================================================
+    // 1. base 파일: 시트 구조 확정 + 헤더 추출 + 즉시 스트리밍
+    //    (파일 1회 읽기 - 구조 분석과 데이터 전송 동시 처리)
+    // ========================================================
+    progressCallback('base 파일 읽기 중...', 8);
+
+    var baseBytes = await zip.files[classified.base].async('arraybuffer');
+    var baseWb = XLSX.read(baseBytes, { type: 'array', cellDates: false });
+    baseBytes = null;
+
+    var baseSheetNames = baseWb.SheetNames.slice();
+
+    for (var bsi = 0; bsi < baseSheetNames.length; bsi++) {
+      var bsn = baseSheetNames[bsi];
+      registerSheet(bsn);
+
+      var bRows = XLSX.utils.sheet_to_json(baseWb.Sheets[bsn], { header: 1, raw: true, defval: '' });
+      baseWb.Sheets[bsn] = null; // 시트 즉시 해제
+
+      sheetHeaders[bsn] = (bRows[0] || []).map(function(h) { return String(h); });
+
+      progressCallback('base: ' + bsn + ' 전송 중... (' + (bsi + 1) + '/' + baseSheetNames.length + ')',
+        8 + Math.round((bsi / baseSheetNames.length) * 17));
+
+      await streamSheetRows(bsn, bRows);
+    }
+    baseWb = null;
+
+    // ========================================================
+    // 2. numbered 파일: base 시트에 행 추가 (즉시 스트리밍)
+    //    부적합무선국은 numbered 파일에서 추가하지 않음
+    // ========================================================
+    for (var nfi = 0; nfi < classified.numbered.length; nfi++) {
+      var nfName = classified.numbered[nfi].name;
+      progressCallback(
+        '번호파일 읽기 (' + (nfi + 1) + '/' + classified.numbered.length + '): ' + nfName.split('/').pop(),
+        27 + Math.round((nfi / Math.max(classified.numbered.length, 1)) * 38)
+      );
+
+      var nfData = await zip.files[nfName].async('arraybuffer');
+      var nfWb = XLSX.read(nfData, { type: 'array', cellDates: false });
+      nfData = null;
+
+      for (var nsi = 0; nsi < baseSheetNames.length; nsi++) {
+        var nsn = baseSheetNames[nsi];
+        if (nfWb.SheetNames.indexOf(nsn) === -1) continue;
+
+        // 부적합무선국: base 파일에서만 (numbered에서는 추가 안 함)
+        if (nsn === '부적합무선국') { nfWb.Sheets[nsn] = null; continue; }
+
+        var nRows = XLSX.utils.sheet_to_json(nfWb.Sheets[nsn], { header: 1, raw: true, defval: '' });
+        nfWb.Sheets[nsn] = null;
+
+        await streamSheetRows(nsn, nRows);
+      }
+      nfWb = null;
+      await new Promise(function(resolve) { setTimeout(resolve, 5); });
+    }
+
+    // ========================================================
+    // 3. spt 파일: base에 없는 새 시트만 (즉시 스트리밍)
+    // ========================================================
+    if (classified.spt) {
+      progressCallback('spt 파일 읽기...', 67);
+
+      var sptFd = await zip.files[classified.spt].async('arraybuffer');
+      var sptWb = XLSX.read(sptFd, { type: 'array', cellDates: false });
+      sptFd = null;
+
+      for (var ssi = 0; ssi < sptWb.SheetNames.length; ssi++) {
+        var ssn = sptWb.SheetNames[ssi];
+        // base 시트는 spt에서 스킵 (이미 처리됨)
+        if (baseSheetNames.indexOf(ssn) !== -1) { sptWb.Sheets[ssn] = null; continue; }
+
+        registerSheet(ssn);
+
+        var sRows = XLSX.utils.sheet_to_json(sptWb.Sheets[ssn], { header: 1, raw: true, defval: '' });
+        sptWb.Sheets[ssn] = null;
+
+        sheetHeaders[ssn] = (sRows[0] || []).map(function(h) { return String(h); });
+        await streamSheetRows(ssn, sRows);
+      }
+      sptWb = null;
+    }
+
+    // ========================================================
+    // 4. (100) 파일 → '일반사항(검사전)' 시트 (즉시 스트리밍)
+    // ========================================================
+    if (classified.skipped.length > 0) {
+      registerSheet('일반사항(검사전)');
+      sheetHeaders['일반사항(검사전)'] = sheetHeaders['일반사항(검사전)'] || [];
+
+      for (var ski = 0; ski < classified.skipped.length; ski++) {
+        progressCallback('(100) 파일 읽기 (' + (ski + 1) + '/' + classified.skipped.length + ')...', 85);
+
+        var skFd = await zip.files[classified.skipped[ski]].async('arraybuffer');
+        var skWb = XLSX.read(skFd, { type: 'array', cellDates: false });
+        skFd = null;
+
+        if (skWb.SheetNames.indexOf('일반사항') !== -1) {
+          var skRows = XLSX.utils.sheet_to_json(skWb.Sheets['일반사항'], { header: 1, raw: true, defval: '' });
+          skWb.Sheets['일반사항'] = null;
+
+          // 첫 번째 파일에서만 헤더 추출
+          if (sheetHeaders['일반사항(검사전)'].length === 0) {
+            sheetHeaders['일반사항(검사전)'] = (skRows[0] || []).map(function(h) { return String(h); });
+          }
+          await streamSheetRows('일반사항(검사전)', skRows);
+        }
+        skWb = null;
+      }
+    }
+
+    zip = null;
     progressCallback('완료!', 100);
 
     meta.sheetStats = sheetStats;
     meta.totalRows = totalRows;
     meta.sheetOrder = sheetOrder;
 
+    console.log('DS 파싱 완료: ' + sheetOrder.length + '개 시트, ' + totalRows.toLocaleString() + '행');
+
     completionCallback(true,
       regionInfo.divisionName + ' ' + parsed.importDate + '\n'
-      + totalSheets + '개 시트, ' + totalRows.toLocaleString() + '행 파싱 완료',
+      + sheetOrder.length + '개 시트, ' + totalRows.toLocaleString() + '행 파싱 완료',
       JSON.stringify(meta));
 
   } catch (e) {
