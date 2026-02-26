@@ -843,16 +843,22 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
 
     if (confirmed == true) {
       try {
-        final deleted = await _dataService.deleteData(
+        await _dataService.deleteData(
           upload.divisionId,
           upload.actualDate,
           divisionCode: upload.divisionCode,
         );
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('${DsDataService.formatNumber(deleted)}건 삭제 완료')),
+            const SnackBar(
+              content: Text('삭제되었습니다. DynamoDB 레코드는 백그라운드에서 정리됩니다.'),
+            ),
           );
           _loadStats();
+          // 백그라운드 삭제 완료 후 재갱신 (혹시 남아있는 데이터 반영)
+          Future.delayed(const Duration(seconds: 15), () {
+            if (mounted) _loadStats();
+          });
         }
       } catch (e) {
         if (mounted) {

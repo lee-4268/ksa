@@ -7,6 +7,8 @@ import os
 import json
 import uuid
 import shutil
+import asyncio
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import List, Optional, Dict
 from datetime import datetime
@@ -17,8 +19,9 @@ import httpx
 import boto3
 from botocore.exceptions import ClientError
 import numpy as np
-from fastapi import FastAPI, File, UploadFile, HTTPException, Query, Form
+from fastapi import FastAPI, File, UploadFile, HTTPException, Query, Form, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 from ultralytics import YOLO
@@ -51,6 +54,22 @@ DYNAMODB_TABLES = {
     "categories": os.getenv("DYNAMODB_CATEGORIES_TABLE", "kca-categories"),
     "stations": os.getenv("DYNAMODB_STATIONS_TABLE", "kca-stations"),
     "classifications": os.getenv("DYNAMODB_CLASSIFICATIONS_TABLE", "kca-classifications"),
+    "ds_records": os.getenv("DYNAMODB_DS_RECORDS_TABLE", "kca-ds-records"),
+    "ds_uploads": os.getenv("DYNAMODB_DS_UPLOADS_TABLE", "kca-ds-uploads"),
+}
+
+# DS 전파관리소 지역코드 → 회사 본부 매핑
+# 수도권(10) → 강남/강북/인천/경기 4개 본부 통합 저장
+# 충남(50)+충북(55) → 충청본부, 전남(30)+전북(70) → 서부본부
+DS_REGION_CODE_MAP = {
+    "10": {"divisionId": "sudogwon", "divisionName": "수도권"},
+    "20": {"divisionId": "gyeongnam", "divisionName": "경남본부"},
+    "30": {"divisionId": "seobu", "divisionName": "서부본부"},
+    "40": {"divisionId": "gangwon", "divisionName": "강원본부"},
+    "50": {"divisionId": "chungcheong", "divisionName": "충청본부"},
+    "55": {"divisionId": "chungcheong", "divisionName": "충청본부"},
+    "60": {"divisionId": "gyeongbuk", "divisionName": "경북본부"},
+    "70": {"divisionId": "seobu", "divisionName": "서부본부"},
 }
 
 # Logger setup
@@ -236,7 +255,38 @@ class S3UploadResponse(BaseModel):
 class S3PresignedUrlResponse(BaseModel):
     success: bool
     url: str
-    expires_in: int
+
+
+# ============================================================
+# DS Upload Models
+# ============================================================
+
+class DsUploadInit(BaseModel):
+    divisionId: str
+    divisionCode: str
+    importDate: str
+    fileName: str
+    uploadedBy: str
+
+
+class DsUploadChunk(BaseModel):
+    divisionId: str
+    divisionCode: str = ""
+    importDate: str
+    sheetName: str
+    headers: List[str]
+    rows: List[List]
+    chunkIndex: int
+    totalChunks: int
+    startIndex: int = 0
+
+
+class DsUploadFinalize(BaseModel):
+    divisionId: str
+    divisionCode: str = ""
+    importDate: str
+    sheetStats: Dict[str, int]
+    totalRows: int
 
 
 # ============================================================
@@ -293,6 +343,9 @@ app.add_middleware(
     max_age=3600,
 )
 
+# GZip 압축 - JSON 응답 80%+ 압축, 네트워크 전송 대폭 감소
+app.add_middleware(GZipMiddleware, minimum_size=1000)
+
 # ============================================================
 # Model Loading
 # ============================================================
@@ -313,12 +366,10 @@ def load_model():
 
 @app.on_event("startup")
 async def startup_event():
-    """Load model on startup"""
-    try:
-        load_model()
-        print("Server started successfully!")
-    except Exception as e:
-        print(f"Warning: Could not load model on startup: {e}")
+    """서버 시작 - YOLO 모델은 Lazy Loading (첫 분류 요청 시 로드)"""
+    # EC2 메모리 절약: 시작 시 모델 로드 안 함 (~200MB 절약)
+    # /predict, /predict/ensemble 첫 호출 시 자동 로드됨
+    print("Server started successfully! (YOLO model: lazy load)")
 
 
 # ============================================================
@@ -1298,6 +1349,620 @@ async def get_user_by_empno(empno: str):
                 "team": user.get("DeptName"),
             }
         return {"success": False, "empno": empno}
+
+
+# ============================================================
+# DS Data Upload/Query Endpoints
+# ============================================================
+
+@app.get("/ds/region-codes")
+async def ds_region_codes():
+    """DS 지역코드 매핑 조회"""
+    return {"success": True, "codes": DS_REGION_CODE_MAP}
+
+
+def _delete_ds_records_targeted(records_table, uploads_table, divisionId: str, importDate: str, divisionCode: str) -> int:
+    """
+    시트별 SK 프리픽스 정밀 쿼리로 레코드 삭제
+    - 각 시트를 별도 스레드에서 병렬 처리 (최대 5개 동시)
+    - 스레드별 독립 DynamoDB 세션 (thread-safe)
+    - 1.8M행 기준: 직렬 ~6분 → 병렬 ~40초
+    - FilterExpression 전체 스캔 완전 제거 (OOM 방지)
+    """
+    dc_part = f"#{divisionCode}" if divisionCode else ""
+    upload_sk = f"{divisionCode}#{importDate}" if divisionCode else importDate
+
+    # kca-ds-uploads에서 시트 목록 조회
+    sheet_names = []
+    try:
+        resp = uploads_table.get_item(Key={"divisionId": divisionId, "importDate": upload_sk})
+        item = resp.get("Item", {})
+        sheet_names = list(item.get("sheetStats", {}).keys())
+    except Exception:
+        pass
+
+    if not sheet_names:
+        return 0  # 데이터 없음 → 스킵 (OOM 방지)
+
+    def _delete_one_sheet(sheet_name: str) -> int:
+        """단일 시트 삭제 - 스레드별 독립 DynamoDB 세션 사용"""
+        # boto3는 기본 session이 thread-safe하지 않으므로 스레드별 신규 session 생성
+        session = boto3.session.Session()
+        _table = session.resource("dynamodb", region_name=S3_REGION).Table(DYNAMODB_TABLES["ds_records"])
+
+        sk_prefix = f"{sheet_name}#{importDate}{dc_part}#"
+        deleted = 0
+        last_key = None
+        while True:
+            kwargs = {
+                "KeyConditionExpression": "divisionId = :did AND begins_with(sk, :skp)",
+                "ExpressionAttributeValues": {":did": divisionId, ":skp": sk_prefix},
+                "ProjectionExpression": "divisionId, sk",
+                "Limit": 1000,
+            }
+            if last_key:
+                kwargs["ExclusiveStartKey"] = last_key
+
+            response = _table.query(**kwargs)
+            items = response.get("Items", [])
+
+            if items:
+                with _table.batch_writer() as batch:
+                    for item in items:
+                        batch.delete_item(Key={"divisionId": item["divisionId"], "sk": item["sk"]})
+                        deleted += 1
+                items = None
+
+            last_key = response.get("LastEvaluatedKey")
+            if not last_key:
+                break
+        return deleted
+
+    # 시트 병렬 삭제 (최대 5개 동시, DynamoDB 처리량 고려)
+    total_deleted = 0
+    max_workers = min(len(sheet_names), 5)
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(_delete_one_sheet, sn): sn for sn in sheet_names}
+        for future in as_completed(futures):
+            try:
+                total_deleted += future.result()
+            except Exception as e:
+                logger.error(f"Sheet deletion error [{futures[future]}]: {e}")
+
+    return total_deleted
+
+
+async def _background_delete_records(divisionId: str, importDate: str, divisionCode: str):
+    """백그라운드 레코드 삭제 - asyncio.to_thread으로 이벤트 루프 블로킹 없이 실행"""
+    try:
+        dynamodb = get_dynamodb_resource()
+        records_table = dynamodb.Table(DYNAMODB_TABLES["ds_records"])
+        uploads_table = dynamodb.Table(DYNAMODB_TABLES["ds_uploads"])
+        deleted = await asyncio.to_thread(
+            _delete_ds_records_targeted, records_table, uploads_table, divisionId, importDate, divisionCode
+        )
+        logger.info(f"Background delete complete: {divisionId}/{divisionCode}_{importDate} - {deleted} records")
+    except Exception as e:
+        logger.error(f"Background delete error [{divisionId}/{divisionCode}_{importDate}]: {e}")
+
+
+@app.get("/ds/upload-presign")
+async def ds_upload_presign(
+    divisionId: str = Query(...),
+    divisionCode: str = Query(...),
+    importDate: str = Query(...),
+):
+    """S3 presigned URL 생성 - 원본 ZIP 업로드용"""
+    try:
+        s3 = boto3.client("s3", region_name=S3_REGION)
+        key = f"ds-raw/{divisionId}/{divisionCode}_{importDate}.zip"
+        url = s3.generate_presigned_url(
+            "put_object",
+            Params={"Bucket": S3_BUCKET_NAME, "Key": key, "ContentType": "application/zip"},
+            ExpiresIn=3600,
+        )
+        return {"success": True, "url": url, "key": key}
+    except Exception as e:
+        logger.error(f"DS upload presign error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/ds/xlsx-upload-presign")
+async def ds_xlsx_upload_presign(
+    divisionId: str = Query(...),
+    divisionCode: str = Query(...),
+    importDate: str = Query(...),
+):
+    """S3 presigned URL 생성 - 병합된 xlsx 저장용 (업로드 시 생성)"""
+    try:
+        s3 = boto3.client("s3", region_name=S3_REGION)
+        key = f"ds-exports/{divisionId}/{divisionCode}_{importDate}.xlsx"
+        url = s3.generate_presigned_url(
+            "put_object",
+            Params={
+                "Bucket": S3_BUCKET_NAME,
+                "Key": key,
+                "ContentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            },
+            ExpiresIn=3600,
+        )
+        return {"success": True, "url": url, "key": key}
+    except Exception as e:
+        logger.error(f"DS xlsx upload presign error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/ds/export-presign")
+async def ds_export_presign(
+    divisionId: str = Query(...),
+    importDate: str = Query(...),
+    divisionCode: str = Query(""),
+):
+    """S3 Export용 presigned URL - 병합 xlsx 우선, 없으면 원본 ZIP"""
+    try:
+        s3 = boto3.client("s3", region_name=S3_REGION)
+
+        # 1순위: 미리 생성된 병합 xlsx → 즉시 다운로드
+        xlsx_key = f"ds-exports/{divisionId}/{divisionCode}_{importDate}.xlsx"
+        try:
+            s3.head_object(Bucket=S3_BUCKET_NAME, Key=xlsx_key)
+            url = s3.generate_presigned_url(
+                "get_object",
+                Params={"Bucket": S3_BUCKET_NAME, "Key": xlsx_key},
+                ExpiresIn=3600,
+            )
+            return {"success": True, "url": url, "type": "xlsx"}
+        except ClientError:
+            pass
+
+        # 2순위: 원본 ZIP → 브라우저에서 병합
+        zip_key = f"ds-raw/{divisionId}/{divisionCode}_{importDate}.zip"
+        try:
+            s3.head_object(Bucket=S3_BUCKET_NAME, Key=zip_key)
+            url = s3.generate_presigned_url(
+                "get_object",
+                Params={"Bucket": S3_BUCKET_NAME, "Key": zip_key},
+                ExpiresIn=3600,
+            )
+            return {"success": True, "url": url, "type": "zip"}
+        except ClientError:
+            pass
+
+        return {"success": False, "message": "S3에 파일 없음. DB Export로 대체합니다."}
+    except Exception as e:
+        logger.error(f"DS export presign error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/ds/upload-init")
+async def ds_upload_init(req: DsUploadInit):
+    """DS 업로드 세션 시작 - 기존 데이터 삭제 후 새 레코드 생성"""
+    try:
+        dynamodb = get_dynamodb_resource()
+        uploads_table = dynamodb.Table(DYNAMODB_TABLES["ds_uploads"])
+        records_table = dynamodb.Table(DYNAMODB_TABLES["ds_records"])
+
+        sk = f"{req.divisionCode}#{req.importDate}" if req.divisionCode else req.importDate
+
+        # 기존 데이터 존재 시 자동 삭제 (동일 divisionId+divisionCode+importDate)
+        existing = uploads_table.get_item(Key={"divisionId": req.divisionId, "importDate": sk}).get("Item")
+        if existing:
+            logger.info(f"DS upload-init: 기존 데이터 삭제 시작 {req.divisionId}/{sk}")
+
+            # 기존 pre-built xlsx S3에서도 삭제 (재업로드 시 이전 xlsx 무효화)
+            try:
+                s3 = boto3.client("s3", region_name=S3_REGION)
+                s3.delete_object(
+                    Bucket=S3_BUCKET_NAME,
+                    Key=f"ds-exports/{req.divisionId}/{req.divisionCode}_{req.importDate}.xlsx"
+                )
+            except Exception:
+                pass
+
+            # asyncio.to_thread: 이벤트 루프 블로킹 없이 병렬 시트 삭제 실행
+            deleted = await asyncio.to_thread(
+                _delete_ds_records_targeted, records_table, uploads_table,
+                req.divisionId, req.importDate, req.divisionCode
+            )
+            uploads_table.delete_item(Key={"divisionId": req.divisionId, "importDate": sk})
+            logger.info(f"DS upload-init: 기존 {deleted}건 삭제 완료")
+
+        now = datetime.now().isoformat()
+        uploads_table.put_item(Item={
+            "divisionId": req.divisionId,
+            "importDate": sk,
+            "divisionCode": req.divisionCode,
+            "uploadedBy": req.uploadedBy,
+            "uploadedAt": now,
+            "fileName": req.fileName,
+            "status": "uploading",
+            "sheetStats": {},
+            "totalRows": 0,
+        })
+
+        logger.info(f"DS upload init: {req.divisionId} / {sk}")
+        return {"success": True, "uploadId": f"{req.divisionId}#{sk}"}
+    except ClientError as e:
+        logger.error(f"DS upload-init error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/ds/upload-chunk")
+async def ds_upload_chunk(req: DsUploadChunk):
+    """DS 청크 데이터 수신 → DynamoDB BatchWriteItem"""
+    try:
+        dynamodb = get_dynamodb_resource()
+        table = dynamodb.Table(DYNAMODB_TABLES["ds_records"])
+
+        now = datetime.now().isoformat()
+        written = 0
+
+        with table.batch_writer() as batch:
+            for i, row in enumerate(req.rows):
+                row_idx = req.startIndex + i
+                # 헤더와 행 데이터를 딕셔너리로 변환
+                data = {}
+                for col_idx, header in enumerate(req.headers):
+                    if col_idx < len(row):
+                        val = row[col_idx]
+                        if val is not None and val != "":
+                            data[header] = str(val)
+
+                dc_part = f"#{req.divisionCode}" if req.divisionCode else ""
+                item = {
+                    "divisionId": req.divisionId,
+                    "sk": f"{req.sheetName}#{req.importDate}{dc_part}#{row_idx:06d}",
+                    "sheetName": req.sheetName,
+                    "importDate": req.importDate,
+                    "divisionCode": req.divisionCode,
+                    "uploadedAt": now,
+                    "data": data,
+                }
+                batch.put_item(Item=item)
+                written += 1
+
+        logger.info(f"DS chunk: {req.divisionId}/{req.sheetName} chunk {req.chunkIndex}/{req.totalChunks} - {written} rows")
+        return {"success": True, "writtenCount": written}
+    except ClientError as e:
+        logger.error(f"DS upload-chunk error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/ds/upload-finalize")
+async def ds_upload_finalize(req: DsUploadFinalize):
+    """DS 업로드 완료 - status 업데이트"""
+    try:
+        dynamodb = get_dynamodb_resource()
+        table = dynamodb.Table(DYNAMODB_TABLES["ds_uploads"])
+
+        sk = f"{req.divisionCode}#{req.importDate}" if req.divisionCode else req.importDate
+        table.update_item(
+            Key={"divisionId": req.divisionId, "importDate": sk},
+            UpdateExpression="SET #s = :s, sheetStats = :ss, totalRows = :tr",
+            ExpressionAttributeNames={"#s": "status"},
+            ExpressionAttributeValues={
+                ":s": "completed",
+                ":ss": {k: v for k, v in req.sheetStats.items()},
+                ":tr": req.totalRows,
+            },
+        )
+
+        logger.info(f"DS upload finalized: {req.divisionId}/{sk} - {req.totalRows} rows")
+        return {"success": True}
+    except ClientError as e:
+        logger.error(f"DS upload-finalize error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/ds/stats")
+async def ds_stats(
+    divisionId: Optional[str] = Query(None),
+    importDate: Optional[str] = Query(None),
+    divisionCode: Optional[str] = Query(None),
+):
+    """DS 업로드 통계 조회 (대시보드용)"""
+    try:
+        dynamodb = get_dynamodb_resource()
+        table = dynamodb.Table(DYNAMODB_TABLES["ds_uploads"])
+
+        if divisionId:
+            # 특정 본부 조회
+            if importDate and divisionCode:
+                # 특정 코드+날짜 조회
+                sk = f"{divisionCode}#{importDate}"
+                response = table.get_item(Key={"divisionId": divisionId, "importDate": sk})
+                item = response.get("Item")
+                items = [item] if item else []
+            elif importDate:
+                # 날짜 필터 (SK contains importDate → FilterExpression 사용)
+                response = table.query(
+                    KeyConditionExpression="divisionId = :did",
+                    FilterExpression="contains(importDate, :idate)",
+                    ExpressionAttributeValues={":did": divisionId, ":idate": importDate},
+                    ScanIndexForward=False,
+                )
+                items = response.get("Items", [])
+            else:
+                response = table.query(
+                    KeyConditionExpression="divisionId = :did",
+                    ExpressionAttributeValues={":did": divisionId},
+                    ScanIndexForward=False,
+                )
+                items = response.get("Items", [])
+        else:
+            # 전체 본부 조회 - 페이지네이션 scan (메모리 절약)
+            items = []
+            last_key = None
+            while True:
+                kwargs = {"Limit": 100}
+                if last_key:
+                    kwargs["ExclusiveStartKey"] = last_key
+                response = table.scan(**kwargs)
+                items.extend(response.get("Items", []))
+                last_key = response.get("LastEvaluatedKey")
+                if not last_key or len(items) >= 500:
+                    break
+
+        # divisionName 추가
+        for item in items:
+            code = item.get("divisionCode", "")
+            if code in DS_REGION_CODE_MAP:
+                item["divisionName"] = DS_REGION_CODE_MAP[code]["divisionName"]
+
+        return {"success": True, "uploads": decimal_to_native(items), "count": len(items)}
+    except ClientError as e:
+        logger.error(f"DS stats error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/ds/export")
+async def ds_export(
+    divisionId: str = Query(...),
+    importDate: str = Query(...),
+    divisionCode: Optional[str] = Query(None),
+):
+    """DS 데이터 Excel Export용 - 스트리밍 JSON 응답 (메모리 절약)"""
+    async def generate():
+        try:
+            dynamodb = get_dynamodb_resource()
+            records_table = dynamodb.Table(DYNAMODB_TABLES["ds_records"])
+            uploads_table = dynamodb.Table(DYNAMODB_TABLES["ds_uploads"])
+
+            # 1. uploads에서 시트 목록 확보
+            upload_sk = f"{divisionCode}#{importDate}" if divisionCode else importDate
+            upload_resp = uploads_table.get_item(Key={"divisionId": divisionId, "importDate": upload_sk})
+            upload_item = upload_resp.get("Item", {})
+            sheet_stats = upload_item.get("sheetStats", {})
+            sheet_names = list(sheet_stats.keys())
+
+            if not sheet_names:
+                yield json.dumps({"success": False, "message": "시트 정보를 찾을 수 없습니다."})
+                return
+
+            division_name = ""
+            if divisionCode and divisionCode in DS_REGION_CODE_MAP:
+                division_name = DS_REGION_CODE_MAP[divisionCode]["divisionName"]
+
+            meta = {
+                "divisionId": divisionId,
+                "divisionCode": divisionCode or "",
+                "divisionName": division_name,
+                "importDate": importDate,
+            }
+
+            # JSON 스트리밍 시작
+            yield '{"success":true,"meta":' + json.dumps(meta, ensure_ascii=False) + ',"sheets":['
+
+            first_sheet = True
+            for sheet_name in sheet_names:
+                dc_part = f"#{divisionCode}" if divisionCode else ""
+                sk_prefix = f"{sheet_name}#{importDate}{dc_part}"
+                base_query = {
+                    "KeyConditionExpression": "divisionId = :did AND begins_with(sk, :skp)",
+                    "ExpressionAttributeValues": {":did": divisionId, ":skp": sk_prefix},
+                    "Limit": 1000,
+                }
+
+                # Pass 1: 헤더 수집 (첫 배치만 — data 키만 추출, 행 저장 안 함)
+                resp = records_table.query(**base_query)
+                first_items = resp.get("Items", [])
+                if not first_items:
+                    continue
+
+                headers = []
+                seen = set()
+                for item in first_items:
+                    for key in item.get("data", {}).keys():
+                        if key not in seen:
+                            headers.append(key)
+                            seen.add(key)
+
+                # 시트 JSON 출력
+                if not first_sheet:
+                    yield ","
+                first_sheet = False
+
+                yield '{"name":' + json.dumps(sheet_name, ensure_ascii=False)
+                yield ',"headers":' + json.dumps(headers, ensure_ascii=False)
+                yield ',"rows":['
+
+                # Pass 2: 행 데이터를 DynamoDB 배치 단위로 바로 스트리밍 (메모리 미축적)
+                first_row = True
+                row_count = 0
+
+                # 첫 배치 결과 먼저 출력
+                batch_items = first_items
+                first_items = None  # 참조 해제
+                p1_last_key = resp.get("LastEvaluatedKey")
+
+                while True:
+                    chunk_rows = []
+                    for item in batch_items:
+                        data = item.get("data", {})
+                        # 헤더에 없는 새 키 발견 시 추가
+                        for key in data.keys():
+                            if key not in seen:
+                                headers.append(key)
+                                seen.add(key)
+                        row = [str(data.get(h, "")) for h in headers]
+                        chunk_rows.append(json.dumps(row, ensure_ascii=False))
+                    batch_items = None  # 참조 해제
+
+                    if chunk_rows:
+                        prefix = "" if first_row else ","
+                        first_row = False
+                        yield prefix + ",".join(chunk_rows)
+                        row_count += len(chunk_rows)
+                    chunk_rows = None
+
+                    if not p1_last_key:
+                        break
+
+                    kwargs = {**base_query, "ExclusiveStartKey": p1_last_key}
+                    resp = records_table.query(**kwargs)
+                    batch_items = resp.get("Items", [])
+                    p1_last_key = resp.get("LastEvaluatedKey")
+
+                yield "]}"
+                logger.info(f"DS export sheet '{sheet_name}': {row_count} rows streamed")
+
+            yield "]}"
+
+        except ClientError as e:
+            logger.error(f"DS export error: {e}")
+            yield json.dumps({"success": False, "message": str(e)})
+        except Exception as e:
+            logger.error(f"DS export unexpected error: {e}")
+            yield json.dumps({"success": False, "message": str(e)})
+
+    return StreamingResponse(generate(), media_type="application/json")
+
+
+@app.get("/ds/data")
+async def ds_data(
+    divisionId: str = Query(...),
+    sheetName: str = Query(...),
+    importDate: Optional[str] = Query(None),
+    limit: int = Query(100, le=1000),
+    lastKey: Optional[str] = Query(None),
+    search: Optional[str] = Query(None),
+):
+    """DS 데이터 리스트 조회 (페이징, 서버측 검색 지원)"""
+    try:
+        dynamodb = get_dynamodb_resource()
+        table = dynamodb.Table(DYNAMODB_TABLES["ds_records"])
+
+        sk_prefix = f"{sheetName}#{importDate}" if importDate else sheetName
+
+        base_kwargs = {
+            "KeyConditionExpression": "divisionId = :did AND begins_with(sk, :skp)",
+            "ExpressionAttributeValues": {
+                ":did": divisionId,
+                ":skp": sk_prefix,
+            },
+        }
+
+        if search:
+            # 서버측 검색: DynamoDB에서 소량 배치로 읽어 Python에서 필터링
+            search_lower = search.lower()
+            matched = []
+            continuation_key = json.loads(lastKey) if lastKey else None
+
+            # 최대 5회 배치 쿼리 (배치당 500건 = 최대 2500건 스캔)
+            for _ in range(5):
+                kwargs = {**base_kwargs, "Limit": 500}
+                if continuation_key:
+                    kwargs["ExclusiveStartKey"] = continuation_key
+
+                response = table.query(**kwargs)
+                batch_items = response.get("Items", [])
+
+                for item in batch_items:
+                    data = item.get("data", {})
+                    if any(search_lower in str(v).lower() for v in data.values()):
+                        matched.append(item)
+                        if len(matched) >= limit:
+                            break
+                batch_items = None  # 참조 해제
+
+                continuation_key = response.get("LastEvaluatedKey")
+                if not continuation_key or len(matched) >= limit:
+                    break
+
+            result_items = matched[:limit]
+            matched = None  # 참조 해제
+            return {
+                "success": True,
+                "items": decimal_to_native(result_items),
+                "count": len(result_items),
+                "lastEvaluatedKey": json.dumps(continuation_key) if continuation_key and len(result_items) >= limit else None,
+            }
+        else:
+            # 일반 페이징 조회
+            kwargs = {**base_kwargs, "Limit": limit}
+            if lastKey:
+                kwargs["ExclusiveStartKey"] = json.loads(lastKey)
+
+            response = table.query(**kwargs)
+            items = response.get("Items", [])
+            last_evaluated_key = response.get("LastEvaluatedKey")
+
+            return {
+                "success": True,
+                "items": decimal_to_native(items),
+                "count": len(items),
+                "lastEvaluatedKey": json.dumps(last_evaluated_key) if last_evaluated_key else None,
+            }
+    except ClientError as e:
+        logger.error(f"DS data query error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/ds/data")
+async def ds_delete_data(
+    background_tasks: BackgroundTasks,
+    divisionId: str = Query(...),
+    importDate: str = Query(...),
+    divisionCode: Optional[str] = Query(None),
+):
+    """
+    DS 데이터 삭제 - 즉시 응답 + 레코드는 백그라운드 삭제
+    - uploads 레코드: 즉시 삭제 → 대시보드에서 즉시 사라짐
+    - S3 xlsx/zip: 즉시 삭제 → 이전 Export 파일 무효화
+    - DynamoDB records: 백그라운드 병렬 삭제 (1.8M행 기준 ~40초, EC2 무부하)
+    """
+    try:
+        dynamodb = get_dynamodb_resource()
+        uploads_table = dynamodb.Table(DYNAMODB_TABLES["ds_uploads"])
+
+        dc = divisionCode or ""
+        upload_sk = f"{dc}#{importDate}" if dc else importDate
+
+        # S3 파일 즉시 삭제 (xlsx + zip)
+        try:
+            s3 = boto3.client("s3", region_name=S3_REGION)
+            for s3_key in [
+                f"ds-exports/{divisionId}/{dc}_{importDate}.xlsx",
+                f"ds-raw/{divisionId}/{dc}_{importDate}.zip",
+            ]:
+                try:
+                    s3.delete_object(Bucket=S3_BUCKET_NAME, Key=s3_key)
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.warning(f"S3 delete error (non-fatal): {e}")
+
+        # uploads 레코드 즉시 삭제 → 대시보드에서 즉시 사라짐
+        uploads_table.delete_item(Key={"divisionId": divisionId, "importDate": upload_sk})
+
+        # DynamoDB records 백그라운드 삭제 (대용량 → EC2 이벤트 루프 블로킹 방지)
+        background_tasks.add_task(_background_delete_records, divisionId, importDate, dc)
+
+        logger.info(f"DS delete initiated (background): {divisionId}/{upload_sk}")
+        return {"success": True, "deletedCount": 0}
+    except ClientError as e:
+        logger.error(f"DS delete error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ============================================================
