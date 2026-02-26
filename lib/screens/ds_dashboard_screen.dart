@@ -116,7 +116,11 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
           _uploadResult = message;
           _uploadSuccess = true;
         });
-        _loadStats(); // 업로드 완료 후 목록 갱신
+        _loadStats(); // 업로드 완료 후 즉시 갱신
+        // DynamoDB eventual consistency 대비 3초 후 재갱신
+        Future.delayed(const Duration(seconds: 3), () {
+          if (mounted) _loadStats();
+        });
       }
     } catch (e) {
       if (mounted) {
@@ -125,6 +129,7 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
           _uploadResult = e.toString().replaceFirst('Exception: ', '');
           _uploadSuccess = false;
         });
+        _loadStats(); // 실패 시에도 목록 갱신 (stuck 레코드 표시)
       }
     }
   }
@@ -303,7 +308,19 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh),
-            onPressed: _isLoading ? null : _loadStats,
+            onPressed: _isLoading
+                ? null
+                : () {
+                    // 수동 새로고침: 업로드가 stuck된 경우 상태 초기화
+                    if (_isUploading) {
+                      setState(() {
+                        _isUploading = false;
+                        _uploadStage = '';
+                        _uploadProgress = 0;
+                      });
+                    }
+                    _loadStats();
+                  },
             tooltip: '새로고침',
           ),
         ],
