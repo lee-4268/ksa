@@ -417,19 +417,25 @@ def decimal_to_native(obj):
     return obj
 
 
+# ============================================================
+# boto3 모듈 레벨 싱글턴 — 커넥션 풀 재사용 (요청마다 재생성 금지)
+# boto3 client/resource는 thread-safe하므로 싱글턴 사용 안전
+# ============================================================
+_s3_client = boto3.client('s3', region_name=S3_REGION)
+_dynamodb_resource = boto3.resource('dynamodb', region_name=S3_REGION)
+_dynamodb_client = boto3.client('dynamodb', region_name=S3_REGION)
+
+
 def get_s3_client():
-    """Get boto3 S3 client"""
-    return boto3.client('s3', region_name=S3_REGION)
+    return _s3_client
 
 
 def get_dynamodb_resource():
-    """Get boto3 DynamoDB resource"""
-    return boto3.resource('dynamodb', region_name=S3_REGION)
+    return _dynamodb_resource
 
 
 def get_dynamodb_client():
-    """Get boto3 DynamoDB client"""
-    return boto3.client('dynamodb', region_name=S3_REGION)
+    return _dynamodb_client
 
 
 def upload_to_s3(file_path: Path, s3_key: str) -> bool:
@@ -1457,7 +1463,7 @@ async def ds_upload_presign(
 ):
     """S3 presigned URL 생성 - 원본 ZIP 업로드용"""
     try:
-        s3 = boto3.client("s3", region_name=S3_REGION)
+        s3 = get_s3_client()
         key = f"ds-raw/{divisionId}/{divisionCode}_{importDate}.zip"
         url = s3.generate_presigned_url(
             "put_object",
@@ -1478,7 +1484,7 @@ async def ds_xlsx_upload_presign(
 ):
     """S3 presigned URL 생성 - 병합된 xlsx 저장용 (업로드 시 생성)"""
     try:
-        s3 = boto3.client("s3", region_name=S3_REGION)
+        s3 = get_s3_client()
         key = f"ds-exports/{divisionId}/{divisionCode}_{importDate}.xlsx"
         url = s3.generate_presigned_url(
             "put_object",
@@ -1503,7 +1509,7 @@ async def ds_export_presign(
 ):
     """S3 Export용 presigned URL - 병합 xlsx 우선, 없으면 원본 ZIP"""
     try:
-        s3 = boto3.client("s3", region_name=S3_REGION)
+        s3 = get_s3_client()
 
         # 1순위: 미리 생성된 병합 xlsx → 즉시 다운로드
         xlsx_key = f"ds-exports/{divisionId}/{divisionCode}_{importDate}.xlsx"
@@ -1556,7 +1562,7 @@ async def ds_upload_init(req: DsUploadInit):
 
             # 기존 pre-built xlsx S3에서도 삭제 (재업로드 시 이전 xlsx 무효화)
             try:
-                s3 = boto3.client("s3", region_name=S3_REGION)
+                s3 = get_s3_client()
                 s3.delete_object(
                     Bucket=S3_BUCKET_NAME,
                     Key=f"ds-exports/{req.divisionId}/{req.divisionCode}_{req.importDate}.xlsx"
@@ -1593,40 +1599,41 @@ async def ds_upload_init(req: DsUploadInit):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _write_chunk_sync(req: "DsUploadChunk") -> int:
+    """동기 DynamoDB 청크 쓰기 — asyncio.to_thread로 호출해 이벤트 루프 비점유"""
+    table = _dynamodb_resource.Table(DYNAMODB_TABLES["ds_records"])
+    now = datetime.now().isoformat()
+    written = 0
+    with table.batch_writer() as batch:
+        for i, row in enumerate(req.rows):
+            row_idx = req.startIndex + i
+            data = {}
+            for col_idx, header in enumerate(req.headers):
+                if col_idx < len(row):
+                    val = row[col_idx]
+                    if val is not None and val != "":
+                        data[header] = str(val)
+            dc_part = f"#{req.divisionCode}" if req.divisionCode else ""
+            item = {
+                "divisionId": req.divisionId,
+                # 8자리 패딩: 최대 99,999,999행 (6자리는 999,999행 초과 시 정렬 오류)
+                "sk": f"{req.sheetName}#{req.importDate}{dc_part}#{row_idx:08d}",
+                "sheetName": req.sheetName,
+                "importDate": req.importDate,
+                "divisionCode": req.divisionCode,
+                "uploadedAt": now,
+                "data": data,
+            }
+            batch.put_item(Item=item)
+            written += 1
+    return written
+
+
 @app.post("/ds/upload-chunk")
 async def ds_upload_chunk(req: DsUploadChunk):
-    """DS 청크 데이터 수신 → DynamoDB BatchWriteItem"""
+    """DS 청크 데이터 수신 → DynamoDB BatchWriteItem (스레드 풀에서 실행)"""
     try:
-        dynamodb = get_dynamodb_resource()
-        table = dynamodb.Table(DYNAMODB_TABLES["ds_records"])
-
-        now = datetime.now().isoformat()
-        written = 0
-
-        with table.batch_writer() as batch:
-            for i, row in enumerate(req.rows):
-                row_idx = req.startIndex + i
-                # 헤더와 행 데이터를 딕셔너리로 변환
-                data = {}
-                for col_idx, header in enumerate(req.headers):
-                    if col_idx < len(row):
-                        val = row[col_idx]
-                        if val is not None and val != "":
-                            data[header] = str(val)
-
-                dc_part = f"#{req.divisionCode}" if req.divisionCode else ""
-                item = {
-                    "divisionId": req.divisionId,
-                    "sk": f"{req.sheetName}#{req.importDate}{dc_part}#{row_idx:06d}",
-                    "sheetName": req.sheetName,
-                    "importDate": req.importDate,
-                    "divisionCode": req.divisionCode,
-                    "uploadedAt": now,
-                    "data": data,
-                }
-                batch.put_item(Item=item)
-                written += 1
-
+        written = await asyncio.to_thread(_write_chunk_sync, req)
         logger.info(f"DS chunk: {req.divisionId}/{req.sheetName} chunk {req.chunkIndex}/{req.totalChunks} - {written} rows")
         return {"success": True, "writtenCount": written}
     except ClientError as e:
@@ -1728,15 +1735,25 @@ async def ds_export(
     divisionCode: Optional[str] = Query(None),
 ):
     """DS 데이터 Excel Export용 - 스트리밍 JSON 응답 (메모리 절약)"""
+
+    def _query_sync(table, **kwargs):
+        """동기 DynamoDB 쿼리 — asyncio.to_thread로 호출해 이벤트 루프 비점유"""
+        return table.query(**kwargs)
+
+    def _get_item_sync(table, **kwargs):
+        return table.get_item(**kwargs)
+
     async def generate():
         try:
-            dynamodb = get_dynamodb_resource()
-            records_table = dynamodb.Table(DYNAMODB_TABLES["ds_records"])
-            uploads_table = dynamodb.Table(DYNAMODB_TABLES["ds_uploads"])
+            records_table = _dynamodb_resource.Table(DYNAMODB_TABLES["ds_records"])
+            uploads_table = _dynamodb_resource.Table(DYNAMODB_TABLES["ds_uploads"])
 
-            # 1. uploads에서 시트 목록 확보
+            # 1. uploads에서 시트 목록 확보 (스레드에서 실행)
             upload_sk = f"{divisionCode}#{importDate}" if divisionCode else importDate
-            upload_resp = uploads_table.get_item(Key={"divisionId": divisionId, "importDate": upload_sk})
+            upload_resp = await asyncio.to_thread(
+                _get_item_sync, uploads_table,
+                Key={"divisionId": divisionId, "importDate": upload_sk}
+            )
             upload_item = upload_resp.get("Item", {})
             sheet_stats = upload_item.get("sheetStats", {})
             sheet_names = list(sheet_stats.keys())
@@ -1769,8 +1786,8 @@ async def ds_export(
                     "Limit": 1000,
                 }
 
-                # Pass 1: 헤더 수집 (첫 배치만 — data 키만 추출, 행 저장 안 함)
-                resp = records_table.query(**base_query)
+                # Pass 1: 헤더 수집 (첫 배치 — 스레드에서 실행)
+                resp = await asyncio.to_thread(_query_sync, records_table, **base_query)
                 first_items = resp.get("Items", [])
                 if not first_items:
                     continue
@@ -1824,8 +1841,9 @@ async def ds_export(
                     if not p1_last_key:
                         break
 
+                    # 다음 배치 — 스레드에서 실행
                     kwargs = {**base_query, "ExclusiveStartKey": p1_last_key}
-                    resp = records_table.query(**kwargs)
+                    resp = await asyncio.to_thread(_query_sync, records_table, **kwargs)
                     batch_items = resp.get("Items", [])
                     p1_last_key = resp.get("LastEvaluatedKey")
 
@@ -1958,7 +1976,7 @@ async def ds_delete_data(
 
         # 2. S3 파일 즉시 삭제 (xlsx + zip)
         try:
-            s3 = boto3.client("s3", region_name=S3_REGION)
+            s3 = get_s3_client()
             for s3_key in [
                 f"ds-exports/{divisionId}/{dc}_{importDate}.xlsx",
                 f"ds-raw/{divisionId}/{dc}_{importDate}.zip",
