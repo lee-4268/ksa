@@ -1361,25 +1361,27 @@ async def ds_region_codes():
     return {"success": True, "codes": DS_REGION_CODE_MAP}
 
 
-def _delete_ds_records_targeted(records_table, uploads_table, divisionId: str, importDate: str, divisionCode: str) -> int:
+def _delete_ds_records_targeted(records_table, uploads_table, divisionId: str, importDate: str, divisionCode: str, sheet_names: list = None) -> int:
     """
     시트별 SK 프리픽스 정밀 쿼리로 레코드 삭제
     - 각 시트를 별도 스레드에서 병렬 처리 (최대 5개 동시)
     - 스레드별 독립 DynamoDB 세션 (thread-safe)
     - 1.8M행 기준: 직렬 ~6분 → 병렬 ~40초
     - FilterExpression 전체 스캔 완전 제거 (OOM 방지)
+    - sheet_names를 직접 전달하면 uploads_table 조회 생략 (삭제 후 호출 시 필수)
     """
     dc_part = f"#{divisionCode}" if divisionCode else ""
     upload_sk = f"{divisionCode}#{importDate}" if divisionCode else importDate
 
-    # kca-ds-uploads에서 시트 목록 조회
-    sheet_names = []
-    try:
-        resp = uploads_table.get_item(Key={"divisionId": divisionId, "importDate": upload_sk})
-        item = resp.get("Item", {})
-        sheet_names = list(item.get("sheetStats", {}).keys())
-    except Exception:
-        pass
+    # sheet_names가 None이면 uploads_table에서 조회 (재업로드 경로)
+    # ds_delete_data는 uploads 삭제 후 호출되므로 반드시 sheet_names를 직접 전달해야 함
+    if sheet_names is None:
+        try:
+            resp = uploads_table.get_item(Key={"divisionId": divisionId, "importDate": upload_sk})
+            item = resp.get("Item", {})
+            sheet_names = list(item.get("sheetStats", {}).keys())
+        except Exception:
+            pass
 
     if not sheet_names:
         return 0  # 데이터 없음 → 스킵 (OOM 방지)
@@ -1432,14 +1434,15 @@ def _delete_ds_records_targeted(records_table, uploads_table, divisionId: str, i
     return total_deleted
 
 
-async def _background_delete_records(divisionId: str, importDate: str, divisionCode: str):
-    """백그라운드 레코드 삭제 - asyncio.to_thread으로 이벤트 루프 블로킹 없이 실행"""
+async def _background_delete_records(divisionId: str, importDate: str, divisionCode: str, sheet_names: list = None):
+    """백그라운드 레코드 삭제 - asyncio.to_thread으로 이벤트 루프 블로킹 없이 실행
+    sheet_names를 직접 받아야 uploads 삭제 후에도 정상 동작함"""
     try:
         dynamodb = get_dynamodb_resource()
         records_table = dynamodb.Table(DYNAMODB_TABLES["ds_records"])
         uploads_table = dynamodb.Table(DYNAMODB_TABLES["ds_uploads"])
         deleted = await asyncio.to_thread(
-            _delete_ds_records_targeted, records_table, uploads_table, divisionId, importDate, divisionCode
+            _delete_ds_records_targeted, records_table, uploads_table, divisionId, importDate, divisionCode, sheet_names
         )
         logger.info(f"Background delete complete: {divisionId}/{divisionCode}_{importDate} - {deleted} records")
     except Exception as e:
@@ -1547,7 +1550,9 @@ async def ds_upload_init(req: DsUploadInit):
         # 기존 데이터 존재 시 자동 삭제 (동일 divisionId+divisionCode+importDate)
         existing = uploads_table.get_item(Key={"divisionId": req.divisionId, "importDate": sk}).get("Item")
         if existing:
-            logger.info(f"DS upload-init: 기존 데이터 삭제 시작 {req.divisionId}/{sk}")
+            # 시트 목록 미리 추출 (asyncio.to_thread 전에 읽어야 thread-safe)
+            existing_sheet_names = list(existing.get("sheetStats", {}).keys())
+            logger.info(f"DS upload-init: 기존 데이터 삭제 시작 {req.divisionId}/{sk}, sheets={existing_sheet_names}")
 
             # 기존 pre-built xlsx S3에서도 삭제 (재업로드 시 이전 xlsx 무효화)
             try:
@@ -1560,9 +1565,10 @@ async def ds_upload_init(req: DsUploadInit):
                 pass
 
             # asyncio.to_thread: 이벤트 루프 블로킹 없이 병렬 시트 삭제 실행
+            # sheet_names 직접 전달 → uploads_table thread-safe 문제 방지
             deleted = await asyncio.to_thread(
                 _delete_ds_records_targeted, records_table, uploads_table,
-                req.divisionId, req.importDate, req.divisionCode
+                req.divisionId, req.importDate, req.divisionCode, existing_sheet_names
             )
             uploads_table.delete_item(Key={"divisionId": req.divisionId, "importDate": sk})
             logger.info(f"DS upload-init: 기존 {deleted}건 삭제 완료")
@@ -1938,7 +1944,19 @@ async def ds_delete_data(
         dc = divisionCode or ""
         upload_sk = f"{dc}#{importDate}" if dc else importDate
 
-        # S3 파일 즉시 삭제 (xlsx + zip)
+        # 1. 시트 목록 먼저 조회 (uploads 삭제 전! 백그라운드 삭제에 필수)
+        #    uploads 레코드를 먼저 삭제하면 background task에서 시트 목록을 읽을 수 없어
+        #    sheet_names = [] → 레코드가 하나도 삭제되지 않는 버그 발생
+        sheet_names = []
+        try:
+            upload_item = uploads_table.get_item(
+                Key={"divisionId": divisionId, "importDate": upload_sk}
+            ).get("Item", {})
+            sheet_names = list(upload_item.get("sheetStats", {}).keys())
+        except Exception as e:
+            logger.warning(f"DS delete: sheet_names 조회 실패 (non-fatal): {e}")
+
+        # 2. S3 파일 즉시 삭제 (xlsx + zip)
         try:
             s3 = boto3.client("s3", region_name=S3_REGION)
             for s3_key in [
@@ -1952,13 +1970,13 @@ async def ds_delete_data(
         except Exception as e:
             logger.warning(f"S3 delete error (non-fatal): {e}")
 
-        # uploads 레코드 즉시 삭제 → 대시보드에서 즉시 사라짐
+        # 3. uploads 레코드 즉시 삭제 → 대시보드에서 즉시 사라짐
         uploads_table.delete_item(Key={"divisionId": divisionId, "importDate": upload_sk})
 
-        # DynamoDB records 백그라운드 삭제 (대용량 → EC2 이벤트 루프 블로킹 방지)
-        background_tasks.add_task(_background_delete_records, divisionId, importDate, dc)
+        # 4. DynamoDB records 백그라운드 삭제 (sheet_names 직접 전달 - uploads 삭제 후에도 정상 동작)
+        background_tasks.add_task(_background_delete_records, divisionId, importDate, dc, sheet_names)
 
-        logger.info(f"DS delete initiated (background): {divisionId}/{upload_sk}")
+        logger.info(f"DS delete initiated (background): {divisionId}/{upload_sk}, sheets={len(sheet_names)}")
         return {"success": True, "deletedCount": 0}
     except ClientError as e:
         logger.error(f"DS delete error: {e}")
