@@ -1553,9 +1553,15 @@ async def ds_upload_init(req: DsUploadInit):
 
         sk = f"{req.divisionCode}#{req.importDate}" if req.divisionCode else req.importDate
 
-        # 기존 데이터 존재 시 자동 삭제 (동일 divisionId+divisionCode+importDate)
+        # 기존 데이터 존재 시 처리
         existing = uploads_table.get_item(Key={"divisionId": req.divisionId, "importDate": sk}).get("Item")
         if existing:
+            # 이미 completed 상태인 경우: 늦게 도착한 upload-init으로 인한 덮어쓰기 방지
+            # (병렬 배치 처리 중 네트워크 지연으로 upload-init이 finalize 이후 도착할 수 있음)
+            if existing.get("status") == "completed":
+                logger.info(f"DS upload-init: already completed, skip overwrite - {req.divisionId}/{sk}")
+                return {"success": True, "uploadId": f"{req.divisionId}#{sk}"}
+
             # 시트 목록 미리 추출 (asyncio.to_thread 전에 읽어야 thread-safe)
             existing_sheet_names = list(existing.get("sheetStats", {}).keys())
             logger.info(f"DS upload-init: 기존 데이터 삭제 시작 {req.divisionId}/{sk}, sheets={existing_sheet_names}")

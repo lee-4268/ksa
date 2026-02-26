@@ -98,13 +98,17 @@ Future<String> parseDsForUpload({
     completionHandler.toJS,
   );
 
-  // JS 파싱이 완료될 때까지 청크 큐를 순차 처리
+  // 청크 병렬 처리 (동시 최대 10개) — 순차 처리 대비 ~10x 속도 향상
+  // 첫 배치의 첫 청크에서 upload-init이 호출되므로 uploadInitStarted 동기 플래그 필수
+  const concurrency = 10;
   while (!processingDone || chunkQueue.isNotEmpty) {
     if (chunkQueue.isNotEmpty) {
-      final chunk = chunkQueue.removeAt(0);
-      await onChunk(chunk);
+      final batch = <Future<void>>[];
+      while (batch.length < concurrency && chunkQueue.isNotEmpty) {
+        batch.add(onChunk(chunkQueue.removeAt(0)));
+      }
+      await Future.wait(batch);
     } else {
-      // 큐가 비어있으면 잠시 대기
       await Future.delayed(const Duration(milliseconds: 10));
     }
   }
