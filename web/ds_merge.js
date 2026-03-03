@@ -122,10 +122,10 @@ function _buildFixedStylesXml() {
     + '<cellXfs count="3">'
     +   '<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>'
     +   '<xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyFont="1" applyBorder="1" applyAlignment="1">'
-    +     '<alignment horizontal="center" vertical="center"/>'
+    +     '<alignment horizontal="center" vertical="center" wrapText="1"/>'
     +   '</xf>'
     +   '<xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1">'
-    +     '<alignment horizontal="center" vertical="center"/>'
+    +     '<alignment horizontal="center" vertical="center" wrapText="1"/>'
     +   '</xf>'
     + '</cellXfs>'
     + '</styleSheet>';
