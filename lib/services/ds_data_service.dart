@@ -139,7 +139,7 @@ class DsDataService {
   }
 
   /// 데이터 삭제
-  Future<int> deleteData(String divisionId, String importDate, {String? divisionCode}) async {
+  Future<int> deleteData(String divisionId, String importDate, {String? divisionCode, String? userId}) async {
     final params = <String, String>{
       'divisionId': divisionId,
       'importDate': importDate,
@@ -147,7 +147,9 @@ class DsDataService {
     if (divisionCode != null) params['divisionCode'] = divisionCode;
 
     final uri = Uri.parse('$_baseUrl/ds/data').replace(queryParameters: params);
-    final response = await http.delete(uri);
+    final headers = <String, String>{};
+    if (userId != null) headers['X-User-Id'] = userId;
+    final response = await http.delete(uri, headers: headers.isNotEmpty ? headers : null);
 
     if (response.statusCode != 200) {
       throw Exception('삭제 실패: ${response.statusCode}');

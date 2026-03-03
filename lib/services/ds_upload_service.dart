@@ -107,7 +107,9 @@ class DsUploadService {
     final uploadReq = http.MultipartRequest(
       'POST',
       Uri.parse('$_baseUrl/ds/upload-raw'),
-    )..files.add(http.MultipartFile.fromBytes(
+    )
+      ..headers['X-User-Id'] = uploadedBy
+      ..files.add(http.MultipartFile.fromBytes(
         'file',
         bytes,
         filename: fileName,
@@ -133,7 +135,7 @@ class DsUploadService {
 
     final enqueueResp = await http.post(
       Uri.parse('$_baseUrl/ds/enqueue'),
-      headers: {'Content-Type': 'application/json'},
+      headers: {'Content-Type': 'application/json', 'X-User-Id': uploadedBy},
       body: jsonEncode({
         's3Key': s3Key,
         'fileName': fileName,

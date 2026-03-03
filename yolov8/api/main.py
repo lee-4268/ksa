@@ -23,7 +23,7 @@ import httpx
 import boto3
 from botocore.exceptions import ClientError
 import numpy as np
-from fastapi import FastAPI, File, UploadFile, HTTPException, Query, Form, BackgroundTasks
+from fastapi import FastAPI, File, UploadFile, HTTPException, Query, Form, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -210,6 +210,47 @@ class UserInfoResponse(BaseModel):
 class LoginRequest(BaseModel):
     username: str
     password: str
+
+
+class SetRoleRequest(BaseModel):
+    empno: str
+    role: str  # "admin", "manager", "member"
+
+
+# 역할 기반 권한 체크 (DS 업로드/삭제 보호)
+VALID_ROLES = {"admin", "manager", "member"}
+
+# 부트스트랩 키: 최초 admin 설정 시 사용 (환경변수 또는 기본값)
+ADMIN_BOOTSTRAP_KEY = os.environ.get("ADMIN_BOOTSTRAP_KEY", "kca-admin-setup-2026")
+
+
+def _get_user_role_sync(empno: str) -> str:
+    """DynamoDB Users 테이블에서 role 필드 조회. 없으면 'member' 반환."""
+    try:
+        dynamodb = get_dynamodb_resource()
+        table = dynamodb.Table(DYNAMODB_TABLES["users"])
+        resp = table.get_item(
+            Key={"user_id": empno},
+            ProjectionExpression="#r",
+            ExpressionAttributeNames={"#r": "role"},
+        )
+        item = resp.get("Item")
+        if item and item.get("role") in VALID_ROLES:
+            return item["role"]
+    except Exception as e:
+        logger.warning(f"role 조회 실패 ({empno}): {e}")
+    return "member"
+
+
+async def _require_role(request: Request, allowed_roles: set) -> str:
+    """요청 헤더 X-User-Id에서 사번 추출 → role 확인. 권한 없으면 403."""
+    empno = request.headers.get("X-User-Id", "").strip()
+    if not empno:
+        raise HTTPException(status_code=401, detail="인증 정보 없음 (X-User-Id 헤더 필요)")
+    role = await asyncio.to_thread(_get_user_role_sync, empno)
+    if role not in allowed_roles:
+        raise HTTPException(status_code=403, detail=f"권한 없음 (현재: {role}, 필요: {', '.join(allowed_roles)})")
+    return empno
 
 
 # ============================================================
@@ -1384,6 +1425,7 @@ async def get_user_by_empno(empno: str):
             "team": user.get("team"),
             "email": user.get("email"),
             "phone": user.get("phone_number"),
+            "role": user.get("role", "member"),
         }
     except ClientError as e:
         logger.error(f"DynamoDB error: {e}")
@@ -1397,8 +1439,47 @@ async def get_user_by_empno(empno: str):
                 "name": user.get("name"),
                 "region": user.get("region"),
                 "team": user.get("DeptName"),
+                "role": "member",
             }
         return {"success": False, "empno": empno}
+
+
+@app.put("/admin/set-role")
+async def set_user_role(req: SetRoleRequest, request: Request):
+    """사용자 역할 설정 — admin 또는 부트스트랩 키 필요"""
+    if req.role not in VALID_ROLES:
+        raise HTTPException(status_code=400, detail=f"유효하지 않은 역할: {req.role} (가능: {', '.join(VALID_ROLES)})")
+
+    # 인증: admin 역할 또는 부트스트랩 키
+    admin_key = request.headers.get("X-Admin-Key", "").strip()
+    caller_id = request.headers.get("X-User-Id", "").strip()
+
+    authorized = False
+    if admin_key == ADMIN_BOOTSTRAP_KEY:
+        authorized = True
+        logger.info(f"role 변경 (부트스트랩): {req.empno} → {req.role}")
+    elif caller_id:
+        caller_role = await asyncio.to_thread(_get_user_role_sync, caller_id)
+        if caller_role == "admin":
+            authorized = True
+            logger.info(f"role 변경 (admin {caller_id}): {req.empno} → {req.role}")
+
+    if not authorized:
+        raise HTTPException(status_code=403, detail="권한 없음 (admin 또는 부트스트랩 키 필요)")
+
+    try:
+        dynamodb = get_dynamodb_resource()
+        table = dynamodb.Table(DYNAMODB_TABLES["users"])
+        table.update_item(
+            Key={"user_id": req.empno},
+            UpdateExpression="SET #r = :role",
+            ExpressionAttributeNames={"#r": "role"},
+            ExpressionAttributeValues={":role": req.role},
+        )
+        return {"success": True, "empno": req.empno, "role": req.role}
+    except Exception as e:
+        logger.error(f"role 설정 실패: {e}")
+        raise HTTPException(status_code=500, detail=f"역할 설정 실패: {e}")
 
 
 # ============================================================
@@ -3425,6 +3506,7 @@ async def ds_data(
 
 @app.delete("/ds/data")
 async def ds_delete_data(
+    request: Request,
     background_tasks: BackgroundTasks,
     divisionId: str = Query(...),
     importDate: str = Query(...),
@@ -3436,6 +3518,9 @@ async def ds_delete_data(
     - S3 xlsx/zip: 즉시 삭제 → 이전 Export 파일 무효화
     - DynamoDB records: storageType="s3"면 건너뜀 (records 없음)
     """
+    # 권한 체크: admin, manager만 삭제 가능
+    await _require_role(request, {"admin", "manager"})
+
     try:
         dynamodb = get_dynamodb_resource()
         uploads_table = dynamodb.Table(DYNAMODB_TABLES["ds_uploads"])
@@ -3517,7 +3602,9 @@ async def ds_presign_raw(
 
 
 @app.post("/ds/upload-raw")
-async def ds_upload_raw(file: UploadFile = File(...)):
+async def ds_upload_raw(request: Request, file: UploadFile = File(...)):
+    # 권한 체크: admin, manager만 업로드 가능
+    await _require_role(request, {"admin", "manager"})
     """DS ZIP → S3 멀티파트 스트리밍 업로드
     디스크 저장 없이 브라우저 → EC2 → S3 직접 파이프라인
     메모리 최대 ~16MB (8MB 수신 버퍼 + 8MB 업로드 파트)
@@ -3600,8 +3687,10 @@ async def ds_upload_raw(file: UploadFile = File(...)):
 
 
 @app.post("/ds/enqueue")
-async def ds_enqueue(req: DsEnqueueRequest):
+async def ds_enqueue(request: Request, req: DsEnqueueRequest):
     """DS 처리 잡을 큐에 추가 — 즉시 jobId 반환, 실제 처리는 백그라운드 워커"""
+    # 권한 체크: admin, manager만 업로드 가능
+    await _require_role(request, {"admin", "manager"})
     if not HAS_XLRD:
         raise HTTPException(status_code=503, detail="서버에 xlrd가 설치되지 않았습니다. 관리자에게 문의하세요.")
 

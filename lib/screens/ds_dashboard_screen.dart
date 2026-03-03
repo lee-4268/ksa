@@ -306,20 +306,21 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
                   child: SingleChildScrollView(
                     physics: const AlwaysScrollableScrollPhysics(),
                     padding: const EdgeInsets.all(16),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        _buildUploadSection(),
-                        const SizedBox(height: 20),
-                        _buildSummaryCards(),
-                        const SizedBox(height: 20),
-                        _buildDivisionFilter(),
-                        const SizedBox(height: 16),
-                        _buildDivisionAnalytics(),
-                        const SizedBox(height: 16),
-                        _buildUploadList(),
-                      ],
-                    ),
+                    child: Builder(builder: (ctx) {
+                      final auth = ctx.watch<AuthService>();
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          if (auth.canUpload) _buildUploadSection(),
+                          if (auth.canUpload) const SizedBox(height: 20),
+                          _buildDivisionFreshness(),
+                          const SizedBox(height: 20),
+                          _buildDivisionFilter(),
+                          const SizedBox(height: 16),
+                          _buildUploadList(),
+                        ],
+                      );
+                    }),
                   ),
                 ),
     );
@@ -439,39 +440,182 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
     );
   }
 
-  Widget _buildSummaryCards() {
-    final stats = _stats!;
-    final cards = [
-      _SummaryData('본부', '${stats.divisions.length}개', Icons.business, _accentColor),
-      _SummaryData('업로드', '${stats.totalUploads}건', Icons.cloud_done, Colors.green),
-      _SummaryData('총 행수', DsDataService.formatNumber(stats.totalRows), Icons.table_rows, Colors.orange),
-    ];
+  /// 본부별 데이터 최신 현황 — 현재 달 기준으로 업데이트 필요 여부 표시
+  Widget _buildDivisionFreshness() {
+    final uploads = _stats?.uploads ?? [];
+    final now = DateTime.now();
+    final currentYm = '${now.year}${now.month.toString().padLeft(2, '0')}'; // e.g. "202603"
+    final currentMonthLabel = '${now.year}년 ${now.month}월';
 
-    return Row(
-      children: cards.map((c) {
-        return Expanded(
-          child: Container(
-            margin: EdgeInsets.only(right: c == cards.last ? 0 : 8),
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Colors.grey.shade200),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Icon(c.icon, color: c.color, size: 24),
-                const SizedBox(height: 8),
-                Text(c.value,
-                    style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
-                const SizedBox(height: 2),
-                Text(c.label, style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
-              ],
-            ),
+    // 본부별 최신 업로드 날짜 수집
+    final latestByDivision = <String, DsUploadInfo>{};
+    for (final u in uploads) {
+      final existing = latestByDivision[u.divisionId];
+      if (existing == null || u.actualDate.compareTo(existing.actualDate) > 0) {
+        latestByDivision[u.divisionId] = u;
+      }
+    }
+
+    // 전체 본부 목록 (데이터 없는 본부도 포함)
+    final allDivisions = DsDataService.dsDivisionNames.entries.toList();
+
+    // 업데이트 필요 본부 수
+    int outdatedCount = 0;
+    for (final entry in allDivisions) {
+      final latest = latestByDivision[entry.key];
+      if (latest == null) {
+        outdatedCount++;
+      } else {
+        final dataYm = latest.actualDate.length >= 6 ? latest.actualDate.substring(0, 6) : '';
+        if (dataYm != currentYm) outdatedCount++;
+      }
+    }
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.grey.shade200),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.update, size: 20, color: _accentColor),
+              const SizedBox(width: 8),
+              Text('본부별 데이터 현황', style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
+              const Spacer(),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade100,
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(
+                  '기준: $currentMonthLabel',
+                  style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
+                ),
+              ),
+            ],
           ),
-        );
-      }).toList(),
+          if (outdatedCount > 0) ...[
+            const SizedBox(height: 12),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: Colors.orange.shade50,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.orange.shade200),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.warning_amber_rounded, size: 18, color: Colors.orange.shade700),
+                  const SizedBox(width: 8),
+                  Text(
+                    '$outdatedCount개 본부 데이터 업데이트 필요',
+                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Colors.orange.shade800),
+                  ),
+                ],
+              ),
+            ),
+          ],
+          const SizedBox(height: 12),
+          ...allDivisions.map((entry) {
+            final divId = entry.key;
+            final divName = entry.value;
+            final latest = latestByDivision[divId];
+
+            if (latest == null) {
+              // 데이터 없음
+              return _buildFreshnessRow(divName, null, null, currentYm);
+            }
+
+            final dataYm = latest.actualDate.length >= 6 ? latest.actualDate.substring(0, 6) : '';
+            return _buildFreshnessRow(divName, latest.actualDate, dataYm, currentYm);
+          }),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFreshnessRow(String divName, String? actualDate, String? dataYm, String currentYm) {
+    final bool isCurrent = dataYm == currentYm;
+    final bool hasData = actualDate != null && dataYm != null;
+
+    String monthLabel;
+    if (!hasData) {
+      monthLabel = '데이터 없음';
+    } else {
+      final year = actualDate.substring(0, 4);
+      final month = actualDate.substring(4, 6);
+      monthLabel = '$year년 ${int.parse(month)}월';
+    }
+
+    final Color statusColor;
+    final IconData statusIcon;
+    final String statusText;
+
+    if (!hasData) {
+      statusColor = Colors.grey;
+      statusIcon = Icons.remove_circle_outline;
+      statusText = '미등록';
+    } else if (isCurrent) {
+      statusColor = Colors.green;
+      statusIcon = Icons.check_circle;
+      statusText = '최신';
+    } else {
+      statusColor = Colors.orange;
+      statusIcon = Icons.error_outline;
+      statusText = '업데이트 필요';
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: hasData && !isCurrent
+              ? Colors.orange.withValues(alpha: 0.04)
+              : Colors.grey.shade50,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: hasData && !isCurrent
+                ? Colors.orange.withValues(alpha: 0.2)
+                : Colors.grey.shade200,
+          ),
+        ),
+        child: Row(
+          children: [
+            Icon(Icons.business, size: 16, color: Colors.grey.shade500),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(divName, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500)),
+            ),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                color: Colors.grey.shade100,
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Text(
+                monthLabel,
+                style: TextStyle(fontSize: 12, color: Colors.grey.shade700, fontWeight: FontWeight.w500),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Icon(statusIcon, size: 16, color: statusColor),
+            const SizedBox(width: 4),
+            Text(
+              statusText,
+              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: statusColor),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -531,74 +675,6 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
     );
   }
 
-  Widget _buildDivisionAnalytics() {
-    final uploads = _filteredUploads;
-    if (uploads.isEmpty) return const SizedBox.shrink();
-
-    final divisionTotals = <String, int>{};
-    for (final u in uploads) {
-      divisionTotals[u.divisionName] = (divisionTotals[u.divisionName] ?? 0) + u.totalRows;
-    }
-
-    final maxRows = divisionTotals.values.fold(0, (a, b) => a > b ? a : b);
-    if (maxRows == 0) return const SizedBox.shrink();
-
-    final sorted = divisionTotals.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
-
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.grey.shade200),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(children: [
-            Icon(Icons.bar_chart, size: 20, color: _accentColor),
-            const SizedBox(width: 8),
-            const Text('본부별 데이터 현황', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
-          ]),
-          const SizedBox(height: 16),
-          ...sorted.map((entry) {
-            final ratio = entry.value / maxRows;
-            return Padding(
-              padding: const EdgeInsets.only(bottom: 10),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(entry.key, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500)),
-                      Text(
-                        '${DsDataService.formatNumber(entry.value)}행',
-                        style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 4),
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(4),
-                    child: LinearProgressIndicator(
-                      value: ratio,
-                      backgroundColor: Colors.grey.shade100,
-                      valueColor: AlwaysStoppedAnimation<Color>(
-                        _accentColor.withValues(alpha: 0.4 + ratio * 0.6),
-                      ),
-                      minHeight: 8,
-                    ),
-                  ),
-                ],
-              ),
-            );
-          }),
-        ],
-      ),
-    );
-  }
 
   Widget _buildUploadList() {
     final uploads = _filteredUploads;
@@ -776,12 +852,14 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
             child: Row(
               mainAxisAlignment: MainAxisAlignment.end,
               children: [
-                TextButton.icon(
-                  onPressed: () => _confirmDelete(upload),
-                  icon: Icon(Icons.delete_outline, size: 18, color: Colors.red.shade400),
-                  label: Text('삭제', style: TextStyle(color: Colors.red.shade400, fontSize: 13)),
-                ),
-                const SizedBox(width: 4),
+                if (context.read<AuthService>().canDelete) ...[
+                  TextButton.icon(
+                    onPressed: () => _confirmDelete(upload),
+                    icon: Icon(Icons.delete_outline, size: 18, color: Colors.red.shade400),
+                    label: Text('삭제', style: TextStyle(color: Colors.red.shade400, fontSize: 13)),
+                  ),
+                  const SizedBox(width: 4),
+                ],
                 TextButton.icon(
                   onPressed: isExporting ? null : () => _startExport(upload),
                   icon: Icon(Icons.download, size: 18,
@@ -848,6 +926,7 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
   }
 
   Future<void> _confirmDelete(DsUploadInfo upload) async {
+    final userId = context.read<AuthService>().userId;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => Dialog(
@@ -962,6 +1041,7 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
           upload.divisionId,
           upload.actualDate,
           divisionCode: upload.divisionCode,
+          userId: userId,
         );
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -986,10 +1066,3 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
   }
 }
 
-class _SummaryData {
-  final String label;
-  final String value;
-  final IconData icon;
-  final Color color;
-  _SummaryData(this.label, this.value, this.icon, this.color);
-}

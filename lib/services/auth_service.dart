@@ -24,6 +24,7 @@ class AuthService extends ChangeNotifier {
   String? _userName;
   String? _userDepartment; // 본부/부서
   String? _userTeam; // 팀
+  String _userRoleStr = 'member'; // "admin", "manager", "member"
 
   /// 세션 타임아웃 (2시간)
   static const Duration sessionTimeout = Duration(hours: 2);
@@ -35,6 +36,7 @@ class AuthService extends ChangeNotifier {
   static const String _userNameKey = 'user_name';
   static const String _userDepartmentKey = 'user_department';
   static const String _userTeamKey = 'user_team';
+  static const String _userRoleKey = 'user_role';
 
   /// 세션 타이머
   Timer? _sessionTimer;
@@ -77,8 +79,15 @@ class AuthService extends ChangeNotifier {
     '서부': 'seobu',
   };
 
-  // 호환성 유지 - 역할/승인 관련 (기본값 반환)
-  AppUserRole get userRole => AppUserRole.member;
+  // 역할 관련
+  String get userRoleStr => _userRoleStr;
+  AppUserRole get userRole {
+    switch (_userRoleStr) {
+      case 'admin': return AppUserRole.superAdmin;
+      case 'manager': return AppUserRole.divisionAdmin;
+      default: return AppUserRole.member;
+    }
+  }
   String? get profileId => null;
   String? get currentTeamId => null;
   String? get currentTeamName => _userTeam;
@@ -95,10 +104,14 @@ class AuthService extends ChangeNotifier {
   bool get isRejected => false;
   bool get isSuspended => false;
   bool get hasNoProfile => false;
-  bool get isSuperAdmin => false;
-  bool get isDivisionAdmin => false;
+  bool get isSuperAdmin => _userRoleStr == 'admin';
+  bool get isDivisionAdmin => _userRoleStr == 'manager';
   bool get isTeamAdmin => false;
-  bool get isAdmin => false;
+  bool get isAdmin => _userRoleStr == 'admin' || _userRoleStr == 'manager';
+
+  /// 업로드/삭제 권한 (admin, manager만)
+  bool get canUpload => _userRoleStr == 'admin' || _userRoleStr == 'manager';
+  bool get canDelete => _userRoleStr == 'admin' || _userRoleStr == 'manager';
 
   /// 초기화 - 저장된 로그인 상태 복원
   Future<void> init() async {
@@ -121,7 +134,8 @@ class AuthService extends ChangeNotifier {
           _userName = prefs.getString(_userNameKey);
           _userDepartment = prefs.getString(_userDepartmentKey);
           _userTeam = prefs.getString(_userTeamKey);
-          debugPrint('로그인 상태 복원: $_userId ($_userName)');
+          _userRoleStr = prefs.getString(_userRoleKey) ?? 'member';
+          debugPrint('로그인 상태 복원: $_userId ($_userName, 역할: $_userRoleStr)');
           _startSessionTimerWithExistingExpiry();
         }
       } else {
@@ -237,7 +251,8 @@ class AuthService extends ChangeNotifier {
       _userName = userInfo['name'] as String? ?? empno;
       _userDepartment = userInfo['region'] as String?;
       _userTeam = userInfo['team'] as String?;
-      debugPrint('사용자 정보 업데이트: $_userName (본부: $_userDepartment, 팀: $_userTeam)');
+      _userRoleStr = userInfo['role'] as String? ?? 'member';
+      debugPrint('사용자 정보 업데이트: $_userName (본부: $_userDepartment, 팀: $_userTeam, 역할: $_userRoleStr)');
       notifyListeners();
       _saveLoginState();
     }
@@ -277,6 +292,7 @@ class AuthService extends ChangeNotifier {
     _userName = null;
     _userDepartment = null;
     _userTeam = null;
+    _userRoleStr = 'member';
 
     notifyListeners();
 
@@ -304,6 +320,7 @@ class AuthService extends ChangeNotifier {
       if (_userTeam != null) {
         await prefs.setString(_userTeamKey, _userTeam!);
       }
+      await prefs.setString(_userRoleKey, _userRoleStr);
     } catch (e) {
       debugPrint('로그인 상태 저장 오류: $e');
     }
@@ -317,6 +334,7 @@ class AuthService extends ChangeNotifier {
       await prefs.remove(_userNameKey);
       await prefs.remove(_userDepartmentKey);
       await prefs.remove(_userTeamKey);
+      await prefs.remove(_userRoleKey);
       await _clearSessionExpiry();
     } catch (e) {
       debugPrint('로그인 상태 삭제 오류: $e');
@@ -418,6 +436,7 @@ class AuthService extends ChangeNotifier {
     _userName = null;
     _userDepartment = null;
     _userTeam = null;
+    _userRoleStr = 'member';
 
     notifyListeners();
 
