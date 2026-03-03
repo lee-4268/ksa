@@ -51,10 +51,11 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
   // 자동 갱신 (uploading 레코드 존재 시 10초마다)
   Timer? _autoRefreshTimer;
 
+  bool _initialized = false;
+
   @override
   void initState() {
     super.initState();
-    _loadStats();
   }
 
   @override
@@ -63,6 +64,10 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
     final token = context.read<AuthService>().authToken;
     _dataService.setAuthToken(token);
     _uploadService.setAuthToken(token);
+    if (!_initialized) {
+      _initialized = true;
+      _loadStats();
+    }
   }
 
   @override
