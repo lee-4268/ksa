@@ -377,6 +377,8 @@ def _list_all_users_sync() -> list:
             break
         params["ExclusiveStartKey"] = resp["LastEvaluatedKey"]
 
+    logger.info(f"kca-user-roles 스캔 결과: {len(role_items)}명")
+
     # 2) 각 user_id로 Users 테이블에서 이름/본부/팀 조회 (읽기전용 get_item)
     users = []
     for role_item in role_items:
@@ -385,25 +387,26 @@ def _list_all_users_sync() -> list:
             continue
         user_role = role_item.get("role", "member")
 
-        # Users 테이블에서 프로필 정보 조회
+        # Users 테이블에서 프로필 정보 조회 (ProjectionExpression 없이 전체 조회)
         try:
-            user_resp = users_table.get_item(
-                Key={"user_id": uid},
-                ProjectionExpression="user_id, #n, region, team, email, phone_number",
-                ExpressionAttributeNames={"#n": "name"},
-            )
-            user_info = user_resp.get("Item", {})
+            user_resp = users_table.get_item(Key={"user_id": uid})
+            user_info = user_resp.get("Item")
+            if user_info:
+                logger.info(f"Users 조회 성공 ({uid}): name={user_info.get('name')}, keys={list(user_info.keys())}")
+            else:
+                logger.warning(f"Users 테이블에 해당 user_id 없음: {uid}")
+                user_info = {}
         except Exception as e:
             logger.warning(f"Users 테이블 조회 실패 ({uid}): {e}")
             user_info = {}
 
         users.append({
             "empno": uid,
-            "name": user_info.get("name", ""),
-            "region": user_info.get("region", ""),
-            "team": user_info.get("team", ""),
-            "email": user_info.get("email", ""),
-            "phone": user_info.get("phone_number", ""),
+            "name": user_info.get("name") or None,
+            "region": user_info.get("region") or None,
+            "team": user_info.get("team") or None,
+            "email": user_info.get("email") or None,
+            "phone": user_info.get("phone_number") or None,
             "role": user_role,
         })
 

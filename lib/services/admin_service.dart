@@ -75,14 +75,19 @@ class AdminService extends ChangeNotifier {
         if (data['success'] == true) {
           _allUsers.clear();
           for (final u in (data['users'] as List)) {
+            // 빈 문자열을 null로 치환
+            String? nullIfEmpty(dynamic v) {
+              final s = v as String?;
+              return (s != null && s.isNotEmpty) ? s : null;
+            }
             _allUsers.add(AppUserProfile(
               id: u['empno'] as String? ?? '',
               cognitoUserId: u['empno'] as String? ?? '',
-              email: u['email'] as String? ?? '',
-              name: u['name'] as String?,
-              phoneNumber: u['phone'] as String?,
-              teamId: u['team'] as String?,
-              divisionId: u['region'] as String?,
+              email: nullIfEmpty(u['email']) ?? '',
+              name: nullIfEmpty(u['name']),
+              phoneNumber: nullIfEmpty(u['phone']),
+              teamId: nullIfEmpty(u['team']),
+              divisionId: nullIfEmpty(u['region']),
               status: UserStatus.approved,
               role: mapBackendRole(u['role'] as String? ?? 'member'),
             ));
