@@ -195,14 +195,22 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
 
           if (data['success'] == true) {
             final type = data['type'] as String?;
-            final url = data['url'] as String;
 
-            // 1. pre-built xlsx → 직접 다운로드 (가장 빠름)
-            if (type == 'xlsx') {
-              onProgress('xlsx 다운로드 중...', 10);
-              final result = await platform_export.downloadXlsxFromUrl(
-                url: url,
-                filename: filename,
+            // 1. 원본 ZIP → EC2 프록시 → 브라우저 병합 (신규 업로드)
+            if (type == 'zip') {
+              onProgress('원본 ZIP에서 Excel 생성 중...', 3);
+              // EC2 프록시 URL 사용 (S3 CORS 우회)
+              final proxyUri = Uri.parse('$_baseUrl/ds/proxy-raw-zip')
+                  .replace(queryParameters: params);
+              final metaJson = jsonEncode({
+                'divisionName': upload.divisionName,
+                'divisionId': upload.divisionId,
+                'divisionCode': upload.divisionCode,
+                'importDate': upload.actualDate,
+              });
+              final result = await platform_export.exportDsFromS3(
+                s3Url: proxyUri.toString(),
+                metaJson: metaJson,
                 onProgress: onProgress,
               );
               if (mounted) {
@@ -213,18 +221,12 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
               return;
             }
 
-            // 2. 원본 ZIP → 브라우저에서 병합 (SheetJS)
-            if (type == 'zip') {
-              onProgress('원본 ZIP에서 Excel 생성 중...', 3);
-              final metaJson = jsonEncode({
-                'divisionName': upload.divisionName,
-                'divisionId': upload.divisionId,
-                'divisionCode': upload.divisionCode,
-                'importDate': upload.actualDate,
-              });
-              final result = await platform_export.exportDsFromS3(
-                s3Url: url,
-                metaJson: metaJson,
+            // 2. pre-built xlsx → presign 직접 다운로드
+            if (type == 'xlsx') {
+              onProgress('xlsx 다운로드 중...', 10);
+              final result = await platform_export.downloadXlsxFromUrl(
+                url: data['url'] as String,
+                filename: filename,
                 onProgress: onProgress,
               );
               if (mounted) {
@@ -719,12 +721,25 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
                       value: _exportProgress,
                       backgroundColor: Colors.grey.shade200,
                       valueColor: const AlwaysStoppedAnimation<Color>(Colors.green),
-                      minHeight: 4,
+                      minHeight: 6,
                     ),
                   ),
-                  const SizedBox(height: 4),
-                  Text(_exportStage,
-                      style: TextStyle(fontSize: 11, color: Colors.grey.shade600)),
+                  const SizedBox(height: 6),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Expanded(
+                        child: Text(_exportStage,
+                            style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
+                            overflow: TextOverflow.ellipsis),
+                      ),
+                      Text('${(_exportProgress * 100).toInt()}%',
+                          style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.grey.shade700)),
+                    ],
+                  ),
                 ],
               ),
             ),

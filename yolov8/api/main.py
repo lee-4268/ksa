@@ -2880,6 +2880,43 @@ async def ds_export_presign(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/ds/proxy-raw-zip")
+async def ds_proxy_raw_zip(
+    divisionId: str = Query(...),
+    importDate: str = Query(...),
+    divisionCode: str = Query(""),
+):
+    """S3 원본 ZIP → EC2 프록시 스트리밍 (브라우저 CORS 우회)"""
+    s3_key = f"ds-raw/{divisionId}/{divisionCode}_{importDate}.zip"
+    s3 = get_s3_client()
+    try:
+        head = s3.head_object(Bucket=S3_BUCKET_NAME, Key=s3_key)
+    except ClientError:
+        raise HTTPException(status_code=404, detail="ZIP 파일 없음")
+
+    content_length = head["ContentLength"]
+
+    async def _stream():
+        obj = await asyncio.to_thread(
+            s3.get_object, Bucket=S3_BUCKET_NAME, Key=s3_key
+        )
+        body = obj["Body"]
+        try:
+            while True:
+                chunk = await asyncio.to_thread(body.read, 65536)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            body.close()
+
+    return StreamingResponse(
+        _stream(),
+        media_type="application/zip",
+        headers={"Content-Length": str(content_length)},
+    )
+
+
 @app.post("/ds/upload-init")
 async def ds_upload_init(req: DsUploadInit):
     """DS 업로드 세션 시작 - 기존 데이터 삭제 후 새 레코드 생성"""
@@ -3235,7 +3272,7 @@ async def ds_data(
                     upload_sk = f"{divisionCode}#{importDate}"
                     resp = uploads_table.get_item(
                         Key={"divisionId": divisionId, "importDate": upload_sk},
-                        ProjectionExpression="storageType, fileManifest",
+                        ProjectionExpression="storageType, fileManifest, sheetHeaders",
                     )
                     upload_rec = resp.get("Item")
                     if upload_rec:
@@ -3285,6 +3322,11 @@ async def ds_data(
                 zip_path, sheetName, divisionId, importDate,
                 divisionCode, manifest_entries, xls_offset, limit, search or "",
             )
+            # 첫 페이지: 서버 저장 헤더 반환 (컬럼 순서 보장 + 빈 컬럼 표시)
+            if xls_offset == 0 and upload_rec:
+                sh = upload_rec.get("sheetHeaders")
+                if sh and sheetName in sh:
+                    result["headers"] = sh[sheetName]
             return result
 
         # ── s3 경로: xlsx 캐시/다운로드 → 페이지네이션 (구버전 호환) ──

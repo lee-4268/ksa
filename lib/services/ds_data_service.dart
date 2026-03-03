@@ -129,10 +129,12 @@ class DsDataService {
       );
     }).toList();
 
+    final headersList = body['headers'] as List<dynamic>?;
     return DsDataPage(
       items: items,
       count: body['count'] ?? items.length,
       lastEvaluatedKey: body['lastEvaluatedKey'],
+      headers: headersList?.cast<String>(),
     );
   }
 
@@ -221,8 +223,9 @@ class DsDataPage {
   final List<DsRecord> items;
   final int count;
   final String? lastEvaluatedKey;
+  final List<String>? headers;
 
-  DsDataPage({required this.items, required this.count, this.lastEvaluatedKey});
+  DsDataPage({required this.items, required this.count, this.lastEvaluatedKey, this.headers});
 
   bool get hasMore => lastEvaluatedKey != null;
 }

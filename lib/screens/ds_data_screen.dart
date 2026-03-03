@@ -30,6 +30,7 @@ class _DsDataScreenState extends State<DsDataScreen> with SingleTickerProviderSt
 
   final DsDataService _dataService = DsDataService();
   final TextEditingController _searchController = TextEditingController();
+  final ScrollController _hScrollController = ScrollController();
 
   late TabController _tabController;
   late List<String> _sheetNames;
@@ -59,11 +60,16 @@ class _DsDataScreenState extends State<DsDataScreen> with SingleTickerProviderSt
     _debounce?.cancel();
     _tabController.dispose();
     _searchController.dispose();
+    _hScrollController.dispose();
     super.dispose();
   }
 
   void _onTabChanged() {
     if (_tabController.indexIsChanging) return;
+    // 탭 전환 시 수평 스크롤 리셋
+    if (_hScrollController.hasClients) {
+      _hScrollController.jumpTo(0);
+    }
     final sheet = _sheetNames[_tabController.index];
     final cacheKey = _cacheKey(sheet);
     if (!_sheetCache.containsKey(cacheKey)) {
@@ -83,7 +89,6 @@ class _DsDataScreenState extends State<DsDataScreen> with SingleTickerProviderSt
         _activeSearch = value;
         _isSearching = value.isNotEmpty;
       });
-      // 현재 탭의 데이터를 새 검색어로 다시 로드
       final sheet = _sheetNames[_tabController.index];
       _loadSheetData(sheet);
     });
@@ -101,7 +106,7 @@ class _DsDataScreenState extends State<DsDataScreen> with SingleTickerProviderSt
     if (!_sheetCache.containsKey(cacheKey)) {
       _loadSheetData(sheet);
     } else {
-      setState(() {}); // rebuild with cached non-search data
+      setState(() {});
     }
   }
 
@@ -138,7 +143,7 @@ class _DsDataScreenState extends State<DsDataScreen> with SingleTickerProviderSt
           existing.lastKey = page.lastEvaluatedKey;
           existing.hasMore = page.hasMore;
           existing.isLoadingMore = false;
-          _updateHeaders(existing);
+          _mergeNewHeaders(existing, page.items);
         } else {
           final data = _SheetData(
             items: page.items,
@@ -146,7 +151,12 @@ class _DsDataScreenState extends State<DsDataScreen> with SingleTickerProviderSt
             hasMore: page.hasMore,
             searchQuery: _activeSearch,
           );
-          _updateHeaders(data);
+          // 서버 제공 헤더 사용 (컬럼 순서 + 빈 컬럼 보장)
+          if (page.headers != null && page.headers!.isNotEmpty) {
+            data.headers = page.headers!;
+          } else {
+            _inferHeaders(data);
+          }
           _sheetCache[cacheKey] = data;
         }
       });
@@ -161,12 +171,26 @@ class _DsDataScreenState extends State<DsDataScreen> with SingleTickerProviderSt
     }
   }
 
-  void _updateHeaders(_SheetData data) {
-    final headers = <String>{};
+  /// 서버 헤더 없을 때: 데이터에서 헤더 추론
+  void _inferHeaders(_SheetData data) {
+    final headers = <String>[];
+    final seen = <String>{};
     for (final item in data.items) {
-      headers.addAll(item.data.keys);
+      for (final key in item.data.keys) {
+        if (seen.add(key)) headers.add(key);
+      }
     }
-    data.headers = headers.toList();
+    data.headers = headers;
+  }
+
+  /// 추가 로드 시: 기존 헤더에 없는 새 컬럼만 append
+  void _mergeNewHeaders(_SheetData data, List<DsRecord> newItems) {
+    final existing = data.headers.toSet();
+    for (final item in newItems) {
+      for (final key in item.data.keys) {
+        if (existing.add(key)) data.headers.add(key);
+      }
+    }
   }
 
   @override
@@ -381,61 +405,115 @@ class _DsDataScreenState extends State<DsDataScreen> with SingleTickerProviderSt
       return const Center(child: Text('데이터가 없습니다'));
     }
 
-    return Scrollbar(
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: SingleChildScrollView(
-          child: DataTable(
-            headingRowColor: WidgetStateProperty.all(Colors.grey.shade100),
-            headingTextStyle: const TextStyle(
-              fontWeight: FontWeight.bold,
-              fontSize: 12,
-              color: Colors.black87,
+    return Column(
+      children: [
+        // 수평 스크롤 가능한 데이터 영역
+        Expanded(
+          child: Scrollbar(
+            controller: _hScrollController,
+            thumbVisibility: true,
+            trackVisibility: true,
+            child: SingleChildScrollView(
+              controller: _hScrollController,
+              scrollDirection: Axis.horizontal,
+              child: SizedBox(
+                width: _calcTableWidth(headers.length),
+                child: _buildFixedHeaderTable(headers, records),
+              ),
             ),
-            dataTextStyle: const TextStyle(fontSize: 12, color: Colors.black87),
-            columnSpacing: 16,
-            horizontalMargin: 16,
-            columns: [
-              const DataColumn(label: Text('#', style: TextStyle(fontWeight: FontWeight.bold))),
-              ...headers.map((h) => DataColumn(
-                    label: ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 150),
-                      child: Text(h, overflow: TextOverflow.ellipsis),
-                    ),
-                  )),
-            ],
-            rows: records.asMap().entries.map((entry) {
-              final idx = entry.key;
-              final record = entry.value;
-              return DataRow(
-                color: WidgetStateProperty.resolveWith<Color?>(
-                  (states) => idx.isOdd ? Colors.grey.shade50 : null,
-                ),
-                cells: [
-                  DataCell(Text('${idx + 1}',
-                      style: TextStyle(color: Colors.grey.shade500, fontSize: 11))),
-                  ...headers.map((h) {
-                    final val = record.data[h] ?? '';
-                    final isMatch = _activeSearch.isNotEmpty &&
-                        val.toLowerCase().contains(_activeSearch.toLowerCase());
-                    return DataCell(
-                      ConstrainedBox(
-                        constraints: const BoxConstraints(maxWidth: 200),
-                        child: Text(
-                          val,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            backgroundColor: isMatch ? Colors.yellow.shade200 : null,
-                          ),
-                        ),
-                      ),
-                    );
-                  }),
-                ],
-              );
-            }).toList(),
           ),
         ),
+        // 좌우 스크롤 힌트
+        Container(
+          padding: const EdgeInsets.symmetric(vertical: 4),
+          color: Colors.grey.shade50,
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.swipe, size: 14, color: Colors.grey.shade400),
+              const SizedBox(width: 4),
+              Text('좌우로 스크롤하여 더 많은 컬럼 보기',
+                  style: TextStyle(fontSize: 10, color: Colors.grey.shade400)),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  double _calcTableWidth(int colCount) {
+    // # 열(50) + 각 데이터 열(130) + 여백
+    return 50.0 + colCount * 130.0 + 32.0;
+  }
+
+  /// 고정 헤더 + 스크롤 가능한 데이터 영역
+  Widget _buildFixedHeaderTable(List<String> headers, List<DsRecord> records) {
+    return Column(
+      children: [
+        // 고정 헤더 행
+        Container(
+          color: Colors.grey.shade200,
+          child: Row(
+            children: [
+              _buildHeaderCell('#', width: 50),
+              ...headers.map((h) => _buildHeaderCell(h, width: 130)),
+            ],
+          ),
+        ),
+        // 스크롤 가능한 데이터 행
+        Expanded(
+          child: ListView.builder(
+            itemCount: records.length,
+            itemBuilder: (context, idx) {
+              final record = records[idx];
+              return Container(
+                decoration: BoxDecoration(
+                  color: idx.isOdd ? Colors.grey.shade50 : Colors.white,
+                  border: Border(bottom: BorderSide(color: Colors.grey.shade200, width: 0.5)),
+                ),
+                child: Row(
+                  children: [
+                    _buildDataCell('${idx + 1}', width: 50, isIndex: true),
+                    ...headers.map((h) {
+                      final val = record.data[h] ?? '';
+                      final isMatch = _activeSearch.isNotEmpty &&
+                          val.toLowerCase().contains(_activeSearch.toLowerCase());
+                      return _buildDataCell(val, width: 130, highlight: isMatch);
+                    }),
+                  ],
+                ),
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildHeaderCell(String text, {required double width}) {
+    return Container(
+      width: width,
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+      child: Text(
+        text,
+        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.black87),
+        overflow: TextOverflow.ellipsis,
+      ),
+    );
+  }
+
+  Widget _buildDataCell(String text, {required double width, bool isIndex = false, bool highlight = false}) {
+    return Container(
+      width: width,
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+      child: Text(
+        text,
+        style: TextStyle(
+          fontSize: 12,
+          color: isIndex ? Colors.grey.shade500 : Colors.black87,
+          backgroundColor: highlight ? Colors.yellow.shade200 : null,
+        ),
+        overflow: TextOverflow.ellipsis,
       ),
     );
   }
