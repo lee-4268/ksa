@@ -180,14 +180,6 @@ class _AuthWrapperState extends State<AuthWrapper> {
 
     // 로그인 상태에 따라 화면 분기
     if (authService.isSignedIn) {
-      // AuditService 사용자 컨텍스트 설정
-      final auditService = context.read<AuditService>();
-      auditService.setUserContext(
-        userId: authService.userId ?? '',
-        email: authService.userEmail,
-        name: authService.userName,
-      );
-
       return const DashboardScreen();
     } else {
       return const LoginScreen();

@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
+import '../../services/auth_service.dart';
 import '../../services/audit_service.dart';
 
 /// 감사 로그 화면
@@ -29,7 +30,12 @@ class _AuditLogScreenState extends State<AuditLogScreen> {
   Future<void> _loadLogs() async {
     setState(() => _isLoading = true);
 
+    final authService = context.read<AuthService>();
     final auditService = context.read<AuditService>();
+
+    // 현재 사용자 컨텍스트 설정 (API 인증용)
+    auditService.setUserContext(userId: authService.userId ?? '');
+
     final logs = await auditService.listAuditLogs(
       entityType: _filterEntityType,
       action: _filterAction,
