@@ -85,6 +85,7 @@ DYNAMODB_TABLES = {
     "ds_uploads": os.getenv("DYNAMODB_DS_UPLOADS_TABLE", "kca-ds-uploads"),
     "ds_jobs": os.getenv("DYNAMODB_DS_JOBS_TABLE", "kca-ds-jobs"),
     "audit_logs": os.getenv("DYNAMODB_AUDIT_TABLE", "kca-audit-logs"),
+    "user_roles": os.getenv("DYNAMODB_USER_ROLES_TABLE", "kca-user-roles"),
 }
 
 # DS 전파관리소 지역코드 → 회사 본부 매핑
@@ -226,10 +227,10 @@ ADMIN_BOOTSTRAP_KEY = os.environ.get("ADMIN_BOOTSTRAP_KEY", "kca-admin-setup-202
 
 
 def _get_user_role_sync(empno: str) -> str:
-    """DynamoDB Users 테이블에서 role 필드 조회. 없으면 'member' 반환."""
+    """kca-user-roles 테이블에서 role 조회. 없으면 'member' 반환."""
     try:
         dynamodb = get_dynamodb_resource()
-        table = dynamodb.Table(DYNAMODB_TABLES["users"])
+        table = dynamodb.Table(DYNAMODB_TABLES["user_roles"])
         resp = table.get_item(
             Key={"user_id": empno},
             ProjectionExpression="#r",
@@ -241,6 +242,26 @@ def _get_user_role_sync(empno: str) -> str:
     except Exception as e:
         logger.warning(f"role 조회 실패 ({empno}): {e}")
     return "member"
+
+
+def _ensure_user_roles_table():
+    """서버 시작 시 kca-user-roles 테이블 자동 생성"""
+    try:
+        client = get_dynamodb_client()
+        client.create_table(
+            TableName=DYNAMODB_TABLES["user_roles"],
+            KeySchema=[
+                {"AttributeName": "user_id", "KeyType": "HASH"},
+            ],
+            AttributeDefinitions=[
+                {"AttributeName": "user_id", "AttributeType": "S"},
+            ],
+            BillingMode="PAY_PER_REQUEST",
+        )
+        logger.info(f"DynamoDB table {DYNAMODB_TABLES['user_roles']} created")
+    except ClientError as e:
+        if e.response["Error"]["Code"] != "ResourceInUseException":
+            logger.warning(f"user_roles table creation error (non-fatal): {e}")
 
 
 async def _require_role(request: Request, allowed_roles: set) -> str:
@@ -331,7 +352,11 @@ def _ensure_audit_table():
 
 
 def _list_all_users_sync() -> list:
-    """DynamoDB Users 테이블 전체 스캔 (캐시 60초)"""
+    """kca-user-roles 스캔 → Users 테이블 개별 조회 (캐시 60초)
+
+    공유 Users 테이블을 Scan하지 않음.
+    kca-user-roles(우리 테이블)만 Scan하고, 각 user_id로 Users 테이블 get_item(읽기전용).
+    """
     global _admin_users_cache, _admin_users_cache_time
     import time as _time
     now = _time.time()
@@ -339,27 +364,48 @@ def _list_all_users_sync() -> list:
         return _admin_users_cache
 
     dynamodb = get_dynamodb_resource()
-    table = dynamodb.Table(DYNAMODB_TABLES["users"])
-    users = []
-    params = {
-        "ProjectionExpression": "user_id, #n, #r, region, team, email, phone_number",
-        "ExpressionAttributeNames": {"#n": "name", "#r": "role"},
-    }
+    roles_table = dynamodb.Table(DYNAMODB_TABLES["user_roles"])
+    users_table = dynamodb.Table(DYNAMODB_TABLES["users"])
+
+    # 1) kca-user-roles 테이블 전체 스캔 (우리 테이블, 소규모)
+    role_items = []
+    params: dict = {}
     while True:
-        resp = table.scan(**params)
-        for item in resp.get("Items", []):
-            users.append({
-                "empno": item.get("user_id", ""),
-                "name": item.get("name", ""),
-                "region": item.get("region", ""),
-                "team": item.get("team", ""),
-                "email": item.get("email", ""),
-                "phone": item.get("phone_number", ""),
-                "role": item.get("role", "member"),
-            })
+        resp = roles_table.scan(**params)
+        role_items.extend(resp.get("Items", []))
         if "LastEvaluatedKey" not in resp:
             break
         params["ExclusiveStartKey"] = resp["LastEvaluatedKey"]
+
+    # 2) 각 user_id로 Users 테이블에서 이름/본부/팀 조회 (읽기전용 get_item)
+    users = []
+    for role_item in role_items:
+        uid = role_item.get("user_id", "")
+        if not uid:
+            continue
+        user_role = role_item.get("role", "member")
+
+        # Users 테이블에서 프로필 정보 조회
+        try:
+            user_resp = users_table.get_item(
+                Key={"user_id": uid},
+                ProjectionExpression="user_id, #n, region, team, email, phone_number",
+                ExpressionAttributeNames={"#n": "name"},
+            )
+            user_info = user_resp.get("Item", {})
+        except Exception as e:
+            logger.warning(f"Users 테이블 조회 실패 ({uid}): {e}")
+            user_info = {}
+
+        users.append({
+            "empno": uid,
+            "name": user_info.get("name", ""),
+            "region": user_info.get("region", ""),
+            "team": user_info.get("team", ""),
+            "email": user_info.get("email", ""),
+            "phone": user_info.get("phone_number", ""),
+            "role": user_role,
+        })
 
     users.sort(key=lambda u: u.get("name", ""))
     _admin_users_cache = users
@@ -567,6 +613,7 @@ async def startup_event():
     # DS 잡 테이블 자동 생성 (없으면) + stuck 잡 복구 + 워커 시작
     asyncio.create_task(_ensure_ds_jobs_table())
     asyncio.create_task(asyncio.to_thread(_ensure_audit_table))
+    asyncio.create_task(asyncio.to_thread(_ensure_user_roles_table))
     asyncio.create_task(_recover_stuck_jobs())
     _ds_job_worker_task = asyncio.create_task(_job_worker_loop())
     print("DS job worker started")
@@ -1514,12 +1561,31 @@ async def delete_s3_object(key: str):
 # DynamoDB Users (i-NET 사용자 - 기존 테이블 사용)
 # ============================================================
 
+def _ensure_user_in_roles_sync(empno: str):
+    """kca-user-roles 테이블에 사용자가 없으면 member로 자동 등록 (로그인 시 호출)"""
+    try:
+        dynamodb = get_dynamodb_resource()
+        table = dynamodb.Table(DYNAMODB_TABLES["user_roles"])
+        resp = table.get_item(
+            Key={"user_id": empno},
+            ProjectionExpression="user_id",
+        )
+        if not resp.get("Item"):
+            table.put_item(Item={"user_id": empno, "role": "member"})
+            logger.info(f"kca-user-roles 자동 등록: {empno} (member)")
+            # 캐시 무효화
+            global _admin_users_cache
+            _admin_users_cache = None
+    except Exception as e:
+        logger.warning(f"kca-user-roles 자동 등록 실패 ({empno}): {e}")
+
+
 @app.get("/users/{empno}")
 async def get_user_by_empno(empno: str):
     """
     사번으로 사용자 정보 조회 (DynamoDB)
 
-    기존 i-NET 사용자 테이블에서 조회
+    기존 i-NET 사용자 테이블에서 조회 + kca-user-roles 자동 등록
     """
     try:
         dynamodb = get_dynamodb_resource()
@@ -1532,6 +1598,12 @@ async def get_user_by_empno(empno: str):
         if not user:
             return {"success": False, "empno": empno, "message": "User not found"}
 
+        # kca-user-roles 테이블에 자동 등록 (없으면 member로)
+        await asyncio.to_thread(_ensure_user_in_roles_sync, empno)
+
+        # role은 kca-user-roles에서 조회
+        role = await asyncio.to_thread(_get_user_role_sync, empno)
+
         return {
             "success": True,
             "empno": empno,
@@ -1540,7 +1612,7 @@ async def get_user_by_empno(empno: str):
             "team": user.get("team"),
             "email": user.get("email"),
             "phone": user.get("phone_number"),
-            "role": user.get("role", "member"),
+            "role": role,
         }
     except ClientError as e:
         logger.error(f"DynamoDB error: {e}")
@@ -1586,14 +1658,10 @@ async def set_user_role(req: SetRoleRequest, request: Request):
         # 변경 전 역할 조회 (감사 로그용)
         old_role = await asyncio.to_thread(_get_user_role_sync, req.empno)
 
+        # kca-user-roles 테이블에 역할 저장 (Users 테이블은 건드리지 않음)
         dynamodb = get_dynamodb_resource()
-        table = dynamodb.Table(DYNAMODB_TABLES["users"])
-        table.update_item(
-            Key={"user_id": req.empno},
-            UpdateExpression="SET #r = :role",
-            ExpressionAttributeNames={"#r": "role"},
-            ExpressionAttributeValues={":role": req.role},
-        )
+        table = dynamodb.Table(DYNAMODB_TABLES["user_roles"])
+        table.put_item(Item={"user_id": req.empno, "role": req.role})
 
         # 감사 로그 기록
         actor = caller_id or "bootstrap"

@@ -410,7 +410,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
   }
 
   Widget _buildResultSummary() {
-    final adminService = context.watch<AdminService>();
+    final adminService = context.read<AdminService>();
     final totalCount = adminService.allUsers.length;
     final filteredCount = _filteredUsers.length;
     final displayedCount = _getDisplayedUsers().length;

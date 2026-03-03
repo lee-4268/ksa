@@ -90,10 +90,19 @@ class AdminService extends ChangeNotifier {
         } else {
           _errorMessage = data['detail'] as String? ?? '사용자 목록 로드 실패';
         }
+      } else if (response.statusCode == 401) {
+        _errorMessage = '인증 정보가 없습니다. 다시 로그인해주세요.';
       } else if (response.statusCode == 403) {
-        _errorMessage = '권한이 없습니다.';
+        _errorMessage = '권한이 없습니다 (관리자 계정 필요).';
       } else {
-        _errorMessage = '사용자 목록 로드 실패 (${response.statusCode})';
+        // 500 등 서버 에러 시 detail 메시지 표시
+        String detail = '사용자 목록 로드 실패 (${response.statusCode})';
+        try {
+          final body = jsonDecode(response.body) as Map<String, dynamic>;
+          if (body['detail'] != null) detail = '${body['detail']}';
+        } catch (_) {}
+        _errorMessage = detail;
+        debugPrint('loadAllUsers server error: ${response.statusCode} - ${response.body}');
       }
     } catch (e) {
       _errorMessage = '네트워크 오류: $e';
