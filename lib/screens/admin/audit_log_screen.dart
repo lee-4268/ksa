@@ -126,11 +126,8 @@ class _AuditLogScreenState extends State<AuditLogScreen> {
               ),
               items: const [
                 DropdownMenuItem(value: null, child: Text('전체')),
-                DropdownMenuItem(value: 'UserProfile', child: Text('사용자')),
-                DropdownMenuItem(value: 'TeamInspectionData', child: Text('검사 데이터')),
-                DropdownMenuItem(value: 'MasterStation', child: Text('무선국')),
-                DropdownMenuItem(value: 'Division', child: Text('본부')),
-                DropdownMenuItem(value: 'Team', child: Text('팀')),
+                DropdownMenuItem(value: 'User', child: Text('사용자')),
+                DropdownMenuItem(value: 'DSData', child: Text('DS 데이터')),
               ],
               onChanged: (value) {
                 setState(() => _filterEntityType = value);

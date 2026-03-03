@@ -5,6 +5,7 @@ import '../models/radio_station.dart';
 import '../providers/station_provider.dart';
 import '../services/division_data_service.dart';
 import '../services/auth_service.dart';
+import '../widgets/user_profile_button.dart';
 
 /// 일정 관리 및 통계 대시보드 화면
 class ScheduleScreen extends StatefulWidget {
@@ -471,6 +472,15 @@ class _ScheduleScreenState extends State<ScheduleScreen>
         ],
       ),
       centerTitle: true,
+      actions: [
+        UserProfileButton(
+          onLogout: () {
+            context.read<AuthService>().signOut();
+            Navigator.of(context).popUntil((route) => route.isFirst);
+          },
+        ),
+        const SizedBox(width: 8),
+      ],
     );
   }
 

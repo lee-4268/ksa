@@ -10,6 +10,7 @@ import '../services/ds_upload_service.dart';
 import '../services/ds_export_service_stub.dart'
     if (dart.library.html) '../services/ds_export_service_web.dart' as platform_export;
 import 'ds_data_screen.dart';
+import '../widgets/user_profile_button.dart';
 
 /// DS 데이터 관리 대시보드 - 업로드 + 조회 + Export + 삭제
 class DsDashboardScreen extends StatefulWidget {
@@ -283,7 +284,6 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
             onPressed: _isLoading
                 ? null
                 : () {
-                    // 수동 새로고침: 업로드가 stuck된 경우 상태 초기화
                     if (_isUploading) {
                       setState(() {
                         _isUploading = false;
@@ -295,6 +295,13 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
                   },
             tooltip: '새로고침',
           ),
+          UserProfileButton(
+            onLogout: () {
+              context.read<AuthService>().signOut();
+              Navigator.of(context).popUntil((route) => route.isFirst);
+            },
+          ),
+          const SizedBox(width: 8),
         ],
       ),
       body: _isLoading

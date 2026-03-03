@@ -8,6 +8,7 @@ import 'division_management_screen.dart';
 import 'admin/admin_panel_screen.dart';
 import 'ds_dashboard_screen.dart';
 import 'ds_merge_screen.dart';
+import '../widgets/user_profile_button.dart';
 
 /// 전국 현황 대시보드 화면
 class DashboardScreen extends StatefulWidget {
@@ -416,6 +417,10 @@ class _DashboardScreenState extends State<DashboardScreen>
         ],
       ),
       centerTitle: true,
+      actions: [
+        UserProfileButton(onLogout: _handleLogout),
+        const SizedBox(width: 8),
+      ],
     );
   }
 

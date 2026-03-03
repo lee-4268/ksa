@@ -1,5 +1,7 @@
 import 'dart:convert';
+
 import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
 
 /// 감사 로그 액션 타입
 enum AuditAction {
@@ -115,7 +117,7 @@ class AuditService extends ChangeNotifier {
     _currentTeamName = teamName;
   }
 
-  /// 감사 로그 기록 (현재 stub - EC2 API 추가 필요)
+  /// 감사 로그 기록 — 서버사이드에서 자동 기록되므로 프론트에서는 호출 불필요
   Future<bool> log({
     required AuditAction action,
     required String entityType,
@@ -125,13 +127,7 @@ class AuditService extends ChangeNotifier {
     List<String>? changedFields,
     bool canRollback = true,
   }) async {
-    if (_currentUserId == null) {
-      debugPrint('AuditService: 사용자 컨텍스트가 설정되지 않음');
-      return false;
-    }
-
-    // 현재 EC2 API에 audit 엔드포인트가 없으므로 로컬 로그만 출력
-    debugPrint('AuditService: 로그 기록 - $action on $entityType:$entityId (EC2 API 구현 필요)');
+    // 감사 로그는 서버에서 자동 기록됨 (변조 방지)
     return true;
   }
 
@@ -189,7 +185,7 @@ class AuditService extends ChangeNotifier {
     return changedFields;
   }
 
-  /// 감사 로그 조회 (현재 stub - EC2 API 추가 필요)
+  /// 감사 로그 조회
   Future<List<AuditLogEntry>> listAuditLogs({
     String? entityType,
     String? entityId,
@@ -199,8 +195,32 @@ class AuditService extends ChangeNotifier {
     DateTime? endDate,
     int limit = 50,
   }) async {
-    debugPrint('AuditService: listAuditLogs 호출 (EC2 API 구현 필요)');
-    return [];
+    try {
+      final params = <String, String>{'limit': limit.toString()};
+      if (entityType != null) params['entityType'] = entityType;
+      if (action != null) params['action'] = action.name.toUpperCase();
+
+      final uri = Uri.parse('$_baseUrl/admin/audit-logs')
+          .replace(queryParameters: params);
+      final response = await http.get(uri, headers: {
+        'Accept': 'application/json',
+        'X-User-Id': _currentUserId ?? '',
+      });
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body) as Map<String, dynamic>;
+        if (data['success'] == true) {
+          return (data['logs'] as List)
+              .map((e) => AuditLogEntry.fromJson(e as Map<String, dynamic>))
+              .toList();
+        }
+      }
+      debugPrint('listAuditLogs failed: ${response.statusCode}');
+      return [];
+    } catch (e) {
+      debugPrint('listAuditLogs error: $e');
+      return [];
+    }
   }
 
   /// 특정 엔티티의 변경 이력 조회
@@ -215,9 +235,8 @@ class AuditService extends ChangeNotifier {
     );
   }
 
-  /// 롤백 수행 (현재 stub - EC2 API 추가 필요)
+  /// 롤백 수행 — Phase 2 구현 예정
   Future<bool> rollback(String auditLogId) async {
-    debugPrint('AuditService: rollback 호출 (EC2 API 구현 필요)');
     return false;
   }
 }

@@ -262,35 +262,24 @@ class TeamContextService extends ChangeNotifier {
     return null;
   }
 
-  /// 모든 본부 목록 조회 (현재 stub - EC2 API 추가 필요)
+  /// 본부 목록 (하드코딩 — 별도 API 불필요)
+  static final List<Division> _hardcodedDivisions = [
+    Division(id: '수도권', name: '수도권본부', code: '10'),
+    Division(id: '경남', name: '경남본부', code: '20'),
+    Division(id: '서부', name: '서부본부', code: '30'),
+    Division(id: '강원', name: '강원본부', code: '40'),
+    Division(id: '충청', name: '충청본부', code: '50'),
+    Division(id: '경북', name: '경북본부', code: '60'),
+  ];
+
   Future<void> loadDivisions() async {
-    _isLoading = true;
-    notifyListeners();
-
-    // EC2 API에 divisions 엔드포인트 추가 필요
-    debugPrint('loadDivisions: EC2 API 구현 필요');
-
-    _isLoading = false;
+    _availableDivisions = _hardcodedDivisions;
     notifyListeners();
   }
 
-  /// 특정 본부의 팀 목록 조회 (현재 stub - EC2 API 추가 필요)
-  Future<void> loadTeamsByDivision(String divisionId) async {
-    // EC2 API에 teams 엔드포인트 추가 필요
-    debugPrint('loadTeamsByDivision: EC2 API 구현 필요');
-  }
+  Future<void> loadTeamsByDivision(String divisionId) async {}
 
-  /// 모든 팀 목록 조회 (현재 stub - EC2 API 추가 필요)
-  Future<void> loadAllTeams() async {
-    _isLoading = true;
-    notifyListeners();
-
-    // EC2 API에 teams 엔드포인트 추가 필요
-    debugPrint('loadAllTeams: EC2 API 구현 필요');
-
-    _isLoading = false;
-    notifyListeners();
-  }
+  Future<void> loadAllTeams() async {}
 
   /// 승인 상태 새로고침
   Future<void> refreshApprovalStatus() async {

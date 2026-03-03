@@ -84,6 +84,7 @@ DYNAMODB_TABLES = {
     "ds_records": os.getenv("DYNAMODB_DS_RECORDS_TABLE", "kca-ds-records"),
     "ds_uploads": os.getenv("DYNAMODB_DS_UPLOADS_TABLE", "kca-ds-uploads"),
     "ds_jobs": os.getenv("DYNAMODB_DS_JOBS_TABLE", "kca-ds-jobs"),
+    "audit_logs": os.getenv("DYNAMODB_AUDIT_TABLE", "kca-audit-logs"),
 }
 
 # DS 전파관리소 지역코드 → 회사 본부 매핑
@@ -251,6 +252,119 @@ async def _require_role(request: Request, allowed_roles: set) -> str:
     if role not in allowed_roles:
         raise HTTPException(status_code=403, detail=f"권한 없음 (현재: {role}, 필요: {', '.join(allowed_roles)})")
     return empno
+
+
+# ── 감사 로그 기록 ──────────────────────────────────────────
+_admin_users_cache: list | None = None
+_admin_users_cache_time: float = 0
+ADMIN_USERS_CACHE_TTL = 60  # seconds
+
+
+def _record_audit_log_sync(action: str, entity_type: str, entity_id: str,
+                            user_id: str, details: dict | None = None):
+    """감사 로그를 DynamoDB kca-audit-logs에 기록 (동기, to_thread로 호출)"""
+    import time as _time
+    try:
+        dynamodb = get_dynamodb_resource()
+        table = dynamodb.Table(DYNAMODB_TABLES["audit_logs"])
+        now = datetime.now(timezone.utc).isoformat()
+        log_id = str(uuid.uuid4())
+
+        item = {
+            "entityType": entity_type,
+            "sk": f"{now}#{log_id}",
+            "action": action,
+            "entityId": entity_id,
+            "userId": user_id,
+            "timestamp": now,
+            "canRollback": False,
+            "ttl": int(_time.time()) + 90 * 86400,  # 90일 후 자동 삭제
+        }
+
+        # 사용자 이름 denormalization
+        try:
+            users_table = dynamodb.Table(DYNAMODB_TABLES["users"])
+            user_resp = users_table.get_item(
+                Key={"user_id": user_id},
+                ProjectionExpression="#n",
+                ExpressionAttributeNames={"#n": "name"},
+            )
+            if user_resp.get("Item"):
+                item["userName"] = user_resp["Item"].get("name", user_id)
+        except Exception:
+            pass
+
+        if details:
+            item.update(details)
+
+        table.put_item(Item=item)
+        logger.info(f"audit: {action} {entity_type} {entity_id} by {user_id}")
+    except Exception as e:
+        logger.error(f"audit log write failed: {e}")
+
+
+def _ensure_audit_table():
+    """서버 시작 시 kca-audit-logs 테이블 자동 생성"""
+    try:
+        client = get_dynamodb_client()
+        client.create_table(
+            TableName=DYNAMODB_TABLES["audit_logs"],
+            KeySchema=[
+                {"AttributeName": "entityType", "KeyType": "HASH"},
+                {"AttributeName": "sk", "KeyType": "RANGE"},
+            ],
+            AttributeDefinitions=[
+                {"AttributeName": "entityType", "AttributeType": "S"},
+                {"AttributeName": "sk", "AttributeType": "S"},
+            ],
+            BillingMode="PAY_PER_REQUEST",
+        )
+        logger.info(f"DynamoDB table {DYNAMODB_TABLES['audit_logs']} created")
+        # TTL 활성화
+        client.update_time_to_live(
+            TableName=DYNAMODB_TABLES["audit_logs"],
+            TimeToLiveSpecification={"Enabled": True, "AttributeName": "ttl"},
+        )
+    except ClientError as e:
+        if e.response["Error"]["Code"] != "ResourceInUseException":
+            logger.warning(f"audit table creation error (non-fatal): {e}")
+
+
+def _list_all_users_sync() -> list:
+    """DynamoDB Users 테이블 전체 스캔 (캐시 60초)"""
+    global _admin_users_cache, _admin_users_cache_time
+    import time as _time
+    now = _time.time()
+    if _admin_users_cache is not None and (now - _admin_users_cache_time) < ADMIN_USERS_CACHE_TTL:
+        return _admin_users_cache
+
+    dynamodb = get_dynamodb_resource()
+    table = dynamodb.Table(DYNAMODB_TABLES["users"])
+    users = []
+    params = {
+        "ProjectionExpression": "user_id, #n, #r, region, team, email, phone_number",
+        "ExpressionAttributeNames": {"#n": "name", "#r": "role"},
+    }
+    while True:
+        resp = table.scan(**params)
+        for item in resp.get("Items", []):
+            users.append({
+                "empno": item.get("user_id", ""),
+                "name": item.get("name", ""),
+                "region": item.get("region", ""),
+                "team": item.get("team", ""),
+                "email": item.get("email", ""),
+                "phone": item.get("phone_number", ""),
+                "role": item.get("role", "member"),
+            })
+        if "LastEvaluatedKey" not in resp:
+            break
+        params["ExclusiveStartKey"] = resp["LastEvaluatedKey"]
+
+    users.sort(key=lambda u: u.get("name", ""))
+    _admin_users_cache = users
+    _admin_users_cache_time = now
+    return users
 
 
 # ============================================================
@@ -452,6 +566,7 @@ async def startup_event():
     print("Server started successfully! (YOLO model: lazy load)")
     # DS 잡 테이블 자동 생성 (없으면) + stuck 잡 복구 + 워커 시작
     asyncio.create_task(_ensure_ds_jobs_table())
+    asyncio.create_task(asyncio.to_thread(_ensure_audit_table))
     asyncio.create_task(_recover_stuck_jobs())
     _ds_job_worker_task = asyncio.create_task(_job_worker_loop())
     print("DS job worker started")
@@ -1468,6 +1583,9 @@ async def set_user_role(req: SetRoleRequest, request: Request):
         raise HTTPException(status_code=403, detail="권한 없음 (admin 또는 부트스트랩 키 필요)")
 
     try:
+        # 변경 전 역할 조회 (감사 로그용)
+        old_role = await asyncio.to_thread(_get_user_role_sync, req.empno)
+
         dynamodb = get_dynamodb_resource()
         table = dynamodb.Table(DYNAMODB_TABLES["users"])
         table.update_item(
@@ -1476,10 +1594,121 @@ async def set_user_role(req: SetRoleRequest, request: Request):
             ExpressionAttributeNames={"#r": "role"},
             ExpressionAttributeValues={":role": req.role},
         )
+
+        # 감사 로그 기록
+        actor = caller_id or "bootstrap"
+        await asyncio.to_thread(
+            _record_audit_log_sync, "UPDATE", "User", req.empno, actor,
+            {
+                "previousData": json.dumps({"role": old_role}),
+                "newData": json.dumps({"role": req.role}),
+                "changedFields": ["role"],
+            },
+        )
+
+        # 캐시 무효화
+        global _admin_users_cache
+        _admin_users_cache = None
+
         return {"success": True, "empno": req.empno, "role": req.role}
     except Exception as e:
         logger.error(f"role 설정 실패: {e}")
         raise HTTPException(status_code=500, detail=f"역할 설정 실패: {e}")
+
+
+@app.get("/admin/users")
+async def admin_list_users(
+    request: Request,
+    search: str | None = None,
+    region: str | None = None,
+    role: str | None = None,
+):
+    """사용자 목록 조회 — admin/manager만"""
+    await _require_role(request, {"admin", "manager"})
+
+    try:
+        users = await asyncio.to_thread(_list_all_users_sync)
+
+        # 필터링
+        filtered = users
+        if search:
+            q = search.lower()
+            filtered = [u for u in filtered
+                        if q in u.get("name", "").lower()
+                        or q in u.get("empno", "").lower()
+                        or q in u.get("email", "").lower()]
+        if region:
+            filtered = [u for u in filtered if u.get("region", "") == region]
+        if role:
+            filtered = [u for u in filtered if u.get("role", "member") == role]
+
+        return {"success": True, "users": filtered, "total": len(filtered)}
+    except Exception as e:
+        logger.error(f"admin users list failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/admin/audit-logs")
+async def admin_list_audit_logs(
+    request: Request,
+    entityType: str | None = None,
+    action: str | None = None,
+    limit: int = 50,
+):
+    """감사 로그 조회 — admin/manager만"""
+    await _require_role(request, {"admin", "manager"})
+
+    try:
+        dynamodb = get_dynamodb_resource()
+        table = dynamodb.Table(DYNAMODB_TABLES["audit_logs"])
+
+        if entityType:
+            # Query by PK (entityType), newest first
+            params: dict = {
+                "KeyConditionExpression": "entityType = :et",
+                "ExpressionAttributeValues": {":et": entityType},
+                "ScanIndexForward": False,
+                "Limit": limit,
+            }
+            if action:
+                params["FilterExpression"] = "#a = :a"
+                params["ExpressionAttributeNames"] = {"#a": "action"}
+                params["ExpressionAttributeValues"][":a"] = action
+            resp = await asyncio.to_thread(lambda: table.query(**params))
+        else:
+            # Scan all (no PK filter)
+            params = {"Limit": limit}
+            if action:
+                params["FilterExpression"] = "#a = :a"
+                params["ExpressionAttributeNames"] = {"#a": "action"}
+                params["ExpressionAttributeValues"] = {":a": action}
+            resp = await asyncio.to_thread(lambda: table.scan(**params))
+
+        logs = []
+        for item in resp.get("Items", []):
+            sk = item.get("sk", "")
+            log_id = sk.split("#")[-1] if "#" in sk else sk
+            logs.append({
+                "id": log_id,
+                "action": item.get("action", "UPDATE"),
+                "entityType": item.get("entityType", ""),
+                "entityId": item.get("entityId", ""),
+                "userId": item.get("userId", ""),
+                "userName": item.get("userName"),
+                "timestamp": item.get("timestamp", ""),
+                "previousData": item.get("previousData"),
+                "newData": item.get("newData"),
+                "changedFields": item.get("changedFields"),
+                "canRollback": item.get("canRollback", False),
+            })
+
+        # Scan 결과는 시간순 정렬 안 됨 → timestamp 역순 정렬
+        logs.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+
+        return {"success": True, "logs": logs}
+    except Exception as e:
+        logger.error(f"audit logs list failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ============================================================
@@ -3568,6 +3797,14 @@ async def ds_delete_data(
         else:
             logger.info(f"DS delete complete ({storage_type}, no records): {divisionId}/{upload_sk}")
 
+        # 6. 감사 로그
+        empno = request.headers.get("X-User-Id", "").strip()
+        await asyncio.to_thread(
+            _record_audit_log_sync, "DELETE", "DSData",
+            f"{divisionId}/{importDate}", empno,
+            {"newData": json.dumps({"divisionCode": dc, "storageType": storage_type})},
+        )
+
         return {"success": True, "deletedCount": 0}
     except ClientError as e:
         logger.error(f"DS delete error: {e}")
@@ -3723,6 +3960,14 @@ async def ds_enqueue(request: Request, req: DsEnqueueRequest):
         queue_position = resp.get("Count", 0)
 
         logger.info(f"DS job enqueued: {job_id} ({req.fileName}, 큐 {queue_position}번째)")
+
+        # 감사 로그
+        empno = request.headers.get("X-User-Id", "").strip() or req.uploadedBy
+        await asyncio.to_thread(
+            _record_audit_log_sync, "CREATE", "DSData", req.s3Key, empno,
+            {"newData": json.dumps({"fileName": req.fileName, "jobId": job_id})},
+        )
+
         return {"success": True, "jobId": job_id, "queuePosition": queue_position}
     except ClientError as e:
         logger.error(f"DS enqueue error: {e}")

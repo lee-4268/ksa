@@ -20,7 +20,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
 
   // 데이터
   List<Division> _divisions = [];
-  Map<String, List<Team>> _teamsByDivision = {};
+  List<String> _uniqueTeams = []; // 사용자 데이터에서 추출한 팀 목록
   List<AppUserProfile> _filteredUsers = [];
 
   // 상태
@@ -64,24 +64,24 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
       final adminService = context.read<AdminService>();
       final teamContext = context.read<TeamContextService>();
 
-      // 본부/팀 목록 로드
+      // 본부 목록 로드 (하드코딩)
       await teamContext.loadDivisions();
-      await teamContext.loadAllTeams();
-
-      // 본부별 팀 그룹핑
-      final allTeams = teamContext.availableTeams;
-      final groupedTeams = <String, List<Team>>{};
-      for (final team in allTeams) {
-        groupedTeams.putIfAbsent(team.divisionId, () => []);
-        groupedTeams[team.divisionId]!.add(team);
-      }
 
       // 사용자 목록 로드
       await adminService.loadAllUsers();
 
+      // 사용자 데이터에서 고유 팀 목록 추출
+      final teams = adminService.allUsers
+          .map((u) => u.teamId)
+          .where((t) => t != null && t.isNotEmpty)
+          .cast<String>()
+          .toSet()
+          .toList()
+        ..sort();
+
       setState(() {
         _divisions = teamContext.availableDivisions;
-        _teamsByDivision = groupedTeams;
+        _uniqueTeams = teams;
         _applyFilters();
         _isLoading = false;
       });
@@ -181,9 +181,16 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
     _applyFilters();
   }
 
-  List<Team> _getTeamsForSelectedDivision() {
-    if (_selectedDivisionId == null) return [];
-    return _teamsByDivision[_selectedDivisionId] ?? [];
+  /// 선택된 본부에 소속된 팀 목록 (사용자 데이터에서 동적 추출)
+  List<String> _getTeamsForSelectedDivision() {
+    if (_selectedDivisionId == null) return _uniqueTeams;
+    final adminService = context.read<AdminService>();
+    return adminService.allUsers
+        .where((u) => u.divisionId == _selectedDivisionId && u.teamId != null && u.teamId!.isNotEmpty)
+        .map((u) => u.teamId!)
+        .toSet()
+        .toList()
+      ..sort();
   }
 
   List<AppUserProfile> _getDisplayedUsers() {
@@ -336,18 +343,16 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                     ),
                     ..._getTeamsForSelectedDivision().map((team) {
                       return DropdownMenuItem(
-                        value: team.id,
-                        child: Text(team.name),
+                        value: team,
+                        child: Text(team),
                       );
                     }),
                   ],
-                  onChanged: _selectedDivisionId != null
-                      ? (value) => _onTeamChanged(
-                            value?.isEmpty == true ? null : value,
-                          )
-                      : null,
+                  onChanged: (value) => _onTeamChanged(
+                    value?.isEmpty == true ? null : value,
+                  ),
                   hint: Text(
-                    _selectedDivisionId == null ? '본부 먼저 선택' : '팀 선택',
+                    '팀 선택',
                     style: TextStyle(color: Colors.grey[500]),
                   ),
                 ),
@@ -560,14 +565,16 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
             ),
 
             // 소속 정보
-            if (user.team != null) ...[
+            if (user.divisionId != null || user.teamId != null) ...[
               const SizedBox(height: 8),
               Row(
                 children: [
                   Icon(Icons.business, size: 16, color: Colors.grey[500]),
                   const SizedBox(width: 4),
                   Text(
-                    '${user.team!.division?.name ?? ''} - ${user.team!.name}',
+                    [user.divisionId, user.teamId]
+                        .where((s) => s != null && s.isNotEmpty)
+                        .join(' - '),
                     style: TextStyle(
                       color: Colors.grey[600],
                       fontSize: 13,
@@ -643,19 +650,14 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
     return myRoleLevel < targetRoleLevel;
   }
 
-  /// 현재 사용자가 부여할 수 있는 권한 목록 반환
-  /// - 최고관리자: 본부관리자, 팀관리자, 일반멤버
-  /// - 본부관리자: 팀관리자, 일반멤버
-  /// - 팀관리자: 일반멤버
-  /// - 일반멤버: 없음
+  /// 현재 사용자가 부여할 수 있는 권한 목록 (백엔드 3역할: admin/manager/member)
   List<UserRole> _getAssignableRoles(AppUserRole myRole) {
     switch (myRole) {
       case AppUserRole.superAdmin:
-        return [UserRole.divisionAdmin, UserRole.teamAdmin, UserRole.member];
+        return [UserRole.divisionAdmin, UserRole.member];
       case AppUserRole.divisionAdmin:
-        return [UserRole.teamAdmin, UserRole.member];
-      case AppUserRole.teamAdmin:
         return [UserRole.member];
+      case AppUserRole.teamAdmin:
       case AppUserRole.member:
         return [];
     }

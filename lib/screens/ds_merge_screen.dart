@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import '../services/auth_service.dart';
 import '../services/ds_merge_service.dart';
+import '../widgets/user_profile_button.dart';
 
 /// DS 파일 병합 화면
 class DsMergeScreen extends StatefulWidget {
@@ -68,6 +71,15 @@ class _DsMergeScreenState extends State<DsMergeScreen> {
         backgroundColor: Colors.white,
         foregroundColor: Colors.black87,
         elevation: 0,
+        actions: [
+          UserProfileButton(
+            onLogout: () {
+              context.read<AuthService>().signOut();
+              Navigator.of(context).popUntil((route) => route.isFirst);
+            },
+          ),
+          const SizedBox(width: 8),
+        ],
       ),
       body: Center(
         child: SingleChildScrollView(
