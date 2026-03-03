@@ -127,6 +127,7 @@ class _DsDataScreenState extends State<DsDataScreen> with SingleTickerProviderSt
         limit: _pageSize,
         lastKey: loadMore ? existing?.lastKey : null,
         search: _activeSearch.isNotEmpty ? _activeSearch : null,
+        divisionCode: widget.divisionCode,
       );
 
       if (!mounted) return;

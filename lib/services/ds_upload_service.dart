@@ -4,21 +4,40 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
-import 'ds_upload_service_stub.dart'
-    if (dart.library.html) 'ds_upload_service_web.dart' as platform_upload;
-
+/// DS 업로드 서비스 — Scenario 2: EC2 경유 S3 업로드 + 서버사이드 처리
+///
+/// 이전 방식 (제거):
+///   브라우저 ZIP 파싱 → 3000+ HTTP 청크 → 타임아웃 위험
+///
+/// 새 방식:
+///   1. ZIP → POST /ds/upload-raw (EC2 스트리밍 → S3, CORS 불필요)
+///   2. POST /ds/enqueue → jobId 수신
+///   3. GET /ds/job/{jobId} 폴링 (3초 간격) → 서버 진행률 표시
+///   4. 서버가 xlrd로 XLS 파싱 → DynamoDB → openpyxl xlsx → S3
 class DsUploadService {
   static const String _baseUrl = String.fromEnvironment(
     'API_BASE_URL',
     defaultValue: 'https://api-sko-kca.skons.net',
   );
 
-  // HTTP 타임아웃 상수 — 행잉 방지 핵심
-  static const _chunkTimeout = Duration(seconds: 60);
-  static const _initTimeout = Duration(seconds: 60);
-  static const _finalizeTimeout = Duration(seconds: 60);
+  static const _s3Timeout = Duration(minutes: 10);    // 대용량 ZIP S3 업로드
+  static const _apiTimeout = Duration(seconds: 30);   // API 호출
+  static const _pollInterval = Duration(seconds: 3);  // 폴링 간격
+  static const _maxPollDuration = Duration(minutes: 35); // 최대 대기 시간
 
-  /// ZIP 파일(들)을 선택하고 DS 파일을 파싱 + EC2에 청크 업로드
+  // DS 지역코드 → 본부명 (서버 DS_REGION_CODE_MAP과 동일)
+  static const _divisionNames = {
+    '10': '수도권',
+    '20': '경남본부',
+    '30': '서부본부',
+    '40': '강원본부',
+    '50': '충청본부',
+    '55': '충청본부',
+    '60': '경북본부',
+    '70': '서부본부',
+  };
+
+  /// ZIP 파일(들) 선택 → S3 업로드 → 서버 처리 → 완료 메시지 반환
   Future<String> pickAndUpload({
     required String uploadedBy,
     required void Function(String stage, double percent) onProgress,
@@ -84,176 +103,127 @@ class DsUploadService {
     required String uploadedBy,
     required void Function(String stage, double percent) onProgress,
   }) async {
-    // ── 상태 변수 ──────────────────────────────────────────────────────────
-    // uploadInitStarted: await 전에 동기적으로 true 설정 → 병렬 배치 내 중복 방지
-    var uploadInitStarted = false;
-    var uploadInitDone = false;
-    var chunkCount = 0;
-    var failedChunks = 0;
+    // ── 1단계: ZIP → EC2 경유 S3 업로드 (/ds/upload-raw) ──────────────────
+    // S3 CORS 설정 없이도 동작 (EC2가 스트리밍으로 S3에 저장)
+    onProgress('ZIP 업로드 중...', 5);
 
-    // ── 1단계: JS에서 ZIP 파싱 + 청크 업로드 ──────────────────────────────
-    final metaJson = await platform_upload.parseDsForUpload(
-      zipBytes: bytes,
-      onChunk: (String chunkJson) async {
-        // 첫 번째 청크에서만 upload-init 호출
-        // uploadInitStarted를 await 전에 동기적으로 설정 (병렬 배치 내 중복 방지 핵심)
-        if (!uploadInitStarted) {
-          uploadInitStarted = true; // ← await 전 동기 설정 (중요!)
-          final chunkData = jsonDecode(chunkJson);
-          try {
-            final resp = await http.post(
-              Uri.parse('$_baseUrl/ds/upload-init'),
-              headers: {'Content-Type': 'application/json'},
-              body: jsonEncode({
-                'divisionId': chunkData['divisionId'],
-                'divisionCode': chunkData['divisionCode'] ?? '',
-                'importDate': chunkData['importDate'],
-                'fileName': fileName,
-                'uploadedBy': uploadedBy,
-              }),
-            ).timeout(_initTimeout);
-            uploadInitDone = resp.statusCode == 200;
-            debugPrint('upload-init: ${resp.statusCode}');
-          } catch (e) {
-            debugPrint('upload-init 오류 (계속 진행): $e');
-          }
-        }
+    final uploadReq = http.MultipartRequest(
+      'POST',
+      Uri.parse('$_baseUrl/ds/upload-raw'),
+    )..files.add(http.MultipartFile.fromBytes(
+        'file',
+        bytes,
+        filename: fileName,
+      ));
 
-        // 청크 업로드 — 타임아웃 필수 (행잉 방지)
-        try {
-          final resp = await http.post(
-            Uri.parse('$_baseUrl/ds/upload-chunk'),
-            headers: {'Content-Type': 'application/json'},
-            body: chunkJson,
-          ).timeout(_chunkTimeout);
-          if (resp.statusCode == 200) {
-            chunkCount++;
-          } else {
-            failedChunks++;
-            debugPrint('청크 업로드 실패: ${resp.statusCode}');
-          }
-        } catch (e) {
-          failedChunks++;
-          debugPrint('청크 업로드 오류: $e');
-        }
-      },
-      onProgress: onProgress,
-    );
+    final uploadStreamedResp = await uploadReq.send().timeout(_s3Timeout);
+    final uploadResp = await http.Response.fromStream(uploadStreamedResp);
 
-    if (metaJson.isEmpty) throw Exception('파싱 결과를 받지 못했습니다.');
-    final meta = jsonDecode(metaJson) as Map<String, dynamic>;
-
-    // ── 2단계: S3에 원본 ZIP 업로드 (비치명적, 백그라운드) ─────────────────
-    _uploadZipToS3(bytes: bytes, meta: meta).catchError((e) {
-      debugPrint('S3 ZIP 업로드 실패 (무시): $e');
-    });
-
-    // ── 3단계: upload-init 미완료 시 여기서 재시도 ─────────────────────────
-    if (!uploadInitDone) {
-      try {
-        await http.post(
-          Uri.parse('$_baseUrl/ds/upload-init'),
-          headers: {'Content-Type': 'application/json'},
-          body: jsonEncode({
-            'divisionId': meta['divisionId'],
-            'divisionCode': meta['divisionCode'] ?? '',
-            'importDate': meta['importDate'],
-            'fileName': fileName,
-            'uploadedBy': uploadedBy,
-          }),
-        ).timeout(_initTimeout);
-        debugPrint('upload-init 재시도 완료');
-      } catch (e) {
-        debugPrint('upload-init 재시도 오류: $e');
-      }
+    if (uploadResp.statusCode != 200) {
+      throw Exception('ZIP 업로드 실패 (${uploadResp.statusCode}): ${uploadResp.body}');
     }
 
-    // ── 4단계: upload-finalize (반드시 xlsx 빌드보다 먼저) ─────────────────
-    onProgress('업로드 완료 처리 중...', 97);
-    try {
-      final resp = await http.post(
-        Uri.parse('$_baseUrl/ds/upload-finalize'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'divisionId': meta['divisionId'],
-          'divisionCode': meta['divisionCode'] ?? '',
-          'importDate': meta['importDate'],
-          'sheetStats': meta['sheetStats'],
-          'totalRows': meta['totalRows'],
-        }),
-      ).timeout(_finalizeTimeout);
-      debugPrint('upload-finalize: ${resp.statusCode}');
-    } catch (e) {
-      debugPrint('upload-finalize 실패: $e');
+    final uploadData = jsonDecode(uploadResp.body) as Map<String, dynamic>;
+    if (uploadData['success'] != true) {
+      throw Exception('ZIP 업로드 실패: ${uploadData['detail'] ?? uploadData['message']}');
     }
 
-    // ── 5단계: pre-built xlsx 생성 (20만행 이하, fire-and-forget) ──────────
-    final totalRows = meta['totalRows'] as int? ?? 0;
-    if (totalRows <= 200000) {
-      _buildAndUploadXlsx(bytes: bytes, meta: meta, metaJson: metaJson, onProgress: onProgress)
-          .catchError((e) => debugPrint('xlsx 빌드 실패 (무시): $e'));
+    final s3Key = uploadData['s3Key'] as String;
+    debugPrint('ZIP EC2→S3 업로드 완료: $s3Key (${bytes.length ~/ 1024}KB)');
+
+    // ── 2단계: 서버에 처리 요청 (enqueue) ───────────────────────────────
+    onProgress('서버 처리 요청 중...', 20);
+
+    final enqueueResp = await http.post(
+      Uri.parse('$_baseUrl/ds/enqueue'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        's3Key': s3Key,
+        'fileName': fileName,
+        'uploadedBy': uploadedBy,
+      }),
+    ).timeout(_apiTimeout);
+
+    if (enqueueResp.statusCode != 200) {
+      throw Exception('서버 처리 요청 실패 (${enqueueResp.statusCode}): ${enqueueResp.body}');
+    }
+
+    final enqueueData = jsonDecode(enqueueResp.body) as Map<String, dynamic>;
+    if (enqueueData['success'] != true) {
+      throw Exception('서버 처리 요청 실패: ${enqueueData['detail'] ?? enqueueData['message']}');
+    }
+
+    final jobId = enqueueData['jobId'] as String;
+    final queuePos = enqueueData['queuePosition'] as int? ?? 1;
+
+    debugPrint('DS 잡 enqueued: $jobId (큐 위치: $queuePos)');
+
+    // ── 4단계: 서버 처리 완료까지 폴링 (3초 간격) ──────────────────────
+    if (queuePos > 1) {
+      onProgress('서버 대기 중... ($queuePos번째)', 22);
     } else {
-      debugPrint('총 ${meta['totalRows']}행 → xlsx 빌드 건너뜀 (ZIP Export 사용)');
+      onProgress('서버 처리 시작 중...', 22);
     }
 
-    // ── 결과 반환 ──────────────────────────────────────────────────────────
-    final divName = meta['divisionName'] ?? meta['divisionId'];
-    final date = meta['importDate'] as String? ?? '';
-    final formattedDate = date.length == 8
-        ? '${date.substring(0, 4)}-${date.substring(4, 6)}-${date.substring(6, 8)}'
-        : date;
+    final deadline = DateTime.now().add(_maxPollDuration);
 
-    return '$divName $formattedDate\n'
-        '${(meta['sheetOrder'] as List?)?.length ?? 0}개 시트, ${_formatNumber(totalRows)}행 업로드 완료\n'
-        '(청크 $chunkCount개 전송${failedChunks > 0 ? ", 실패 $failedChunks개" : ""})';
-  }
+    while (DateTime.now().isBefore(deadline)) {
+      await Future.delayed(_pollInterval);
 
-  Future<void> _uploadZipToS3({required Uint8List bytes, required Map<String, dynamic> meta}) async {
-    final resp = await http.get(Uri.parse(
-      '$_baseUrl/ds/upload-presign'
-      '?divisionId=${meta['divisionId']}'
-      '&divisionCode=${meta['divisionCode']}'
-      '&importDate=${meta['importDate']}',
-    )).timeout(const Duration(seconds: 30));
+      try {
+        final jobResp = await http.get(
+          Uri.parse('$_baseUrl/ds/job/$jobId'),
+        ).timeout(_apiTimeout);
 
-    if (resp.statusCode == 200) {
-      final data = jsonDecode(resp.body) as Map<String, dynamic>;
-      if (data['success'] == true) {
-        await http.put(
-          Uri.parse(data['url'] as String),
-          headers: {'Content-Type': 'application/zip'},
-          body: bytes,
-        ).timeout(const Duration(minutes: 5));
-        debugPrint('S3 원본 ZIP 업로드 완료');
+        if (jobResp.statusCode != 200) {
+          debugPrint('폴링 HTTP 오류: ${jobResp.statusCode}, 재시도...');
+          continue;
+        }
+
+        final jobData = jsonDecode(jobResp.body) as Map<String, dynamic>;
+        final job = jobData['job'] as Map<String, dynamic>? ?? {};
+        final status = job['status'] as String? ?? 'queued';
+        final stage = job['stage'] as String? ?? '처리 중...';
+        final serverPercent = (job['percent'] as num?)?.toDouble() ?? 0;
+        final queuePosition = job['queuePosition'] as int?;
+
+        // 진행률: S3 업로드 20% + 서버처리 80%
+        final displayPercent = 20.0 + (serverPercent / 100.0) * 80.0;
+        final displayStage = (queuePosition != null && queuePosition > 1)
+            ? '$stage (대기 $queuePosition번째)'
+            : stage;
+        onProgress(displayStage, displayPercent);
+
+        if (status == 'completed') {
+          // 완료
+          final divisionCode = job['divisionCode'] as String? ?? '';
+          final importDate = job['importDate'] as String? ?? '';
+          final totalRows = job['totalRows'] as int? ?? 0;
+          final sheetStats = job['sheetStats'] as Map<String, dynamic>? ?? {};
+          final divName = _divisionNames[divisionCode] ?? job['divisionId'] ?? '';
+          final formattedDate = importDate.length == 8
+              ? '${importDate.substring(0, 4)}-${importDate.substring(4, 6)}-${importDate.substring(6, 8)}'
+              : importDate;
+
+          return '$divName $formattedDate\n'
+              '${sheetStats.length}개 시트, ${_formatNumber(totalRows)}행 업로드 완료';
+        }
+
+        if (status == 'failed') {
+          final error = job['error'] as String? ?? '알 수 없는 오류';
+          throw Exception('서버 처리 실패: $error');
+        }
+      } catch (e) {
+        // 서버 처리 실패는 rethrow, 네트워크 오류는 재시도
+        if (e is Exception && e.toString().contains('서버 처리 실패')) {
+          rethrow;
+        }
+        debugPrint('폴링 오류 (재시도): $e');
       }
     }
-  }
 
-  Future<void> _buildAndUploadXlsx({
-    required Uint8List bytes,
-    required Map<String, dynamic> meta,
-    required String metaJson,
-    required void Function(String stage, double percent) onProgress,
-  }) async {
-    final resp = await http.get(Uri.parse(
-      '$_baseUrl/ds/xlsx-upload-presign'
-      '?divisionId=${meta['divisionId']}'
-      '&divisionCode=${meta['divisionCode']}'
-      '&importDate=${meta['importDate']}',
-    )).timeout(const Duration(seconds: 30));
-
-    if (resp.statusCode == 200) {
-      final data = jsonDecode(resp.body) as Map<String, dynamic>;
-      if (data['success'] == true) {
-        await platform_upload.buildDsXlsxAndUploadToS3(
-          zipBytes: bytes,
-          xlsxPutUrl: data['url'] as String,
-          metaJson: metaJson,
-          onProgress: (stage, percent) => onProgress('xlsx 생성 중: $stage', percent),
-        );
-        debugPrint('xlsx S3 업로드 완료');
-      }
-    }
+    throw Exception('서버 처리 타임아웃 (${_maxPollDuration.inMinutes}분 초과).\n'
+        '처리가 계속 진행 중일 수 있으니 잠시 후 새로고침하세요.');
   }
 
   static String _formatNumber(int num) {

@@ -93,6 +93,7 @@ class DsDataService {
     int limit = 100,
     String? lastKey,
     String? search,
+    String? divisionCode,
   }) async {
     final params = <String, String>{
       'divisionId': divisionId,
@@ -102,6 +103,7 @@ class DsDataService {
     if (importDate != null) params['importDate'] = importDate;
     if (lastKey != null) params['lastKey'] = lastKey;
     if (search != null && search.isNotEmpty) params['search'] = search;
+    if (divisionCode != null) params['divisionCode'] = divisionCode;
 
     final uri = Uri.parse('$_baseUrl/ds/data').replace(queryParameters: params);
     final response = await http.get(uri);

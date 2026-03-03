@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -46,10 +47,29 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
   String _exportStage = '';
   double _exportProgress = 0;
 
+  // 자동 갱신 (uploading 레코드 존재 시 10초마다)
+  Timer? _autoRefreshTimer;
+
   @override
   void initState() {
     super.initState();
     _loadStats();
+  }
+
+  @override
+  void dispose() {
+    _autoRefreshTimer?.cancel();
+    super.dispose();
+  }
+
+  void _scheduleAutoRefresh() {
+    _autoRefreshTimer?.cancel();
+    final hasUploading = _stats?.uploads.any((u) => u.status == 'uploading') ?? false;
+    if (hasUploading) {
+      _autoRefreshTimer = Timer.periodic(const Duration(seconds: 10), (_) {
+        if (mounted && !_isLoading) _loadStats();
+      });
+    }
   }
 
   Future<void> _loadStats() async {
@@ -65,6 +85,7 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
           _stats = stats;
           _isLoading = false;
         });
+        _scheduleAutoRefresh();
       }
     } catch (e) {
       if (mounted) {
@@ -151,147 +172,68 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
         'importDate': upload.actualDate,
         'divisionCode': upload.divisionCode,
       };
+      final filename = '${upload.divisionName}_${upload.actualDate}_DS.xlsx';
 
-      // 1. S3 고속 경로 시도
-      bool usedS3 = false;
+      void onProgress(String stage, double percent) {
+        if (mounted) {
+          setState(() {
+            _exportStage = stage;
+            _exportProgress = percent / 100;
+          });
+        }
+      }
+
+      // 1. S3에 pre-built xlsx 있으면 직접 다운로드 (가장 빠름)
       try {
-        final presignUri = Uri.parse('$_baseUrl/ds/export-presign').replace(queryParameters: params);
-        final presignResp = await http.get(presignUri);
+        final presignUri =
+            Uri.parse('$_baseUrl/ds/export-presign').replace(queryParameters: params);
+        final presignResp =
+            await http.get(presignUri).timeout(const Duration(seconds: 10));
 
         if (presignResp.statusCode == 200) {
-          final presignData = jsonDecode(presignResp.body);
-          if (presignData['success'] == true) {
-            if (!mounted) return;
-            final type = presignData['type'] as String? ?? 'zip';
-
-            if (type == 'xlsx') {
-              // 1a. pre-built xlsx 직접 다운로드 (가장 빠름)
-              setState(() {
-                _exportStage = 'xlsx 다운로드 중...';
-                _exportProgress = 0.1;
-              });
-
-              final filename =
-                  '${upload.divisionName}_${upload.actualDate}_DS.xlsx';
-              final result = await platform_export.downloadXlsxFromUrl(
-                url: presignData['url'] as String,
-                filename: filename,
-                onProgress: (stage, percent) {
-                  if (mounted) {
-                    setState(() {
-                      _exportStage = stage;
-                      _exportProgress = percent / 100;
-                    });
-                  }
-                },
-              );
-
-              usedS3 = true;
-              if (mounted) {
-                setState(() => _exportingId = null);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text(result)),
-                );
-              }
-              return;
+          final data = jsonDecode(presignResp.body);
+          if (data['success'] == true && data['type'] == 'xlsx') {
+            onProgress('xlsx 다운로드 중...', 10);
+            final result = await platform_export.downloadXlsxFromUrl(
+              url: data['url'] as String,
+              filename: filename,
+              onProgress: onProgress,
+            );
+            if (mounted) {
+              setState(() => _exportingId = null);
+              ScaffoldMessenger.of(context)
+                  .showSnackBar(SnackBar(content: Text(result)));
             }
-
-            if (type == 'zip') {
-              // 1b. 원본 ZIP → 브라우저 merge → xlsx
-              setState(() {
-                _exportStage = 'S3에서 원본 다운로드 중...';
-                _exportProgress = 0.02;
-              });
-
-              final metaJson = jsonEncode({
-                'divisionId': upload.divisionId,
-                'divisionCode': upload.divisionCode,
-                'divisionName': upload.divisionName,
-                'importDate': upload.actualDate,
-              });
-
-              final result = await platform_export.exportDsFromS3(
-                s3Url: presignData['url'] as String,
-                metaJson: metaJson,
-                onProgress: (stage, percent) {
-                  if (mounted) {
-                    setState(() {
-                      _exportStage = stage;
-                      _exportProgress = percent / 100;
-                    });
-                  }
-                },
-              );
-
-              usedS3 = true;
-              if (mounted) {
-                setState(() => _exportingId = null);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text(result)),
-                );
-              }
-              return;
-            }
+            return;
           }
         }
       } catch (e) {
-        debugPrint('S3 Export 실패, DB 폴백으로 전환: $e');
+        debugPrint('S3 presign 확인 실패 (서버 빌드로 전환): $e');
       }
 
-      // 2. DB 폴백 (S3에 원본이 없는 경우)
-      if (!usedS3) {
-        if (!mounted) return;
-        setState(() {
-          _exportStage = '서버에서 데이터 가져오는 중...';
-          _exportProgress = 0;
-        });
+      // 2. xlsx 없음 → 서버사이드 빌드 후 직접 다운로드 (/ds/export-xlsx)
+      // 서버가 DynamoDB → openpyxl 빌드 → 스트리밍 반환 + S3 자동 저장
+      onProgress('서버에서 Excel 생성 중...', 5);
+      final exportUri =
+          Uri.parse('$_baseUrl/ds/export-xlsx').replace(queryParameters: params);
+      final result = await platform_export.downloadXlsxFromUrl(
+        url: exportUri.toString(),
+        filename: filename,
+        onProgress: onProgress,
+      );
 
-        final uri = Uri.parse('$_baseUrl/ds/export').replace(queryParameters: params);
-        final response = await http.get(uri);
-
-        if (response.statusCode != 200) {
-          throw Exception('데이터 조회 실패: ${response.statusCode}');
-        }
-
-        final body = jsonDecode(response.body);
-        if (body['success'] != true) {
-          throw Exception(body['message'] ?? '데이터 조회 실패');
-        }
-
-        if (!mounted) return;
-        setState(() {
-          _exportStage = 'xlsx 생성 중...';
-          _exportProgress = 0.3;
-        });
-
-        final result = await platform_export.exportDsToXlsx(
-          jsonData: response.body,
-          onProgress: (stage, percent) {
-            if (mounted) {
-              setState(() {
-                _exportStage = stage;
-                _exportProgress = 0.3 + (percent / 100) * 0.7;
-              });
-            }
-          },
-        );
-
-        if (mounted) {
-          setState(() => _exportingId = null);
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text(result)),
-          );
-        }
+      if (mounted) {
+        setState(() => _exportingId = null);
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(result)));
       }
     } catch (e) {
       if (mounted) {
         setState(() => _exportingId = null);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Export 실패: ${e.toString().replaceFirst("Exception: ", "")}'),
-            backgroundColor: Colors.red,
-          ),
-        );
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Export 실패: ${e.toString().replaceFirst("Exception: ", "")}'),
+          backgroundColor: Colors.red,
+        ));
       }
     }
   }

@@ -14,6 +14,10 @@ from typing import List, Optional, Dict
 from datetime import datetime, timezone
 from decimal import Decimal
 import logging
+import zipfile
+import re
+import gc
+import io
 
 import httpx
 import boto3
@@ -25,6 +29,29 @@ from starlette.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 from ultralytics import YOLO
+
+# DS 서버사이드 처리 패키지 (선택적 — 없으면 경고만)
+try:
+    import xlrd
+    HAS_XLRD = True
+except ImportError:
+    HAS_XLRD = False
+    logging.warning("xlrd not installed - DS server-side processing disabled")
+
+try:
+    import openpyxl
+    from openpyxl.cell import WriteOnlyCell
+    from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+    from openpyxl.utils import get_column_letter
+    HAS_OPENPYXL = True
+except ImportError:
+    HAS_OPENPYXL = False
+
+try:
+    import psutil
+    HAS_PSUTIL = True
+except ImportError:
+    HAS_PSUTIL = False
 
 # ============================================================
 # Configuration
@@ -56,6 +83,7 @@ DYNAMODB_TABLES = {
     "classifications": os.getenv("DYNAMODB_CLASSIFICATIONS_TABLE", "kca-classifications"),
     "ds_records": os.getenv("DYNAMODB_DS_RECORDS_TABLE", "kca-ds-records"),
     "ds_uploads": os.getenv("DYNAMODB_DS_UPLOADS_TABLE", "kca-ds-uploads"),
+    "ds_jobs": os.getenv("DYNAMODB_DS_JOBS_TABLE", "kca-ds-jobs"),
 }
 
 # DS 전파관리소 지역코드 → 회사 본부 매핑
@@ -75,6 +103,9 @@ DS_REGION_CODE_MAP = {
 # Logger setup
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# DS 백그라운드 워커 상태 (싱글턴 — 동시에 1개 잡만 처리)
+_ds_job_worker_task: Optional[asyncio.Task] = None
 
 # Class name mappings (Korean)
 CLASS_NAMES_KR = {
@@ -289,6 +320,13 @@ class DsUploadFinalize(BaseModel):
     totalRows: int
 
 
+class DsEnqueueRequest(BaseModel):
+    """DS 서버사이드 처리 잡 요청"""
+    s3Key: str       # S3 임시 키 (/ds/presign-raw에서 반환)
+    fileName: str    # 원본 파일명 (메타 파싱용)
+    uploadedBy: str  # 업로드한 사용자 ID
+
+
 # ============================================================
 # User Data Loading (JSON file)
 # ============================================================
@@ -367,9 +405,15 @@ def load_model():
 @app.on_event("startup")
 async def startup_event():
     """서버 시작 - YOLO 모델은 Lazy Loading (첫 분류 요청 시 로드)"""
+    global _ds_job_worker_task
     # EC2 메모리 절약: 시작 시 모델 로드 안 함 (~200MB 절약)
     # /predict, /predict/ensemble 첫 호출 시 자동 로드됨
     print("Server started successfully! (YOLO model: lazy load)")
+    # DS 잡 테이블 자동 생성 (없으면) + stuck 잡 복구 + 워커 시작
+    asyncio.create_task(_ensure_ds_jobs_table())
+    asyncio.create_task(_recover_stuck_jobs())
+    _ds_job_worker_task = asyncio.create_task(_job_worker_loop())
+    print("DS job worker started")
 
 
 # ============================================================
@@ -1367,6 +1411,49 @@ async def ds_region_codes():
     return {"success": True, "codes": DS_REGION_CODE_MAP}
 
 
+# ============================================================
+# DS S3 xlsx 로컬 캐시 — /ds/data 조회 시 반복 S3 다운로드 방지
+# ============================================================
+DS_CACHE_DIR = "/tmp/ds_cache"
+DS_CACHE_TTL = 3600  # 1시간
+
+
+def _get_cache_path(division_id: str, division_code: str, import_date: str, ext: str = "xlsx") -> str:
+    """캐시 파일 경로 반환 (ext: 'xlsx' 또는 'zip')"""
+    return os.path.join(DS_CACHE_DIR, division_id, f"{division_code}_{import_date}.{ext}")
+
+
+def _get_cached_file(division_id: str, division_code: str, import_date: str, ext: str = "xlsx") -> Optional[str]:
+    """TTL 내 캐시 파일 존재하면 경로 반환, 아니면 None"""
+    path = _get_cache_path(division_id, division_code, import_date, ext)
+    if os.path.exists(path):
+        import time
+        age = time.time() - os.path.getmtime(path)
+        if age < DS_CACHE_TTL:
+            return path
+        try:
+            os.remove(path)
+        except Exception:
+            pass
+    return None
+
+
+# 하위호환 별칭
+def _get_cached_xlsx(division_id: str, division_code: str, import_date: str) -> Optional[str]:
+    return _get_cached_file(division_id, division_code, import_date, "xlsx")
+
+
+def _evict_cache(division_id: str, division_code: str, import_date: str):
+    """캐시 파일 삭제 (xlsx + zip 모두)"""
+    for ext in ("xlsx", "zip"):
+        path = _get_cache_path(division_id, division_code, import_date, ext)
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+        except Exception:
+            pass
+
+
 def _delete_ds_records_targeted(records_table, uploads_table, divisionId: str, importDate: str, divisionCode: str, sheet_names: list = None) -> int:
     """
     시트별 SK 프리픽스 정밀 쿼리로 레코드 삭제
@@ -1453,6 +1540,1356 @@ async def _background_delete_records(divisionId: str, importDate: str, divisionC
         logger.info(f"Background delete complete: {divisionId}/{divisionCode}_{importDate} - {deleted} records")
     except Exception as e:
         logger.error(f"Background delete error [{divisionId}/{divisionCode}_{importDate}]: {e}")
+
+
+# ============================================================
+# DS 서버사이드 처리 — 잡 큐 + 백그라운드 워커
+# S3 ZIP → xlrd → DynamoDB → openpyxl xlsx → S3
+# ============================================================
+
+async def _ensure_ds_jobs_table():
+    """kca-ds-jobs 테이블이 없으면 자동 생성"""
+    await asyncio.sleep(1)
+    try:
+        dynamodb_client = get_dynamodb_client()
+        dynamodb_client.create_table(
+            TableName=DYNAMODB_TABLES["ds_jobs"],
+            KeySchema=[{"AttributeName": "jobId", "KeyType": "HASH"}],
+            AttributeDefinitions=[{"AttributeName": "jobId", "AttributeType": "S"}],
+            BillingMode="PAY_PER_REQUEST",
+        )
+        logger.info(f"DynamoDB table {DYNAMODB_TABLES['ds_jobs']} created")
+    except ClientError as e:
+        if e.response["Error"]["Code"] != "ResourceInUseException":
+            logger.warning(f"DS jobs table creation error (non-fatal): {e}")
+
+
+def _parse_ds_filename_in_zip(filename: str) -> Optional[dict]:
+    """파일명에서 divisionCode와 importDate 추출
+    예: 경남DS(20)20260115.xls → {divisionCode:'20', importDate:'20260115'}
+    """
+    region_match = re.search(r'\((\d+)\)', filename)
+    date_match = re.search(r'(\d{8})', filename)
+    if not region_match or not date_match:
+        return None
+    return {
+        "divisionCode": region_match.group(1),
+        "importDate": date_match.group(1),
+    }
+
+
+def _classify_ds_file(filename: str) -> str:
+    """DS 파일 분류: base / numbered / spt / skipped"""
+    lower = filename.lower()
+    if "(100)" in filename:
+        return "skipped"
+    if "특수" in filename or "spt" in lower:
+        return "spt"
+    paren_numbers = re.findall(r"\(\d+\)", filename)
+    if len(paren_numbers) >= 2:
+        return "numbered"
+    return "base"
+
+
+def _update_job_progress_sync(job_id: str, stage: str, percent: float,
+                               processed_rows: int = 0, total_rows: int = 0):
+    """동기: DynamoDB job 진행상황 업데이트"""
+    try:
+        jobs_table = _dynamodb_resource.Table(DYNAMODB_TABLES["ds_jobs"])
+        jobs_table.update_item(
+            Key={"jobId": job_id},
+            UpdateExpression="SET stage=:s, #p=:p, processedRows=:pr, totalRows=:tr",
+            ExpressionAttributeNames={"#p": "percent"},
+            ExpressionAttributeValues={
+                ":s": stage,
+                ":p": Decimal(str(round(percent, 1))),
+                ":pr": processed_rows,
+                ":tr": total_rows,
+            },
+        )
+    except Exception as e:
+        logger.warning(f"Job progress update failed ({job_id}): {e}")
+
+
+async def _update_job_progress(job_id: str, stage: str, percent: float,
+                                processed_rows: int = 0, total_rows: int = 0):
+    """비동기: DynamoDB job 진행상황 업데이트"""
+    await asyncio.to_thread(
+        _update_job_progress_sync, job_id, stage, percent, processed_rows, total_rows
+    )
+
+
+def _mark_job_processing_sync(job_id: str):
+    """동기: 잡 상태를 processing으로 변경"""
+    jobs_table = _dynamodb_resource.Table(DYNAMODB_TABLES["ds_jobs"])
+    now = datetime.now(timezone.utc).isoformat()
+    jobs_table.update_item(
+        Key={"jobId": job_id},
+        UpdateExpression="SET #s=:s, startedAt=:sa, stage=:g, #p=:p",
+        ExpressionAttributeNames={"#s": "status", "#p": "percent"},
+        ExpressionAttributeValues={
+            ":s": "processing",
+            ":sa": now,
+            ":g": "처리 시작...",
+            ":p": Decimal("0"),
+        },
+    )
+
+
+def _mark_job_done_sync(job_id: str, division_id: str, division_code: str,
+                         import_date: str, sheet_stats: dict, total_rows: int):
+    """동기: 잡 완료 처리"""
+    jobs_table = _dynamodb_resource.Table(DYNAMODB_TABLES["ds_jobs"])
+    now = datetime.now(timezone.utc).isoformat()
+    jobs_table.update_item(
+        Key={"jobId": job_id},
+        UpdateExpression=(
+            "SET #s=:s, completedAt=:ca, stage=:g, #p=:p, "
+            "divisionId=:did, divisionCode=:dc, importDate=:idate, "
+            "sheetStats=:ss, totalRows=:tr"
+        ),
+        ExpressionAttributeNames={"#s": "status", "#p": "percent"},
+        ExpressionAttributeValues={
+            ":s": "completed",
+            ":ca": now,
+            ":g": "완료",
+            ":p": Decimal("100"),
+            ":did": division_id,
+            ":dc": division_code,
+            ":idate": import_date,
+            ":ss": {k: v for k, v in sheet_stats.items()},
+            ":tr": total_rows,
+        },
+    )
+
+
+def _mark_job_failed_sync(job_id: str, error: str):
+    """동기: 잡 실패 처리"""
+    jobs_table = _dynamodb_resource.Table(DYNAMODB_TABLES["ds_jobs"])
+    now = datetime.now(timezone.utc).isoformat()
+    jobs_table.update_item(
+        Key={"jobId": job_id},
+        UpdateExpression="SET #s=:s, completedAt=:ca, stage=:g, #e=:e",
+        ExpressionAttributeNames={"#s": "status", "#e": "error"},
+        ExpressionAttributeValues={
+            ":s": "failed",
+            ":ca": now,
+            ":g": "실패",
+            ":e": error[:500],
+        },
+    )
+
+
+async def _recover_stuck_jobs():
+    """서버 시작 시 processing 상태 잡을 queued로 복구"""
+    await asyncio.sleep(3)
+    try:
+        jobs_table = _dynamodb_resource.Table(DYNAMODB_TABLES["ds_jobs"])
+        resp = jobs_table.scan(
+            FilterExpression="#s = :s",
+            ExpressionAttributeNames={"#s": "status"},
+            ExpressionAttributeValues={":s": "processing"},
+        )
+        stuck_jobs = resp.get("Items", [])
+        for job in stuck_jobs:
+            job_id = job["jobId"]
+            jobs_table.update_item(
+                Key={"jobId": job_id},
+                UpdateExpression="SET #s=:s, stage=:g",
+                ExpressionAttributeNames={"#s": "status"},
+                ExpressionAttributeValues={":s": "queued", ":g": "재시작 대기 중..."},
+            )
+            logger.info(f"Recovered stuck DS job: {job_id}")
+        if stuck_jobs:
+            logger.info(f"DS job recovery: {len(stuck_jobs)}개 잡 복구 완료")
+    except Exception as e:
+        logger.warning(f"DS job recovery error (non-fatal): {e}")
+
+
+async def _get_next_queued_job() -> Optional[dict]:
+    """큐에서 다음 잡 가져오기 (FIFO: queuedAt 기준)
+    페이지네이션으로 전체 테이블을 확인 — 완료/실패 잡이 많아도 누락 없음
+    """
+    try:
+        jobs_table = _dynamodb_resource.Table(DYNAMODB_TABLES["ds_jobs"])
+
+        def _scan_all_queued():
+            queued = []
+            last_key = None
+            while True:
+                kwargs = {
+                    "FilterExpression": "#s = :s",
+                    "ExpressionAttributeNames": {"#s": "status"},
+                    "ExpressionAttributeValues": {":s": "queued"},
+                    "ProjectionExpression": "jobId, queuedAt, s3Key, fileName, uploadedBy, #s",
+                    "Limit": 100,
+                }
+                if last_key:
+                    kwargs["ExclusiveStartKey"] = last_key
+                resp = jobs_table.scan(**kwargs)
+                queued.extend(resp.get("Items", []))
+                if queued:
+                    break  # 1개라도 찾으면 즉시 반환 (추가 스캔 불필요)
+                last_key = resp.get("LastEvaluatedKey")
+                if not last_key:
+                    break
+            return queued
+
+        items = await asyncio.to_thread(_scan_all_queued)
+        if not items:
+            return None
+        items.sort(key=lambda x: x.get("queuedAt", ""))
+        return items[0]
+    except Exception as e:
+        logger.error(f"Get next queued job error: {e}")
+        return None
+
+
+def _xlrd_cell_to_str(sheet, row_idx: int, col_idx: int) -> str:
+    """xlrd 셀 값을 문자열로 변환"""
+    cell_type = sheet.cell_type(row_idx, col_idx)
+    # 0=EMPTY, 5=ERROR, 6=BLANK → 빈 문자열
+    if cell_type in (0, 5, 6):
+        return ""
+    val = sheet.cell_value(row_idx, col_idx)
+    # NUMBER(2) → 정수면 int, 아니면 float 문자열
+    if cell_type == 2:
+        if isinstance(val, float) and val == int(val):
+            return str(int(val))
+        return str(val)
+    # BOOLEAN(4)
+    if cell_type == 4:
+        return "True" if val else "False"
+    return str(val).strip()
+
+
+def _process_xls_file_sync(xls_bytes: bytes, filename: str, division_id: str,
+                             division_code: str, import_date: str,
+                             base_row_counts: dict) -> tuple:
+    """동기: XLS 바이트 → DynamoDB batch write
+    base_row_counts: {sheet_name: current_row_count} — numbered 파일 병합 시 연속 인덱스
+    Returns: (sheet_stats, total_rows_written, sheet_headers)
+    sheet_headers: {sheet_name: [col1, col2, ...]} — 원본 XLS 헤더 순서 그대로
+    """
+    if not HAS_XLRD:
+        raise RuntimeError("xlrd not installed on server")
+
+    sheet_stats = {}
+    sheet_headers: Dict[str, list] = {}
+    total_rows = 0
+    records_table = _dynamodb_resource.Table(DYNAMODB_TABLES["ds_records"])
+    now = datetime.now(timezone.utc).isoformat()
+    dc_part = f"#{division_code}" if division_code else ""
+
+    try:
+        workbook = xlrd.open_workbook(file_contents=xls_bytes)
+    except Exception as e:
+        logger.warning(f"XLS 파싱 실패 ({filename}): {e}")
+        return {}, 0, {}
+
+    for sheet_idx in range(workbook.nsheets):
+        sheet = workbook.sheet_by_index(sheet_idx)
+        sheet_name = sheet.name.strip()
+
+        if sheet.nrows < 2:
+            continue
+
+        # 헤더 추출 — 실제 컬럼 인덱스 보존 (빈 헤더 건너뛰되 위치 기억)
+        header_map = []  # [(actual_col_idx, header_name), ...]
+        for col in range(sheet.ncols):
+            h = _xlrd_cell_to_str(sheet, 0, col)
+            if h:
+                header_map.append((col, h))
+        headers = [name for _, name in header_map]
+
+        if not headers:
+            continue
+
+        # 첫 등장 시트의 헤더만 기록 (base 파일 헤더가 기준)
+        if sheet_name not in sheet_headers:
+            sheet_headers[sheet_name] = list(headers)
+
+        # numbered 파일 병합: 이전 파일의 마지막 rowIndex부터 이어서 번호 부여
+        start_row_idx = base_row_counts.get(sheet_name, 0)
+        row_count = 0
+
+        with records_table.batch_writer() as batch:
+            for row_idx in range(1, sheet.nrows):
+                data = {}
+                for col_idx, hname in header_map:
+                    val = _xlrd_cell_to_str(sheet, row_idx, col_idx)
+                    if val:
+                        data[hname] = val
+
+                if not data:
+                    continue
+
+                global_row_idx = start_row_idx + row_count
+                batch.put_item(Item={
+                    "divisionId": division_id,
+                    "sk": f"{sheet_name}#{import_date}{dc_part}#{global_row_idx:08d}",
+                    "sheetName": sheet_name,
+                    "importDate": import_date,
+                    "divisionCode": division_code,
+                    "uploadedAt": now,
+                    "data": data,
+                })
+                row_count += 1
+
+        sheet_stats[sheet_name] = row_count
+        total_rows += row_count
+        # 다음 파일을 위해 시작 인덱스 업데이트
+        base_row_counts[sheet_name] = start_row_idx + row_count
+
+    workbook.release_resources()
+    gc.collect()  # workbook 전체 해제 후 1회만 실행
+    return sheet_stats, total_rows, sheet_headers
+
+
+async def _process_zip_to_dynamodb(job_id: str, zip_temp_path: str,
+                                    division_id: str, division_code: str,
+                                    import_date: str) -> tuple:
+    """ZIP 파일 → XLS 파싱 → DynamoDB 저장
+    Returns: (sheet_stats, total_rows, sheet_headers)
+    sheet_headers: {sheet_name: [col1, col2, ...]} — base 파일 헤더 순서 기준
+    """
+    sheet_stats: Dict[str, int] = {}
+    sheet_headers: Dict[str, list] = {}
+    total_rows = 0
+    base_row_counts: Dict[str, int] = {}
+
+    with zipfile.ZipFile(zip_temp_path, "r") as zf:
+        all_names = zf.namelist()
+        xls_names = [n for n in all_names
+                     if n.lower().endswith(".xls") and not os.path.basename(n).startswith("~")]
+
+        classified: Dict[str, list] = {"base": [], "numbered": [], "spt": [], "skipped": []}
+        for fname in xls_names:
+            base_fname = os.path.basename(fname)
+            if not base_fname:
+                continue
+            cls = _classify_ds_file(base_fname)
+            classified[cls].append(fname)
+
+        process_list = classified["base"] + classified["numbered"] + classified["spt"]
+        total_files = len(process_list)
+
+        if total_files == 0:
+            raise ValueError("처리할 XLS 파일 없음 (스킵 파일만 포함)")
+
+        logger.info(f"DS job {job_id}: {total_files}개 XLS 처리 "
+                    f"(base={len(classified['base'])}, numbered={len(classified['numbered'])}, "
+                    f"spt={len(classified['spt'])}, skipped={len(classified['skipped'])})")
+
+        # 프로그레스 스로틀: 5% 이상 변화 또는 첫/마지막 파일에서만 DynamoDB 업데이트
+        # 기존: 파일마다 UpdateItem → 파일 N개일 때 N회 불필요한 DynamoDB 쓰기
+        last_progress_pct = 0.0
+
+        for file_idx, fname in enumerate(process_list):
+            base_fname = os.path.basename(fname) or fname
+            percent = 10 + (file_idx / total_files) * 70
+            if percent - last_progress_pct >= 5 or file_idx in (0, total_files - 1):
+                await _update_job_progress(job_id, f"XLS 파싱: {base_fname}", percent, total_rows, total_rows)
+                last_progress_pct = percent
+
+            try:
+                xls_bytes = zf.read(fname)
+            except Exception as e:
+                logger.warning(f"DS job {job_id}: {fname} 읽기 실패: {e}")
+                continue
+
+            try:
+                file_sheet_stats, file_rows, file_sheet_headers = await asyncio.to_thread(
+                    _process_xls_file_sync, xls_bytes, base_fname,
+                    division_id, division_code, import_date, base_row_counts
+                )
+            except Exception as e:
+                logger.warning(f"DS job {job_id}: {fname} 처리 실패: {e}")
+                del xls_bytes
+                continue
+
+            del xls_bytes  # xlrd workbook은 이미 release_resources() 호출됨
+
+            for sn, cnt in file_sheet_stats.items():
+                sheet_stats[sn] = sheet_stats.get(sn, 0) + cnt
+            # base 파일 헤더 우선 (첫 등장 시트만 기록)
+            for sn, hdrs in file_sheet_headers.items():
+                if sn not in sheet_headers:
+                    sheet_headers[sn] = hdrs
+            total_rows += file_rows
+            logger.info(f"DS job {job_id}: [{file_idx+1}/{total_files}] {base_fname} → {file_rows}행")
+
+    return sheet_stats, total_rows, sheet_headers
+
+
+def _read_xlsx_paginated_sync(xlsx_path: str, sheet_name: str,
+                               division_id: str, import_date: str,
+                               division_code: str, offset: int = 0,
+                               limit: int = 100, search: Optional[str] = None) -> dict:
+    """S3 xlsx에서 페이지네이션 읽기 — GET /ds/data 응답 형식과 100% 동일
+    DynamoDB 경로와 동일한 응답 → 프론트엔드 수정 불필요
+    """
+    if not HAS_OPENPYXL:
+        raise RuntimeError("openpyxl not installed on server")
+
+    try:
+        wb = openpyxl.load_workbook(xlsx_path, read_only=True, data_only=True)
+    except Exception as e:
+        logger.warning(f"DS xlsx read failed ({xlsx_path}): {e}")
+        return {"success": True, "items": [], "count": 0, "lastEvaluatedKey": None}
+
+    # 시트 찾기
+    if sheet_name not in wb.sheetnames:
+        wb.close()
+        return {"success": True, "items": [], "count": 0, "lastEvaluatedKey": None}
+
+    ws = wb[sheet_name]
+    dc_part = f"#{division_code}" if division_code else ""
+
+    try:
+        # 헤더 읽기 (첫 행)
+        headers = []
+        rows_iter = ws.iter_rows()
+        header_row = next(rows_iter, None)
+        if not header_row:
+            wb.close()
+            return {"success": True, "items": [], "count": 0, "lastEvaluatedKey": None}
+        # 헤더 셀을 위치 기반으로 읽기 (None 셀도 포함하여 컬럼 위치 보존)
+        headers = []
+        for cell in header_row:
+            v = cell.value
+            if v is not None and str(v).strip():
+                headers.append(str(v).strip())
+            else:
+                break  # 연속된 헤더 영역 끝
+        num_cols = len(headers)
+
+        items = []
+        row_idx = 0  # 0-based data row index
+
+        if search:
+            # 검색 모드: 전체 순회 + case-insensitive 필터
+            search_lower = search.lower()
+            scanned = 0
+            for row in rows_iter:
+                vals = [str(cell.value or "") for cell in row[:num_cols]]
+                data = {}
+                for i, h in enumerate(headers):
+                    if i < len(vals) and vals[i]:
+                        data[h] = vals[i]
+
+                if not data:
+                    row_idx += 1
+                    continue
+
+                # 검색 필터 (현재 DynamoDB 검색과 동일 로직)
+                if any(search_lower in str(v).lower() for v in data.values()):
+                    if scanned >= offset:
+                        items.append({
+                            "divisionId": division_id,
+                            "sk": f"{sheet_name}#{import_date}{dc_part}#{row_idx:08d}",
+                            "sheetName": sheet_name,
+                            "importDate": import_date,
+                            "divisionCode": division_code,
+                            "data": data,
+                        })
+                        if len(items) >= limit:
+                            row_idx += 1
+                            break
+                    scanned += 1
+                row_idx += 1
+
+            next_offset = offset + len(items)
+            # 더 있는지 확인: 남은 행에서 검색 매치 존재 여부
+            has_more = False
+            if len(items) >= limit:
+                for row in rows_iter:
+                    vals = [str(cell.value or "") for cell in row[:num_cols]]
+                    if any(search_lower in str(v).lower() for v in vals if v):
+                        has_more = True
+                        break
+        else:
+            # 일반 페이징: offset까지 skip → limit개 읽기
+            for row in rows_iter:
+                if row_idx < offset:
+                    row_idx += 1
+                    continue
+                if len(items) >= limit:
+                    break
+
+                vals = [str(cell.value or "") for cell in row[:num_cols]]
+                data = {}
+                for i, h in enumerate(headers):
+                    if i < len(vals) and vals[i]:
+                        data[h] = vals[i]
+
+                if data:
+                    items.append({
+                        "divisionId": division_id,
+                        "sk": f"{sheet_name}#{import_date}{dc_part}#{row_idx:08d}",
+                        "sheetName": sheet_name,
+                        "importDate": import_date,
+                        "divisionCode": division_code,
+                        "data": data,
+                    })
+                row_idx += 1
+
+            next_offset = offset + len(items)
+            # 다음 행 존재 여부
+            has_more = next(rows_iter, None) is not None
+
+        wb.close()
+
+        last_key = None
+        if has_more and len(items) >= limit:
+            last_key = json.dumps({"_xlsOffset": next_offset})
+
+        return {
+            "success": True,
+            "items": items,
+            "count": len(items),
+            "lastEvaluatedKey": last_key,
+        }
+    except Exception as e:
+        wb.close()
+        logger.error(f"DS xlsx paginated read error: {e}")
+        return {"success": True, "items": [], "count": 0, "lastEvaluatedKey": None}
+
+
+def _parse_zip_metadata_sync(zip_temp_path: str, progress_cb=None) -> tuple:
+    """ZIP → 메타데이터만 초고속 파싱 (xlsx 빌드 완전 생략)
+
+    XLS 파일별로 xlrd.open_workbook → sheet.nrows + 헤더(row 0) 만 추출.
+    데이터 행은 한 줄도 읽지 않음 → 10만행 ZIP도 ~5초.
+
+    Returns: (sheet_stats, total_rows, sheet_headers, file_manifest)
+      sheet_stats:   {sheet_name: row_count}
+      total_rows:    전체 행수
+      sheet_headers: {sheet_name: [col1, col2, ...]}
+      file_manifest: {sheet_name: [{"f": filename, "r": row_count}, ...]}
+        → 데이터 조회 시 어느 XLS 파일에서 몇 행을 읽을지 결정하는 데 사용
+    """
+    if not HAS_XLRD:
+        raise RuntimeError("xlrd not installed on server")
+
+    sheet_stats: Dict[str, int] = {}
+    sheet_headers: Dict[str, list] = {}
+    file_manifest: Dict[str, list] = {}  # {sheet_name: [{"f": fname, "r": rows}, ...]}
+    total_rows = 0
+
+    with zipfile.ZipFile(zip_temp_path, "r") as zf:
+        all_names = zf.namelist()
+        xls_names = [n for n in all_names
+                     if n.lower().endswith(".xls") and not os.path.basename(n).startswith("~")]
+
+        classified: Dict[str, list] = {"base": [], "numbered": [], "spt": [], "skipped": []}
+        for fname in xls_names:
+            base_fname = os.path.basename(fname)
+            if not base_fname:
+                continue
+            cls = _classify_ds_file(base_fname)
+            classified[cls].append(fname)
+
+        process_list = classified["base"] + classified["numbered"] + classified["spt"]
+        if not process_list:
+            raise ValueError("처리할 XLS 파일 없음 (스킵 파일만 포함)")
+
+        logger.info(f"DS metadata parse: {len(process_list)}개 XLS "
+                    f"(base={len(classified['base'])}, numbered={len(classified['numbered'])}, "
+                    f"spt={len(classified['spt'])}, skipped={len(classified['skipped'])})")
+
+        total_files = len(process_list)
+        for file_idx, fname in enumerate(process_list):
+            base_fname = os.path.basename(fname) or fname
+
+            if progress_cb and (file_idx % 5 == 0 or file_idx == total_files - 1):
+                pct = 10 + (file_idx / total_files) * 60
+                progress_cb(f"메타데이터 파싱 중... ({file_idx+1}/{total_files})", pct)
+
+            try:
+                xls_bytes = zf.read(fname)
+            except Exception as e:
+                logger.warning(f"DS metadata: {fname} 읽기 실패: {e}")
+                continue
+
+            try:
+                workbook = xlrd.open_workbook(file_contents=xls_bytes)
+            except Exception as e:
+                logger.warning(f"DS metadata: XLS 파싱 실패 ({base_fname}): {e}")
+                del xls_bytes
+                continue
+
+            file_rows = 0
+            for sheet_idx in range(workbook.nsheets):
+                sheet = workbook.sheet_by_index(sheet_idx)
+                sheet_name = sheet.name.strip()
+                if sheet.nrows < 2:
+                    continue
+
+                data_rows = sheet.nrows - 1  # 헤더 행 제외
+
+                # 첫 등장 시트: 헤더 추출
+                if sheet_name not in sheet_headers:
+                    header_map = []
+                    for col in range(sheet.ncols):
+                        h = _xlrd_cell_to_str(sheet, 0, col)
+                        if h:
+                            header_map.append((col, h))
+                    if not header_map:
+                        continue
+                    sheet_headers[sheet_name] = [name for _, name in header_map]
+                    sheet_stats[sheet_name] = 0
+                    file_manifest[sheet_name] = []
+
+                sheet_stats[sheet_name] += data_rows
+                file_manifest[sheet_name].append({"f": fname, "r": data_rows})
+                file_rows += data_rows
+
+            workbook.release_resources()
+            del xls_bytes
+            total_rows += file_rows
+
+    logger.info(f"DS metadata parse 완료: {total_rows}행, {len(sheet_stats)}시트")
+    return sheet_stats, total_rows, sheet_headers, file_manifest
+
+
+def _read_xls_from_zip_paginated_sync(
+    zip_cache_path: str,
+    sheet_name: str,
+    division_id: str,
+    import_date: str,
+    division_code: str,
+    file_manifest_entries: list,
+    offset: int = 0,
+    limit: int = 500,
+    search: str = "",
+) -> dict:
+    """ZIP 내 XLS 파일에서 직접 페이지네이션 읽기 (xlsx 불필요)
+
+    file_manifest_entries: [{"f": "file.xls", "r": 3000}, ...] — 시트에 기여하는 XLS 파일 목록
+    응답 형식은 _read_xlsx_paginated_sync 와 100% 동일.
+    """
+    if not HAS_XLRD:
+        raise RuntimeError("xlrd not installed on server")
+
+    dc_part = f"#{division_code}" if division_code else ""
+    items = []
+    search_lower = search.strip().lower() if search else ""
+
+    with zipfile.ZipFile(zip_cache_path, "r") as zf:
+        if search_lower:
+            # 검색 모드: 모든 파일 순회, scanned 카운터로 offset/limit
+            scanned = 0
+            global_row_idx = 0
+            for entry in file_manifest_entries:
+                if len(items) >= limit:
+                    break
+                fname = entry["f"]
+                try:
+                    xls_bytes = zf.read(fname)
+                    wb = xlrd.open_workbook(file_contents=xls_bytes)
+                except Exception:
+                    global_row_idx += entry["r"]
+                    continue
+
+                target_sheet = None
+                for si in range(wb.nsheets):
+                    s = wb.sheet_by_index(si)
+                    if s.name.strip() == sheet_name:
+                        target_sheet = s
+                        break
+
+                if target_sheet is None or target_sheet.nrows < 2:
+                    wb.release_resources()
+                    del xls_bytes
+                    global_row_idx += entry["r"]
+                    continue
+
+                # 헤더 매핑: actual col index
+                header_map = []
+                for col in range(target_sheet.ncols):
+                    h = _xlrd_cell_to_str(target_sheet, 0, col)
+                    if h:
+                        header_map.append((col, h))
+
+                for row_i in range(1, target_sheet.nrows):
+                    data = {}
+                    for col_idx, hname in header_map:
+                        val = _xlrd_cell_to_str(target_sheet, row_i, col_idx)
+                        if val:
+                            data[hname] = val
+                    if not data:
+                        global_row_idx += 1
+                        continue
+
+                    if any(search_lower in str(v).lower() for v in data.values()):
+                        if scanned >= offset:
+                            items.append({
+                                "divisionId": division_id,
+                                "sk": f"{sheet_name}#{import_date}{dc_part}#{global_row_idx:08d}",
+                                "sheetName": sheet_name,
+                                "importDate": import_date,
+                                "divisionCode": division_code,
+                                "data": data,
+                            })
+                            if len(items) >= limit:
+                                wb.release_resources()
+                                del xls_bytes
+                                break
+                        scanned += 1
+                    global_row_idx += 1
+
+                wb.release_resources()
+                del xls_bytes
+
+            next_offset = offset + len(items)
+            has_more = len(items) >= limit
+            last_key = json.dumps({"_xlsOffset": next_offset}) if has_more else None
+
+        else:
+            # 일반 페이지네이션: file_manifest로 파일 건너뛰기
+            cumulative = 0
+            global_row_idx = 0
+            rows_remaining = limit
+            rows_to_skip = offset
+
+            for entry in file_manifest_entries:
+                if rows_remaining <= 0:
+                    break
+                fname = entry["f"]
+                file_row_count = entry["r"]
+
+                # 이 파일을 완전히 건너뛸 수 있는지 확인
+                if rows_to_skip >= file_row_count:
+                    rows_to_skip -= file_row_count
+                    global_row_idx += file_row_count
+                    cumulative += file_row_count
+                    continue
+
+                try:
+                    xls_bytes = zf.read(fname)
+                    wb = xlrd.open_workbook(file_contents=xls_bytes)
+                except Exception:
+                    global_row_idx += file_row_count
+                    cumulative += file_row_count
+                    continue
+
+                target_sheet = None
+                for si in range(wb.nsheets):
+                    s = wb.sheet_by_index(si)
+                    if s.name.strip() == sheet_name:
+                        target_sheet = s
+                        break
+
+                if target_sheet is None or target_sheet.nrows < 2:
+                    wb.release_resources()
+                    del xls_bytes
+                    global_row_idx += file_row_count
+                    cumulative += file_row_count
+                    continue
+
+                header_map = []
+                for col in range(target_sheet.ncols):
+                    h = _xlrd_cell_to_str(target_sheet, 0, col)
+                    if h:
+                        header_map.append((col, h))
+
+                start_row = 1 + rows_to_skip  # 1-based (row 0 = header)
+                rows_to_skip = 0  # 이 파일에서 소화
+
+                for row_i in range(start_row, target_sheet.nrows):
+                    if rows_remaining <= 0:
+                        break
+                    data = {}
+                    for col_idx, hname in header_map:
+                        val = _xlrd_cell_to_str(target_sheet, row_i, col_idx)
+                        if val:
+                            data[hname] = val
+                    if not data:
+                        global_row_idx += 1
+                        continue
+
+                    items.append({
+                        "divisionId": division_id,
+                        "sk": f"{sheet_name}#{import_date}{dc_part}#{global_row_idx:08d}",
+                        "sheetName": sheet_name,
+                        "importDate": import_date,
+                        "divisionCode": division_code,
+                        "data": data,
+                    })
+                    global_row_idx += 1
+                    rows_remaining -= 1
+
+                wb.release_resources()
+                del xls_bytes
+
+            next_offset = offset + len(items)
+            total_sheet_rows = sum(e["r"] for e in file_manifest_entries)
+            has_more = next_offset < total_sheet_rows
+            last_key = json.dumps({"_xlsOffset": next_offset}) if has_more else None
+
+    return {
+        "success": True,
+        "items": items,
+        "count": len(items),
+        "lastEvaluatedKey": last_key,
+    }
+
+
+def _process_zip_to_xlsx_sync(zip_temp_path: str, progress_cb=None) -> tuple:
+    """ZIP → XLS 파싱 → xlsx 직접 빌드 (DynamoDB 행 쓰기 0회)
+    Returns: (xlsx_bytes, sheet_stats, total_rows, sheet_headers)
+    progress_cb: Optional[Callable(stage, percent)] — 파일별 진행률 콜백
+    """
+    if not HAS_XLRD:
+        raise RuntimeError("xlrd not installed on server")
+    if not HAS_OPENPYXL:
+        raise RuntimeError("openpyxl not installed on server")
+
+    # openpyxl 서식 (헤더만 스타일 적용, 데이터 행은 plain 값 = 고속)
+    wb = openpyxl.Workbook(write_only=True)
+    header_fill = PatternFill(patternType="solid", fgColor="BFBFBF")
+    thin_side = Side(style="thin")
+    thin_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
+    center_align = Alignment(horizontal="center", vertical="center")
+    header_font = Font(name="Arial", size=10, bold=True)
+
+    sheet_stats: Dict[str, int] = {}
+    sheet_headers: Dict[str, list] = {}
+    total_rows = 0
+    ws_map: Dict[str, object] = {}  # sheet_name → openpyxl worksheet
+
+    with zipfile.ZipFile(zip_temp_path, "r") as zf:
+        all_names = zf.namelist()
+        xls_names = [n for n in all_names
+                     if n.lower().endswith(".xls") and not os.path.basename(n).startswith("~")]
+
+        classified: Dict[str, list] = {"base": [], "numbered": [], "spt": [], "skipped": []}
+        for fname in xls_names:
+            base_fname = os.path.basename(fname)
+            if not base_fname:
+                continue
+            cls = _classify_ds_file(base_fname)
+            classified[cls].append(fname)
+
+        process_list = classified["base"] + classified["numbered"] + classified["spt"]
+        if not process_list:
+            raise ValueError("처리할 XLS 파일 없음 (스킵 파일만 포함)")
+
+        logger.info(f"DS xlsx build: {len(process_list)}개 XLS "
+                    f"(base={len(classified['base'])}, numbered={len(classified['numbered'])}, "
+                    f"spt={len(classified['spt'])}, skipped={len(classified['skipped'])})")
+
+        total_files = len(process_list)
+        last_cb_pct = 0.0
+
+        for file_idx, fname in enumerate(process_list):
+            base_fname = os.path.basename(fname) or fname
+
+            # 파일별 진행률 콜백 (10% ~ 75% 구간, 5% 간격 스로틀)
+            if progress_cb:
+                pct = 10 + (file_idx / total_files) * 65
+                if pct - last_cb_pct >= 5 or file_idx == 0 or file_idx == total_files - 1:
+                    progress_cb(f"XLS 파싱 중... ({file_idx+1}/{total_files})", pct)
+                    last_cb_pct = pct
+
+            try:
+                xls_bytes = zf.read(fname)
+            except Exception as e:
+                logger.warning(f"DS xlsx build: {fname} 읽기 실패: {e}")
+                continue
+
+            try:
+                workbook = xlrd.open_workbook(file_contents=xls_bytes)
+            except Exception as e:
+                logger.warning(f"DS xlsx build: XLS 파싱 실패 ({base_fname}): {e}")
+                del xls_bytes
+                continue
+
+            file_rows = 0
+            for sheet_idx in range(workbook.nsheets):
+                sheet = workbook.sheet_by_index(sheet_idx)
+                sheet_name = sheet.name.strip()
+                if sheet.nrows < 2:
+                    continue
+
+                # 헤더 추출 — 실제 컬럼 인덱스 보존 (빈 헤더 건너뛰되 위치 기억)
+                header_map = []  # [(actual_col_idx, header_name), ...]
+                for col in range(sheet.ncols):
+                    h = _xlrd_cell_to_str(sheet, 0, col)
+                    if h:
+                        header_map.append((col, h))
+                if not header_map:
+                    continue
+
+                headers = [name for _, name in header_map]
+
+                # 첫 등장 시트: 워크시트 생성 + 헤더 행 + 열 너비
+                if sheet_name not in ws_map:
+                    ws = wb.create_sheet(title=sheet_name[:31])
+                    ws_map[sheet_name] = ws
+                    sheet_headers[sheet_name] = list(headers)
+                    sheet_stats[sheet_name] = 0
+
+                    # 헤더 행 쓰기
+                    header_row = []
+                    for h in headers:
+                        cell = WriteOnlyCell(ws, value=h)
+                        cell.font = header_font
+                        cell.fill = header_fill
+                        cell.border = thin_border
+                        cell.alignment = center_align
+                        header_row.append(cell)
+                    ws.append(header_row)
+
+                    # 열 너비 = 20
+                    for i in range(1, len(headers) + 1):
+                        ws.column_dimensions[get_column_letter(i)].width = 20
+
+                ws = ws_map[sheet_name]
+                canonical_headers = sheet_headers[sheet_name]
+                row_count = 0
+
+                # 현재 파일의 헤더→실제 컬럼 인덱스 매핑
+                cur_col_map = {name: col_idx for col_idx, name in header_map}
+
+                # 데이터 행 append — 실제 컬럼 인덱스로 정확하게 읽기
+                for row_idx in range(1, sheet.nrows):
+                    data = {}
+                    for col_idx, hname in header_map:
+                        val = _xlrd_cell_to_str(sheet, row_idx, col_idx)
+                        if val:
+                            data[hname] = val
+                    if not data:
+                        continue
+
+                    ws.append([data.get(h, "") for h in canonical_headers])
+                    row_count += 1
+
+                sheet_stats[sheet_name] += row_count
+                file_rows += row_count
+
+            workbook.release_resources()
+            del xls_bytes
+            total_rows += file_rows
+            logger.info(f"DS xlsx build: {base_fname} → {file_rows}행")
+
+    gc.collect()
+    if progress_cb:
+        progress_cb(f"xlsx 파일 생성 중... ({total_rows:,}행)", 76)
+    buf = io.BytesIO()
+    wb.save(buf)
+    xlsx_bytes = buf.getvalue()
+    logger.info(f"DS xlsx build 완료: {total_rows}행, {len(sheet_stats)}시트, {len(xlsx_bytes):,} bytes")
+    return xlsx_bytes, sheet_stats, total_rows, sheet_headers
+
+
+def _init_upload_record_sync(division_id: str, division_code: str, import_date: str,
+                              file_name: str, uploaded_by: str, job_id: str):
+    """동기: 업로드 레코드 초기화 (기존 레코드 삭제 후 새로 생성)"""
+    uploads_table = _dynamodb_resource.Table(DYNAMODB_TABLES["ds_uploads"])
+    records_table = _dynamodb_resource.Table(DYNAMODB_TABLES["ds_records"])
+    sk = f"{division_code}#{import_date}" if division_code else import_date
+
+    existing = uploads_table.get_item(
+        Key={"divisionId": division_id, "importDate": sk}
+    ).get("Item")
+
+    if existing:
+        existing_storage = existing.get("storageType", "")
+        existing_sheet_names = list(existing.get("sheetStats", {}).keys())
+        logger.info(f"DS init: 기존 {division_id}/{sk} 삭제 (storageType={existing_storage})")
+
+        # S3 파일 삭제 (공통)
+        try:
+            s3 = get_s3_client()
+            for s3_key in [
+                f"ds-exports/{division_id}/{division_code}_{import_date}.xlsx",
+                f"ds-raw/{division_id}/{division_code}_{import_date}.zip",
+            ]:
+                try:
+                    s3.delete_object(Bucket=S3_BUCKET_NAME, Key=s3_key)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        # EC2 캐시 삭제
+        _evict_cache(division_id, division_code, import_date)
+
+        # DynamoDB records 삭제: S3 계열 스토리지면 건너뜀 (records 없음)
+        if existing_storage not in ("s3", "s3-zip"):
+            _delete_ds_records_targeted(
+                records_table, uploads_table,
+                division_id, import_date, division_code, existing_sheet_names
+            )
+
+        uploads_table.delete_item(Key={"divisionId": division_id, "importDate": sk})
+
+    now = datetime.now(timezone.utc).isoformat()
+    uploads_table.put_item(Item={
+        "divisionId": division_id,
+        "importDate": sk,
+        "divisionCode": division_code,
+        "uploadedBy": uploaded_by,
+        "uploadedAt": now,
+        "fileName": file_name,
+        "status": "uploading",
+        "jobId": job_id,
+        "storageType": "s3",
+        "sheetStats": {},
+        "totalRows": 0,
+    })
+
+
+def _finalize_upload_record_sync(division_id: str, division_code: str,
+                                  import_date: str, sheet_stats: dict, total_rows: int,
+                                  sheet_headers: Optional[dict] = None,
+                                  storage_type: str = "s3",
+                                  file_manifest: Optional[dict] = None):
+    """동기: 업로드 레코드를 completed 상태로 업데이트
+    sheet_headers: {sheet_name: [col1, col2, ...]} — export 시 컬럼 순서 복원용
+    storage_type: "s3-zip" (ZIP 보관, xlsx 미생성) / "s3" (xlsx 사전빌드)
+    file_manifest: {sheet_name: [{"f": fname, "r": rows}, ...]} — s3-zip 시 페이지네이션용
+    """
+    uploads_table = _dynamodb_resource.Table(DYNAMODB_TABLES["ds_uploads"])
+    sk = f"{division_code}#{import_date}" if division_code else import_date
+    update_expr = "SET #s=:s, sheetStats=:ss, totalRows=:tr, storageType=:st"
+    attr_values: dict = {
+        ":s": "completed",
+        ":ss": {k: v for k, v in sheet_stats.items()},
+        ":tr": total_rows,
+        ":st": storage_type,
+    }
+    if sheet_headers:
+        update_expr += ", sheetHeaders=:sh"
+        attr_values[":sh"] = {k: list(v) for k, v in sheet_headers.items()}
+    if file_manifest:
+        update_expr += ", fileManifest=:fm"
+        attr_values[":fm"] = file_manifest
+    uploads_table.update_item(
+        Key={"divisionId": division_id, "importDate": sk},
+        UpdateExpression=update_expr,
+        ExpressionAttributeNames={"#s": "status"},
+        ExpressionAttributeValues=attr_values,
+    )
+
+
+def _build_xlsx_sync(division_id: str, division_code: str, import_date: str,
+                      division_name: str, sheet_stats: dict,
+                      sheet_headers: Optional[dict] = None) -> bytes:
+    """동기: DynamoDB → openpyxl write-only → xlsx 바이트
+
+    ds_merge.js와 동일한 서식:
+      - Arial 10pt, 가운데정렬, 얇은 테두리 (모든 셀)
+      - 헤더 행: 볼드 + #BFBFBF 배경
+      - 모든 열 너비 = 20
+
+    헤더 결정 방식:
+      1. sheet_headers[sheet_name] 있으면 그대로 사용 (업로드 시 원본 XLS 순서 보존)
+      2. 없으면 전체 스캔으로 수집 (하위 호환 fallback)
+    → 이 방식으로 누락 컬럼 없이 원본과 동일한 컬럼 구성 보장
+    """
+    if not HAS_OPENPYXL:
+        raise RuntimeError("openpyxl not installed on server")
+
+    records_table = _dynamodb_resource.Table(DYNAMODB_TABLES["ds_records"])
+    dc_part = f"#{division_code}" if division_code else ""
+
+    wb = openpyxl.Workbook(write_only=True)
+
+    header_fill = PatternFill(patternType="solid", fgColor="BFBFBF")
+    thin_side = Side(style="thin")
+    thin_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
+    center_align = Alignment(horizontal="center", vertical="center")
+    data_font = Font(name="Arial", size=10)
+    header_font = Font(name="Arial", size=10, bold=True)
+
+    for sheet_name in sheet_stats.keys():
+        ws = wb.create_sheet(title=sheet_name[:31])
+        sk_prefix = f"{sheet_name}#{import_date}{dc_part}"
+
+        # ── 1단계: headers 결정 ──────────────────────────────────────────────
+        # 저장된 헤더 우선 사용 → 원본 XLS 컬럼 순서 + 누락 없음 보장
+        if sheet_headers and sheet_name in sheet_headers:
+            headers = list(sheet_headers[sheet_name])
+        else:
+            # fallback: 전체 스캔으로 헤더 수집 (기존 업로드 데이터 하위 호환)
+            headers = []
+            seen: set = set()
+            scan_key = None
+            while True:
+                kw: dict = {
+                    "KeyConditionExpression": "divisionId = :did AND begins_with(sk, :skp)",
+                    "ExpressionAttributeValues": {":did": division_id, ":skp": sk_prefix},
+                    "ProjectionExpression": "#d",
+                    "ExpressionAttributeNames": {"#d": "data"},
+                    "Limit": 500,
+                }
+                if scan_key:
+                    kw["ExclusiveStartKey"] = scan_key
+                r = records_table.query(**kw)
+                for item in r.get("Items", []):
+                    for k in item.get("data", {}).keys():
+                        if k not in seen:
+                            headers.append(k)
+                            seen.add(k)
+                scan_key = r.get("LastEvaluatedKey")
+                if not scan_key:
+                    break
+
+        if not headers:
+            continue
+
+        # ── 2단계: 헤더 행 쓰기 ─────────────────────────────────────────────
+        header_row = []
+        for h in headers:
+            cell = WriteOnlyCell(ws, value=h)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.border = thin_border
+            cell.alignment = center_align
+            header_row.append(cell)
+        ws.append(header_row)
+
+        # 열 너비 = 20 (헤더 행 write 후, save 전까지 언제든 설정 가능)
+        for i in range(1, len(headers) + 1):
+            ws.column_dimensions[get_column_letter(i)].width = 20
+
+        # ── 3단계: 데이터 행 쓰기 (headers 순서 고정, 빈 셀은 "" 처리) ────
+        # ProjectionExpression으로 data 속성만 가져와 RCU + 네트워크 비용 절감
+        last_key = None
+        while True:
+            kwargs: dict = {
+                "KeyConditionExpression": "divisionId = :did AND begins_with(sk, :skp)",
+                "ExpressionAttributeValues": {":did": division_id, ":skp": sk_prefix},
+                "ProjectionExpression": "#d",
+                "ExpressionAttributeNames": {"#d": "data"},
+                "Limit": 500,
+            }
+            if last_key:
+                kwargs["ExclusiveStartKey"] = last_key
+
+            resp = records_table.query(**kwargs)
+            items = resp.get("Items", [])
+
+            for item in items:
+                data = item.get("data", {})
+                row = []
+                for h in headers:
+                    cell = WriteOnlyCell(ws, value=data.get(h, ""))
+                    cell.font = data_font
+                    cell.border = thin_border
+                    cell.alignment = center_align
+                    row.append(cell)
+                ws.append(row)
+
+            last_key = resp.get("LastEvaluatedKey")
+            if not last_key:
+                break
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def _upload_xlsx_to_s3_sync(xlsx_bytes: bytes, division_id: str,
+                              division_code: str, import_date: str) -> str:
+    """동기: xlsx 바이트를 S3 ds-exports 경로에 업로드"""
+    s3 = get_s3_client()
+    key = f"ds-exports/{division_id}/{division_code}_{import_date}.xlsx"
+    s3.put_object(
+        Bucket=S3_BUCKET_NAME,
+        Key=key,
+        Body=xlsx_bytes,
+        ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    return key
+
+
+async def _process_ds_job(job_id: str, job_item: dict):
+    """DS 잡 메인 처리 — ZIP → xlsx 빌드 → S3 저장 (DynamoDB 행 쓰기 0회)"""
+    s3_key = job_item.get("s3Key", "")
+    file_name = job_item.get("fileName", "")
+    uploaded_by = job_item.get("uploadedBy", "unknown")
+    zip_temp_path = f"/tmp/ds_{job_id}.zip"
+
+    # except 블록에서 접근 가능하도록 try 바깥에서 초기화
+    division_id: Optional[str] = None
+    division_code: Optional[str] = None
+    import_date: Optional[str] = None
+    uploads_record_created = False  # _init 이후 True → except에서 정리 대상
+
+    try:
+        # 1. ZIP S3에서 다운로드
+        await _update_job_progress(job_id, "S3에서 ZIP 다운로드 중...", 3)
+
+        def _dl():
+            get_s3_client().download_file(S3_BUCKET_NAME, s3_key, zip_temp_path)
+        await asyncio.to_thread(_dl)
+        logger.info(f"DS job {job_id}: ZIP downloaded ({os.path.getsize(zip_temp_path):,} bytes)")
+
+        # 2. ZIP 내 XLS 파일명에서 divisionCode/importDate 파싱
+        await _update_job_progress(job_id, "ZIP 메타 파싱 중...", 5)
+
+        def _parse_meta():
+            with zipfile.ZipFile(zip_temp_path, "r") as zf:
+                for name in zf.namelist():
+                    base = os.path.basename(name)
+                    if not base.lower().endswith(".xls"):
+                        continue
+                    if _classify_ds_file(base) == "skipped":
+                        continue
+                    parsed = _parse_ds_filename_in_zip(base)
+                    if parsed:
+                        return parsed
+            return None
+
+        parsed = await asyncio.to_thread(_parse_meta)
+        if not parsed:
+            parsed = _parse_ds_filename_in_zip(file_name)
+        if not parsed:
+            raise ValueError(f"지역코드/업로드일자 파싱 실패: {file_name}")
+
+        division_code = parsed["divisionCode"]
+        import_date = parsed["importDate"]
+
+        if division_code not in DS_REGION_CODE_MAP:
+            raise ValueError(f"알 수 없는 지역코드: {division_code}")
+
+        division_id = DS_REGION_CODE_MAP[division_code]["divisionId"]
+        division_name = DS_REGION_CODE_MAP[division_code]["divisionName"]
+        logger.info(f"DS job {job_id}: {division_name}({division_code}) / {import_date}")
+
+        # 3. 메모리 체크
+        if HAS_PSUTIL:
+            mem = psutil.virtual_memory()
+            if mem.percent > 80:
+                logger.warning(f"DS job {job_id}: 메모리 {mem.percent}% > 80%, 30초 대기")
+                await asyncio.sleep(30)
+
+        # 4. uploads 레코드 초기화 (기존 데이터 삭제)
+        await _update_job_progress(job_id, "기존 데이터 정리 중...", 8)
+        await asyncio.to_thread(
+            _init_upload_record_sync,
+            division_id, division_code, import_date, file_name, uploaded_by, job_id
+        )
+        uploads_record_created = True
+
+        # 5. 메타데이터만 초고속 파싱 (xlsx 빌드 완전 생략 → 30분→5초)
+        await _update_job_progress(job_id, "메타데이터 파싱 중...", 10)
+
+        def _progress_cb(stage: str, pct: float):
+            _update_job_progress_sync(job_id, stage, pct)
+
+        sheet_stats, total_rows, sheet_headers, file_manifest = await asyncio.to_thread(
+            _parse_zip_metadata_sync, zip_temp_path, _progress_cb
+        )
+        logger.info(f"DS job {job_id}: 메타 파싱 완료 — {total_rows}행, {len(sheet_stats)}시트")
+
+        # 6. ZIP → S3 영구 경로로 복사 (xlsx 빌드 없이 원본 ZIP 보관)
+        await _update_job_progress(job_id, "ZIP S3 저장 중...", 80)
+        permanent_zip_key = f"ds-raw/{division_id}/{division_code}_{import_date}.zip"
+
+        def _copy_zip_to_s3():
+            s3 = get_s3_client()
+            s3.upload_file(zip_temp_path, S3_BUCKET_NAME, permanent_zip_key)
+
+        await asyncio.to_thread(_copy_zip_to_s3)
+        logger.info(f"DS job {job_id}: ZIP S3 저장 완료 → {permanent_zip_key}")
+
+        # 7. uploads 레코드 완료 처리 (storageType="s3-zip")
+        await _update_job_progress(job_id, "업로드 완료 처리 중...", 90)
+        await asyncio.to_thread(
+            _finalize_upload_record_sync,
+            division_id, division_code, import_date, sheet_stats, total_rows,
+            sheet_headers, "s3-zip", file_manifest
+        )
+
+        # 8. 잡 완료
+        await asyncio.to_thread(
+            _mark_job_done_sync,
+            job_id, division_id, division_code, import_date, sheet_stats, total_rows
+        )
+        uploads_record_created = False  # 정상 완료 → except 정리 불필요
+        logger.info(f"DS job {job_id}: 완료! {division_name} {import_date} — {total_rows}행")
+
+    except Exception as e:
+        error_msg = str(e)[:500]
+        logger.error(f"DS job {job_id} 실패: {error_msg}")
+
+        # 잡 실패 처리
+        try:
+            await asyncio.to_thread(_mark_job_failed_sync, job_id, error_msg)
+        except Exception as e2:
+            logger.error(f"DS job {job_id} mark-failed도 실패: {e2}")
+
+        # 고스트 uploads 레코드 정리 (step 4 이후 실패 시)
+        if uploads_record_created and division_id and import_date:
+            try:
+                _sk = f"{division_code}#{import_date}" if division_code else import_date
+                _uploads_table = _dynamodb_resource.Table(DYNAMODB_TABLES["ds_uploads"])
+                await asyncio.to_thread(
+                    lambda: _uploads_table.delete_item(
+                        Key={"divisionId": division_id, "importDate": _sk}
+                    )
+                )
+                logger.info(f"DS job {job_id}: 고스트 uploads 레코드 삭제 완료")
+            except Exception as e3:
+                logger.warning(f"DS job {job_id}: uploads 정리 실패 (non-fatal): {e3}")
+
+    finally:
+        try:
+            if os.path.exists(zip_temp_path):
+                os.remove(zip_temp_path)
+        except Exception:
+            pass
+        gc.collect()
+
+
+async def _job_worker_loop():
+    """싱글턴 백그라운드 워커 — 한 번에 1개 DS 잡만 처리 (OOM 방지)
+    10분마다 stuck "processing" 잡 자동 복구
+    """
+    logger.info("DS job worker loop started")
+    last_stuck_check = 0.0  # epoch seconds
+    STUCK_CHECK_INTERVAL = 600  # 10분
+
+    while True:
+        try:
+            # 주기적 stuck job 복구 (10분마다)
+            now = asyncio.get_event_loop().time()
+            if now - last_stuck_check > STUCK_CHECK_INTERVAL:
+                last_stuck_check = now
+                try:
+                    await _recover_stuck_jobs()
+                except Exception as e:
+                    logger.warning(f"Periodic stuck job recovery error: {e}")
+
+            job = await _get_next_queued_job()
+            if job is None:
+                await asyncio.sleep(5)
+                continue
+
+            job_id = job["jobId"]
+            logger.info(f"DS job worker: processing {job_id}")
+
+            await asyncio.to_thread(_mark_job_processing_sync, job_id)
+
+            if HAS_PSUTIL:
+                mem = psutil.virtual_memory()
+                if mem.percent > 80:
+                    logger.warning(f"메모리 {mem.percent}% > 80%, 30초 대기 후 처리")
+                    await asyncio.sleep(30)
+
+            await _process_ds_job(job_id, job)
+
+        except asyncio.CancelledError:
+            logger.info("DS job worker loop cancelled")
+            break
+        except Exception as e:
+            logger.error(f"DS job worker loop error: {e}")
+            await asyncio.sleep(5)
 
 
 @app.get("/ds/upload-presign")
@@ -1876,9 +3313,105 @@ async def ds_data(
     limit: int = Query(100, le=1000),
     lastKey: Optional[str] = Query(None),
     search: Optional[str] = Query(None),
+    divisionCode: Optional[str] = Query(None),
 ):
-    """DS 데이터 리스트 조회 (페이징, 서버측 검색 지원)"""
+    """DS 데이터 리스트 조회 (페이징, 서버측 검색 지원)
+    트리플 라우팅: s3-zip → ZIP 내 XLS 직접 / s3 → xlsx / 없음 → DynamoDB fallback
+    """
     try:
+        # ── 스토리지 타입 판별 ──────────────────────────────────
+        storage_type = ""
+        xls_offset = 0
+        file_manifest = None
+
+        if lastKey:
+            parsed_key = json.loads(lastKey)
+            if isinstance(parsed_key, dict) and "_xlsOffset" in parsed_key:
+                xls_offset = parsed_key["_xlsOffset"]
+                # S3 계열 → uploads 레코드에서 storageType 확인
+                if importDate and divisionCode:
+                    dynamodb = get_dynamodb_resource()
+                    uploads_table = dynamodb.Table(DYNAMODB_TABLES["ds_uploads"])
+                    upload_sk = f"{divisionCode}#{importDate}"
+                    resp = uploads_table.get_item(
+                        Key={"divisionId": divisionId, "importDate": upload_sk},
+                        ProjectionExpression="storageType, fileManifest",
+                    )
+                    upload_rec = resp.get("Item")
+                    if upload_rec:
+                        storage_type = upload_rec.get("storageType", "")
+                        file_manifest = upload_rec.get("fileManifest")
+
+        if not storage_type and importDate and divisionCode:
+            # 첫 페이지: uploads 레코드에서 storageType 확인
+            dynamodb = get_dynamodb_resource()
+            uploads_table = dynamodb.Table(DYNAMODB_TABLES["ds_uploads"])
+            upload_sk = f"{divisionCode}#{importDate}"
+            resp = uploads_table.get_item(
+                Key={"divisionId": divisionId, "importDate": upload_sk},
+                ProjectionExpression="storageType, fileManifest",
+            )
+            upload_rec = resp.get("Item")
+            if upload_rec:
+                storage_type = upload_rec.get("storageType", "")
+                file_manifest = upload_rec.get("fileManifest")
+
+        # ── s3-zip 경로: ZIP 내 XLS에서 직접 읽기 (초고속 업로드용) ──
+        if storage_type == "s3-zip" and importDate and divisionCode:
+            zip_path = _get_cached_file(divisionId, divisionCode, importDate, "zip")
+            if not zip_path:
+                s3_key = f"ds-raw/{divisionId}/{divisionCode}_{importDate}.zip"
+                cache_path = _get_cache_path(divisionId, divisionCode, importDate, "zip")
+                os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+                try:
+                    s3_client = get_s3_client()
+                    await asyncio.to_thread(
+                        s3_client.download_file, S3_BUCKET_NAME, s3_key, cache_path
+                    )
+                    zip_path = cache_path
+                except Exception as e:
+                    logger.warning(f"DS S3 ZIP download failed ({s3_key}): {e}")
+                    return {"success": True, "items": [], "count": 0, "lastEvaluatedKey": None}
+
+            # fileManifest에서 해당 시트의 파일 목록 추출
+            manifest_entries = []
+            if file_manifest and sheetName in file_manifest:
+                manifest_entries = file_manifest[sheetName]
+            if not manifest_entries:
+                return {"success": True, "items": [], "count": 0, "lastEvaluatedKey": None}
+
+            result = await asyncio.to_thread(
+                _read_xls_from_zip_paginated_sync,
+                zip_path, sheetName, divisionId, importDate,
+                divisionCode, manifest_entries, xls_offset, limit, search or "",
+            )
+            return result
+
+        # ── s3 경로: xlsx 캐시/다운로드 → 페이지네이션 (구버전 호환) ──
+        if storage_type == "s3" and importDate and divisionCode:
+            xlsx_path = _get_cached_xlsx(divisionId, divisionCode, importDate)
+            if not xlsx_path:
+                s3_key = f"ds-exports/{divisionId}/{divisionCode}_{importDate}.xlsx"
+                cache_path = _get_cache_path(divisionId, divisionCode, importDate)
+                os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+                try:
+                    s3_client = get_s3_client()
+                    await asyncio.to_thread(
+                        s3_client.download_file, S3_BUCKET_NAME, s3_key, cache_path
+                    )
+                    xlsx_path = cache_path
+                except Exception as e:
+                    logger.warning(f"DS S3 xlsx download failed ({s3_key}): {e}")
+                    return {"success": True, "items": [], "count": 0, "lastEvaluatedKey": None}
+
+            result = await asyncio.to_thread(
+                _read_xlsx_paginated_sync,
+                xlsx_path, sheetName, divisionId, importDate,
+                divisionCode, xls_offset, limit, search,
+            )
+            return result
+
+        # ── DynamoDB fallback (기존 데이터) ──────────────
         dynamodb = get_dynamodb_resource()
         table = dynamodb.Table(DYNAMODB_TABLES["ds_records"])
 
@@ -1959,7 +3492,7 @@ async def ds_delete_data(
     DS 데이터 삭제 - 즉시 응답 + 레코드는 백그라운드 삭제
     - uploads 레코드: 즉시 삭제 → 대시보드에서 즉시 사라짐
     - S3 xlsx/zip: 즉시 삭제 → 이전 Export 파일 무효화
-    - DynamoDB records: 백그라운드 병렬 삭제 (1.8M행 기준 ~40초, EC2 무부하)
+    - DynamoDB records: storageType="s3"면 건너뜀 (records 없음)
     """
     try:
         dynamodb = get_dynamodb_resource()
@@ -1968,17 +3501,17 @@ async def ds_delete_data(
         dc = divisionCode or ""
         upload_sk = f"{dc}#{importDate}" if dc else importDate
 
-        # 1. 시트 목록 먼저 조회 (uploads 삭제 전! 백그라운드 삭제에 필수)
-        #    uploads 레코드를 먼저 삭제하면 background task에서 시트 목록을 읽을 수 없어
-        #    sheet_names = [] → 레코드가 하나도 삭제되지 않는 버그 발생
+        # 1. uploads 레코드 조회 (storageType + sheet_names 확인)
+        storage_type = ""
         sheet_names = []
         try:
             upload_item = uploads_table.get_item(
                 Key={"divisionId": divisionId, "importDate": upload_sk}
             ).get("Item", {})
             sheet_names = list(upload_item.get("sheetStats", {}).keys())
+            storage_type = upload_item.get("storageType", "")
         except Exception as e:
-            logger.warning(f"DS delete: sheet_names 조회 실패 (non-fatal): {e}")
+            logger.warning(f"DS delete: uploads 조회 실패 (non-fatal): {e}")
 
         # 2. S3 파일 즉시 삭제 (xlsx + zip)
         try:
@@ -1994,16 +3527,378 @@ async def ds_delete_data(
         except Exception as e:
             logger.warning(f"S3 delete error (non-fatal): {e}")
 
-        # 3. uploads 레코드 즉시 삭제 → 대시보드에서 즉시 사라짐
+        # 3. 로컬 캐시 삭제
+        if dc:
+            _evict_cache(divisionId, dc, importDate)
+
+        # 4. uploads 레코드 즉시 삭제 → 대시보드에서 즉시 사라짐
         uploads_table.delete_item(Key={"divisionId": divisionId, "importDate": upload_sk})
 
-        # 4. DynamoDB records 백그라운드 삭제 (sheet_names 직접 전달 - uploads 삭제 후에도 정상 동작)
-        background_tasks.add_task(_background_delete_records, divisionId, importDate, dc, sheet_names)
+        # 5. DynamoDB records 삭제: S3 계열이면 건너뜀 (records 없음)
+        if storage_type not in ("s3", "s3-zip"):
+            background_tasks.add_task(_background_delete_records, divisionId, importDate, dc, sheet_names)
+            logger.info(f"DS delete initiated (background/dynamo): {divisionId}/{upload_sk}, sheets={len(sheet_names)}")
+        else:
+            logger.info(f"DS delete complete ({storage_type}, no records): {divisionId}/{upload_sk}")
 
-        logger.info(f"DS delete initiated (background): {divisionId}/{upload_sk}, sheets={len(sheet_names)}")
         return {"success": True, "deletedCount": 0}
     except ClientError as e:
         logger.error(f"DS delete error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================
+# DS 잡 큐 엔드포인트
+# ============================================================
+
+@app.get("/ds/presign-raw")
+async def ds_presign_raw(
+    fileName: str = Query(...),
+):
+    """DS ZIP S3 직접 업로드용 presigned PUT URL 발급
+    브라우저가 이 URL로 직접 S3에 PUT → EC2 메모리 0 사용
+    (S3 버킷 CORS 설정 필요 — 없으면 /ds/upload-raw 사용)
+    """
+    try:
+        s3 = get_s3_client()
+        safe_name = re.sub(r"[^\w\-_\.]", "_", fileName)
+        temp_key = f"ds-raw/temp/{uuid.uuid4()}_{safe_name}"
+        url = s3.generate_presigned_url(
+            "put_object",
+            Params={"Bucket": S3_BUCKET_NAME, "Key": temp_key, "ContentType": "application/zip"},
+            ExpiresIn=3600,
+        )
+        return {"success": True, "url": url, "s3Key": temp_key}
+    except Exception as e:
+        logger.error(f"DS presign-raw error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/ds/upload-raw")
+async def ds_upload_raw(file: UploadFile = File(...)):
+    """DS ZIP → S3 멀티파트 스트리밍 업로드
+    디스크 저장 없이 브라우저 → EC2 → S3 직접 파이프라인
+    메모리 최대 ~16MB (8MB 수신 버퍼 + 8MB 업로드 파트)
+    기존: 디스크 write(100MB) + S3 upload(100MB) = 200MB I/O
+    개선: 수신 즉시 S3 파트 업로드 → I/O 절반 + 시간 30~50% 단축
+    """
+    safe_name = re.sub(r"[^\w\-_\.]", "_", file.filename or "upload.zip")
+    s3_key = f"ds-raw/temp/{uuid.uuid4()}_{safe_name}"
+    s3 = get_s3_client()
+    upload_id: Optional[str] = None
+    try:
+        # S3 멀티파트 업로드 초기화
+        mpu = await asyncio.to_thread(
+            lambda: s3.create_multipart_upload(
+                Bucket=S3_BUCKET_NAME, Key=s3_key, ContentType="application/zip"
+            )
+        )
+        upload_id = mpu["UploadId"]
+
+        PART_SIZE = 8 * 1024 * 1024  # 8MB (AWS 최소 5MB, 마지막 파트 예외)
+        buf = b""
+        parts: list = []
+        part_number = 1
+
+        # 8MB씩 수신 → 버퍼가 PART_SIZE 이상이면 즉시 S3 파트 업로드
+        while True:
+            chunk = await file.read(PART_SIZE)
+            if not chunk:
+                break
+            buf += chunk
+            while len(buf) >= PART_SIZE:
+                part_data, buf = buf[:PART_SIZE], buf[PART_SIZE:]
+                pn = part_number
+                resp = await asyncio.to_thread(
+                    lambda pd=part_data, n=pn: s3.upload_part(
+                        Bucket=S3_BUCKET_NAME, Key=s3_key,
+                        UploadId=upload_id, PartNumber=n, Body=pd,
+                    )
+                )
+                parts.append({"PartNumber": pn, "ETag": resp["ETag"]})
+                part_number += 1
+
+        # 나머지 버퍼를 마지막 파트로 업로드 (< PART_SIZE 허용)
+        if buf:
+            pn = part_number
+            resp = await asyncio.to_thread(
+                lambda pd=buf, n=pn: s3.upload_part(
+                    Bucket=S3_BUCKET_NAME, Key=s3_key,
+                    UploadId=upload_id, PartNumber=n, Body=pd,
+                )
+            )
+            parts.append({"PartNumber": pn, "ETag": resp["ETag"]})
+
+        if not parts:
+            raise ValueError("업로드된 데이터가 없습니다")
+
+        # 멀티파트 완료
+        await asyncio.to_thread(
+            lambda: s3.complete_multipart_upload(
+                Bucket=S3_BUCKET_NAME, Key=s3_key, UploadId=upload_id,
+                MultipartUpload={"Parts": parts},
+            )
+        )
+        logger.info(f"DS upload-raw: {s3_key} ({len(parts)} parts)")
+        return {"success": True, "s3Key": s3_key}
+
+    except Exception as e:
+        # 오류 시 S3 멀티파트 정리 (미완료 파트 과금 방지)
+        if upload_id:
+            try:
+                await asyncio.to_thread(
+                    lambda: s3.abort_multipart_upload(
+                        Bucket=S3_BUCKET_NAME, Key=s3_key, UploadId=upload_id,
+                    )
+                )
+            except Exception:
+                pass
+        logger.error(f"DS upload-raw error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/ds/enqueue")
+async def ds_enqueue(req: DsEnqueueRequest):
+    """DS 처리 잡을 큐에 추가 — 즉시 jobId 반환, 실제 처리는 백그라운드 워커"""
+    if not HAS_XLRD:
+        raise HTTPException(status_code=503, detail="서버에 xlrd가 설치되지 않았습니다. 관리자에게 문의하세요.")
+
+    try:
+        jobs_table = _dynamodb_resource.Table(DYNAMODB_TABLES["ds_jobs"])
+        job_id = str(uuid.uuid4())
+        now = datetime.now(timezone.utc).isoformat()
+
+        jobs_table.put_item(Item={
+            "jobId": job_id,
+            "status": "queued",
+            "stage": "처리 대기 중...",
+            "percent": Decimal("0"),
+            "processedRows": 0,
+            "totalRows": 0,
+            "s3Key": req.s3Key,
+            "fileName": req.fileName,
+            "uploadedBy": req.uploadedBy,
+            "queuedAt": now,
+        })
+
+        # 현재 큐 길이 (대기 순서 표시용)
+        # Select='COUNT': 아이템 데이터 반환 없이 개수만 집계 → RCU + 네트워크 비용 절감
+        resp = jobs_table.scan(
+            FilterExpression="#s = :s",
+            ExpressionAttributeNames={"#s": "status"},
+            ExpressionAttributeValues={":s": "queued"},
+            Select="COUNT",
+        )
+        queue_position = resp.get("Count", 0)
+
+        logger.info(f"DS job enqueued: {job_id} ({req.fileName}, 큐 {queue_position}번째)")
+        return {"success": True, "jobId": job_id, "queuePosition": queue_position}
+    except ClientError as e:
+        logger.error(f"DS enqueue error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/ds/export-xlsx")
+async def ds_export_xlsx(
+    divisionId: str = Query(...),
+    importDate: str = Query(...),
+    divisionCode: str = Query(""),
+):
+    """DS xlsx 다운로드
+    - storageType="s3": S3에서 직접 다운로드 (빌드 불필요, 즉시)
+    - old: DynamoDB → xlsx 서버사이드 빌드 후 다운로드 + S3 캐싱
+    """
+    if not HAS_OPENPYXL:
+        raise HTTPException(status_code=503, detail="서버에 openpyxl이 설치되지 않았습니다.")
+
+    division_name = ""
+    if divisionCode and divisionCode in DS_REGION_CODE_MAP:
+        division_name = DS_REGION_CODE_MAP[divisionCode]["divisionName"]
+
+    dc = divisionCode or divisionId
+    filename = f"{division_name or dc}_{importDate}_DS.xlsx"
+
+    # uploads에서 sheetStats + sheetHeaders + storageType 가져오기
+    def _get_upload_meta():
+        uploads_table = _dynamodb_resource.Table(DYNAMODB_TABLES["ds_uploads"])
+        sk = f"{divisionCode}#{importDate}" if divisionCode else importDate
+        item = uploads_table.get_item(
+            Key={"divisionId": divisionId, "importDate": sk}
+        ).get("Item", {})
+        return item.get("sheetStats", {}), item.get("sheetHeaders", {}), item.get("storageType", "")
+
+    sheet_stats, sheet_headers, storage_type = await asyncio.to_thread(_get_upload_meta)
+    if not sheet_stats:
+        raise HTTPException(status_code=404, detail="업로드 정보를 찾을 수 없습니다.")
+
+    xlsx_s3_key = f"ds-exports/{divisionId}/{divisionCode}_{importDate}.xlsx"
+    xlsx_media = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+    # ── S3 fast path: xlsx가 이미 S3에 있음 → 스트리밍 다운로드 ──
+    if storage_type in ("s3", "s3-zip"):
+        try:
+            s3_client = get_s3_client()
+            s3_obj = await asyncio.to_thread(
+                lambda: s3_client.get_object(Bucket=S3_BUCKET_NAME, Key=xlsx_s3_key)
+            )
+            content_length = s3_obj["ContentLength"]
+
+            def _stream_s3():
+                body = s3_obj["Body"]
+                try:
+                    while True:
+                        chunk = body.read(1024 * 1024)  # 1MB chunks
+                        if not chunk:
+                            break
+                        yield chunk
+                finally:
+                    body.close()
+
+            return StreamingResponse(
+                _stream_s3(),
+                media_type=xlsx_media,
+                headers={
+                    "Content-Disposition": f"attachment; filename*=UTF-8''{filename.replace(' ', '%20')}",
+                    "Content-Length": str(content_length),
+                },
+            )
+        except Exception as e:
+            logger.info(f"DS export: S3 xlsx 미존재 ({xlsx_s3_key}), 빌드 진행: {e}")
+
+    # ── s3-zip: ZIP에서 on-demand xlsx 빌드 → S3 캐싱 ──
+    if storage_type == "s3-zip":
+        zip_s3_key = f"ds-raw/{divisionId}/{divisionCode}_{importDate}.zip"
+        zip_temp = f"/tmp/ds_export_{divisionId}_{divisionCode}_{importDate}.zip"
+        try:
+            s3_client = get_s3_client()
+            await asyncio.to_thread(s3_client.download_file, S3_BUCKET_NAME, zip_s3_key, zip_temp)
+
+            xlsx_bytes, _, _, _ = await asyncio.to_thread(
+                _process_zip_to_xlsx_sync, zip_temp
+            )
+
+            # S3에 캐싱 (다음 export는 fast path)
+            async def _cache_xlsx():
+                try:
+                    await asyncio.to_thread(
+                        _upload_xlsx_to_s3_sync, xlsx_bytes, divisionId, divisionCode, importDate
+                    )
+                    logger.info(f"DS export: xlsx S3 캐싱 완료 {xlsx_s3_key}")
+                except Exception as ce:
+                    logger.warning(f"DS export: xlsx S3 캐싱 실패 (non-fatal): {ce}")
+
+            asyncio.create_task(_cache_xlsx())
+
+            return StreamingResponse(
+                iter([xlsx_bytes]),
+                media_type=xlsx_media,
+                headers={
+                    "Content-Disposition": f"attachment; filename*=UTF-8''{filename.replace(' ', '%20')}",
+                    "Content-Length": str(len(xlsx_bytes)),
+                },
+            )
+        except Exception as e:
+            logger.error(f"DS export s3-zip build failed: {e}")
+            raise HTTPException(status_code=500, detail=f"Export 빌드 실패: {str(e)[:200]}")
+        finally:
+            try:
+                if os.path.exists(zip_temp):
+                    os.remove(zip_temp)
+            except Exception:
+                pass
+
+    # ── DynamoDB fallback: 기존 빌드 경로 ──
+    xlsx_bytes = await asyncio.to_thread(
+        _build_xlsx_sync, divisionId, divisionCode, importDate, division_name,
+        sheet_stats, sheet_headers
+    )
+
+    # S3에 저장 (비치명적 — 이후 presign 경로로 빠르게 다운로드 가능)
+    async def _save_to_s3():
+        try:
+            await asyncio.to_thread(
+                _upload_xlsx_to_s3_sync, xlsx_bytes, divisionId, divisionCode, importDate
+            )
+            logger.info(f"DS export-xlsx: S3 저장 완료 {xlsx_s3_key}")
+        except Exception as e:
+            logger.warning(f"DS export-xlsx: S3 저장 실패 (non-fatal): {e}")
+
+    asyncio.create_task(_save_to_s3())
+
+    return StreamingResponse(
+        iter([xlsx_bytes]),
+        media_type=xlsx_media,
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{filename.replace(' ', '%20')}",
+            "Content-Length": str(len(xlsx_bytes)),
+        },
+    )
+
+
+@app.get("/ds/job/{job_id}")
+async def ds_job_status(job_id: str):
+    """DS 잡 상태 조회 — 브라우저가 3초 간격으로 폴링"""
+    try:
+        jobs_table = _dynamodb_resource.Table(DYNAMODB_TABLES["ds_jobs"])
+        resp = await asyncio.to_thread(
+            lambda: jobs_table.get_item(Key={"jobId": job_id})
+        )
+        item = resp.get("Item")
+        if not item:
+            raise HTTPException(status_code=404, detail="Job not found")
+
+        # queued 상태: 대기 순서 계산
+        queue_position = None
+        if item.get("status") == "queued":
+            resp2 = await asyncio.to_thread(
+                lambda: jobs_table.scan(
+                    FilterExpression="#s = :s AND queuedAt <= :qt",
+                    ExpressionAttributeNames={"#s": "status"},
+                    ExpressionAttributeValues={
+                        ":s": "queued",
+                        ":qt": item.get("queuedAt", ""),
+                    },
+                )
+            )
+            queue_position = len(resp2.get("Items", []))
+
+        return {
+            "success": True,
+            "job": {**decimal_to_native(item), "queuePosition": queue_position},
+        }
+    except HTTPException:
+        raise
+    except ClientError as e:
+        logger.error(f"DS job status error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/ds/job/{job_id}")
+async def ds_job_cancel(job_id: str):
+    """DS 잡 취소 — queued 상태인 경우만 가능"""
+    try:
+        jobs_table = _dynamodb_resource.Table(DYNAMODB_TABLES["ds_jobs"])
+        item = jobs_table.get_item(Key={"jobId": job_id}).get("Item")
+        if not item:
+            raise HTTPException(status_code=404, detail="Job not found")
+        if item.get("status") != "queued":
+            raise HTTPException(status_code=400, detail="처리 중인 잡은 취소할 수 없습니다.")
+
+        jobs_table.delete_item(Key={"jobId": job_id})
+
+        # S3 임시 파일 삭제
+        try:
+            s3_key = item.get("s3Key", "")
+            if s3_key and "/temp/" in s3_key:
+                get_s3_client().delete_object(Bucket=S3_BUCKET_NAME, Key=s3_key)
+        except Exception:
+            pass
+
+        return {"success": True}
+    except HTTPException:
+        raise
+    except ClientError as e:
+        logger.error(f"DS job cancel error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
