@@ -3286,7 +3286,7 @@ async def ds_data(
             upload_sk = f"{divisionCode}#{importDate}"
             resp = uploads_table.get_item(
                 Key={"divisionId": divisionId, "importDate": upload_sk},
-                ProjectionExpression="storageType, fileManifest",
+                ProjectionExpression="storageType, fileManifest, sheetHeaders",
             )
             upload_rec = resp.get("Item")
             if upload_rec:
