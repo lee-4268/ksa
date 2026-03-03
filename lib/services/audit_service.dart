@@ -101,6 +101,7 @@ class AuditService extends ChangeNotifier {
   String? _currentUserName;
   String? _currentTeamId;
   String? _currentTeamName;
+  String? _authToken;
 
   /// 현재 사용자 컨텍스트 설정
   void setUserContext({
@@ -109,12 +110,14 @@ class AuditService extends ChangeNotifier {
     String? name,
     String? teamId,
     String? teamName,
+    String? token,
   }) {
     _currentUserId = userId;
     _currentUserEmail = email;
     _currentUserName = name;
     _currentTeamId = teamId;
     _currentTeamName = teamName;
+    _authToken = token;
   }
 
   /// 감사 로그 기록 — 서버사이드에서 자동 기록되므로 프론트에서는 호출 불필요
@@ -205,6 +208,7 @@ class AuditService extends ChangeNotifier {
       final response = await http.get(uri, headers: {
         'Accept': 'application/json',
         'X-User-Id': _currentUserId ?? '',
+        if (_authToken != null) 'Authorization': 'Bearer $_authToken',
       });
 
       if (response.statusCode == 200) {

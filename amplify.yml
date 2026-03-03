@@ -9,7 +9,7 @@ frontend:
         - flutter pub get
     build:
       commands:
-        - flutter build web
+        - flutter build web --dart-define=KAKAO_JS_KEY=$KAKAO_JS_KEY --dart-define=KAKAO_REST_KEY=$KAKAO_REST_KEY --dart-define=KAKAO_NATIVE_KEY=$KAKAO_NATIVE_KEY --dart-define=KMA_SERVICE_KEY=$KMA_SERVICE_KEY
   artifacts:
     baseDirectory: build/web
     files:

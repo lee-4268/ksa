@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:geolocator/geolocator.dart';
+import '../config/api_keys.dart';
 import 'kakao_geocoding_web.dart' if (dart.library.io) 'kakao_geocoding_stub.dart';
 
 /// 날씨 정보 모델
@@ -24,7 +25,7 @@ class WeatherInfo {
 class WeatherService {
   // 기상청 초단기실황 API (공공데이터포털)
   // 실제 서비스키는 공공데이터포털에서 발급받아야 합니다
-  static const String _serviceKey = 'UBG8tBW43f1rTQXOjXsfgPlxewnI/nNtlKaX5HzLsiwFjjFZJ6dee7lmAoZ7452c6ZVWWDKMLEiaGsasY7RiYg=='; // TODO: 실제 키로 교체
+  static const String _serviceKey = String.fromEnvironment('KMA_SERVICE_KEY', defaultValue: '');
   static const String _baseUrl = 'https://apis.data.go.kr/1360000/VilageFcstInfoService_2.0';
 
   /// 현재 위치의 날씨 정보 가져오기
@@ -76,7 +77,7 @@ class WeatherService {
 
     // 모바일: 카카오 REST API 사용
     try {
-      const kakaoApiKey = '6dd0c0e78e66ff915c1590bd3d7ab09d';
+      final kakaoApiKey = ApiKeys.kakaoRestApiKey;
 
       final url = Uri.parse(
         'https://dapi.kakao.com/v2/local/geo/coord2regioncode.json'

@@ -16,6 +16,7 @@ class AdminService extends ChangeNotifier {
   );
 
   String? _currentUserId;
+  String? _authToken;
   final List<AppUserProfile> _allUsers = [];
   bool _isLoading = false;
   String? _errorMessage;
@@ -29,8 +30,9 @@ class AdminService extends ChangeNotifier {
   String? get errorMessage => _errorMessage;
   int get pendingCount => 0;
 
-  void setCurrentUser(String empno) {
+  void setCurrentUser(String empno, {String? token}) {
     _currentUserId = empno;
+    _authToken = token;
   }
 
   // ── 역할 매핑 ──────────────────────────────────────────
@@ -68,6 +70,7 @@ class AdminService extends ChangeNotifier {
       final response = await http.get(uri, headers: {
         'Accept': 'application/json',
         'X-User-Id': _currentUserId ?? '',
+        if (_authToken != null) 'Authorization': 'Bearer $_authToken',
       });
 
       if (response.statusCode == 200) {
@@ -127,6 +130,7 @@ class AdminService extends ChangeNotifier {
         headers: {
           'Content-Type': 'application/json',
           'X-User-Id': _currentUserId ?? '',
+          if (_authToken != null) 'Authorization': 'Bearer $_authToken',
         },
         body: jsonEncode({'empno': profileId, 'role': backendRole}),
       );

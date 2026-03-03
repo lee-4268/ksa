@@ -22,6 +22,9 @@ class DsUploadService {
   static const _pollInterval = Duration(seconds: 3);  // 폴링 간격
   static const _maxPollDuration = Duration(minutes: 3);  // 최대 대기 시간 (Upload-Zero-Build)
 
+  String? _authToken;
+  void setAuthToken(String? token) => _authToken = token;
+
   // DS 지역코드 → 본부명 (서버 DS_REGION_CODE_MAP과 동일)
   static const _divisionNames = {
     '10': '수도권',
@@ -114,6 +117,9 @@ class DsUploadService {
         bytes,
         filename: fileName,
       ));
+    if (_authToken != null) {
+      uploadReq.headers['Authorization'] = 'Bearer $_authToken';
+    }
 
     final uploadStreamedResp = await uploadReq.send().timeout(_s3Timeout);
     final uploadResp = await http.Response.fromStream(uploadStreamedResp);
@@ -135,7 +141,11 @@ class DsUploadService {
 
     final enqueueResp = await http.post(
       Uri.parse('$_baseUrl/ds/enqueue'),
-      headers: {'Content-Type': 'application/json', 'X-User-Id': uploadedBy},
+      headers: {
+        'Content-Type': 'application/json',
+        'X-User-Id': uploadedBy,
+        if (_authToken != null) 'Authorization': 'Bearer $_authToken',
+      },
       body: jsonEncode({
         's3Key': s3Key,
         'fileName': fileName,
@@ -172,6 +182,9 @@ class DsUploadService {
       try {
         final jobResp = await http.get(
           Uri.parse('$_baseUrl/ds/job/$jobId'),
+          headers: {
+            if (_authToken != null) 'Authorization': 'Bearer $_authToken',
+          },
         ).timeout(_apiTimeout);
 
         if (jobResp.statusCode != 200) {

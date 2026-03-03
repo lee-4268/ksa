@@ -10,6 +10,9 @@ class DsDataService {
     defaultValue: 'https://api-sko-kca.skons.net',
   );
 
+  String? _authToken;
+  void setAuthToken(String? token) => _authToken = token;
+
   /// Auth 본부 ID → DS 본부 ID 매핑
   static const Map<String, String> authToDsDivision = {
     'gangnam': 'sudogwon',
@@ -39,7 +42,9 @@ class DsDataService {
     if (divisionId != null) params['divisionId'] = divisionId;
 
     final uri = Uri.parse('$_baseUrl/ds/stats').replace(queryParameters: params.isNotEmpty ? params : null);
-    final response = await http.get(uri);
+    final response = await http.get(uri, headers: {
+      if (_authToken != null) 'Authorization': 'Bearer $_authToken',
+    });
 
     if (response.statusCode != 200) {
       throw Exception('통계 조회 실패: ${response.statusCode}');
@@ -106,7 +111,9 @@ class DsDataService {
     if (divisionCode != null) params['divisionCode'] = divisionCode;
 
     final uri = Uri.parse('$_baseUrl/ds/data').replace(queryParameters: params);
-    final response = await http.get(uri);
+    final response = await http.get(uri, headers: {
+      if (_authToken != null) 'Authorization': 'Bearer $_authToken',
+    });
 
     if (response.statusCode != 200) {
       throw Exception('데이터 조회 실패: ${response.statusCode}');
@@ -149,6 +156,7 @@ class DsDataService {
     final uri = Uri.parse('$_baseUrl/ds/data').replace(queryParameters: params);
     final headers = <String, String>{};
     if (userId != null) headers['X-User-Id'] = userId;
+    if (_authToken != null) headers['Authorization'] = 'Bearer $_authToken';
     final response = await http.delete(uri, headers: headers.isNotEmpty ? headers : null);
 
     if (response.statusCode != 200) {

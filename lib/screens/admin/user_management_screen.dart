@@ -65,7 +65,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
       final adminService = context.read<AdminService>();
 
       // 현재 사용자 ID를 AdminService에 설정
-      adminService.setCurrentUser(authService.userId ?? '');
+      adminService.setCurrentUser(authService.userId ?? '', token: authService.authToken);
 
       // 사용자 목록 로드
       await adminService.loadAllUsers();

@@ -34,7 +34,7 @@ class _AuditLogScreenState extends State<AuditLogScreen> {
     final auditService = context.read<AuditService>();
 
     // 현재 사용자 컨텍스트 설정 (API 인증용)
-    auditService.setUserContext(userId: authService.userId ?? '');
+    auditService.setUserContext(userId: authService.userId ?? '', token: authService.authToken);
 
     final logs = await auditService.listAuditLogs(
       entityType: _filterEntityType,

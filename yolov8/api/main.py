@@ -18,6 +18,11 @@ import zipfile
 import re
 import gc
 import io
+import hmac as _hmac_mod
+import hashlib
+import base64
+import time as _time_mod
+import threading
 
 import httpx
 import boto3
@@ -222,8 +227,128 @@ class SetRoleRequest(BaseModel):
 # 역할 기반 권한 체크 (DS 업로드/삭제 보호)
 VALID_ROLES = {"admin", "manager", "member"}
 
-# 부트스트랩 키: 최초 admin 설정 시 사용 (환경변수 또는 기본값)
-ADMIN_BOOTSTRAP_KEY = os.environ.get("ADMIN_BOOTSTRAP_KEY", "kca-admin-setup-2026")
+# 부트스트랩 키: 최초 admin 설정 시 사용 (환경변수 필수, 미설정 시 비활성화)
+ADMIN_BOOTSTRAP_KEY = os.environ.get("ADMIN_BOOTSTRAP_KEY")
+
+# ── HMAC 토큰 인증 ─────────────────────────────────────────
+AUTH_TOKEN_SECRET = os.environ.get("AUTH_TOKEN_SECRET", f"dev-fallback-{uuid.uuid4().hex}")
+AUTH_TOKEN_EXPIRY = 2 * 3600  # 2시간
+
+if AUTH_TOKEN_SECRET.startswith("dev-fallback-"):
+    logger.warning("AUTH_TOKEN_SECRET 환경변수 미설정 — 개발용 임시 키 사용 중 (운영 시 반드시 설정)")
+
+
+def _generate_token(empno: str) -> str:
+    """HMAC-SHA256 토큰 생성: base64url(empno:expiry:signature)"""
+    expiry = int(_time_mod.time()) + AUTH_TOKEN_EXPIRY
+    payload = f"{empno}:{expiry}"
+    sig = _hmac_mod.new(
+        AUTH_TOKEN_SECRET.encode(), payload.encode(), hashlib.sha256
+    ).hexdigest()
+    token_raw = f"{payload}:{sig}"
+    return base64.urlsafe_b64encode(token_raw.encode()).decode()
+
+
+def _verify_token(token: str) -> str | None:
+    """토큰 검증 → empno 반환. 무효/만료 시 None."""
+    try:
+        decoded = base64.urlsafe_b64decode(token.encode()).decode()
+        parts = decoded.split(":")
+        if len(parts) != 3:
+            return None
+        empno, expiry_str, sig = parts
+        expiry = int(expiry_str)
+        if _time_mod.time() > expiry:
+            return None
+        expected = _hmac_mod.new(
+            AUTH_TOKEN_SECRET.encode(), f"{empno}:{expiry_str}".encode(), hashlib.sha256
+        ).hexdigest()
+        if not _hmac_mod.compare_digest(sig, expected):
+            return None
+        return empno
+    except Exception:
+        return None
+
+
+async def _verify_auth(request: Request) -> str:
+    """Bearer 토큰 검증. 폴백: X-User-Id (마이그레이션 기간). 실패 시 401."""
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        token = auth_header[7:]
+        empno = _verify_token(token)
+        if empno:
+            return empno
+        raise HTTPException(status_code=401, detail="토큰이 만료되었거나 유효하지 않습니다")
+
+    # 하위 호환: X-User-Id (프론트 마이그레이션 후 제거 예정)
+    empno = request.headers.get("X-User-Id", "").strip()
+    if empno:
+        return empno
+
+    raise HTTPException(status_code=401, detail="인증 정보 없음")
+
+
+# ── S3 경로 검증 ───────────────────────────────────────────
+ALLOWED_S3_READ_PREFIXES = ("photos/", "excel/", "feedback/", "ds-exports/", "ds-raw/")
+ALLOWED_S3_DELETE_PREFIXES = ("photos/", "excel/", "feedback/")
+
+
+def _validate_s3_key(key: str, allowed_prefixes: tuple) -> None:
+    """S3 키 검증: 경로 조작 방지 + prefix 제한."""
+    normalized = key.replace("\\", "/")
+    if ".." in normalized or normalized.startswith("/"):
+        raise HTTPException(status_code=400, detail="잘못된 S3 키")
+    if not any(normalized.startswith(p) for p in allowed_prefixes):
+        raise HTTPException(status_code=403, detail="허용되지 않은 S3 경로")
+
+
+# ── Rate Limiting ──────────────────────────────────────────
+class SimpleRateLimiter:
+    """IP별 슬라이딩 윈도우 Rate Limiter. 메모리: ~100B/IP."""
+    def __init__(self):
+        self._store: dict[str, list[float]] = {}
+        self._lock = threading.Lock()
+
+    def is_allowed(self, key: str, max_requests: int, window_seconds: int) -> bool:
+        now = _time_mod.time()
+        cutoff = now - window_seconds
+        with self._lock:
+            timestamps = self._store.get(key, [])
+            timestamps = [t for t in timestamps if t > cutoff]
+            if len(timestamps) >= max_requests:
+                self._store[key] = timestamps
+                return False
+            timestamps.append(now)
+            self._store[key] = timestamps
+            return True
+
+    def cleanup(self):
+        now = _time_mod.time()
+        cutoff = now - 3600
+        with self._lock:
+            stale = [k for k, v in self._store.items() if not v or v[-1] < cutoff]
+            for k in stale:
+                del self._store[k]
+
+
+_rate_limiter = SimpleRateLimiter()
+
+MAX_PHOTO_SIZE = 10 * 1024 * 1024    # 10MB
+MAX_EXCEL_SIZE = 50 * 1024 * 1024    # 50MB
+MAX_DS_UPLOAD_SIZE = 200 * 1024 * 1024  # 200MB
+
+
+def _get_client_ip(request: Request) -> str:
+    forwarded = request.headers.get("X-Forwarded-For", "")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def _check_rate_limit(request: Request, endpoint: str, max_req: int, window: int):
+    ip = _get_client_ip(request)
+    if not _rate_limiter.is_allowed(f"{endpoint}:{ip}", max_req, window):
+        raise HTTPException(status_code=429, detail="요청 횟수 초과. 잠시 후 다시 시도해주세요.")
 
 
 def _get_user_role_sync(empno: str) -> str:
@@ -265,10 +390,8 @@ def _ensure_user_roles_table():
 
 
 async def _require_role(request: Request, allowed_roles: set) -> str:
-    """요청 헤더 X-User-Id에서 사번 추출 → role 확인. 권한 없으면 403."""
-    empno = request.headers.get("X-User-Id", "").strip()
-    if not empno:
-        raise HTTPException(status_code=401, detail="인증 정보 없음 (X-User-Id 헤더 필요)")
+    """Bearer 토큰 검증 → role 확인. 401/403."""
+    empno = await _verify_auth(request)
     role = await asyncio.to_thread(_get_user_role_sync, empno)
     if role not in allowed_roles:
         raise HTTPException(status_code=403, detail=f"권한 없음 (현재: {role}, 필요: {', '.join(allowed_roles)})")
@@ -573,15 +696,19 @@ app = FastAPI(
 )
 
 # CORS Configuration for Flutter Web/PWA
-# Note: allow_credentials=False when using allow_origins=["*"]
-# This is required for proper CORS handling in browsers
+# CORS: 환경변수로 허용 도메인 설정 (쉼표 구분)
+_cors_env = os.environ.get("CORS_ALLOWED_ORIGINS", "")
+ALLOWED_ORIGINS = [x.strip() for x in _cors_env.split(",") if x.strip()] or [
+    "http://localhost:3000",
+    "http://localhost:8080",
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["*"],
-    expose_headers=["*"],
+    allow_headers=["Authorization", "Content-Type", "Accept", "X-Admin-Key"],
+    expose_headers=["Content-Length", "Content-Disposition"],
     max_age=3600,
 )
 
@@ -619,6 +746,14 @@ async def startup_event():
     asyncio.create_task(asyncio.to_thread(_ensure_user_roles_table))
     asyncio.create_task(_recover_stuck_jobs())
     _ds_job_worker_task = asyncio.create_task(_job_worker_loop())
+
+    # Rate limiter 5분 주기 정리
+    async def _rl_cleanup():
+        while True:
+            await asyncio.sleep(300)
+            _rate_limiter.cleanup()
+    asyncio.create_task(_rl_cleanup())
+
     print("DS job worker started")
 
 
@@ -838,7 +973,8 @@ async def get_classes():
 @app.post("/predict", response_model=SinglePredictionResponse)
 async def predict_single(
     file: UploadFile = File(..., description="Image file to classify"),
-    conf_threshold: float = Query(0.5, ge=0.0, le=1.0, description="Confidence threshold")
+    conf_threshold: float = Query(0.5, ge=0.0, le=1.0, description="Confidence threshold"),
+    request: Request = None,
 ):
     """
     Classify a single image
@@ -846,6 +982,9 @@ async def predict_single(
     - Upload one image
     - Returns prediction with confidence score
     """
+    await _verify_auth(request)
+    _check_rate_limit(request, "predict", 10, 60)
+
     import time
     start_time = time.time()
 
@@ -878,7 +1017,8 @@ async def predict_single(
         }
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"predict failed: {e}")
+        raise HTTPException(status_code=500, detail="서버 내부 오류")
 
     finally:
         if file_path:
@@ -889,7 +1029,8 @@ async def predict_single(
 async def predict_ensemble(
     files: List[UploadFile] = File(..., description="Multiple image files to classify"),
     method: str = Query("mean", regex="^(mean|max|vote)$", description="Ensemble method"),
-    conf_threshold: float = Query(0.5, ge=0.0, le=1.0, description="Confidence threshold")
+    conf_threshold: float = Query(0.5, ge=0.0, le=1.0, description="Confidence threshold"),
+    request: Request = None,
 ):
     """
     Classify multiple images and combine predictions
@@ -898,6 +1039,9 @@ async def predict_ensemble(
     - Combines predictions using ensemble method
     - Methods: mean (average), max (maximum), vote (voting)
     """
+    await _verify_auth(request)
+    _check_rate_limit(request, "predict_ensemble", 5, 60)
+
     import time
     start_time = time.time()
 
@@ -957,7 +1101,8 @@ async def predict_ensemble(
         }
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"predict_ensemble failed: {e}")
+        raise HTTPException(status_code=500, detail="서버 내부 오류")
 
     finally:
         for file_path in file_paths:
@@ -968,7 +1113,8 @@ async def predict_ensemble(
 async def submit_feedback(
     file: UploadFile = File(..., description="Image file"),
     original_class: str = Form(..., description="Original predicted class (English)"),
-    corrected_class: str = Form(..., description="User-corrected class (English)")
+    corrected_class: str = Form(..., description="User-corrected class (English)"),
+    request: Request = None,
 ):
     """
     Submit feedback for model improvement
@@ -977,6 +1123,9 @@ async def submit_feedback(
     - Images are stored in S3 for future retraining
     - Storage path: feedback/{corrected_class}/{timestamp}_{filename}
     """
+    await _verify_auth(request)
+    _check_rate_limit(request, "feedback", 10, 60)
+
     # Validate file
     if not validate_image(file):
         raise HTTPException(
@@ -1035,7 +1184,7 @@ async def submit_feedback(
 
     except Exception as e:
         logger.error(f"Feedback submission error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="서버 내부 오류")
 
     finally:
         if file_path:
@@ -1043,13 +1192,14 @@ async def submit_feedback(
 
 
 @app.get("/feedback/stats")
-async def get_feedback_stats():
+async def get_feedback_stats(request: Request = None):
     """
     Get feedback statistics
 
     - Shows count of feedback images per class
     - Useful for monitoring data collection progress
     """
+    await _verify_auth(request)
     try:
         s3_client = get_s3_client()
 
@@ -1085,7 +1235,7 @@ async def get_feedback_stats():
         logger.error(f"Feedback stats error: {e}")
         return {
             "success": False,
-            "message": str(e),
+            "message": "서버 내부 오류",
             "timestamp": datetime.now(timezone.utc).isoformat()
         }
 
@@ -1098,12 +1248,9 @@ SSO_LOGIN_URL = "https://auth.skons.net/accounts/sko/sso/login/"
 
 
 @app.post("/auth/login")
-async def proxy_sso_login(req: LoginRequest):
-    """
-    SKons SSO 로그인 프록시
-
-    브라우저 CORS 제약 우회를 위해 서버에서 SSO 요청을 대신 수행합니다.
-    """
+async def proxy_sso_login(req: LoginRequest, request: Request):
+    """SKons SSO 로그인 프록시 + 토큰 발급"""
+    _check_rate_limit(request, "login", 5, 60)
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.post(
@@ -1111,10 +1258,17 @@ async def proxy_sso_login(req: LoginRequest):
                 json={"username": req.username, "password": req.password},
                 headers={"Content-Type": "application/json"},
             )
-        return JSONResponse(
-            status_code=response.status_code,
-            content=response.json(),
-        )
+        sso_data = response.json()
+
+        if response.status_code == 200 and sso_data.get("result") == "ok":
+            token = _generate_token(req.username)
+            await asyncio.to_thread(_ensure_user_in_roles_sync, req.username)
+            return JSONResponse(
+                status_code=200,
+                content={**sso_data, "token": token, "expiresIn": AUTH_TOKEN_EXPIRY},
+            )
+
+        return JSONResponse(status_code=response.status_code, content=sso_data)
     except httpx.TimeoutException:
         return JSONResponse(
             status_code=504,
@@ -1129,8 +1283,9 @@ async def proxy_sso_login(req: LoginRequest):
 
 
 @app.get("/users")
-async def list_users_count():
+async def list_users_count(request: Request = None):
     """사용자 데이터 통계"""
+    await _verify_auth(request)
     users = load_users()
     return {
         "success": True,
@@ -1144,8 +1299,9 @@ async def list_users_count():
 # ============================================================
 
 @app.post("/categories")
-async def create_category(category: CategoryCreate):
+async def create_category(category: CategoryCreate, request: Request):
     """카테고리 생성"""
+    await _verify_auth(request)
     try:
         dynamodb = get_dynamodb_resource()
         table = dynamodb.Table(DYNAMODB_TABLES["categories"])
@@ -1166,12 +1322,13 @@ async def create_category(category: CategoryCreate):
         return {"success": True, "category": item}
     except ClientError as e:
         logger.error(f"DynamoDB error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="서버 내부 오류")
 
 
 @app.get("/categories")
-async def list_categories(owner: str = Query(..., description="소유자 사번")):
+async def list_categories(owner: str = Query(..., description="소유자 사번"), request: Request = None):
     """카테고리 목록 조회 (owner 필터)"""
+    await _verify_auth(request)
     try:
         dynamodb = get_dynamodb_resource()
         table = dynamodb.Table(DYNAMODB_TABLES["categories"])
@@ -1198,12 +1355,13 @@ async def list_categories(owner: str = Query(..., description="소유자 사번"
         return {"success": True, "categories": decimal_to_native(items), "count": len(items)}
     except ClientError as e:
         logger.error(f"DynamoDB error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="서버 내부 오류")
 
 
 @app.get("/categories/{category_id}")
-async def get_category(category_id: str):
+async def get_category(category_id: str, request: Request = None):
     """카테고리 단일 조회"""
+    await _verify_auth(request)
     try:
         dynamodb = get_dynamodb_resource()
         table = dynamodb.Table(DYNAMODB_TABLES["categories"])
@@ -1217,12 +1375,13 @@ async def get_category(category_id: str):
         return {"success": True, "category": decimal_to_native(item)}
     except ClientError as e:
         logger.error(f"DynamoDB error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="서버 내부 오류")
 
 
 @app.put("/categories/{category_id}")
-async def update_category(category_id: str, name: str = None, originalExcelKey: str = None):
+async def update_category(category_id: str, request: Request, name: str = None, originalExcelKey: str = None):
     """카테고리 업데이트"""
+    await _verify_auth(request)
     try:
         dynamodb = get_dynamodb_resource()
         table = dynamodb.Table(DYNAMODB_TABLES["categories"])
@@ -1251,12 +1410,13 @@ async def update_category(category_id: str, name: str = None, originalExcelKey: 
         return {"success": True, "category": decimal_to_native(response.get("Attributes"))}
     except ClientError as e:
         logger.error(f"DynamoDB error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="서버 내부 오류")
 
 
 @app.delete("/categories/{category_id}")
-async def delete_category(category_id: str):
+async def delete_category(category_id: str, request: Request = None):
     """카테고리 삭제"""
+    await _verify_auth(request)
     try:
         dynamodb = get_dynamodb_resource()
         table = dynamodb.Table(DYNAMODB_TABLES["categories"])
@@ -1266,7 +1426,7 @@ async def delete_category(category_id: str):
         return {"success": True, "message": "Category deleted"}
     except ClientError as e:
         logger.error(f"DynamoDB error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="서버 내부 오류")
 
 
 # ============================================================
@@ -1274,8 +1434,9 @@ async def delete_category(category_id: str):
 # ============================================================
 
 @app.post("/stations")
-async def create_station(station: StationCreate):
+async def create_station(station: StationCreate, request: Request):
     """무선국 생성"""
+    await _verify_auth(request)
     try:
         dynamodb = get_dynamodb_resource()
         table = dynamodb.Table(DYNAMODB_TABLES["stations"])
@@ -1313,15 +1474,17 @@ async def create_station(station: StationCreate):
         return {"success": True, "station": decimal_to_native(item)}
     except ClientError as e:
         logger.error(f"DynamoDB error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="서버 내부 오류")
 
 
 @app.get("/stations")
 async def list_stations(
     owner: str = Query(..., description="소유자 사번"),
-    categoryId: str = Query(None, description="카테고리 ID (선택)")
+    categoryId: str = Query(None, description="카테고리 ID (선택)"),
+    request: Request = None,
 ):
     """무선국 목록 조회"""
+    await _verify_auth(request)
     try:
         dynamodb = get_dynamodb_resource()
         table = dynamodb.Table(DYNAMODB_TABLES["stations"])
@@ -1354,12 +1517,13 @@ async def list_stations(
         return {"success": True, "stations": decimal_to_native(items), "count": len(items)}
     except ClientError as e:
         logger.error(f"DynamoDB error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="서버 내부 오류")
 
 
 @app.get("/stations/{station_id}")
-async def get_station(station_id: str):
+async def get_station(station_id: str, request: Request = None):
     """무선국 단일 조회"""
+    await _verify_auth(request)
     try:
         dynamodb = get_dynamodb_resource()
         table = dynamodb.Table(DYNAMODB_TABLES["stations"])
@@ -1373,12 +1537,13 @@ async def get_station(station_id: str):
         return {"success": True, "station": decimal_to_native(item)}
     except ClientError as e:
         logger.error(f"DynamoDB error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="서버 내부 오류")
 
 
 @app.put("/stations/{station_id}")
-async def update_station(station_id: str, station: StationUpdate):
+async def update_station(station_id: str, station: StationUpdate, request: Request = None):
     """무선국 업데이트"""
+    await _verify_auth(request)
     try:
         dynamodb = get_dynamodb_resource()
         table = dynamodb.Table(DYNAMODB_TABLES["stations"])
@@ -1418,12 +1583,13 @@ async def update_station(station_id: str, station: StationUpdate):
         return {"success": True, "station": decimal_to_native(response.get("Attributes"))}
     except ClientError as e:
         logger.error(f"DynamoDB error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="서버 내부 오류")
 
 
 @app.delete("/stations/{station_id}")
-async def delete_station(station_id: str):
+async def delete_station(station_id: str, request: Request = None):
     """무선국 삭제"""
+    await _verify_auth(request)
     try:
         dynamodb = get_dynamodb_resource()
         table = dynamodb.Table(DYNAMODB_TABLES["stations"])
@@ -1433,7 +1599,7 @@ async def delete_station(station_id: str):
         return {"success": True, "message": "Station deleted"}
     except ClientError as e:
         logger.error(f"DynamoDB error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="서버 내부 오류")
 
 
 # ============================================================
@@ -1444,9 +1610,12 @@ async def delete_station(station_id: str):
 async def upload_photo(
     file: UploadFile = File(...),
     owner: str = Form(...),
-    stationId: str = Form(...)
+    stationId: str = Form(...),
+    request: Request = None,
 ):
     """사진 S3 업로드"""
+    await _verify_auth(request)
+
     if not validate_image(file):
         raise HTTPException(status_code=400, detail="Invalid image format")
 
@@ -1458,6 +1627,8 @@ async def upload_photo(
         s3_key = f"photos/{owner}/{stationId}/{timestamp}{ext}"
 
         content = await file.read()
+        if len(content) > MAX_PHOTO_SIZE:
+            raise HTTPException(status_code=400, detail=f"파일 크기 초과 (최대 {MAX_PHOTO_SIZE // 1024 // 1024}MB)")
         s3_client.put_object(
             Bucket=S3_BUCKET_NAME,
             Key=s3_key,
@@ -1468,16 +1639,19 @@ async def upload_photo(
         return {"success": True, "key": s3_key}
     except ClientError as e:
         logger.error(f"S3 upload error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="서버 내부 오류")
 
 
 @app.post("/upload/excel")
 async def upload_excel(
     file: UploadFile = File(...),
     owner: str = Form(...),
-    categoryName: str = Form(...)
+    categoryName: str = Form(...),
+    request: Request = None,
 ):
     """원본 Excel S3 업로드"""
+    await _verify_auth(request)
+
     if not file.filename.endswith(('.xlsx', '.xls')):
         raise HTTPException(status_code=400, detail="Invalid Excel format")
 
@@ -1489,6 +1663,8 @@ async def upload_excel(
         s3_key = f"excel/{owner}/{safe_name}_{timestamp}.xlsx"
 
         content = await file.read()
+        if len(content) > MAX_EXCEL_SIZE:
+            raise HTTPException(status_code=400, detail=f"파일 크기 초과 (최대 {MAX_EXCEL_SIZE // 1024 // 1024}MB)")
         s3_client.put_object(
             Bucket=S3_BUCKET_NAME,
             Key=s3_key,
@@ -1499,12 +1675,14 @@ async def upload_excel(
         return {"success": True, "key": s3_key}
     except ClientError as e:
         logger.error(f"S3 upload error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="서버 내부 오류")
 
 
 @app.get("/download/presigned")
-async def get_presigned_url(key: str = Query(..., description="S3 object key")):
+async def get_presigned_url(key: str = Query(..., description="S3 object key"), request: Request = None):
     """S3 Presigned URL 생성 (다운로드용)"""
+    await _verify_auth(request)
+    _validate_s3_key(key, ALLOWED_S3_READ_PREFIXES)
     try:
         s3_client = get_s3_client()
 
@@ -1517,12 +1695,14 @@ async def get_presigned_url(key: str = Query(..., description="S3 object key")):
         return {"success": True, "url": url, "expires_in": 3600}
     except ClientError as e:
         logger.error(f"Presigned URL error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="서버 내부 오류")
 
 
 @app.get("/download/photo")
-async def download_photo(key: str = Query(..., description="S3 object key")):
+async def download_photo(key: str = Query(..., description="S3 object key"), request: Request = None):
     """S3 이미지를 EC2 경유로 스트리밍 (CORS 우회)"""
+    await _verify_auth(request)
+    _validate_s3_key(key, ALLOWED_S3_READ_PREFIXES)
     try:
         s3_client = get_s3_client()
         response = s3_client.get_object(Bucket=S3_BUCKET_NAME, Key=key)
@@ -1545,19 +1725,22 @@ async def download_photo(key: str = Query(..., description="S3 object key")):
         )
     except ClientError as e:
         logger.error(f"S3 download error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="서버 내부 오류")
 
 
 @app.delete("/storage/{key:path}")
-async def delete_s3_object(key: str):
+async def delete_s3_object(key: str, request: Request = None):
     """S3 객체 삭제"""
+    await _verify_auth(request)
+    _check_rate_limit(request, "storage_delete", 10, 60)
+    _validate_s3_key(key, ALLOWED_S3_DELETE_PREFIXES)
     try:
         s3_client = get_s3_client()
         s3_client.delete_object(Bucket=S3_BUCKET_NAME, Key=key)
         return {"success": True, "message": f"Deleted: {key}"}
     except ClientError as e:
         logger.error(f"S3 delete error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="서버 내부 오류")
 
 
 # ============================================================
@@ -1584,12 +1767,13 @@ def _ensure_user_in_roles_sync(empno: str):
 
 
 @app.get("/users/{empno}")
-async def get_user_by_empno(empno: str):
+async def get_user_by_empno(empno: str, request: Request = None):
     """
     사번으로 사용자 정보 조회 (DynamoDB)
 
     기존 i-NET 사용자 테이블에서 조회 + kca-user-roles 자동 등록
     """
+    await _verify_auth(request)
     try:
         dynamodb = get_dynamodb_resource()
         table = dynamodb.Table(DYNAMODB_TABLES["users"])
@@ -1645,7 +1829,7 @@ async def set_user_role(req: SetRoleRequest, request: Request):
     caller_id = request.headers.get("X-User-Id", "").strip()
 
     authorized = False
-    if admin_key == ADMIN_BOOTSTRAP_KEY:
+    if ADMIN_BOOTSTRAP_KEY and admin_key == ADMIN_BOOTSTRAP_KEY:
         authorized = True
         logger.info(f"role 변경 (부트스트랩): {req.empno} → {req.role}")
     elif caller_id:
@@ -1684,7 +1868,7 @@ async def set_user_role(req: SetRoleRequest, request: Request):
         return {"success": True, "empno": req.empno, "role": req.role}
     except Exception as e:
         logger.error(f"role 설정 실패: {e}")
-        raise HTTPException(status_code=500, detail=f"역할 설정 실패: {e}")
+        raise HTTPException(status_code=500, detail="서버 내부 오류")
 
 
 @app.get("/admin/users")
@@ -1716,7 +1900,7 @@ async def admin_list_users(
         return {"success": True, "users": filtered, "total": len(filtered)}
     except Exception as e:
         logger.error(f"admin users list failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="서버 내부 오류")
 
 
 @app.get("/admin/audit-logs")
@@ -1779,7 +1963,7 @@ async def admin_list_audit_logs(
         return {"success": True, "logs": logs}
     except Exception as e:
         logger.error(f"audit logs list failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="서버 내부 오류")
 
 
 # ============================================================
@@ -3175,11 +3359,13 @@ async def _job_worker_loop():
 
 @app.get("/ds/upload-presign")
 async def ds_upload_presign(
+    request: Request,
     divisionId: str = Query(...),
     divisionCode: str = Query(...),
     importDate: str = Query(...),
 ):
     """S3 presigned URL 생성 - 원본 ZIP 업로드용"""
+    await _verify_auth(request)
     try:
         s3 = get_s3_client()
         key = f"ds-raw/{divisionId}/{divisionCode}_{importDate}.zip"
@@ -3191,16 +3377,18 @@ async def ds_upload_presign(
         return {"success": True, "url": url, "key": key}
     except Exception as e:
         logger.error(f"DS upload presign error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="서버 내부 오류")
 
 
 @app.get("/ds/xlsx-upload-presign")
 async def ds_xlsx_upload_presign(
+    request: Request,
     divisionId: str = Query(...),
     divisionCode: str = Query(...),
     importDate: str = Query(...),
 ):
     """S3 presigned URL 생성 - 병합된 xlsx 저장용 (업로드 시 생성)"""
+    await _verify_auth(request)
     try:
         s3 = get_s3_client()
         key = f"ds-exports/{divisionId}/{divisionCode}_{importDate}.xlsx"
@@ -3216,21 +3404,24 @@ async def ds_xlsx_upload_presign(
         return {"success": True, "url": url, "key": key}
     except Exception as e:
         logger.error(f"DS xlsx upload presign error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="서버 내부 오류")
 
 
 @app.get("/ds/export-presign")
 async def ds_export_presign(
+    request: Request,
     divisionId: str = Query(...),
     importDate: str = Query(...),
     divisionCode: str = Query(""),
 ):
     """S3 Export용 presigned URL - 병합 xlsx 우선, 없으면 원본 ZIP"""
+    await _verify_auth(request)
     try:
         s3 = get_s3_client()
 
         # 1순위: 미리 생성된 병합 xlsx → 즉시 다운로드
         xlsx_key = f"ds-exports/{divisionId}/{divisionCode}_{importDate}.xlsx"
+        _validate_s3_key(xlsx_key, ALLOWED_S3_READ_PREFIXES)
         try:
             s3.head_object(Bucket=S3_BUCKET_NAME, Key=xlsx_key)
             url = s3.generate_presigned_url(
@@ -3258,16 +3449,18 @@ async def ds_export_presign(
         return {"success": False, "message": "S3에 파일 없음. DB Export로 대체합니다."}
     except Exception as e:
         logger.error(f"DS export presign error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="서버 내부 오류")
 
 
 @app.get("/ds/proxy-raw-zip")
 async def ds_proxy_raw_zip(
+    request: Request,
     divisionId: str = Query(...),
     importDate: str = Query(...),
     divisionCode: str = Query(""),
 ):
     """S3 원본 ZIP → EC2 프록시 스트리밍 (브라우저 CORS 우회)"""
+    await _verify_auth(request)
     s3_key = f"ds-raw/{divisionId}/{divisionCode}_{importDate}.zip"
     s3 = get_s3_client()
     try:
@@ -3299,8 +3492,9 @@ async def ds_proxy_raw_zip(
 
 
 @app.post("/ds/upload-init")
-async def ds_upload_init(req: DsUploadInit):
+async def ds_upload_init(req: DsUploadInit, request: Request = None):
     """DS 업로드 세션 시작 - 기존 데이터 삭제 후 새 레코드 생성"""
+    await _verify_auth(request)
     try:
         dynamodb = get_dynamodb_resource()
         uploads_table = dynamodb.Table(DYNAMODB_TABLES["ds_uploads"])
@@ -3357,7 +3551,7 @@ async def ds_upload_init(req: DsUploadInit):
         return {"success": True, "uploadId": f"{req.divisionId}#{sk}"}
     except ClientError as e:
         logger.error(f"DS upload-init error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="서버 내부 오류")
 
 
 def _write_chunk_sync(req: "DsUploadChunk") -> int:
@@ -3391,20 +3585,22 @@ def _write_chunk_sync(req: "DsUploadChunk") -> int:
 
 
 @app.post("/ds/upload-chunk")
-async def ds_upload_chunk(req: DsUploadChunk):
+async def ds_upload_chunk(req: DsUploadChunk, request: Request = None):
     """DS 청크 데이터 수신 → DynamoDB BatchWriteItem (스레드 풀에서 실행)"""
+    await _verify_auth(request)
     try:
         written = await asyncio.to_thread(_write_chunk_sync, req)
         logger.info(f"DS chunk: {req.divisionId}/{req.sheetName} chunk {req.chunkIndex}/{req.totalChunks} - {written} rows")
         return {"success": True, "writtenCount": written}
     except ClientError as e:
         logger.error(f"DS upload-chunk error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="서버 내부 오류")
 
 
 @app.post("/ds/upload-finalize")
-async def ds_upload_finalize(req: DsUploadFinalize):
+async def ds_upload_finalize(req: DsUploadFinalize, request: Request = None):
     """DS 업로드 완료 - status 업데이트"""
+    await _verify_auth(request)
     try:
         dynamodb = get_dynamodb_resource()
         table = dynamodb.Table(DYNAMODB_TABLES["ds_uploads"])
@@ -3425,16 +3621,18 @@ async def ds_upload_finalize(req: DsUploadFinalize):
         return {"success": True}
     except ClientError as e:
         logger.error(f"DS upload-finalize error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="서버 내부 오류")
 
 
 @app.get("/ds/stats")
 async def ds_stats(
+    request: Request,
     divisionId: Optional[str] = Query(None),
     importDate: Optional[str] = Query(None),
     divisionCode: Optional[str] = Query(None),
 ):
     """DS 업로드 통계 조회 (대시보드용)"""
+    await _verify_auth(request)
     try:
         dynamodb = get_dynamodb_resource()
         table = dynamodb.Table(DYNAMODB_TABLES["ds_uploads"])
@@ -3486,16 +3684,18 @@ async def ds_stats(
         return {"success": True, "uploads": decimal_to_native(items), "count": len(items)}
     except ClientError as e:
         logger.error(f"DS stats error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="서버 내부 오류")
 
 
 @app.get("/ds/export")
 async def ds_export(
+    request: Request,
     divisionId: str = Query(...),
     importDate: str = Query(...),
     divisionCode: Optional[str] = Query(None),
 ):
     """DS 데이터 Excel Export용 - 스트리밍 JSON 응답 (메모리 절약)"""
+    await _verify_auth(request)
 
     def _query_sync(table, **kwargs):
         """동기 DynamoDB 쿼리 — asyncio.to_thread로 호출해 이벤트 루프 비점유"""
@@ -3615,16 +3815,17 @@ async def ds_export(
 
         except ClientError as e:
             logger.error(f"DS export error: {e}")
-            yield json.dumps({"success": False, "message": str(e)})
+            yield json.dumps({"success": False, "message": "서버 내부 오류"})
         except Exception as e:
             logger.error(f"DS export unexpected error: {e}")
-            yield json.dumps({"success": False, "message": str(e)})
+            yield json.dumps({"success": False, "message": "서버 내부 오류"})
 
     return StreamingResponse(generate(), media_type="application/json")
 
 
 @app.get("/ds/data")
 async def ds_data(
+    request: Request,
     divisionId: str = Query(...),
     sheetName: str = Query(...),
     importDate: Optional[str] = Query(None),
@@ -3636,6 +3837,7 @@ async def ds_data(
     """DS 데이터 리스트 조회 (페이징, 서버측 검색 지원)
     트리플 라우팅: s3-zip → ZIP 내 XLS 직접 / s3 → xlsx / 없음 → DynamoDB fallback
     """
+    await _verify_auth(request)
     try:
         # ── 스토리지 타입 판별 ──────────────────────────────────
         storage_type = ""
@@ -3801,7 +4003,7 @@ async def ds_data(
             }
     except ClientError as e:
         logger.error(f"DS data query error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="서버 내부 오류")
 
 
 @app.delete("/ds/data")
@@ -3879,7 +4081,7 @@ async def ds_delete_data(
         return {"success": True, "deletedCount": 0}
     except ClientError as e:
         logger.error(f"DS delete error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="서버 내부 오류")
 
 
 # ============================================================
@@ -3888,12 +4090,14 @@ async def ds_delete_data(
 
 @app.get("/ds/presign-raw")
 async def ds_presign_raw(
+    request: Request,
     fileName: str = Query(...),
 ):
     """DS ZIP S3 직접 업로드용 presigned PUT URL 발급
     브라우저가 이 URL로 직접 S3에 PUT → EC2 메모리 0 사용
     (S3 버킷 CORS 설정 필요 — 없으면 /ds/upload-raw 사용)
     """
+    await _verify_auth(request)
     try:
         s3 = get_s3_client()
         safe_name = re.sub(r"[^\w\-_\.]", "_", fileName)
@@ -3906,7 +4110,7 @@ async def ds_presign_raw(
         return {"success": True, "url": url, "s3Key": temp_key}
     except Exception as e:
         logger.error(f"DS presign-raw error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="서버 내부 오류")
 
 
 @app.post("/ds/upload-raw")
@@ -3991,7 +4195,7 @@ async def ds_upload_raw(request: Request, file: UploadFile = File(...)):
             except Exception:
                 pass
         logger.error(f"DS upload-raw error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="서버 내부 오류")
 
 
 @app.post("/ds/enqueue")
@@ -4042,11 +4246,12 @@ async def ds_enqueue(request: Request, req: DsEnqueueRequest):
         return {"success": True, "jobId": job_id, "queuePosition": queue_position}
     except ClientError as e:
         logger.error(f"DS enqueue error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="서버 내부 오류")
 
 
 @app.get("/ds/export-xlsx")
 async def ds_export_xlsx(
+    request: Request,
     divisionId: str = Query(...),
     importDate: str = Query(...),
     divisionCode: str = Query(""),
@@ -4055,6 +4260,7 @@ async def ds_export_xlsx(
     - storageType="s3": S3에서 직접 다운로드 (빌드 불필요, 즉시)
     - old: DynamoDB → xlsx 서버사이드 빌드 후 다운로드 + S3 캐싱
     """
+    await _verify_auth(request)
     if not HAS_OPENPYXL:
         raise HTTPException(status_code=503, detail="서버에 openpyxl이 설치되지 않았습니다.")
 
@@ -4146,7 +4352,7 @@ async def ds_export_xlsx(
             )
         except Exception as e:
             logger.error(f"DS export s3-zip build failed: {e}")
-            raise HTTPException(status_code=500, detail=f"Export 빌드 실패: {str(e)[:200]}")
+            raise HTTPException(status_code=500, detail="서버 내부 오류")
         finally:
             try:
                 if os.path.exists(zip_temp):
@@ -4183,8 +4389,9 @@ async def ds_export_xlsx(
 
 
 @app.get("/ds/job/{job_id}")
-async def ds_job_status(job_id: str):
+async def ds_job_status(job_id: str, request: Request = None):
     """DS 잡 상태 조회 — 브라우저가 3초 간격으로 폴링"""
+    await _verify_auth(request)
     try:
         jobs_table = _dynamodb_resource.Table(DYNAMODB_TABLES["ds_jobs"])
         resp = await asyncio.to_thread(
@@ -4217,12 +4424,13 @@ async def ds_job_status(job_id: str):
         raise
     except ClientError as e:
         logger.error(f"DS job status error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="서버 내부 오류")
 
 
 @app.delete("/ds/job/{job_id}")
-async def ds_job_cancel(job_id: str):
+async def ds_job_cancel(job_id: str, request: Request = None):
     """DS 잡 취소 — queued 상태인 경우만 가능"""
+    await _verify_auth(request)
     try:
         jobs_table = _dynamodb_resource.Table(DYNAMODB_TABLES["ds_jobs"])
         item = jobs_table.get_item(Key={"jobId": job_id}).get("Item")
@@ -4246,7 +4454,7 @@ async def ds_job_cancel(job_id: str):
         raise
     except ClientError as e:
         logger.error(f"DS job cancel error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="서버 내부 오류")
 
 
 # ============================================================

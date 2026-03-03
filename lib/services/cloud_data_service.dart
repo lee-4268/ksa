@@ -17,11 +17,13 @@ class CloudDataService extends ChangeNotifier {
 
   /// 앱 레벨 사용자 격리용 userId (사번)
   String? _userId;
+  String? _authToken;
   String? get userId => _userId;
   void setUserId(String? userId) {
     _userId = userId;
     debugPrint('CloudDataService userId 설정: $userId');
   }
+  void setAuthToken(String? token) => _authToken = token;
 
   bool get isLoading => _isLoading;
   String? get errorMessage => _errorMessage;
@@ -31,6 +33,7 @@ class CloudDataService extends ChangeNotifier {
   Map<String, String> get _headers => {
         'Content-Type': 'application/json',
         'Accept': 'application/json',
+        if (_authToken != null) 'Authorization': 'Bearer $_authToken',
       };
 
   // ==================== Category CRUD ====================
@@ -571,6 +574,9 @@ class CloudDataService extends ChangeNotifier {
           filename: '$categoryName.xlsx',
         ),
       );
+      if (_authToken != null) {
+        request.headers['Authorization'] = 'Bearer $_authToken';
+      }
 
       final streamedResponse = await request.send();
       final response = await http.Response.fromStream(streamedResponse);
@@ -598,6 +604,9 @@ class CloudDataService extends ChangeNotifier {
       // EC2 프록시를 통해 S3 파일 다운로드
       final downloadResponse = await http.get(
         Uri.parse('$_baseUrl/download/photo?key=${Uri.encodeComponent(storedPath)}'),
+        headers: {
+          if (_authToken != null) 'Authorization': 'Bearer $_authToken',
+        },
       );
 
       if (downloadResponse.statusCode == 200) {

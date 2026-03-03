@@ -155,6 +155,8 @@ class TeamContextService extends ChangeNotifier {
   List<Division> _availableDivisions = [];
   bool _isLoading = false;
   String? _errorMessage;
+  String? _authToken;
+  void setAuthToken(String? token) => _authToken = token;
 
   // Getters
   AppUserProfile? get currentProfile => _currentProfile;
@@ -195,7 +197,10 @@ class TeamContextService extends ChangeNotifier {
     try {
       final response = await http.get(
         Uri.parse('$_baseUrl/users/$empno'),
-        headers: {'Accept': 'application/json'},
+        headers: {
+          'Accept': 'application/json',
+          if (_authToken != null) 'Authorization': 'Bearer $_authToken',
+        },
       );
 
       if (response.statusCode == 200) {
@@ -293,6 +298,7 @@ class TeamContextService extends ChangeNotifier {
     _availableTeams = [];
     _availableDivisions = [];
     _errorMessage = null;
+    _authToken = null;
     notifyListeners();
   }
 }

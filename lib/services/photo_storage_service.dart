@@ -11,6 +11,10 @@ class PhotoStorageService {
     defaultValue: 'https://api-sko-kca.skons.net',
   );
 
+  /// Auth token for Bearer authentication
+  static String? _authToken;
+  static void setAuthToken(String? token) => _authToken = token;
+
   /// S3 Storage가 설정되어 있는지 확인
   static bool _isStorageConfigured = true; // EC2 API 사용 시 항상 true
 
@@ -77,6 +81,9 @@ class PhotoStorageService {
           filename: fileName,
         ),
       );
+      if (_authToken != null) {
+        request.headers['Authorization'] = 'Bearer $_authToken';
+      }
 
       final streamedResponse = await request.send();
       final response = await http.Response.fromStream(streamedResponse);
@@ -145,6 +152,9 @@ class PhotoStorageService {
 
       final response = await http.delete(
         Uri.parse('$_baseUrl/storage/${Uri.encodeComponent(key)}'),
+        headers: {
+          if (_authToken != null) 'Authorization': 'Bearer $_authToken',
+        },
       );
 
       if (response.statusCode == 200) {

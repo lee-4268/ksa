@@ -58,6 +58,14 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final token = context.read<AuthService>().authToken;
+    _dataService.setAuthToken(token);
+    _uploadService.setAuthToken(token);
+  }
+
+  @override
   void dispose() {
     _autoRefreshTimer?.cancel();
     super.dispose();
@@ -186,10 +194,13 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
 
       // S3 presign 확인 → type별 분기
       try {
+        final authToken = context.read<AuthService>().authToken;
         final presignUri =
             Uri.parse('$_baseUrl/ds/export-presign').replace(queryParameters: params);
         final presignResp =
-            await http.get(presignUri).timeout(const Duration(seconds: 10));
+            await http.get(presignUri, headers: {
+              if (authToken != null) 'Authorization': 'Bearer $authToken',
+            }).timeout(const Duration(seconds: 10));
 
         if (presignResp.statusCode == 200) {
           final data = jsonDecode(presignResp.body);

@@ -25,6 +25,7 @@ class AuthService extends ChangeNotifier {
   String? _userDepartment; // 본부/부서
   String? _userTeam; // 팀
   String _userRoleStr = 'member'; // "admin", "manager", "member"
+  String? _authToken; // 서버 발급 HMAC 토큰
 
   /// 세션 타임아웃 (2시간)
   static const Duration sessionTimeout = Duration(hours: 2);
@@ -37,6 +38,7 @@ class AuthService extends ChangeNotifier {
   static const String _userDepartmentKey = 'user_department';
   static const String _userTeamKey = 'user_team';
   static const String _userRoleKey = 'user_role';
+  static const String _authTokenKey = 'auth_token';
 
   /// 세션 타이머
   Timer? _sessionTimer;
@@ -49,6 +51,16 @@ class AuthService extends ChangeNotifier {
   bool get isSignedIn => _isSignedIn;
   String? get errorMessage => _errorMessage;
   bool get isInitialized => _isInitialized;
+
+  // 토큰
+  String? get authToken => _authToken;
+
+  /// 인증 헤더 (Bearer 토큰 포함)
+  Map<String, String> get authHeaders => {
+    'Content-Type': 'application/json',
+    'Accept': 'application/json',
+    if (_authToken != null) 'Authorization': 'Bearer $_authToken',
+  };
 
   // 사용자 정보 Getters
   String? get userId => _userId;
@@ -135,6 +147,7 @@ class AuthService extends ChangeNotifier {
           _userDepartment = prefs.getString(_userDepartmentKey);
           _userTeam = prefs.getString(_userTeamKey);
           _userRoleStr = prefs.getString(_userRoleKey) ?? 'member';
+          _authToken = prefs.getString(_authTokenKey);
           debugPrint('로그인 상태 복원: $_userId ($_userName, 역할: $_userRoleStr)');
           _startSessionTimerWithExistingExpiry();
         }
@@ -183,7 +196,8 @@ class AuthService extends ChangeNotifier {
         final result = data['result'] as String?;
 
         if (result == 'ok') {
-          // 2. SSO 인증 성공 → 즉시 로그인 상태 반영
+          // 2. SSO 인증 성공 → 토큰 저장 + 즉시 로그인 상태 반영
+          _authToken = data['token'] as String?;
           _isSignedIn = true;
           _userId = username;
           _userName = username; // 임시로 사번 표시
@@ -262,7 +276,7 @@ class AuthService extends ChangeNotifier {
     try {
       final response = await http.get(
         Uri.parse('$_loginUrl/users/$empno'),
-        headers: {'Content-Type': 'application/json'},
+        headers: authHeaders,
       );
 
       if (response.statusCode == 200) {
@@ -293,6 +307,7 @@ class AuthService extends ChangeNotifier {
     _userDepartment = null;
     _userTeam = null;
     _userRoleStr = 'member';
+    _authToken = null;
 
     notifyListeners();
 
@@ -321,6 +336,9 @@ class AuthService extends ChangeNotifier {
         await prefs.setString(_userTeamKey, _userTeam!);
       }
       await prefs.setString(_userRoleKey, _userRoleStr);
+      if (_authToken != null) {
+        await prefs.setString(_authTokenKey, _authToken!);
+      }
     } catch (e) {
       debugPrint('로그인 상태 저장 오류: $e');
     }
@@ -335,6 +353,7 @@ class AuthService extends ChangeNotifier {
       await prefs.remove(_userDepartmentKey);
       await prefs.remove(_userTeamKey);
       await prefs.remove(_userRoleKey);
+      await prefs.remove(_authTokenKey);
       await _clearSessionExpiry();
     } catch (e) {
       debugPrint('로그인 상태 삭제 오류: $e');

@@ -12,6 +12,7 @@ import 'services/audit_service.dart';
 import 'services/team_context_service.dart';
 import 'services/admin_service.dart';
 import 'services/division_data_service.dart';
+import 'services/photo_storage_service.dart';
 
 // 모바일용 조건부 import
 import 'main_init_stub.dart' if (dart.library.io) 'main_init_mobile.dart'
@@ -127,11 +128,21 @@ class _AuthWrapperState extends State<AuthWrapper> {
   }
 
   void _onAuthStateChanged() {
-    // AuthService 상태 변화 시 강제 rebuild
+    // AuthService 상태 변화 시 강제 rebuild + 토큰 전파
     if (mounted) {
       debugPrint('AuthWrapper: AuthService 상태 변경 감지, rebuild 트리거');
+      _propagateAuthToken();
       setState(() {});
     }
+  }
+
+  /// AuthService의 토큰을 모든 서비스에 전파
+  void _propagateAuthToken() {
+    final auth = context.read<AuthService>();
+    final token = auth.authToken;
+    context.read<CloudDataService>().setAuthToken(token);
+    context.read<TeamContextService>().setAuthToken(token);
+    PhotoStorageService.setAuthToken(token);
   }
 
   @override
