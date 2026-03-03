@@ -60,7 +60,7 @@ function _buildSheetXml(data, preamble) {
     var isHeader = (r === 0);
     // s="1"=데이터(Arial 10pt,가운데정렬,테두리), s="2"=헤더(+볼드+회색배경)
     var sAttr = isHeader ? ' s="2"' : ' s="1"';
-    var rowXml = '<row r="' + (r + 1) + '">';
+    var rowXml = '<row r="' + (r + 1) + '" ht="12.75" customHeight="1">';
 
     for (var c = 0; c < row.length; c++) {
       var val = row[c];
