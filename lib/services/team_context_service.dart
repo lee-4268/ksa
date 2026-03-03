@@ -262,18 +262,16 @@ class TeamContextService extends ChangeNotifier {
     return null;
   }
 
-  /// 본부 목록 (하드코딩 — 별도 API 불필요)
-  static final List<Division> _hardcodedDivisions = [
-    Division(id: '수도권', name: '수도권본부', code: '10'),
-    Division(id: '경남', name: '경남본부', code: '20'),
-    Division(id: '서부', name: '서부본부', code: '30'),
-    Division(id: '강원', name: '강원본부', code: '40'),
-    Division(id: '충청', name: '충청본부', code: '50'),
-    Division(id: '경북', name: '경북본부', code: '60'),
-  ];
-
   Future<void> loadDivisions() async {
-    _availableDivisions = _hardcodedDivisions;
+    // 사용자 데이터에서 동적 추출하므로 여기서는 별도 로드 불필요
+    notifyListeners();
+  }
+
+  /// 사용자 목록에서 고유 본부 목록을 동적 생성
+  void updateDivisionsFromUsers(List<String> regionNames) {
+    _availableDivisions = regionNames
+        .map((name) => Division(id: name, name: name, code: name))
+        .toList();
     notifyListeners();
   }
 

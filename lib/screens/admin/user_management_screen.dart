@@ -18,9 +18,9 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
   String? _selectedDivisionId;
   String? _selectedTeamId;
 
-  // 데이터
-  List<Division> _divisions = [];
-  List<String> _uniqueTeams = []; // 사용자 데이터에서 추출한 팀 목록
+  // 데이터 (사용자에서 동적 추출)
+  List<String> _uniqueDivisions = [];
+  List<String> _uniqueTeams = [];
   List<AppUserProfile> _filteredUsers = [];
 
   // 상태
@@ -62,15 +62,18 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
 
     try {
       final adminService = context.read<AdminService>();
-      final teamContext = context.read<TeamContextService>();
-
-      // 본부 목록 로드 (하드코딩)
-      await teamContext.loadDivisions();
 
       // 사용자 목록 로드
       await adminService.loadAllUsers();
 
-      // 사용자 데이터에서 고유 팀 목록 추출
+      // 사용자 데이터에서 고유 본부/팀 목록 동적 추출
+      final divisions = adminService.allUsers
+          .map((u) => u.divisionId)
+          .where((d) => d != null && d.isNotEmpty)
+          .cast<String>()
+          .toSet()
+          .toList()
+        ..sort();
       final teams = adminService.allUsers
           .map((u) => u.teamId)
           .where((t) => t != null && t.isNotEmpty)
@@ -80,7 +83,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
         ..sort();
 
       setState(() {
-        _divisions = teamContext.availableDivisions;
+        _uniqueDivisions = divisions;
         _uniqueTeams = teams;
         _applyFilters();
         _isLoading = false;
@@ -236,145 +239,167 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
   }
 
   Widget _buildFilterSection() {
+    final hasFilters = _searchController.text.isNotEmpty ||
+        _selectedDivisionId != null ||
+        _selectedTeamId != null;
+
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       decoration: BoxDecoration(
-        color: Colors.grey[50],
-        border: Border(
-          bottom: BorderSide(color: Colors.grey[200]!),
-        ),
+        color: Colors.grey.shade50,
+        border: Border(bottom: BorderSide(color: Colors.grey.shade200)),
       ),
       child: Column(
         children: [
           // 검색창
-          TextField(
-            controller: _searchController,
-            decoration: InputDecoration(
-              hintText: '이름 또는 이메일로 검색',
-              prefixIcon: const Icon(Icons.search),
-              suffixIcon: _searchController.text.isNotEmpty
-                  ? IconButton(
-                      icon: const Icon(Icons.clear),
-                      onPressed: () {
-                        _searchController.clear();
-                        _applyFilters();
-                      },
-                    )
-                  : null,
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: BorderSide.none,
-              ),
-              filled: true,
-              fillColor: Colors.white,
-              contentPadding: const EdgeInsets.symmetric(
-                horizontal: 16,
-                vertical: 12,
-              ),
+          Container(
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: Colors.grey.shade300),
             ),
-            onChanged: _onSearchChanged,
+            child: TextField(
+              controller: _searchController,
+              decoration: InputDecoration(
+                hintText: '이름 또는 사번으로 검색',
+                hintStyle: TextStyle(fontSize: 14, color: Colors.grey.shade400),
+                prefixIcon: Icon(Icons.search, size: 20, color: Colors.grey.shade500),
+                suffixIcon: _searchController.text.isNotEmpty
+                    ? IconButton(
+                        icon: Icon(Icons.clear, size: 18, color: Colors.grey.shade500),
+                        onPressed: () {
+                          _searchController.clear();
+                          _applyFilters();
+                        },
+                      )
+                    : null,
+                border: InputBorder.none,
+                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              ),
+              style: const TextStyle(fontSize: 14),
+              onChanged: _onSearchChanged,
+            ),
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 10),
 
-          // 본부/팀 필터
+          // 본부/팀 필터 (DS 대시보드 스타일)
           Row(
             children: [
-              // 본부 선택
-              Expanded(
-                child: DropdownButtonFormField<String>(
-                  value: _selectedDivisionId,
-                  dropdownColor: Colors.white,
-                  decoration: InputDecoration(
-                    labelText: '본부',
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                      borderSide: BorderSide.none,
+              Icon(Icons.filter_list, size: 20, color: Colors.grey.shade600),
+              const SizedBox(width: 8),
+              // 본부 드롭다운
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.grey.shade300),
+                ),
+                child: DropdownButtonHideUnderline(
+                  child: DropdownButton<String>(
+                    value: _selectedDivisionId ?? '',
+                    isDense: true,
+                    dropdownColor: Colors.white,
+                    borderRadius: BorderRadius.circular(12),
+                    icon: Icon(Icons.keyboard_arrow_down, size: 20, color: Colors.grey.shade600),
+                    style: const TextStyle(fontSize: 14, color: Colors.black87),
+                    items: [
+                      DropdownMenuItem(
+                        value: '',
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.select_all, size: 16, color: Colors.teal.shade400),
+                            const SizedBox(width: 8),
+                            const Text('전체 본부'),
+                          ],
+                        ),
+                      ),
+                      ..._uniqueDivisions.map((div) => DropdownMenuItem(
+                            value: div,
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.business, size: 16, color: Colors.grey.shade500),
+                                const SizedBox(width: 8),
+                                Text(div),
+                              ],
+                            ),
+                          )),
+                    ],
+                    onChanged: (v) => _onDivisionChanged(
+                      v != null && v.isNotEmpty ? v : null,
                     ),
-                    filled: true,
-                    fillColor: Colors.white,
-                    contentPadding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 8,
-                    ),
-                  ),
-                  items: [
-                    const DropdownMenuItem(
-                      value: '',
-                      child: Text('전체 본부'),
-                    ),
-                    ..._divisions.map((division) {
-                      return DropdownMenuItem(
-                        value: division.id,
-                        child: Text(division.name),
-                      );
-                    }),
-                  ],
-                  onChanged: (value) => _onDivisionChanged(
-                    value?.isEmpty == true ? null : value,
                   ),
                 ),
               ),
-              const SizedBox(width: 12),
-
-              // 팀 선택
-              Expanded(
-                child: DropdownButtonFormField<String>(
-                  value: _selectedTeamId,
-                  dropdownColor: Colors.white,
-                  decoration: InputDecoration(
-                    labelText: '팀',
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                      borderSide: BorderSide.none,
+              const SizedBox(width: 8),
+              // 팀 드롭다운
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.grey.shade300),
+                ),
+                child: DropdownButtonHideUnderline(
+                  child: DropdownButton<String>(
+                    value: _selectedTeamId ?? '',
+                    isDense: true,
+                    dropdownColor: Colors.white,
+                    borderRadius: BorderRadius.circular(12),
+                    icon: Icon(Icons.keyboard_arrow_down, size: 20, color: Colors.grey.shade600),
+                    style: const TextStyle(fontSize: 14, color: Colors.black87),
+                    items: [
+                      DropdownMenuItem(
+                        value: '',
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.select_all, size: 16, color: Colors.teal.shade400),
+                            const SizedBox(width: 8),
+                            const Text('전체 팀'),
+                          ],
+                        ),
+                      ),
+                      ..._getTeamsForSelectedDivision().map((team) => DropdownMenuItem(
+                            value: team,
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.groups, size: 16, color: Colors.grey.shade500),
+                                const SizedBox(width: 8),
+                                Text(team),
+                              ],
+                            ),
+                          )),
+                    ],
+                    onChanged: (v) => _onTeamChanged(
+                      v != null && v.isNotEmpty ? v : null,
                     ),
-                    filled: true,
-                    fillColor: _selectedDivisionId != null
-                        ? Colors.white
-                        : Colors.grey[100],
-                    contentPadding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 8,
-                    ),
-                  ),
-                  items: [
-                    const DropdownMenuItem(
-                      value: '',
-                      child: Text('전체 팀'),
-                    ),
-                    ..._getTeamsForSelectedDivision().map((team) {
-                      return DropdownMenuItem(
-                        value: team,
-                        child: Text(team),
-                      );
-                    }),
-                  ],
-                  onChanged: (value) => _onTeamChanged(
-                    value?.isEmpty == true ? null : value,
-                  ),
-                  hint: Text(
-                    '팀 선택',
-                    style: TextStyle(color: Colors.grey[500]),
                   ),
                 ),
               ),
+              const Spacer(),
+              // 필터 초기화
+              if (hasFilters)
+                InkWell(
+                  onTap: _clearFilters,
+                  borderRadius: BorderRadius.circular(8),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.filter_alt_off, size: 16, color: Colors.grey.shade500),
+                        const SizedBox(width: 4),
+                        Text('초기화', style: TextStyle(fontSize: 13, color: Colors.grey.shade600)),
+                      ],
+                    ),
+                  ),
+                ),
             ],
           ),
-
-          // 필터 초기화 버튼
-          if (_searchController.text.isNotEmpty ||
-              _selectedDivisionId != null ||
-              _selectedTeamId != null)
-            Padding(
-              padding: const EdgeInsets.only(top: 8),
-              child: Align(
-                alignment: Alignment.centerRight,
-                child: TextButton.icon(
-                  onPressed: _clearFilters,
-                  icon: const Icon(Icons.filter_alt_off, size: 18),
-                  label: const Text('필터 초기화'),
-                ),
-              ),
-            ),
         ],
       ),
     );
