@@ -493,10 +493,34 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
             child: DropdownButton<String>(
               value: _selectedDivision,
               isDense: true,
+              dropdownColor: Colors.white,
+              borderRadius: BorderRadius.circular(12),
+              icon: Icon(Icons.keyboard_arrow_down, size: 20, color: Colors.grey.shade600),
+              style: const TextStyle(fontSize: 14, color: Colors.black87),
               items: [
-                const DropdownMenuItem(value: 'all', child: Text('전체')),
+                DropdownMenuItem(
+                  value: 'all',
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.select_all, size: 16, color: _accentColor),
+                      const SizedBox(width: 8),
+                      const Text('전체'),
+                    ],
+                  ),
+                ),
                 ...DsDataService.dsDivisionNames.entries.map((e) {
-                  return DropdownMenuItem(value: e.key, child: Text(e.value));
+                  return DropdownMenuItem(
+                    value: e.key,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.business, size: 16, color: Colors.grey.shade500),
+                        const SizedBox(width: 8),
+                        Text(e.value),
+                      ],
+                    ),
+                  );
                 }),
               ],
               onChanged: (v) => setState(() => _selectedDivision = v ?? 'all'),
@@ -826,20 +850,109 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
   Future<void> _confirmDelete(DsUploadInfo upload) async {
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('데이터 삭제'),
-        content: Text(
-          '${upload.divisionName} ${upload.formattedDate} (코드: ${upload.divisionCode})\n'
-          '${DsDataService.formatNumber(upload.totalRows)}행을 삭제하시겠습니까?\n\n'
-          '이 작업은 되돌릴 수 없습니다.',
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('취소')),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: Text('삭제', style: TextStyle(color: Colors.red.shade600)),
+      builder: (ctx) => Dialog(
+        backgroundColor: Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 360),
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.red.shade50,
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(Icons.delete_outline, color: Colors.red.shade400, size: 28),
+                ),
+                const SizedBox(height: 16),
+                const Text(
+                  '데이터 삭제',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.black87),
+                ),
+                const SizedBox(height: 12),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.grey.shade50,
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: Colors.grey.shade200),
+                  ),
+                  child: Column(
+                    children: [
+                      Row(
+                        children: [
+                          Icon(Icons.business, size: 16, color: Colors.grey.shade500),
+                          const SizedBox(width: 8),
+                          Text(upload.divisionName,
+                              style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      Row(
+                        children: [
+                          Icon(Icons.calendar_today, size: 14, color: Colors.grey.shade500),
+                          const SizedBox(width: 8),
+                          Text('${upload.formattedDate}  |  코드: ${upload.divisionCode}',
+                              style: TextStyle(fontSize: 13, color: Colors.grey.shade600)),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      Row(
+                        children: [
+                          Icon(Icons.table_rows, size: 14, color: Colors.grey.shade500),
+                          const SizedBox(width: 8),
+                          Text('${DsDataService.formatNumber(upload.totalRows)}행',
+                              style: TextStyle(fontSize: 13, color: Colors.grey.shade600)),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  '이 작업은 되돌릴 수 없습니다.',
+                  style: TextStyle(fontSize: 13, color: Colors.red.shade400),
+                ),
+                const SizedBox(height: 20),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: () => Navigator.pop(ctx, false),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: Colors.grey.shade700,
+                          side: BorderSide(color: Colors.grey.shade300),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                        ),
+                        child: const Text('취소', style: TextStyle(fontWeight: FontWeight.w600)),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: ElevatedButton(
+                        onPressed: () => Navigator.pop(ctx, true),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.red.shade500,
+                          foregroundColor: Colors.white,
+                          elevation: 0,
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                        ),
+                        child: const Text('삭제', style: TextStyle(fontWeight: FontWeight.w600)),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ),
-        ],
+        ),
       ),
     );
 

@@ -46,6 +46,11 @@ function _buildSheetXml(data, preamble) {
     + ' xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">');
 
   if (preamble) {
+    // 원본 XLS의 defaultRowHeight(229.5 등)가 행 높이를 오버라이드하므로 12.75로 강제
+    preamble = preamble.replace(
+      /(<sheetFormatPr[^>]*?)defaultRowHeight="[^"]*"/,
+      '$1defaultRowHeight="12.75"'
+    );
     parts.push(preamble);
   }
 
