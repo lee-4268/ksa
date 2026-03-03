@@ -1579,10 +1579,12 @@ def _parse_ds_filename_in_zip(filename: str) -> Optional[dict]:
 
 
 def _classify_ds_file(filename: str) -> str:
-    """DS 파일 분류: base / numbered / spt / skipped"""
+    """DS 파일 분류: base / numbered / spt / hundred / skipped
+    hundred: (100) 파일 → '일반사항' 시트를 '일반사항(검사전)'으로 변환
+    """
     lower = filename.lower()
     if "(100)" in filename:
-        return "skipped"
+        return "hundred"
     if "특수" in filename or "spt" in lower:
         return "spt"
     paren_numbers = re.findall(r"\(\d+\)", filename)
@@ -1763,163 +1765,6 @@ def _xlrd_cell_to_str(sheet, row_idx: int, col_idx: int) -> str:
     return str(val).strip()
 
 
-def _process_xls_file_sync(xls_bytes: bytes, filename: str, division_id: str,
-                             division_code: str, import_date: str,
-                             base_row_counts: dict) -> tuple:
-    """동기: XLS 바이트 → DynamoDB batch write
-    base_row_counts: {sheet_name: current_row_count} — numbered 파일 병합 시 연속 인덱스
-    Returns: (sheet_stats, total_rows_written, sheet_headers)
-    sheet_headers: {sheet_name: [col1, col2, ...]} — 원본 XLS 헤더 순서 그대로
-    """
-    if not HAS_XLRD:
-        raise RuntimeError("xlrd not installed on server")
-
-    sheet_stats = {}
-    sheet_headers: Dict[str, list] = {}
-    total_rows = 0
-    records_table = _dynamodb_resource.Table(DYNAMODB_TABLES["ds_records"])
-    now = datetime.now(timezone.utc).isoformat()
-    dc_part = f"#{division_code}" if division_code else ""
-
-    try:
-        workbook = xlrd.open_workbook(file_contents=xls_bytes)
-    except Exception as e:
-        logger.warning(f"XLS 파싱 실패 ({filename}): {e}")
-        return {}, 0, {}
-
-    for sheet_idx in range(workbook.nsheets):
-        sheet = workbook.sheet_by_index(sheet_idx)
-        sheet_name = sheet.name.strip()
-
-        if sheet.nrows < 2:
-            continue
-
-        # 헤더 추출 — 실제 컬럼 인덱스 보존 (빈 헤더 건너뛰되 위치 기억)
-        header_map = []  # [(actual_col_idx, header_name), ...]
-        for col in range(sheet.ncols):
-            h = _xlrd_cell_to_str(sheet, 0, col)
-            if h:
-                header_map.append((col, h))
-        headers = [name for _, name in header_map]
-
-        if not headers:
-            continue
-
-        # 첫 등장 시트의 헤더만 기록 (base 파일 헤더가 기준)
-        if sheet_name not in sheet_headers:
-            sheet_headers[sheet_name] = list(headers)
-
-        # numbered 파일 병합: 이전 파일의 마지막 rowIndex부터 이어서 번호 부여
-        start_row_idx = base_row_counts.get(sheet_name, 0)
-        row_count = 0
-
-        with records_table.batch_writer() as batch:
-            for row_idx in range(1, sheet.nrows):
-                data = {}
-                for col_idx, hname in header_map:
-                    val = _xlrd_cell_to_str(sheet, row_idx, col_idx)
-                    if val:
-                        data[hname] = val
-
-                if not data:
-                    continue
-
-                global_row_idx = start_row_idx + row_count
-                batch.put_item(Item={
-                    "divisionId": division_id,
-                    "sk": f"{sheet_name}#{import_date}{dc_part}#{global_row_idx:08d}",
-                    "sheetName": sheet_name,
-                    "importDate": import_date,
-                    "divisionCode": division_code,
-                    "uploadedAt": now,
-                    "data": data,
-                })
-                row_count += 1
-
-        sheet_stats[sheet_name] = row_count
-        total_rows += row_count
-        # 다음 파일을 위해 시작 인덱스 업데이트
-        base_row_counts[sheet_name] = start_row_idx + row_count
-
-    workbook.release_resources()
-    gc.collect()  # workbook 전체 해제 후 1회만 실행
-    return sheet_stats, total_rows, sheet_headers
-
-
-async def _process_zip_to_dynamodb(job_id: str, zip_temp_path: str,
-                                    division_id: str, division_code: str,
-                                    import_date: str) -> tuple:
-    """ZIP 파일 → XLS 파싱 → DynamoDB 저장
-    Returns: (sheet_stats, total_rows, sheet_headers)
-    sheet_headers: {sheet_name: [col1, col2, ...]} — base 파일 헤더 순서 기준
-    """
-    sheet_stats: Dict[str, int] = {}
-    sheet_headers: Dict[str, list] = {}
-    total_rows = 0
-    base_row_counts: Dict[str, int] = {}
-
-    with zipfile.ZipFile(zip_temp_path, "r") as zf:
-        all_names = zf.namelist()
-        xls_names = [n for n in all_names
-                     if n.lower().endswith(".xls") and not os.path.basename(n).startswith("~")]
-
-        classified: Dict[str, list] = {"base": [], "numbered": [], "spt": [], "skipped": []}
-        for fname in xls_names:
-            base_fname = os.path.basename(fname)
-            if not base_fname:
-                continue
-            cls = _classify_ds_file(base_fname)
-            classified[cls].append(fname)
-
-        process_list = classified["base"] + classified["numbered"] + classified["spt"]
-        total_files = len(process_list)
-
-        if total_files == 0:
-            raise ValueError("처리할 XLS 파일 없음 (스킵 파일만 포함)")
-
-        logger.info(f"DS job {job_id}: {total_files}개 XLS 처리 "
-                    f"(base={len(classified['base'])}, numbered={len(classified['numbered'])}, "
-                    f"spt={len(classified['spt'])}, skipped={len(classified['skipped'])})")
-
-        # 프로그레스 스로틀: 5% 이상 변화 또는 첫/마지막 파일에서만 DynamoDB 업데이트
-        # 기존: 파일마다 UpdateItem → 파일 N개일 때 N회 불필요한 DynamoDB 쓰기
-        last_progress_pct = 0.0
-
-        for file_idx, fname in enumerate(process_list):
-            base_fname = os.path.basename(fname) or fname
-            percent = 10 + (file_idx / total_files) * 70
-            if percent - last_progress_pct >= 5 or file_idx in (0, total_files - 1):
-                await _update_job_progress(job_id, f"XLS 파싱: {base_fname}", percent, total_rows, total_rows)
-                last_progress_pct = percent
-
-            try:
-                xls_bytes = zf.read(fname)
-            except Exception as e:
-                logger.warning(f"DS job {job_id}: {fname} 읽기 실패: {e}")
-                continue
-
-            try:
-                file_sheet_stats, file_rows, file_sheet_headers = await asyncio.to_thread(
-                    _process_xls_file_sync, xls_bytes, base_fname,
-                    division_id, division_code, import_date, base_row_counts
-                )
-            except Exception as e:
-                logger.warning(f"DS job {job_id}: {fname} 처리 실패: {e}")
-                del xls_bytes
-                continue
-
-            del xls_bytes  # xlrd workbook은 이미 release_resources() 호출됨
-
-            for sn, cnt in file_sheet_stats.items():
-                sheet_stats[sn] = sheet_stats.get(sn, 0) + cnt
-            # base 파일 헤더 우선 (첫 등장 시트만 기록)
-            for sn, hdrs in file_sheet_headers.items():
-                if sn not in sheet_headers:
-                    sheet_headers[sn] = hdrs
-            total_rows += file_rows
-            logger.info(f"DS job {job_id}: [{file_idx+1}/{total_files}] {base_fname} → {file_rows}행")
-
-    return sheet_stats, total_rows, sheet_headers
 
 
 def _read_xlsx_paginated_sync(xlsx_path: str, sheet_name: str,
@@ -2062,12 +1907,15 @@ def _parse_zip_metadata_sync(zip_temp_path: str, progress_cb=None) -> tuple:
     XLS 파일별로 xlrd.open_workbook → sheet.nrows + 헤더(row 0) 만 추출.
     데이터 행은 한 줄도 읽지 않음 → 10만행 ZIP도 ~5초.
 
+    (100) 파일: '일반사항' 시트 → '일반사항(검사전)' 으로 변환 (ds_merge.js 동일)
+    헤더 union: 같은 시트에 대해 모든 파일의 헤더를 합집합으로 수집
+
     Returns: (sheet_stats, total_rows, sheet_headers, file_manifest)
       sheet_stats:   {sheet_name: row_count}
       total_rows:    전체 행수
       sheet_headers: {sheet_name: [col1, col2, ...]}
-      file_manifest: {sheet_name: [{"f": filename, "r": row_count}, ...]}
-        → 데이터 조회 시 어느 XLS 파일에서 몇 행을 읽을지 결정하는 데 사용
+      file_manifest: {sheet_name: [{"f": filename, "r": row_count, "orig": orig_sheet}, ...]}
+        → "orig" 필드: XLS 내 실제 시트명 (리네임된 경우만 존재)
     """
     if not HAS_XLRD:
         raise RuntimeError("xlrd not installed on server")
@@ -2077,30 +1925,37 @@ def _parse_zip_metadata_sync(zip_temp_path: str, progress_cb=None) -> tuple:
     file_manifest: Dict[str, list] = {}  # {sheet_name: [{"f": fname, "r": rows}, ...]}
     total_rows = 0
 
+    # (100) 파일인지 빠르게 판별하기 위한 셋
+    hundred_files: set = set()
+
     with zipfile.ZipFile(zip_temp_path, "r") as zf:
         all_names = zf.namelist()
         xls_names = [n for n in all_names
                      if n.lower().endswith(".xls") and not os.path.basename(n).startswith("~")]
 
-        classified: Dict[str, list] = {"base": [], "numbered": [], "spt": [], "skipped": []}
+        classified: Dict[str, list] = {"base": [], "numbered": [], "spt": [], "hundred": []}
         for fname in xls_names:
             base_fname = os.path.basename(fname)
             if not base_fname:
                 continue
             cls = _classify_ds_file(base_fname)
             classified[cls].append(fname)
+            if cls == "hundred":
+                hundred_files.add(fname)
 
-        process_list = classified["base"] + classified["numbered"] + classified["spt"]
+        # (100) 파일도 처리 대상에 포함 (마지막에 추가 — ds_merge.js 순서 일치)
+        process_list = classified["base"] + classified["numbered"] + classified["spt"] + classified["hundred"]
         if not process_list:
-            raise ValueError("처리할 XLS 파일 없음 (스킵 파일만 포함)")
+            raise ValueError("처리할 XLS 파일 없음")
 
         logger.info(f"DS metadata parse: {len(process_list)}개 XLS "
                     f"(base={len(classified['base'])}, numbered={len(classified['numbered'])}, "
-                    f"spt={len(classified['spt'])}, skipped={len(classified['skipped'])})")
+                    f"spt={len(classified['spt'])}, hundred={len(classified['hundred'])})")
 
         total_files = len(process_list)
         for file_idx, fname in enumerate(process_list):
             base_fname = os.path.basename(fname) or fname
+            is_hundred = fname in hundred_files
 
             if progress_cb and (file_idx % 5 == 0 or file_idx == total_files - 1):
                 pct = 10 + (file_idx / total_files) * 60
@@ -2122,27 +1977,49 @@ def _parse_zip_metadata_sync(zip_temp_path: str, progress_cb=None) -> tuple:
             file_rows = 0
             for sheet_idx in range(workbook.nsheets):
                 sheet = workbook.sheet_by_index(sheet_idx)
-                sheet_name = sheet.name.strip()
+                orig_sheet_name = sheet.name.strip()
                 if sheet.nrows < 2:
                     continue
 
+                # (100) 파일: '일반사항' → '일반사항(검사전)' 변환, 다른 시트는 건너뜀
+                if is_hundred:
+                    if orig_sheet_name == "일반사항":
+                        sheet_name = "일반사항(검사전)"
+                    else:
+                        continue  # (100) 파일에서 일반사항만 처리
+                else:
+                    sheet_name = orig_sheet_name
+
                 data_rows = sheet.nrows - 1  # 헤더 행 제외
 
-                # 첫 등장 시트: 헤더 추출
+                # 헤더 추출
+                header_map = []
+                for col in range(sheet.ncols):
+                    h = _xlrd_cell_to_str(sheet, 0, col)
+                    if h:
+                        header_map.append((col, h))
+                if not header_map:
+                    continue
+
                 if sheet_name not in sheet_headers:
-                    header_map = []
-                    for col in range(sheet.ncols):
-                        h = _xlrd_cell_to_str(sheet, 0, col)
-                        if h:
-                            header_map.append((col, h))
-                    if not header_map:
-                        continue
+                    # 첫 등장 시트: 초기화
                     sheet_headers[sheet_name] = [name for _, name in header_map]
                     sheet_stats[sheet_name] = 0
                     file_manifest[sheet_name] = []
+                else:
+                    # 헤더 union: 이후 파일에 새 컬럼이 있으면 추가
+                    existing = set(sheet_headers[sheet_name])
+                    for _, name in header_map:
+                        if name not in existing:
+                            sheet_headers[sheet_name].append(name)
+                            existing.add(name)
 
                 sheet_stats[sheet_name] += data_rows
-                file_manifest[sheet_name].append({"f": fname, "r": data_rows})
+                # manifest에 원본 시트명 기록 (리네임된 경우 "orig" 필드 추가)
+                entry: dict = {"f": fname, "r": data_rows}
+                if sheet_name != orig_sheet_name:
+                    entry["orig"] = orig_sheet_name
+                file_manifest[sheet_name].append(entry)
                 file_rows += data_rows
 
             workbook.release_resources()
@@ -2166,7 +2043,8 @@ def _read_xls_from_zip_paginated_sync(
 ) -> dict:
     """ZIP 내 XLS 파일에서 직접 페이지네이션 읽기 (xlsx 불필요)
 
-    file_manifest_entries: [{"f": "file.xls", "r": 3000}, ...] — 시트에 기여하는 XLS 파일 목록
+    file_manifest_entries: [{"f": "file.xls", "r": 3000, "orig": "일반사항"}, ...]
+      — 시트에 기여하는 XLS 파일 목록. "orig" 필드가 있으면 XLS 내 실제 시트명.
     응답 형식은 _read_xlsx_paginated_sync 와 100% 동일.
     """
     if not HAS_XLRD:
@@ -2185,6 +2063,8 @@ def _read_xls_from_zip_paginated_sync(
                 if len(items) >= limit:
                     break
                 fname = entry["f"]
+                # XLS 내 실제 시트명 (리네임된 경우 "orig" 사용)
+                xls_sheet_name = entry.get("orig", sheet_name)
                 try:
                     xls_bytes = zf.read(fname)
                     wb = xlrd.open_workbook(file_contents=xls_bytes)
@@ -2195,7 +2075,7 @@ def _read_xls_from_zip_paginated_sync(
                 target_sheet = None
                 for si in range(wb.nsheets):
                     s = wb.sheet_by_index(si)
-                    if s.name.strip() == sheet_name:
+                    if s.name.strip() == xls_sheet_name:
                         target_sheet = s
                         break
 
@@ -2258,6 +2138,8 @@ def _read_xls_from_zip_paginated_sync(
                     break
                 fname = entry["f"]
                 file_row_count = entry["r"]
+                # XLS 내 실제 시트명 (리네임된 경우 "orig" 사용)
+                xls_sheet_name = entry.get("orig", sheet_name)
 
                 # 이 파일을 완전히 건너뛸 수 있는지 확인
                 if rows_to_skip >= file_row_count:
@@ -2277,7 +2159,7 @@ def _read_xls_from_zip_paginated_sync(
                 target_sheet = None
                 for si in range(wb.nsheets):
                     s = wb.sheet_by_index(si)
-                    if s.name.strip() == sheet_name:
+                    if s.name.strip() == xls_sheet_name:
                         target_sheet = s
                         break
 
@@ -2364,27 +2246,32 @@ def _process_zip_to_xlsx_sync(zip_temp_path: str, progress_cb=None) -> tuple:
         xls_names = [n for n in all_names
                      if n.lower().endswith(".xls") and not os.path.basename(n).startswith("~")]
 
-        classified: Dict[str, list] = {"base": [], "numbered": [], "spt": [], "skipped": []}
+        classified: Dict[str, list] = {"base": [], "numbered": [], "spt": [], "hundred": []}
+        hundred_files: set = set()
         for fname in xls_names:
             base_fname = os.path.basename(fname)
             if not base_fname:
                 continue
             cls = _classify_ds_file(base_fname)
             classified[cls].append(fname)
+            if cls == "hundred":
+                hundred_files.add(fname)
 
-        process_list = classified["base"] + classified["numbered"] + classified["spt"]
+        # (100) 파일도 처리 대상에 포함 (마지막에 추가)
+        process_list = classified["base"] + classified["numbered"] + classified["spt"] + classified["hundred"]
         if not process_list:
-            raise ValueError("처리할 XLS 파일 없음 (스킵 파일만 포함)")
+            raise ValueError("처리할 XLS 파일 없음")
 
         logger.info(f"DS xlsx build: {len(process_list)}개 XLS "
                     f"(base={len(classified['base'])}, numbered={len(classified['numbered'])}, "
-                    f"spt={len(classified['spt'])}, skipped={len(classified['skipped'])})")
+                    f"spt={len(classified['spt'])}, hundred={len(classified['hundred'])})")
 
         total_files = len(process_list)
         last_cb_pct = 0.0
 
         for file_idx, fname in enumerate(process_list):
             base_fname = os.path.basename(fname) or fname
+            is_hundred = fname in hundred_files
 
             # 파일별 진행률 콜백 (10% ~ 75% 구간, 5% 간격 스로틀)
             if progress_cb:
@@ -2409,9 +2296,18 @@ def _process_zip_to_xlsx_sync(zip_temp_path: str, progress_cb=None) -> tuple:
             file_rows = 0
             for sheet_idx in range(workbook.nsheets):
                 sheet = workbook.sheet_by_index(sheet_idx)
-                sheet_name = sheet.name.strip()
+                orig_sheet_name = sheet.name.strip()
                 if sheet.nrows < 2:
                     continue
+
+                # (100) 파일: '일반사항' → '일반사항(검사전)' 변환, 다른 시트 건너뜀
+                if is_hundred:
+                    if orig_sheet_name == "일반사항":
+                        sheet_name = "일반사항(검사전)"
+                    else:
+                        continue
+                else:
+                    sheet_name = orig_sheet_name
 
                 # 헤더 추출 — 실제 컬럼 인덱스 보존 (빈 헤더 건너뛰되 위치 기억)
                 header_map = []  # [(actual_col_idx, header_name), ...]
@@ -2445,13 +2341,17 @@ def _process_zip_to_xlsx_sync(zip_temp_path: str, progress_cb=None) -> tuple:
                     # 열 너비 = 20
                     for i in range(1, len(headers) + 1):
                         ws.column_dimensions[get_column_letter(i)].width = 20
+                else:
+                    # 헤더 union: 이후 파일에 새 컬럼이 있으면 기록만 (ws는 첫 파일 기준)
+                    existing = set(sheet_headers[sheet_name])
+                    for h in headers:
+                        if h not in existing:
+                            sheet_headers[sheet_name].append(h)
+                            existing.add(h)
 
                 ws = ws_map[sheet_name]
                 canonical_headers = sheet_headers[sheet_name]
                 row_count = 0
-
-                # 현재 파일의 헤더→실제 컬럼 인덱스 매핑
-                cur_col_map = {name: col_idx for col_idx, name in header_map}
 
                 # 데이터 행 append — 실제 컬럼 인덱스로 정확하게 읽기
                 for row_idx in range(1, sheet.nrows):
@@ -2576,7 +2476,7 @@ def _finalize_upload_record_sync(division_id: str, division_code: str,
 
 
 def _build_xlsx_sync(division_id: str, division_code: str, import_date: str,
-                      division_name: str, sheet_stats: dict,
+                      sheet_stats: dict,
                       sheet_headers: Optional[dict] = None) -> bytes:
     """동기: DynamoDB → openpyxl write-only → xlsx 바이트
 
@@ -2738,7 +2638,7 @@ async def _process_ds_job(job_id: str, job_item: dict):
                     base = os.path.basename(name)
                     if not base.lower().endswith(".xls"):
                         continue
-                    if _classify_ds_file(base) == "skipped":
+                    if base.startswith("~"):
                         continue
                     parsed = _parse_ds_filename_in_zip(base)
                     if parsed:
@@ -3809,7 +3709,7 @@ async def ds_export_xlsx(
 
     # ── DynamoDB fallback: 기존 빌드 경로 ──
     xlsx_bytes = await asyncio.to_thread(
-        _build_xlsx_sync, divisionId, divisionCode, importDate, division_name,
+        _build_xlsx_sync, divisionId, divisionCode, importDate,
         sheet_stats, sheet_headers
     )
 

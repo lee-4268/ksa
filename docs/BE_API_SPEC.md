@@ -1,81 +1,69 @@
 # KSA Backend API 명세서
 
-## GraphQL API Specification + Tower Classification REST API
-
-**버전:** 1.2.0
-**최종 수정일:** 2026-01-27
-**API 타입:** AWS AppSync GraphQL + FastAPI REST
+**버전:** 1.3.1
+**최종 수정일:** 2026-03-03
+**API 타입:** AWS AppSync GraphQL + FastAPI REST (2개 서버)
 
 ---
 
-## 1. API 정보
+## 1. 서버 구성
 
-### 1.1 Endpoint
+### 1.1 무선국 관리 API (AWS AppSync)
 ```
 https://mtokcw2pmffyjdhl3uhfihwj7m.appsync-api.ap-northeast-2.amazonaws.com/graphql
 ```
+- Region: ap-northeast-2
+- Auth: AMAZON_COGNITO_USER_POOLS (Primary), API_KEY (Secondary)
+- Authorization: Owner-based (사용자는 자신의 데이터만 접근)
 
-### 1.2 Region
-`ap-northeast-2` (Seoul, Korea)
+### 1.2 DS API 서버 (FastAPI on EC2)
+```
+https://api-sko-kca.skons.net
+```
+- Framework: FastAPI + Uvicorn
+- Service: systemd (kca-api)
+- S3 Bucket: sko-kca-s3
+- DynamoDB Tables: kca-ds-records, kca-ds-uploads, kca-ds-jobs
 
-### 1.3 Authentication
-| 타입 | 설명 |
-|------|------|
-| Primary | AMAZON_COGNITO_USER_POOLS |
-| Secondary | API_KEY |
-
-### 1.4 Authorization
-Owner-based authorization - 사용자는 자신이 생성한 데이터만 접근 가능
+### 1.3 AI 분류 서버 (FastAPI on EC2 + API Gateway)
+```
+https://c3jictzagh.execute-api.ap-northeast-2.amazonaws.com
+```
+- Framework: FastAPI + YOLOv8n-cls
+- Instance: c7i-flex.large
 
 ---
 
-## 2. Schema
+## 2. GraphQL API (무선국 관리)
 
-### 2.1 Category Type
-카테고리 (Excel 파일 그룹)
+### 2.1 Schema Types
 
+#### Category
 ```graphql
 type Category @model @auth(rules: [
   { allow: owner, operations: [create, read, update, delete] }
 ]) {
   id: ID!
   name: String!
-  originalExcelKey: String    # 원본 Excel 파일 S3 키 (서식 유지 export용)
+  originalExcelKey: String
   stations: [Station] @hasMany(indexName: "byCategory", fields: ["id"])
   createdAt: AWSDateTime
   updatedAt: AWSDateTime
 }
 ```
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| id | ID | O | 고유 식별자 (UUID) |
-| name | String | O | 카테고리 이름 |
-| originalExcelKey | String | - | 원본 Excel 파일 S3 키 (서식 유지 export용) |
-| stations | [Station] | - | 소속 무선국 목록 (관계) |
-| createdAt | AWSDateTime | - | 생성 일시 (자동) |
-| updatedAt | AWSDateTime | - | 수정 일시 (자동) |
-
----
-
-### 2.2 Station Type
-무선국
-
+#### Station
 ```graphql
 type Station @model @auth(rules: [
   { allow: owner, operations: [create, read, update, delete] }
 ]) {
   id: ID!
   categoryId: ID! @index(name: "byCategory", sortKeyFields: ["createdAt"])
-
-  # 기본 정보
   stationName: String!
   licenseNumber: String
   address: String!
   latitude: Float
   longitude: Float
-
-  # 상세 정보
   callSign: String
   gain: String
   antennaCount: String
@@ -84,1017 +72,526 @@ type Station @model @auth(rules: [
   frequency: String
   stationType: String
   stationOwner: String
-  installationType: String    # 설치대 (철탑형태)
-
-  # 검사 정보
+  installationType: String
   isInspected: Boolean @default(value: "false")
   inspectionDate: AWSDateTime
   memo: String
-
-  # 사진
   photoKeys: [String]
-
   createdAt: AWSDateTime
   updatedAt: AWSDateTime
 }
 ```
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| id | ID | O | 고유 식별자 (UUID) |
-| categoryId | ID | O | 소속 카테고리 ID |
-| stationName | String | O | ERP 국소명 |
-| licenseNumber | String | - | 허가번호 |
-| address | String | O | 설치장소 주소 |
-| latitude | Float | - | 위도 |
-| longitude | Float | - | 경도 |
-| callSign | String | - | 호출부호 |
-| gain | String | - | 안테나 이득 |
-| antennaCount | String | - | 안테나 수량 |
-| remarks | String | - | 비고 |
-| typeApprovalNumber | String | - | 형식검정번호 |
-| frequency | String | - | 주파수 |
-| stationType | String | - | 무선국 종류 |
-| stationOwner | String | - | 소유자 |
-| installationType | String | - | 설치대/철탑형태 (AI 분류 또는 수동입력) |
-| isInspected | Boolean | - | 검사완료 여부 (기본: false) |
-| inspectionDate | AWSDateTime | - | 검사일시 |
-| memo | String | - | 메모 |
-| photoKeys | [String] | - | S3 사진 키 목록 |
-| createdAt | AWSDateTime | - | 생성 일시 (자동) |
-| updatedAt | AWSDateTime | - | 수정 일시 (자동) |
-
----
-
-### 2.3 TowerClassification Type
-철탑/설치대 분류 결과
-
+#### TowerClassification
 ```graphql
 type TowerClassification @model @auth(rules: [
   { allow: owner, operations: [create, read, update, delete] }
 ]) {
   id: ID!
-
-  # 이미지 정보
-  imageKey: String!           # S3 이미지 키
-  imageName: String           # 원본 파일명
-
-  # 분류 결과
-  className: String!          # 영문 클래스명 (예: steel_pipe)
-  classNameKr: String!        # 한글 클래스명 (예: 강관주)
-  confidence: Float!          # 신뢰도 (0.0 ~ 1.0)
-  isConfident: Boolean        # 신뢰도 임계값 이상 여부
-
-  # Top-5 예측 (JSON 문자열로 저장)
-  top5Predictions: String     # JSON: [{rank, className, classNameKr, confidence}]
-
-  # 앙상블 정보 (선택)
-  ensembleMethod: String      # mean, max, vote (앙상블인 경우)
-  ensembleImageKeys: [String] # 앙상블에 사용된 이미지 키 목록
-
-  # 메타데이터
+  imageKey: String!
+  imageName: String
+  className: String!
+  classNameKr: String!
+  confidence: Float!
+  isConfident: Boolean
+  top5Predictions: String
+  ensembleMethod: String
+  ensembleImageKeys: [String]
   processingTimeMs: Float
   createdAt: AWSDateTime
   updatedAt: AWSDateTime
 }
 ```
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| id | ID | O | 고유 식별자 (UUID) |
-| imageKey | String | O | S3 이미지 키 |
-| imageName | String | - | 원본 파일명 |
-| className | String | O | 영문 클래스명 (예: steel_pipe) |
-| classNameKr | String | O | 한글 클래스명 (예: 강관주) |
-| confidence | Float | O | 신뢰도 (0.0 ~ 1.0) |
-| isConfident | Boolean | - | 신뢰도 임계값 이상 여부 |
-| top5Predictions | String | - | Top-5 예측 결과 (JSON 문자열) |
-| ensembleMethod | String | - | 앙상블 방식 (mean, max, vote) |
-| ensembleImageKeys | [String] | - | 앙상블에 사용된 이미지 키 목록 |
-| processingTimeMs | Float | - | 처리 시간 (밀리초) |
-| createdAt | AWSDateTime | - | 생성 일시 (자동) |
-| updatedAt | AWSDateTime | - | 수정 일시 (자동) |
+### 2.2 Queries
 
----
-
-## 3. Queries
-
-### 3.1 getCategory
-카테고리 단건 조회
-
+#### getCategory
 ```graphql
 query GetCategory($id: ID!) {
   getCategory(id: $id) {
-    id
-    name
-    stations {
-      items {
-        id
-        stationName
-        address
-        isInspected
-      }
-    }
-    createdAt
-    updatedAt
+    id name stations { items { id stationName address isInspected } }
+    createdAt updatedAt
   }
 }
 ```
 
-**Variables:**
-```json
-{
-  "id": "category-uuid"
-}
-```
-
-**Response:**
-```json
-{
-  "data": {
-    "getCategory": {
-      "id": "category-uuid",
-      "name": "2026년 1월 검사목록",
-      "stations": {
-        "items": [
-          {
-            "id": "station-uuid",
-            "stationName": "서울중앙국",
-            "address": "서울시 중구 세종대로 110",
-            "isInspected": false
-          }
-        ]
-      },
-      "createdAt": "2026-01-13T00:00:00.000Z",
-      "updatedAt": "2026-01-13T00:00:00.000Z"
-    }
-  }
-}
-```
-
----
-
-### 3.2 listCategories
-카테고리 목록 조회
-
+#### listCategories
 ```graphql
 query ListCategories($limit: Int, $nextToken: String) {
   listCategories(limit: $limit, nextToken: $nextToken) {
-    items {
-      id
-      name
-      createdAt
-      updatedAt
-    }
+    items { id name createdAt updatedAt }
     nextToken
   }
 }
 ```
 
-**Variables:**
-```json
-{
-  "limit": 1000,
-  "nextToken": null
-}
-```
-
-**Response:**
-```json
-{
-  "data": {
-    "listCategories": {
-      "items": [
-        {
-          "id": "category-uuid-1",
-          "name": "2026년 1월 검사목록",
-          "createdAt": "2026-01-13T00:00:00.000Z",
-          "updatedAt": "2026-01-13T00:00:00.000Z"
-        },
-        {
-          "id": "category-uuid-2",
-          "name": "2026년 2월 검사목록",
-          "createdAt": "2026-01-13T01:00:00.000Z",
-          "updatedAt": "2026-01-13T01:00:00.000Z"
-        }
-      ],
-      "nextToken": null
-    }
-  }
-}
-```
-
----
-
-### 3.3 getStation
-무선국 단건 조회
-
+#### stationsByCategory
 ```graphql
-query GetStation($id: ID!) {
-  getStation(id: $id) {
-    id
-    categoryId
-    stationName
-    licenseNumber
-    address
-    latitude
-    longitude
-    callSign
-    gain
-    antennaCount
-    remarks
-    typeApprovalNumber
-    frequency
-    stationType
-    stationOwner
-    isInspected
-    inspectionDate
-    memo
-    photoKeys
-    createdAt
-    updatedAt
-  }
-}
-```
-
-**Variables:**
-```json
-{
-  "id": "station-uuid"
-}
-```
-
----
-
-### 3.4 listStations
-무선국 목록 조회
-
-```graphql
-query ListStations(
-  $filter: ModelStationFilterInput
-  $limit: Int
-  $nextToken: String
-) {
-  listStations(filter: $filter, limit: $limit, nextToken: $nextToken) {
-    items {
-      id
-      categoryId
-      stationName
-      licenseNumber
-      address
-      latitude
-      longitude
-      callSign
-      gain
-      antennaCount
-      remarks
-      typeApprovalNumber
-      frequency
-      stationType
-      stationOwner
-      isInspected
-      inspectionDate
-      memo
-      photoKeys
-      createdAt
-      updatedAt
-    }
+query StationsByCategory($categoryId: ID!, $sortDirection: ModelSortDirection, $limit: Int, $nextToken: String) {
+  stationsByCategory(categoryId: $categoryId, sortDirection: $sortDirection, limit: $limit, nextToken: $nextToken) {
+    items { id categoryId stationName address latitude longitude isInspected createdAt }
     nextToken
   }
 }
 ```
 
-**Variables:**
-```json
-{
-  "filter": null,
-  "limit": 1000,
-  "nextToken": null
-}
-```
+### 2.3 Mutations
 
----
-
-### 3.5 stationsByCategory
-카테고리별 무선국 조회 (GSI 사용)
-
-```graphql
-query StationsByCategory(
-  $categoryId: ID!
-  $sortDirection: ModelSortDirection
-  $limit: Int
-  $nextToken: String
-) {
-  stationsByCategory(
-    categoryId: $categoryId
-    sortDirection: $sortDirection
-    limit: $limit
-    nextToken: $nextToken
-  ) {
-    items {
-      id
-      categoryId
-      stationName
-      address
-      latitude
-      longitude
-      isInspected
-      createdAt
-    }
-    nextToken
-  }
-}
-```
-
-**Variables:**
-```json
-{
-  "categoryId": "category-uuid",
-  "sortDirection": "DESC",
-  "limit": 1000,
-  "nextToken": null
-}
-```
-
----
-
-## 4. Mutations
-
-### 4.1 createCategory
-카테고리 생성
-
+#### createCategory / updateCategory / deleteCategory
 ```graphql
 mutation CreateCategory($input: CreateCategoryInput!) {
-  createCategory(input: $input) {
-    id
-    name
-    createdAt
-    updatedAt
+  createCategory(input: $input) { id name createdAt updatedAt }
+}
+mutation UpdateCategory($input: UpdateCategoryInput!) {
+  updateCategory(input: $input) { id name createdAt updatedAt }
+}
+mutation DeleteCategory($input: DeleteCategoryInput!) {
+  deleteCategory(input: $input) { id }
+}
+```
+
+#### createStation / updateStation / deleteStation
+```graphql
+mutation UpdateStation($input: UpdateStationInput!) {
+  updateStation(input: $input) { id isInspected inspectionDate memo photoKeys installationType updatedAt }
+}
+```
+
+---
+
+## 3. DS API (FastAPI REST)
+
+Base URL: `https://api-sko-kca.skons.net`
+
+### 3.1 지역코드 조회
+
+#### `GET /ds/region-codes`
+DS 본부별 지역코드 매핑 조회
+
+**Response:**
+```json
+{
+  "success": true,
+  "codes": {
+    "10": {"divisionId": "sudogwon", "divisionName": "수도권"},
+    "20": {"divisionId": "gyeongnam", "divisionName": "경남본부"},
+    "30": {"divisionId": "seobu", "divisionName": "서부본부"},
+    "40": {"divisionId": "gangwon", "divisionName": "강원본부"},
+    "50": {"divisionId": "chungcheong", "divisionName": "충청본부"},
+    "55": {"divisionId": "chungcheong", "divisionName": "충청본부"},
+    "60": {"divisionId": "gyeongbuk", "divisionName": "경북본부"},
+    "70": {"divisionId": "seobu", "divisionName": "서부본부"}
   }
 }
 ```
 
-**Variables:**
+---
+
+### 3.2 DS 업로드 (Upload-Zero-Build)
+
+> **v1.3.1**: 업로드 시 xlsx 빌드 완전 생략. 메타데이터만 초고속 파싱 → ZIP을 S3에 그대로 보관.
+> 처리 시간: ~30분 → **~10초** (10만행 기준)
+
+#### `POST /ds/upload-raw`
+ZIP 파일을 EC2 경유로 S3에 업로드 (CORS 설정 불필요)
+- Content-Type: `multipart/form-data`
+- Field: `file` (ZIP 파일)
+- 8MB 청크 스트리밍으로 EC2 메모리 최소 사용
+- S3 저장 경로: `ds-raw/temp/{uuid}_{filename}`
+
+**Response:**
+```json
+{ "success": true, "s3Key": "ds-raw/temp/uuid_filename.zip" }
+```
+
+| Error | 설명 |
+|-------|------|
+| 500 | S3 업로드 실패 |
+
+---
+
+#### `POST /ds/enqueue`
+업로드된 ZIP의 처리 잡을 큐에 등록
+
+**Request Body:**
 ```json
 {
-  "input": {
-    "name": "2026년 1월 검사목록"
-  }
+  "s3Key": "ds-raw/temp/uuid_filename.zip",
+  "fileName": "충청본부_20260203.zip",
+  "uploadedBy": "user@example.com"
 }
 ```
 
 **Response:**
 ```json
+{ "success": true, "jobId": "uuid", "queuePosition": 1 }
+```
+
+| Error | 설명 |
+|-------|------|
+| 503 | xlrd 미설치 |
+| 500 | DynamoDB 오류 |
+
+---
+
+**서버 처리 흐름 (백그라운드 워커):**
+1. S3에서 ZIP 다운로드 → `/tmp`
+2. ZIP 내 XLS 파일 분류 (`_classify_ds_file`: base/numbered/spt)
+3. **메타데이터만 파싱** — 시트별 행 수 + 헤더 추출 (데이터 행 읽기 0회)
+4. `fileManifest` 생성: `{시트명: [{"f": 파일명, "r": 데이터행수}, ...]}`
+5. ZIP → S3 영구 경로 복사: `ds-raw/{divisionId}/{divisionCode}_{importDate}.zip`
+6. `kca-ds-uploads` 레코드 완료 처리 (`storageType: "s3-zip"`, `fileManifest` 저장)
+
+---
+
+#### `GET /ds/job/{job_id}`
+잡 처리 상태 조회 (3초 간격 폴링)
+
+**Response (처리 중):**
+```json
 {
-  "data": {
-    "createCategory": {
-      "id": "generated-uuid",
-      "name": "2026년 1월 검사목록",
-      "createdAt": "2026-01-13T00:00:00.000Z",
-      "updatedAt": "2026-01-13T00:00:00.000Z"
+  "success": true,
+  "job": {
+    "jobId": "uuid",
+    "status": "processing",
+    "stage": "메타데이터 파싱: base_file.xls",
+    "percent": 45.0,
+    "processedRows": 0,
+    "totalRows": 200000,
+    "queuePosition": null
+  }
+}
+```
+
+**Response (완료):**
+```json
+{
+  "success": true,
+  "job": {
+    "status": "completed",
+    "divisionCode": "50",
+    "importDate": "20260203",
+    "sheetStats": {"일반사항": 12000, "검사이력": 8000},
+    "totalRows": 20000
+  }
+}
+```
+
+**Response (실패):**
+```json
+{
+  "success": true,
+  "job": { "status": "failed", "error": "오류 메시지" }
+}
+```
+
+**job.status 값:**
+| 값 | 설명 |
+|----|------|
+| queued | 큐 대기 중 |
+| processing | 처리 중 (메타데이터 파싱) |
+| completed | 완료 |
+| failed | 실패 |
+
+---
+
+#### `DELETE /ds/job/{job_id}`
+queued 상태의 잡 취소
+
+**Response:**
+```json
+{ "success": true, "message": "잡이 취소되었습니다." }
+```
+
+---
+
+### 3.3 DS 통계 / 대시보드
+
+#### `GET /ds/stats`
+업로드 현황 조회
+
+**Query Parameters:**
+
+| 파라미터 | 필수 | 설명 |
+|---------|------|------|
+| divisionId | - | 특정 본부 필터 (없으면 전체) |
+| importDate | - | 날짜 필터 (YYYYMMDD) |
+| divisionCode | - | 지역코드 필터 (divisionId+importDate와 함께 사용 시 단건 조회) |
+
+**Response:**
+```json
+{
+  "success": true,
+  "count": 3,
+  "uploads": [
+    {
+      "divisionId": "chungcheong",
+      "importDate": "50#20260203",
+      "divisionCode": "50",
+      "divisionName": "충청본부",
+      "uploadedBy": "user@example.com",
+      "uploadedAt": "2026-02-03T10:00:00Z",
+      "fileName": "충청_20260203.zip",
+      "status": "completed",
+      "sheetStats": {"일반사항": 12000},
+      "totalRows": 12000
     }
-  }
+  ]
 }
 ```
 
 ---
 
-### 4.2 updateCategory
-카테고리 수정
+### 3.4 DS Excel Export
 
-```graphql
-mutation UpdateCategory($input: UpdateCategoryInput!) {
-  updateCategory(input: $input) {
-    id
-    name
-    createdAt
-    updatedAt
-  }
-}
+#### `GET /ds/export-xlsx`
+서버사이드 xlsx 빌드 후 직접 다운로드
+
+**스토리지별 동작:**
+| storageType | 동작 |
+|-------------|------|
+| `s3-zip` | S3 캐시 xlsx 확인 → 없으면 ZIP 다운로드 + on-demand xlsx 빌드 → S3 캐싱 |
+| `s3` | S3에서 기존 xlsx 직접 스트리밍 |
+| 없음 (old) | DynamoDB → openpyxl 빌드 → S3 캐싱 |
+
+다음 요청은 presign 경로로 즉시 다운로드
+
+**Query Parameters:**
+
+| 파라미터 | 필수 | 설명 |
+|---------|------|------|
+| divisionId | O | 본부 ID |
+| importDate | O | 날짜 (YYYYMMDD) |
+| divisionCode | - | 지역코드 |
+
+**Response:** `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`
+- Content-Disposition: `attachment; filename*=UTF-8''...xlsx`
+- xlsx 서식: Arial 10pt, 가운데정렬, #BFBFBF 헤더, 얇은 테두리, 열 너비 20
+- 컬럼 순서: 업로드 시 저장된 sheetHeaders 기준 (원본 XLS 순서)
+
+| Error | 설명 |
+|-------|------|
+| 503 | openpyxl 미설치 |
+| 404 | 업로드 정보 없음 |
+
+---
+
+#### `GET /ds/export-presign`
+S3에 저장된 xlsx의 presigned URL 조회 (60분 유효)
+
+**Query Parameters:** divisionId, importDate, divisionCode
+
+**Response (존재):**
+```json
+{ "success": true, "url": "https://s3.presigned.url/...", "exists": true }
 ```
 
-**Variables:**
+**Response (없음):**
+```json
+{ "success": true, "exists": false }
+```
+
+---
+
+### 3.5 DS 데이터 조회
+
+#### `GET /ds/data`
+시트별 레코드 페이징 조회 (트리플 라우팅)
+
+**트리플 라우팅:**
+| storageType | 데이터 소스 | 설명 |
+|-------------|------------|------|
+| `s3-zip` | S3 ZIP 내 XLS 직접 읽기 | `fileManifest`로 효율적 파일 스킵 |
+| `s3` | S3 xlsx 파일 | openpyxl read_only 모드 |
+| 없음 (old) | DynamoDB 쿼리 | 기존 `kca-ds-records` 조회 |
+
+**Query Parameters:**
+
+| 파라미터 | 필수 | 설명 |
+|---------|------|------|
+| divisionId | O | 본부 ID |
+| sheetName | O | 시트명 |
+| importDate | - | 날짜 (YYYYMMDD) |
+| divisionCode | - | 지역코드 (정확한 uploads 레코드 조회용) |
+| limit | - | 페이지 크기 (기본 100, 최대 1000) |
+| lastKey | - | 페이징 커서 (이전 응답의 lastEvaluatedKey) |
+| search | - | 검색어 (data 필드 값 포함 여부) |
+
+> `lastKey`에 `_xlsOffset` 포함 시 → S3 경로 직행 (클라이언트는 opaque하게 처리)
+
+**Response:**
 ```json
 {
-  "input": {
-    "id": "category-uuid",
-    "name": "수정된 카테고리명"
-  }
+  "success": true,
+  "count": 100,
+  "items": [
+    {
+      "divisionId": "chungcheong",
+      "sk": "일반사항#20260203#50#00000001",
+      "sheetName": "일반사항",
+      "importDate": "20260203",
+      "divisionCode": "50",
+      "data": { "국소명": "홍성국", "주소": "충남 홍성군 ..." }
+    }
+  ],
+  "lastEvaluatedKey": "base64encodedkey"
 }
 ```
 
 ---
 
-### 4.3 deleteCategory
-카테고리 삭제
+#### `DELETE /ds/data`
+본부/날짜별 모든 레코드 삭제 (uploads 레코드 + records 레코드 + S3 파일 포함)
 
-```graphql
-mutation DeleteCategory($input: DeleteCategoryInput!) {
-  deleteCategory(input: $input) {
-    id
-  }
-}
+**스토리지별 동작:**
+| storageType | 삭제 대상 |
+|-------------|----------|
+| `s3` / `s3-zip` | uploads 레코드 + S3 파일 + 캐시 (DynamoDB records 삭제 생략) |
+| 없음 (old) | uploads 레코드 + DynamoDB records 백그라운드 삭제 + S3 파일 |
+
+**Query Parameters:** divisionId (필수), importDate (필수), divisionCode (선택)
+
+**Response:**
+```json
+{ "success": true, "deletedCount": 12000 }
 ```
 
-**Variables:**
+---
+
+### 3.6 DS 업로드 (Legacy — 청크 방식, 사용 안 함)
+
+> ⚠️ 아래 엔드포인트들은 구버전 청크 방식으로 현재 미사용. Scenario 2 (`/ds/upload-raw` + `/ds/enqueue`)를 사용할 것.
+
+- `GET /ds/upload-presign` — S3 presigned PUT URL
+- `GET /ds/xlsx-upload-presign` — xlsx S3 presigned PUT URL
+- `POST /ds/upload-init` — 청크 업로드 초기화
+- `POST /ds/upload-chunk` — 청크 데이터 전송
+- `POST /ds/upload-finalize` — 청크 업로드 완료 처리
+- `GET /ds/export` — 스트리밍 JSON Export (DB → JS xlsx 생성용 폴백)
+
+---
+
+## 4. AI 분류 API (FastAPI REST)
+
+Base URL: `https://c3jictzagh.execute-api.ap-northeast-2.amazonaws.com`
+
+### 4.1 분류 클래스 (9개)
+
+| ID | 영문명 | 한글명 |
+|----|--------|--------|
+| 0 | simple_pole | 간이폴, 분산폴 및 비기준 설치대 |
+| 1 | steel_pipe | 강관주 |
+| 2 | complex_type | 복합형 |
+| 3 | indoor | 옥내, 터널, 지하 등 |
+| 4 | single_pole_building | 원폴(건물) |
+| 5 | tower_building | 철탑(건물) |
+| 6 | tower_ground | 철탑(지면) |
+| 7 | telecom_pole | 통신주 |
+| 8 | frame_mount | 프레임 |
+
+### 4.2 Endpoints
+
+#### `GET /health`
+```json
+{ "status": "healthy", "model_loaded": true }
+```
+
+#### `POST /predict`
+- Content-Type: `multipart/form-data`
+- Field: `file` (이미지), Query: `conf_threshold` (기본 0.5)
+
 ```json
 {
-  "input": {
-    "id": "category-uuid"
-  }
+  "success": true,
+  "prediction": { "class_name": "steel_pipe", "class_name_kr": "강관주", "confidence": 0.9234 },
+  "top5": [...],
+  "is_confident": true,
+  "processing_time_ms": 245.32
 }
 ```
+
+#### `POST /predict/ensemble`
+- Fields: `files` (최대 10개), Query: `method` (mean|max|vote), `conf_threshold`
 
 ---
 
-### 4.4 createStation
-무선국 생성
+## 5. S3 Storage
 
-```graphql
-mutation CreateStation($input: CreateStationInput!) {
-  createStation(input: $input) {
-    id
-    categoryId
-    stationName
-    licenseNumber
-    address
-    latitude
-    longitude
-    callSign
-    gain
-    antennaCount
-    remarks
-    typeApprovalNumber
-    frequency
-    stationType
-    stationOwner
-    isInspected
-    inspectionDate
-    memo
-    photoKeys
-    createdAt
-    updatedAt
-  }
-}
-```
+### 5.1 무선국 관리 (ksa-photos-bucket)
+| 경로 | 설명 |
+|------|------|
+| `private/{identityId}/photos/{stationId}/{ts}_{filename}` | 현장 사진 |
+| `private/{identityId}/excel-originals/{categoryId}_{ts}.xlsx` | 원본 Excel |
 
-**Variables:**
-```json
-{
-  "input": {
-    "categoryId": "category-uuid",
-    "stationName": "서울중앙국",
-    "licenseNumber": "RN-2026-001",
-    "address": "서울시 중구 세종대로 110",
-    "latitude": 37.5665,
-    "longitude": 126.9780,
-    "callSign": "HLK",
-    "gain": "10",
-    "antennaCount": "2",
-    "remarks": "비고 내용",
-    "typeApprovalNumber": "KCC-2026-001",
-    "frequency": "100.0 MHz",
-    "stationType": "기지국",
-    "stationOwner": "한국통신",
-    "isInspected": false,
-    "memo": null,
-    "photoKeys": []
-  }
-}
-```
+### 5.2 DS 데이터 (sko-kca-s3)
+| 경로 | 설명 |
+|------|------|
+| `ds-raw/temp/{uuid}_{filename}` | 업로드 임시 ZIP |
+| `ds-raw/{divisionId}/{divisionCode}_{importDate}.zip` | 원본 ZIP 보관 |
+| `ds-exports/{divisionId}/{divisionCode}_{importDate}.xlsx` | 생성된 xlsx 캐시 |
 
 ---
 
-### 4.5 updateStation
-무선국 수정
+## 6. Cognito Authentication
 
-```graphql
-mutation UpdateStation($input: UpdateStationInput!) {
-  updateStation(input: $input) {
-    id
-    categoryId
-    stationName
-    isInspected
-    inspectionDate
-    memo
-    photoKeys
-    updatedAt
-  }
-}
-```
-
-**Variables (검사완료 처리):**
-```json
-{
-  "input": {
-    "id": "station-uuid",
-    "isInspected": true,
-    "inspectionDate": "2026-01-13T10:30:00.000Z"
-  }
-}
-```
-
-**Variables (메모 수정):**
-```json
-{
-  "input": {
-    "id": "station-uuid",
-    "memo": "현장 확인 결과 정상 운영 중"
-  }
-}
-```
-
-**Variables (사진 추가):**
-```json
-{
-  "input": {
-    "id": "station-uuid",
-    "photoKeys": [
-      "photos/station-uuid/1705123456789_photo1.jpg",
-      "photos/station-uuid/1705123456790_photo2.jpg"
-    ]
-  }
-}
-```
-
----
-
-### 4.6 deleteStation
-무선국 삭제
-
-```graphql
-mutation DeleteStation($input: DeleteStationInput!) {
-  deleteStation(input: $input) {
-    id
-  }
-}
-```
-
-**Variables:**
-```json
-{
-  "input": {
-    "id": "station-uuid"
-  }
-}
-```
-
----
-
-## 5. Input Types
-
-### 5.1 CreateCategoryInput
-```graphql
-input CreateCategoryInput {
-  id: ID
-  name: String!
-  originalExcelKey: String
-}
-```
-
-### 5.2 UpdateCategoryInput
-```graphql
-input UpdateCategoryInput {
-  id: ID!
-  name: String
-  originalExcelKey: String
-}
-```
-
-### 5.3 DeleteCategoryInput
-```graphql
-input DeleteCategoryInput {
-  id: ID!
-}
-```
-
-### 5.4 CreateStationInput
-```graphql
-input CreateStationInput {
-  id: ID
-  categoryId: ID!
-  stationName: String!
-  licenseNumber: String
-  address: String!
-  latitude: Float
-  longitude: Float
-  callSign: String
-  gain: String
-  antennaCount: String
-  remarks: String
-  typeApprovalNumber: String
-  frequency: String
-  stationType: String
-  stationOwner: String
-  installationType: String
-  isInspected: Boolean
-  inspectionDate: AWSDateTime
-  memo: String
-  photoKeys: [String]
-}
-```
-
-### 5.5 UpdateStationInput
-```graphql
-input UpdateStationInput {
-  id: ID!
-  categoryId: ID
-  stationName: String
-  licenseNumber: String
-  address: String
-  latitude: Float
-  longitude: Float
-  callSign: String
-  gain: String
-  antennaCount: String
-  remarks: String
-  typeApprovalNumber: String
-  frequency: String
-  stationType: String
-  stationOwner: String
-  installationType: String
-  isInspected: Boolean
-  inspectionDate: AWSDateTime
-  memo: String
-  photoKeys: [String]
-}
-```
-
-### 5.6 DeleteStationInput
-```graphql
-input DeleteStationInput {
-  id: ID!
-}
-```
-
-### 5.7 ModelStationFilterInput
-```graphql
-input ModelStationFilterInput {
-  id: ModelIDInput
-  categoryId: ModelIDInput
-  stationName: ModelStringInput
-  address: ModelStringInput
-  isInspected: ModelBooleanInput
-  and: [ModelStationFilterInput]
-  or: [ModelStationFilterInput]
-  not: ModelStationFilterInput
-}
-```
-
----
-
-## 6. S3 Storage API
-
-### 6.1 Configuration
-| 항목 | 값 |
-|------|-----|
-| Bucket | ksa-photos-bucket1d5de-dev |
-| Region | ap-northeast-2 |
-| Access Level | Private |
-
-### 6.2 사진 업로드 (Photo Upload)
-**Endpoint:** AWS S3 (Amplify SDK)
-
-**Path Format:**
-```
-private/{identityId}/photos/{stationId}/{timestamp}_{fileName}
-```
-
-### 6.3 원본 Excel 파일 저장 (Original Excel Storage)
-**Path Format:**
-```
-private/{identityId}/excel-originals/{categoryId}_{timestamp}.xlsx
-```
-
-**용도:** 원본 Excel 파일의 서식(셀 병합, 스타일, 컬럼 너비 등)을 유지하여 Export 시 활용
-
-### 6.4 Upload Request
-**Request:**
-```dart
-await Amplify.Storage.uploadData(
-  data: StorageDataPayload.bytes(bytes),
-  path: StoragePath.fromIdentityId(
-    (identityId) => 'private/$identityId/$fileKey',
-  ),
-).result;
-```
-
-### 6.5 Download (Presigned URL)
-**Request:**
-```dart
-final result = await Amplify.Storage.getUrl(
-  path: StoragePath.fromIdentityId(
-    (identityId) => 'private/$identityId/$relativePath',
-  ),
-  options: StorageGetUrlOptions(
-    pluginOptions: S3GetUrlPluginOptions(
-      expiresIn: Duration(hours: 1),
-    ),
-  ),
-).result;
-```
-
-**Response:** Presigned URL (1시간 유효)
-
-### 6.6 Delete
-**Request:**
-```dart
-await Amplify.Storage.remove(
-  path: StoragePath.fromIdentityId(
-    (identityId) => 'private/$identityId/$relativePath',
-  ),
-).result;
-```
-
----
-
-## 7. Cognito Authentication API
-
-### 7.1 Configuration
 | 항목 | 값 |
 |------|-----|
 | User Pool ID | ap-northeast-2_omieCGwQP |
 | App Client ID | ehlckq7k9tl2n9b6gq12pj7tp |
 | Identity Pool ID | ap-northeast-2:4640cfa8-1f7b-43eb-b2fa-4f8d021a70e1 |
 
-### 7.2 Sign Up
-```dart
-await Amplify.Auth.signUp(
-  username: email,
-  password: password,
-  options: SignUpOptions(
-    userAttributes: {
-      AuthUserAttributeKey.email: email,
-      AuthUserAttributeKey.name: name,
-      AuthUserAttributeKey.phoneNumber: phoneNumber,
-    },
-  ),
-);
-```
+---
 
-### 7.3 Confirm Sign Up
-```dart
-await Amplify.Auth.confirmSignUp(
-  username: email,
-  confirmationCode: code,
-);
-```
+## 7. DynamoDB Tables
 
-### 7.4 Sign In
-```dart
-await Amplify.Auth.signIn(
-  username: email,
-  password: password,
-);
-```
+| Table | PK | SK | 용도 |
+|-------|----|----|------|
+| kca-ds-records | divisionId | sheetName#importDate#divisionCode#rowIndex | DS 레코드 (old 데이터만) |
+| kca-ds-uploads | divisionId | divisionCode#importDate | 업로드 메타/현황 |
+| kca-ds-jobs | jobId | — | 처리 잡 큐 |
 
-### 7.5 Sign Out
-```dart
-await Amplify.Auth.signOut();
-```
+### kca-ds-uploads 주요 속성
 
-### 7.6 Reset Password
-```dart
-await Amplify.Auth.resetPassword(username: email);
-```
-
-### 7.7 Confirm Reset Password
-```dart
-await Amplify.Auth.confirmResetPassword(
-  username: email,
-  newPassword: newPassword,
-  confirmationCode: code,
-);
-```
+| 속성 | 타입 | 설명 |
+|------|------|------|
+| divisionId | S (PK) | 본부 ID |
+| importDate | S (SK) | `{divisionCode}#{YYYYMMDD}` |
+| storageType | S | `"s3-zip"` (v1.3.1+) / `"s3"` (v1.3.0) / 없음 (old DynamoDB) |
+| fileManifest | M | `{시트명: [{"f": 파일명, "r": 행수}, ...]}` (s3-zip만) |
+| sheetStats | M | `{시트명: 행수}` |
+| sheetHeaders | M | `{시트명: [컬럼1, 컬럼2, ...]}` |
+| totalRows | N | 전체 행 수 |
+| fileName | S | 원본 ZIP 파일명 |
+| uploadedBy | S | 업로더 이메일 |
+| status | S | `uploading` / `completed` / `failed` |
 
 ---
 
 ## 8. Error Codes
 
-### 8.1 GraphQL Errors
-| Code | Description |
-|------|-------------|
-| Unauthorized | 인증 실패 또는 권한 없음 |
-| ValidationError | 입력 데이터 유효성 검증 실패 |
-| ConditionalCheckFailedException | 조건부 업데이트 실패 |
+### DS API 공통
+| Status | 설명 |
+|--------|------|
+| 400 | 잘못된 파라미터 |
+| 404 | 리소스 없음 |
+| 500 | 서버 내부 오류 (DynamoDB, S3) |
+| 503 | 의존성 미설치 (xlrd, openpyxl) |
+
+### GraphQL
+| Code | 설명 |
+|------|------|
+| Unauthorized | 인증 실패 |
+| ValidationError | 입력 유효성 오류 |
 | ProvisionedThroughputExceededException | DynamoDB 처리량 초과 |
-
-### 8.2 Cognito Errors
-| Code | Description |
-|------|-------------|
-| UserNotFoundException | 존재하지 않는 사용자 |
-| NotAuthorizedException | 인증 실패 |
-| UsernameExistsException | 중복 이메일 |
-| CodeMismatchException | 잘못된 인증 코드 |
-| InvalidPasswordException | 비밀번호 정책 불충족 |
-| LimitExceededException | 요청 횟수 초과 |
-| ExpiredCodeException | 만료된 인증 코드 |
-
-### 8.3 S3 Errors
-| Code | Description |
-|------|-------------|
-| AccessDenied | 접근 권한 없음 |
-| NoSuchKey | 존재하지 않는 키 |
-| InvalidAccessKeyId | 잘못된 액세스 키 |
-| SignatureDoesNotMatch | 서명 불일치 |
-
----
-
-## 9. Rate Limits
-
-| Service | Limit |
-|---------|-------|
-| AppSync Queries | 1,000 req/sec |
-| AppSync Mutations | 1,000 req/sec |
-| Cognito Sign In | 5 req/sec/IP |
-| Cognito Sign Up | 5 req/sec/IP |
-| S3 PUT | 3,500 req/sec/prefix |
-| S3 GET | 5,500 req/sec/prefix |
-
----
-
-## 10. Pagination
-
-### 10.1 기본 페이지 크기
-- 기본값: 1,000 items
-- 최대값: 1,000 items
-
-### 10.2 사용 예시
-```graphql
-# 첫 번째 페이지
-query {
-  listStations(limit: 1000) {
-    items { ... }
-    nextToken
-  }
-}
-
-# 다음 페이지
-query {
-  listStations(limit: 1000, nextToken: "eyJ2ZXJzaW9u...") {
-    items { ... }
-    nextToken
-  }
-}
-```
-
----
-
----
-
-## 10. Tower Classification API (FastAPI)
-
-철탑/안테나 설치형태 분류를 위한 REST API
-
-### 10.1 API 정보
-
-| 항목 | 값 |
-|------|-----|
-| Base URL | https://c3jictzagh.execute-api.ap-northeast-2.amazonaws.com |
-| Protocol | HTTPS (API Gateway) |
-| Backend | FastAPI + Uvicorn (EC2) |
-| Model | YOLOv8n-cls |
-
-### 10.2 분류 클래스 (9개)
-
-| ID | 영문명 | 한글명 | 약어 |
-|----|--------|--------|------|
-| 0 | simple_pole | 간이폴, 분산폴 및 비기준 설치대 | 간이폴 |
-| 1 | steel_pipe | 강관주 | 강관주 |
-| 2 | complex_type | 복합형 | 복합형 |
-| 3 | indoor | 옥내, 터널, 지하 등 | 옥내 |
-| 4 | single_pole_building | 원폴(건물) | 원폴건물 |
-| 5 | tower_building | 철탑(건물) | 철탑건물 |
-| 6 | tower_ground | 철탑(지면) | 철탑지면 |
-| 7 | telecom_pole | 통신주 | 통신주 |
-| 8 | frame_mount | 프레임 | 프레임 |
-
-### 10.3 Endpoints
-
-#### GET /health
-서버 및 모델 상태 확인
-
-**Response:**
-```json
-{
-  "status": "healthy",
-  "model_loaded": true,
-  "model_path": "/home/ubuntu/tower-api/best.pt",
-  "timestamp": "2026-01-22T09:00:00.000Z"
-}
-```
-
-#### GET /classes
-분류 클래스 목록 조회
-
-**Response:**
-```json
-{
-  "classes": [
-    {"id": 0, "name": "simple_pole", "name_kr": "간이폴, 분산폴 및 비기준 설치대", "short_name": "간이폴"},
-    {"id": 1, "name": "steel_pipe", "name_kr": "강관주", "short_name": "강관주"},
-    ...
-  ]
-}
-```
-
-#### POST /predict
-단일 이미지 분류
-
-**Request:**
-- Content-Type: `multipart/form-data`
-- Body: `file` (이미지 파일)
-- Query: `conf_threshold` (선택, 기본값: 0.5)
-
-**Response:**
-```json
-{
-  "success": true,
-  "prediction": {
-    "class_name": "steel_pipe",
-    "class_name_kr": "강관주",
-    "short_name": "강관주",
-    "confidence": 0.9234
-  },
-  "top5": [
-    {"rank": 1, "class_name": "steel_pipe", "class_name_kr": "강관주", "confidence": 0.9234},
-    {"rank": 2, "class_name": "telecom_pole", "class_name_kr": "통신주", "confidence": 0.0521},
-    ...
-  ],
-  "is_confident": true,
-  "processing_time_ms": 245.32
-}
-```
-
-#### POST /predict/ensemble
-다중 이미지 앙상블 분류
-
-**Request:**
-- Content-Type: `multipart/form-data`
-- Body: `files` (여러 이미지 파일, 최대 10개)
-- Query:
-  - `method` (mean|max|vote, 기본값: mean)
-  - `conf_threshold` (선택, 기본값: 0.5)
-
-**Response:**
-```json
-{
-  "success": true,
-  "method": "mean",
-  "num_images": 3,
-  "final_prediction": {
-    "class_name": "tower_ground",
-    "class_name_kr": "철탑(지면)",
-    "short_name": "철탑지면",
-    "confidence": 0.8756
-  },
-  "top5": [...],
-  "individual_predictions": [
-    {"filename": "image1.jpg", "prediction": "tower_ground", "prediction_kr": "철탑(지면)", "confidence": 0.91},
-    {"filename": "image2.jpg", "prediction": "tower_ground", "prediction_kr": "철탑(지면)", "confidence": 0.87},
-    {"filename": "image3.jpg", "prediction": "tower_building", "prediction_kr": "철탑(건물)", "confidence": 0.82}
-  ],
-  "is_confident": true,
-  "processing_time_ms": 523.45
-}
-```
-
-### 10.4 Error Responses
-
-| Status Code | 설명 |
-|-------------|------|
-| 400 | 잘못된 파일 형식 (지원: jpg, jpeg, png, bmp, webp) |
-| 500 | 서버 내부 오류 |
-| 503 | 모델 로드 실패 |
-
-**Error Response Format:**
-```json
-{
-  "detail": "Invalid file type. Allowed: {'.jpg', '.jpeg', '.png', '.bmp', '.webp'}"
-}
-```
-
-### 10.5 인프라 구성
-
-```
-Flutter App (Amplify HTTPS)
-        │
-        ▼
-API Gateway (HTTPS)
-https://c3jictzagh.execute-api.ap-northeast-2.amazonaws.com
-        │
-        ▼
-EC2 Instance (c7i-flex.large)
-http://15.165.204.39:8000
-FastAPI + YOLOv8 Model
-```
 
 ---
 
 ## 변경 이력
 
-| 버전 | 날짜 | 변경 내용 | 작성자 |
-|------|------|----------|--------|
-| 1.0.0 | 2026-01-13 | 최초 작성 | Dev Team |
-| 1.1.0 | 2026-01-22 | Tower Classification API 추가 | Dev Team |
-| 1.2.0 | 2026-01-27 | Category.originalExcelKey, Station.installationType, TowerClassification 타입, 원본 Excel S3 저장 스펙 추가 | Dev Team |
+| 버전 | 날짜 | 변경 내용 |
+|------|------|----------|
+| 1.0.0 | 2026-01-13 | 최초 작성 |
+| 1.1.0 | 2026-01-22 | Tower Classification API 추가 |
+| 1.2.0 | 2026-01-27 | Category.originalExcelKey, Station.installationType, TowerClassification 타입 추가 |
+| 1.3.0 | 2026-02-26 | DS API 서버 전체 추가 (upload-raw, enqueue, job, stats, export-xlsx, export-presign, data CRUD), S3 경로, DynamoDB 테이블 구조 추가 |
+| 1.3.1 | 2026-03-03 | Upload-Zero-Build: 메타데이터만 파싱 (xlsx 빌드 제거), storageType/fileManifest 추가, 트리플 라우팅 (s3-zip/s3/DynamoDB), export on-demand 빌드, kca-ds-uploads 속성 명세 |

@@ -2,8 +2,8 @@
 
 ## Product Requirements Document
 
-**버전:** 1.2.0
-**최종 수정일:** 2026-01-27
+**버전:** 1.3.1
+**최종 수정일:** 2026-03-03
 **작성자:** Development Team
 
 ---
@@ -14,19 +14,20 @@
 KSA (Korea Station Administration) - 무선국 검사 관리 시스템
 
 ### 1.2 제품 설명
-무선국 현장 검사 업무를 효율적으로 관리하기 위한 크로스 플랫폼 애플리케이션입니다. Excel 파일로 관리되던 무선국 데이터를 클라우드 기반으로 전환하여 실시간 동기화, 지도 기반 위치 확인, 현장 사진 관리 등의 기능을 제공합니다.
+무선국 현장 검사 업무를 효율적으로 관리하기 위한 크로스 플랫폼 애플리케이션입니다. Excel 파일로 관리되던 무선국 데이터를 클라우드 기반으로 전환하여 실시간 동기화, 지도 기반 위치 확인, 현장 사진 관리, DS(Data Set) 대용량 업로드 및 통계 기능을 제공합니다.
 
 ### 1.3 목표 사용자
 - 무선국 검사 담당자
 - 현장 검사원
 - 검사 관리 감독자
+- 본부별 DS 데이터 관리자
 
 ### 1.4 플랫폼 지원
 | 플랫폼 | 지원 여부 | 비고 |
 |--------|----------|------|
+| Web | O | 주 플랫폼 (Amplify 배포) |
 | Android | O | Kakao Maps Native SDK |
 | iOS | O | Kakao Maps Native SDK |
-| Web | O | Kakao Maps JavaScript API |
 | Windows | O | 맵 기능 제한 |
 | macOS | O | 맵 기능 제한 |
 | Linux | O | 맵 기능 제한 |
@@ -43,6 +44,7 @@ KSA (Korea Station Administration) - 무선국 검사 관리 시스템
 | 로그아웃 | 세션 종료 | P0 |
 | 비밀번호 재설정 | 이메일 인증 기반 비밀번호 변경 | P1 |
 | 세션 관리 | 2시간 비활성 시 자동 로그아웃 | P1 |
+| 본부별 데이터 접근 | 로그인 사용자의 본부에 해당하는 데이터만 조회 | P1 |
 
 ### 2.2 데이터 관리
 | 기능 | 설명 | 우선순위 |
@@ -102,6 +104,18 @@ KSA (Korea Station Administration) - 무선국 검사 관리 시스템
 | 날씨 상세정보 | 기온, 체감온도, 습도, 바람, 강수량 표시 | P1 |
 | 자동 갱신 | 지도 이동 시 날씨 정보 자동 갱신 | P2 |
 
+### 2.8 DS 데이터 관리 (신규)
+| 기능 | 설명 | 우선순위 |
+|------|------|----------|
+| DS ZIP 업로드 | 본부별 XLS 파일 ZIP 업로드 (EC2 경유 S3) | P0 |
+| 서버 백그라운드 처리 | ZIP 메타데이터 파싱 → S3 보관 (xlsx 빌드 없음, ~10초) | P0 |
+| 업로드 진행률 폴링 | 3초 간격 잡 상태 조회 | P0 |
+| DS 데이터 현황 | 본부별 업로드 현황 + 자동갱신 대시보드 | P0 |
+| DS Excel Export | on-demand xlsx 빌드 + S3 캐싱 (2회차부터 즉시) | P0 |
+| DS 파일 병합 | 브라우저에서 ZIP 내 XLS 파일 병합 → xlsx | P1 |
+| DS 데이터 조회 | 시트별 데이터 페이징 조회 및 검색 | P1 |
+| DS 데이터 삭제 | 본부/날짜별 데이터 삭제 | P1 |
+
 ---
 
 ## 3. 데이터 모델
@@ -145,7 +159,70 @@ KSA (Korea Station Administration) - 무선국 검사 관리 시스템
 | createdAt | DateTime | O | 생성일시 |
 | updatedAt | DateTime | O | 수정일시 |
 
-### 3.3 철탑 분류 결과 (TowerClassification)
+### 3.3 DS 업로드 (DsUpload)
+DynamoDB Table: `kca-ds-uploads` (PK=divisionId, SK=divisionCode#importDate)
+
+| 필드명 | 타입 | 설명 |
+|--------|------|------|
+| divisionId | String | 본부 ID (예: sudogwon) |
+| importDate | String | SK: `{divisionCode}#{importDate}` (예: 50#20260203) |
+| divisionCode | String | 지역코드 (10/20/30/40/50/55/60/70) |
+| divisionName | String | 본부명 (예: 충청본부) |
+| uploadedBy | String | 업로드한 사용자 이메일 |
+| uploadedAt | String | 업로드 일시 (ISO 8601) |
+| fileName | String | 원본 ZIP 파일명 |
+| status | String | uploading / completed |
+| jobId | String | 처리 잡 ID |
+| storageType | String | `"s3-zip"` (ZIP 보관) / `"s3"` (xlsx 사전빌드) / 없음 (구 DynamoDB) |
+| sheetStats | Map<String, int> | 시트별 행 수 (예: {"일반사항": 12000}) |
+| sheetHeaders | Map<String, List<String>> | 시트별 컬럼 목록 (원본 XLS 순서) |
+| fileManifest | Map<String, List> | 시트별 XLS 파일 목록 (s3-zip용 페이지네이션) |
+| totalRows | int | 전체 행 수 |
+
+### 3.4 DS 레코드 (DsRecord)
+DynamoDB Table: `kca-ds-records` (PK=divisionId, SK=sheetName#importDate#divisionCode#rowIndex)
+
+| 필드명 | 타입 | 설명 |
+|--------|------|------|
+| divisionId | String | 본부 ID |
+| sk | String | sheetName#importDate#divisionCode#rowIndex (8자리 패딩) |
+| sheetName | String | XLS 시트명 |
+| importDate | String | 업로드 날짜 (YYYYMMDD) |
+| divisionCode | String | 지역코드 |
+| uploadedAt | String | 저장 일시 |
+| data | Map<String, String> | 헤더명 → 셀 값 (비어있는 셀은 저장 안 함) |
+
+### 3.5 DS 잡 (DsJob)
+DynamoDB Table: `kca-ds-jobs` (PK=jobId)
+
+| 필드명 | 타입 | 설명 |
+|--------|------|------|
+| jobId | String | UUID |
+| status | String | queued / processing / completed / failed |
+| stage | String | 현재 처리 단계 메시지 |
+| percent | Decimal | 진행률 (0~100) |
+| s3Key | String | 처리할 ZIP S3 키 |
+| fileName | String | 원본 파일명 |
+| uploadedBy | String | 업로더 이메일 |
+| queuedAt | String | 큐 등록 일시 |
+| divisionCode | String | 처리 완료 후 설정 |
+| importDate | String | 처리 완료 후 설정 |
+| sheetStats | Map | 처리 완료 후 설정 |
+| totalRows | int | 처리 완료 후 설정 |
+| error | String | 실패 시 오류 메시지 |
+
+### 3.6 DS 본부 코드 매핑
+
+| divisionCode | divisionId | 본부명 |
+|-------------|-----------|--------|
+| 10 | sudogwon | 수도권 |
+| 20 | gyeongnam | 경남본부 |
+| 30, 70 | seobu | 서부본부 |
+| 40 | gangwon | 강원본부 |
+| 50, 55 | chungcheong | 충청본부 |
+| 60 | gyeongbuk | 경북본부 |
+
+### 3.7 철탑 분류 결과 (TowerClassification)
 
 | 필드명 | 타입 | 필수 | 설명 |
 |--------|------|------|------|
@@ -164,7 +241,7 @@ KSA (Korea Station Administration) - 무선국 검사 관리 시스템
 
 ## 4. Excel Export 상세 스펙
 
-### 4.1 원본 서식 유지 Export
+### 4.1 무선국 원본 서식 유지 Export
 - 가져온 Excel 원본 파일의 서식, 스타일, 병합 셀 등을 유지
 - 새 컬럼 3개 추가: 설치대(수정후), 수검여부, 특이사항
 - 새 컬럼은 마지막 컬럼의 스타일을 상속
@@ -175,95 +252,173 @@ KSA (Korea Station Administration) - 무선국 검사 관리 시스템
 2. **국소명 + 호출명칭**: 같은 국소명이어도 호출명칭으로 구분
 3. **국소명 + 주소**: fallback 매칭
 
-### 4.3 설치대(수정후) 컬럼 로직
-- 수정사항 없을 시: 원본 설치대 표시
-- 수정사항 있을 시: 수정된 설치대 표시
+### 4.3 DS Excel Export 서식
+- **글꼴**: Arial 10pt
+- **정렬**: 가운데 정렬 (수평/수직)
+- **헤더 행**: 볼드 + 배경색 #BFBFBF
+- **테두리**: 얇은 테두리 (모든 셀)
+- **열 너비**: 20 (고정)
 
-### 4.4 컬럼 너비 자동 조절
+### 4.4 컬럼 너비 자동 조절 (무선국 Export)
 - 한글 문자: 2 단위
 - ASCII 문자: 1 단위
 - 셀 패딩: +2 단위
-- Excel 자동 맞춤과 유사한 너비 계산
 
 ---
 
-## 5. 사용자 흐름
+## 5. DS 데이터 처리 흐름
 
-### 5.1 최초 사용 흐름
+### 5.1 업로드 흐름 (Upload-Zero-Build)
+```
+브라우저
+  → POST /ds/upload-raw (ZIP, 8MB 청크)
+  → EC2 스트리밍 → S3 ds-raw/temp/
+  → POST /ds/enqueue → jobId
+  → GET /ds/job/{jobId} 폴링 (3초 간격)
+
+백그라운드 워커 (단일 FIFO) — ~10초
+  → S3 ZIP 다운로드
+  → 메타데이터만 파싱 (행수 + 헤더 추출, 데이터 행 읽기 0회)
+  → ZIP을 S3 영구 경로로 복사 (ds-raw/{divisionId}/{code}_{date}.zip)
+  → storageType="s3-zip" + fileManifest 저장
+  → xlsx 빌드 없음! (DynamoDB 쓰기 0회, openpyxl 0회)
+```
+
+### 5.2 데이터 조회 흐름 (트리플 라우팅)
+```
+GET /ds/data
+  1. storageType="s3-zip" → S3 ZIP 다운로드 (캐시) → xlrd로 XLS 직접 읽기
+  2. storageType="s3"     → S3 xlsx 다운로드 (캐시) → openpyxl 읽기
+  3. storageType 없음      → DynamoDB 쿼리 (구버전 fallback)
+```
+
+### 5.3 Export 흐름
+```
+1. S3 ds-exports/ xlsx 존재 확인
+   → 존재: presign URL → 브라우저 직접 다운로드 (즉시)
+
+2. storageType="s3-zip": 없으면 on-demand 빌드
+   → S3 ZIP 다운로드 → xlrd + openpyxl xlsx 빌드 → StreamingResponse
+   → 비동기로 S3 저장 (다음 Export는 1번 경로, 즉시)
+
+3. storageType 없음: DynamoDB fallback
+   → DynamoDB 조회 → openpyxl xlsx 빌드 → StreamingResponse
+```
+
+### 5.3 DS 파일 분류 규칙
+| 조건 | 분류 |
+|------|------|
+| 파일명에 `(100)` 포함 | skipped (일반사항(검사전) 시트) |
+| 파일명에 `특수` 또는 `spt` 포함 | spt |
+| 파일명에 `(\d+)` 패턴 2개 이상 | numbered |
+| 그 외 | base |
+
+처리 순서: base → numbered (번호순) → spt
+
+---
+
+## 6. 사용자 흐름
+
+### 6.1 최초 사용 흐름
 ```
 앱 실행 → 로그인 화면 → 회원가입 → 이메일 인증 → 로그인 → 메인 화면
 ```
 
-### 5.2 데이터 가져오기 흐름
+### 6.2 데이터 가져오기 흐름
 ```
 메뉴 → Excel 가져오기 → 파일 선택 → 파싱 → 주소 좌표 변환 → 클라우드 저장 → 원본 Excel S3 업로드 → 지도 표시
 ```
 
-### 5.3 현장 검사 흐름
+### 6.3 현장 검사 흐름
 ```
 지도에서 마커 선택 → 상세정보 확인 → 로드뷰로 위치 확인 → 사진 촬영 → 메모 작성 → 검사완료 처리
 ```
 
-### 5.4 데이터 내보내기 흐름
+### 6.4 DS 업로드 흐름
 ```
-메뉴 → 카테고리 선택 → Export 옵션 선택 → 원본 Excel 서식 유지하여 결과 컬럼 추가 → Excel + 사진 ZIP 생성 → 공유/저장
+DS 데이터 관리 → ZIP 업로드 버튼 → 파일 선택
+→ EC2 업로드 진행률 표시
+→ 서버 처리 진행률 폴링 (XLS 파싱 → DB 저장 → xlsx 생성)
+→ 완료 후 대시보드 자동 갱신
 ```
 
-### 5.5 철탑 분류 흐름
+### 6.5 DS Export 흐름
 ```
-홈 → 철탑형태 분류 → 이미지 선택 → AI 분류 요청 → Top-5 결과 표시 → (선택) 무선국에 적용
+DS 데이터 관리 → 업로드 카드 → Excel Export 버튼
+→ S3 xlsx 존재 확인 → 있으면 즉시 다운로드
+→ 없으면 서버사이드 빌드 → 다운로드 (다음부터 즉시 다운로드)
 ```
 
 ---
 
-## 6. 비기능 요구사항
+## 7. 비기능 요구사항
 
-### 6.1 성능
+### 7.1 성능
 - Excel 파일 1,000건 이상 처리 가능
 - 지도 마커 1,000개 이상 동시 표시
 - 사진 업로드 10MB 이하
 - AI 분류 응답 시간 2초 이내
+- DS 업로드 ZIP 최대 200MB (EC2 8MB 청크 스트리밍)
+- DS 업로드 처리: ~10초 (메타데이터만 파싱, xlsx 빌드 없음)
+- DS Export: S3 캐시 시 즉시, 최초 빌드 시 수분 소요 (자동 S3 캐싱)
 
-### 6.2 보안
+### 7.2 보안
 - AWS Cognito 기반 인증
 - 사용자별 데이터 격리 (Owner-based authorization)
 - S3 Private 접근 제어
 - 2시간 세션 타임아웃
 - API Gateway HTTPS 프록시 (AI 서버)
 
-### 6.3 가용성
+### 7.3 가용성
 - 오프라인 모드 지원 (로컬 Hive DB)
 - 클라우드 연결 실패 시 로컬 fallback
 - AI 서버 상태 실시간 확인
+- DS 잡 워커: 서버 재시작 시 processing → queued 자동 복구
 
-### 6.4 확장성
+### 7.4 확장성
 - 페이지네이션 (1,000건 단위)
 - 카테고리 기반 데이터 분류
+- DS: 본부별 독립 데이터 파티션 (DynamoDB PK=divisionId)
+
+### 7.5 AWS 비용 최적화
+- DynamoDB 쿼리 시 ProjectionExpression으로 필요 속성만 조회
+- Scan 대신 Query 우선 사용; 집계만 필요할 때 Select='COUNT'
+- S3 xlsx 캐싱으로 반복 Export 시 DynamoDB 읽기 비용 절감
+- EC2 OOM 방지: 잡 워커 단일 FIFO, write-only xlsx, 배치 25개
+- Upload-Zero-Build: 업로드 시 DynamoDB WCU 0, xlsx 빌드 0 → 비용 극소
 
 ---
 
-## 7. 기술 스택
+## 8. 기술 스택
 
-### 7.1 Frontend
-- **Framework:** Flutter 3.x
+### 8.1 Frontend
+- **Framework:** Flutter 3.x (Web 주 플랫폼)
 - **State Management:** Provider (ChangeNotifier)
 - **Local Storage:** Hive
 - **Maps:** Kakao Maps (Native SDK + JavaScript API)
+- **Deploy:** AWS Amplify (Web) / S3 sync (deploy.ps1)
 
-### 7.2 Backend (AWS Amplify)
+### 8.2 Backend - 무선국 관리 (AWS Amplify)
 - **Authentication:** AWS Cognito
 - **API:** AWS AppSync (GraphQL)
-- **Storage:** AWS S3
+- **Storage:** AWS S3 (ksa-photos-bucket)
 - **Region:** ap-northeast-2 (서울)
 
-### 7.3 AI 서버 (AWS EC2)
+### 8.3 Backend - AI 서버 (EC2 #1)
 - **Framework:** FastAPI + Uvicorn
 - **Model:** YOLOv8n-cls (철탑형태 분류)
 - **Proxy:** AWS API Gateway (HTTPS)
 - **Instance:** c7i-flex.large (Ubuntu 22.04)
 - **Endpoint:** https://c3jictzagh.execute-api.ap-northeast-2.amazonaws.com
 
-### 7.4 외부 API
+### 8.4 Backend - DS API 서버 (EC2 #2)
+- **Framework:** FastAPI + Uvicorn
+- **Service:** systemd (kca-api)
+- **Endpoint:** https://api-sko-kca.skons.net
+- **Storage:** AWS S3 (sko-kca-s3), DynamoDB
+- **의존성:** xlrd (XLS 파싱), openpyxl (xlsx 생성), psutil (메모리 모니터링)
+
+### 8.5 외부 API
 - Kakao Maps JavaScript API (Web)
 - Kakao Maps Native SDK (Mobile)
 - Kakao Geocoding REST API
@@ -271,7 +426,7 @@ KSA (Korea Station Administration) - 무선국 검사 관리 시스템
 
 ---
 
-## 8. 릴리스 계획
+## 9. 릴리스 계획
 
 ### v1.0.0
 - [x] 사용자 인증 (로그인/회원가입)
@@ -287,7 +442,7 @@ KSA (Korea Station Administration) - 무선국 검사 관리 시스템
 - [x] API Gateway HTTPS 프록시
 - [x] 홈 화면 메뉴 시스템
 
-### v1.2.0 (현재)
+### v1.2.0
 - [x] 원본 Excel 서식 유지 Export
 - [x] 설치대(수정후) 컬럼 추가
 - [x] 원본 Excel S3 저장/관리
@@ -296,20 +451,35 @@ KSA (Korea Station Administration) - 무선국 검사 관리 시스템
 - [x] 역지오코딩 (좌표→지역명)
 - [x] Export 컬럼 너비 자동 조절
 
-### v1.3.0 (예정)
-- [ ] 오프라인 모드 강화
-- [ ] 푸시 알림
-- [ ] 검사 보고서 생성
-- [ ] 다중 사용자 협업
+### v1.3.0
+- [x] DS 파일 병합 (브라우저 ZIP + SheetJS + JSZip)
+- [x] DS 데이터 업로드 (EC2 proxy → S3 → 백그라운드 워커)
+- [x] DS 데이터 현황 대시보드
+- [x] DS Excel Export (서버사이드 xlsx 빌드 + S3 캐싱)
+- [x] DS 잡 큐 시스템 (DynamoDB + 싱글 워커)
+- [x] 본부별 DS 데이터 접근 필터링
+- [x] sheetHeaders 저장으로 컬럼 순서 보존
+
+### v1.3.1 (현재)
+- [x] Upload-Zero-Build: 업로드 시 xlsx 빌드 완전 제거 (30분 → ~10초)
+- [x] storageType 기반 트리플 라우팅 (s3-zip / s3 / DynamoDB fallback)
+- [x] ZIP 원본 S3 보관 + fileManifest 메타데이터 저장
+- [x] 데이터 조회: ZIP 내 XLS에서 xlrd 직접 읽기 (xlsx 불필요)
+- [x] Export: on-demand xlsx 빌드 + S3 자동 캐싱
+- [x] 대시보드 자동갱신 (uploading 상태 시 10초 주기)
+- [x] 고스트 uploads 레코드 자동 정리
+- [x] stuck job 10분 주기 자동 복구
+- [x] 컬럼 정합성 수정 (빈 헤더 건너뛰기 + 실제 컬럼 인덱스 보존)
 
 ### v2.0.0 (예정)
+- [ ] FE/BE 레포지터리 분리
 - [ ] 관리자 대시보드
-- [ ] 통계 및 분석
-- [ ] API 연동 확장
+- [ ] 오프라인 모드 강화
+- [ ] 다중 사용자 협업
 
 ---
 
-## 9. 용어 정의
+## 10. 용어 정의
 
 | 용어 | 설명 |
 |------|------|
@@ -319,7 +489,11 @@ KSA (Korea Station Administration) - 무선국 검사 관리 시스템
 | 검사 | 무선국의 운용 상태 및 법적 요건 충족 여부 확인 |
 | 카테고리 | Excel 파일 단위로 그룹화된 무선국 집합 |
 | 설치대 | 안테나 설치 형태 (철탑, 강관주, 옥내 등) |
-| 원본 서식 유지 | Import한 Excel의 스타일/서식을 보존하여 Export |
+| DS | Data Set — 본부별 무선국 검사 원시 데이터 (XLS 파일 묶음) |
+| divisionId | DS 본부 식별자 (sudogwon, gangwon, gyeongnam 등) |
+| divisionCode | XLS 파일명 기반 지역코드 (10, 20, 30, 40, 50, 55, 60, 70) |
+| importDate | DS 업로드 기준 날짜 (YYYYMMDD 형식) |
+| sheetHeaders | 업로드 시 저장된 원본 XLS 컬럼 순서 (Export 시 정확도 보장) |
 
 ---
 
@@ -330,3 +504,5 @@ KSA (Korea Station Administration) - 무선국 검사 관리 시스템
 | 1.0.0 | 2026-01-13 | 최초 작성 | Dev Team |
 | 1.1.0 | 2026-01-22 | AI 철탑형태 분류 기능 추가, EC2/API Gateway 배포 | Dev Team |
 | 1.2.0 | 2026-01-27 | 원본 서식 유지 Export, 설치대 추적, 날씨 정보, 매칭 개선 | Dev Team |
+| 1.3.0 | 2026-02-26 | DS 데이터 관리 전체 추가 (업로드/파싱/저장/Export/대시보드), sheetHeaders 설계, DS API 서버 분리 | Dev Team |
+| 1.3.1 | 2026-03-03 | Upload-Zero-Build (30분→10초), 트리플 라우팅, 자동갱신, 고스트 레코드 정리, 컬럼 정합성 수정 | Dev Team |

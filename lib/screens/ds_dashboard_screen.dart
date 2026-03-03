@@ -183,7 +183,7 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
         }
       }
 
-      // 1. S3에 pre-built xlsx 있으면 직접 다운로드 (가장 빠름)
+      // S3 presign 확인 → type별 분기
       try {
         final presignUri =
             Uri.parse('$_baseUrl/ds/export-presign').replace(queryParameters: params);
@@ -192,27 +192,55 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
 
         if (presignResp.statusCode == 200) {
           final data = jsonDecode(presignResp.body);
-          if (data['success'] == true && data['type'] == 'xlsx') {
-            onProgress('xlsx 다운로드 중...', 10);
-            final result = await platform_export.downloadXlsxFromUrl(
-              url: data['url'] as String,
-              filename: filename,
-              onProgress: onProgress,
-            );
-            if (mounted) {
-              setState(() => _exportingId = null);
-              ScaffoldMessenger.of(context)
-                  .showSnackBar(SnackBar(content: Text(result)));
+
+          if (data['success'] == true) {
+            final type = data['type'] as String?;
+            final url = data['url'] as String;
+
+            // 1. pre-built xlsx → 직접 다운로드 (가장 빠름)
+            if (type == 'xlsx') {
+              onProgress('xlsx 다운로드 중...', 10);
+              final result = await platform_export.downloadXlsxFromUrl(
+                url: url,
+                filename: filename,
+                onProgress: onProgress,
+              );
+              if (mounted) {
+                setState(() => _exportingId = null);
+                ScaffoldMessenger.of(context)
+                    .showSnackBar(SnackBar(content: Text(result)));
+              }
+              return;
             }
-            return;
+
+            // 2. 원본 ZIP → 브라우저에서 병합 (SheetJS)
+            if (type == 'zip') {
+              onProgress('원본 ZIP에서 Excel 생성 중...', 3);
+              final metaJson = jsonEncode({
+                'divisionName': upload.divisionName,
+                'divisionId': upload.divisionId,
+                'divisionCode': upload.divisionCode,
+                'importDate': upload.actualDate,
+              });
+              final result = await platform_export.exportDsFromS3(
+                s3Url: url,
+                metaJson: metaJson,
+                onProgress: onProgress,
+              );
+              if (mounted) {
+                setState(() => _exportingId = null);
+                ScaffoldMessenger.of(context)
+                    .showSnackBar(SnackBar(content: Text(result)));
+              }
+              return;
+            }
           }
         }
       } catch (e) {
-        debugPrint('S3 presign 확인 실패 (서버 빌드로 전환): $e');
+        debugPrint('S3 presign/export 실패 (서버 빌드로 전환): $e');
       }
 
-      // 2. xlsx 없음 → 서버사이드 빌드 후 직접 다운로드 (/ds/export-xlsx)
-      // 서버가 DynamoDB → openpyxl 빌드 → 스트리밍 반환 + S3 자동 저장
+      // 3. 폴백: 서버사이드 빌드 (/ds/export-xlsx) — old DynamoDB 데이터용
       onProgress('서버에서 Excel 생성 중...', 5);
       final exportUri =
           Uri.parse('$_baseUrl/ds/export-xlsx').replace(queryParameters: params);

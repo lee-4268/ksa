@@ -4,16 +4,13 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
-/// DS 업로드 서비스 — Scenario 2: EC2 경유 S3 업로드 + 서버사이드 처리
+/// DS 업로드 서비스 — Upload-Zero-Build (EC2 경유 S3 업로드 + 메타데이터 파싱)
 ///
-/// 이전 방식 (제거):
-///   브라우저 ZIP 파싱 → 3000+ HTTP 청크 → 타임아웃 위험
-///
-/// 새 방식:
+/// 흐름:
 ///   1. ZIP → POST /ds/upload-raw (EC2 스트리밍 → S3, CORS 불필요)
 ///   2. POST /ds/enqueue → jobId 수신
 ///   3. GET /ds/job/{jobId} 폴링 (3초 간격) → 서버 진행률 표시
-///   4. 서버가 xlrd로 XLS 파싱 → DynamoDB → openpyxl xlsx → S3
+///   4. 서버가 메타데이터만 파싱 → ZIP을 S3에 그대로 보관 (~10초)
 class DsUploadService {
   static const String _baseUrl = String.fromEnvironment(
     'API_BASE_URL',
@@ -23,7 +20,7 @@ class DsUploadService {
   static const _s3Timeout = Duration(minutes: 10);    // 대용량 ZIP S3 업로드
   static const _apiTimeout = Duration(seconds: 30);   // API 호출
   static const _pollInterval = Duration(seconds: 3);  // 폴링 간격
-  static const _maxPollDuration = Duration(minutes: 35); // 최대 대기 시간
+  static const _maxPollDuration = Duration(minutes: 3);  // 최대 대기 시간 (Upload-Zero-Build)
 
   // DS 지역코드 → 본부명 (서버 DS_REGION_CODE_MAP과 동일)
   static const _divisionNames = {

@@ -145,7 +145,7 @@ class _DsMergeScreenState extends State<DsMergeScreen> {
           _buildStep('3', '자동으로 병합 후 .xlsx 파일이 다운로드됩니다'),
           const SizedBox(height: 12),
           Text(
-            '* (100) 파일의 일반사항 → "일반사항(접수번호)" 시트로 추가\n* _spt 파일의 "검사" 시트는 별도 시트로 추가됩니다',
+            '* (100) 파일의 일반사항 → "일반사항(검사전)" 시트로 추가\n* _spt 파일의 "검사" 시트는 별도 시트로 추가됩니다',
             style: TextStyle(fontSize: 12, color: Colors.grey.shade500),
           ),
         ],
