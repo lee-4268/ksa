@@ -48,7 +48,7 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
     }
   }
 
-  Future<void> _uploadDbFile() async {
+  Future<void> _uploadDbFile({required bool replace}) async {
     final result = await FilePicker.platform.pickFiles(
       type: FileType.custom,
       allowedExtensions: ['csv', 'xlsx', 'xls'],
@@ -63,6 +63,7 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
       final resp = await _callnameService.uploadDbFile(
         Uint8List.fromList(file.bytes!),
         file.name,
+        replace: replace,
       );
       final msg = resp['message'] as String? ?? '업로드 완료';
       if (mounted) {
@@ -193,23 +194,38 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
             ),
             const SizedBox(height: 12),
             Text(
-              '호출명칭 매칭에 사용되는 DB 파일을 업데이트합니다.\nCSV 또는 Excel 파일을 업로드하면 기존 DB를 교체합니다.',
+              '호출명칭 매칭에 사용되는 DB 파일을 업데이트합니다.\nCSV/Excel 파일을 업로드할 수 있습니다.',
               style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
             ),
             const SizedBox(height: 12),
-            SizedBox(
-              width: double.infinity,
-              child: _dbUploading
-                  ? const Center(child: CircularProgressIndicator())
-                  : OutlinedButton.icon(
-                      onPressed: _uploadDbFile,
-                      icon: const Icon(Icons.upload_file),
-                      label: const Text('DB 파일 업로드'),
+            if (_dbUploading)
+              const Center(child: CircularProgressIndicator())
+            else
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: () => _uploadDbFile(replace: false),
+                      icon: const Icon(Icons.add_circle_outline, size: 18),
+                      label: const Text('파일 추가'),
                       style: OutlinedButton.styleFrom(
                         foregroundColor: Colors.orange.shade700,
                       ),
                     ),
-            ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: () => _uploadDbFile(replace: true),
+                      icon: const Icon(Icons.swap_horiz, size: 18),
+                      label: const Text('전체 교체'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.red.shade600,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
           ],
         ),
       ),

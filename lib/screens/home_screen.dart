@@ -12,6 +12,7 @@ import 'admin/admin_panel_screen.dart';
 import 'ds_dashboard_screen.dart';
 import 'ds_merge_screen.dart';
 import 'callname_screen.dart';
+import 'certificate_screen.dart';
 import '../widgets/user_profile_button.dart';
 
 /// 메인 홈 화면 - 메뉴 선택 인터페이스
@@ -259,6 +260,13 @@ class _HomeScreenState extends State<HomeScreen> {
                   subtitle: '통시/Access담당/품질개선팀 자동 매칭',
                   color: const Color(0xFFE53935),
                   onTap: () => _navigateFromDrawer(const CallnameScreen()),
+                ),
+                _buildDrawerItem(
+                  icon: Icons.article_outlined,
+                  title: '설치확인서',
+                  subtitle: '개별/일괄 설치확인서 생성 (PDF/HWPX)',
+                  color: const Color(0xFF00838F),
+                  onTap: () => _navigateFromDrawer(const CertificateScreen()),
                 ),
                 // 전체 대상 관리 (본부 담당자만 표시)
                 Consumer<AuthService>(

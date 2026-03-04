@@ -34,13 +34,12 @@ class CallnameService {
     return json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
   }
 
-  /// 관리자: DB CSV/Excel 업로드
+  /// 관리자: DB CSV/Excel 업로드 (replace=true면 기존 DB 교체)
   Future<Map<String, dynamic>> uploadDbFile(
-      Uint8List bytes, String filename) async {
-    final req = http.MultipartRequest(
-      'POST',
-      Uri.parse('$_baseUrl/callname/upload-csv'),
-    )
+      Uint8List bytes, String filename, {bool replace = true}) async {
+    final uri = Uri.parse('$_baseUrl/callname/upload-csv')
+        .replace(queryParameters: {'replace': replace.toString()});
+    final req = http.MultipartRequest('POST', uri)
       ..headers['Authorization'] = 'Bearer ${_authToken ?? ''}'
       ..files.add(http.MultipartFile.fromBytes('file', bytes,
           filename: filename));

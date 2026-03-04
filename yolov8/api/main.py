@@ -123,7 +123,7 @@ CALLNAME_CSV_PREFIX = "callname-db/"
 CALLNAME_CACHE_TTL = 86400  # 24시간
 CALLNAME_SESSION_TTL = 1800  # 30분
 CALLNAME_MAX_SESSIONS = 3
-CALLNAME_USE_COLS = ["zpwina", "zpwino", "zpwiadr", "zpcode", "area_hdofc_nm", "ons_team_nm"]
+CALLNAME_USE_COLS = ["zpwina", "zpwino", "zpwiadr", "zpcode", "area_hdofc_nm", "ons_team_nm", "zpirty3"]
 CALLNAME_POSSIBLE_CALLNAME_COLS = ["호출명칭", "callname", "CALLNAME", "호출명", "call_name"]
 CALLNAME_POSSIBLE_TONGSI_COLS = ["통시", "통합시설코드", "zpcode"]
 CALLNAME_POSSIBLE_ZPWINA_COLS = ["zpwina", "ZPWINA", "Zpwina", "호출명칭", "호출명"]
@@ -4630,53 +4630,172 @@ def _query_callname_db(zpwina_values: list, zpwino_values: list) -> dict:
 # ── 호출명칭 매칭 API ──────────────────────────────────────
 
 @app.post("/callname/upload-csv")
-async def callname_upload_csv(request: Request, file: UploadFile = File(...)):
-    """관리자: S3에 호출명칭 DB CSV 업로드 → 캐시 갱신"""
+async def callname_upload_csv(
+    request: Request,
+    file: UploadFile = File(...),
+    replace: bool = Query(False, description="True면 기존 DB 전체 교체, False면 추가/병합"),
+):
+    """관리자: S3에 호출명칭 DB CSV/Excel 업로드 → 6컬럼 필터링 → 캐시 갱신
+    - CSV: chunksize로 메모리 절약 파싱
+    - Excel: 시트별 순차 처리 (read_only 모드, OOM 방지)
+    - replace=false(기본): 기존 파일 유지 + 추가 (여러 파일 업로드 지원)
+    - replace=true: 기존 파일 전부 삭제 후 교체
+    """
     await _require_role(request, {"admin"})
     if not file.filename.lower().endswith((".csv", ".xlsx", ".xls")):
         raise HTTPException(status_code=400, detail="CSV 또는 Excel 파일만 가능합니다.")
+    if not HAS_PANDAS:
+        raise HTTPException(status_code=500, detail="pandas 미설치")
 
+    ext = file.filename.rsplit(".", 1)[-1].lower()
+    tmp_path = None
+    filtered_paths = []
     try:
-        content = await file.read()
-        ext = file.filename.rsplit(".", 1)[-1].lower()
+        # 1) 업로드 파일 → 디스크 임시 저장 (메모리에 전체 로드 X)
+        with _tempfile.NamedTemporaryFile(delete=False, suffix=f".{ext}") as tmp:
+            tmp_path = tmp.name
+            while True:
+                chunk = await file.read(8 * 1024 * 1024)  # 8MB 청크
+                if not chunk:
+                    break
+                tmp.write(chunk)
 
+        # 2) 6개 필요 컬럼만 추출 → 시트별 필터링된 CSV 생성
+        base_name = file.filename.rsplit(".", 1)[0].replace(" ", "_")
         if ext == "csv":
-            safe_name = re.sub(r"[^a-zA-Z0-9_.-]", "_", file.filename)
-            s3_key = f"{CALLNAME_CSV_PREFIX}{safe_name}"
-            get_s3_client().put_object(Bucket=S3_BUCKET_NAME, Key=s3_key, Body=content)
-            logger.info(f"호출명칭 CSV 업로드: {s3_key} ({len(content):,} bytes)")
+            filtered_path = tmp_path + ".filtered.csv"
+            filtered_paths.append(("csv", filtered_path))
+            first_chunk = True
+            with open(filtered_path, "w", encoding="utf-8", newline="") as f:
+                for chunk_df in pd.read_csv(
+                    tmp_path, dtype=str, na_filter=False, chunksize=50000
+                ):
+                    avail = [c for c in CALLNAME_USE_COLS if c in chunk_df.columns]
+                    if not avail:
+                        del chunk_df
+                        continue
+                    chunk_df[avail].to_csv(f, index=False, header=first_chunk)
+                    first_chunk = False
+                    del chunk_df
+        elif ext == "xlsx":
+            # openpyxl read_only 모드: 전체 메모리 로드 없이 시트별 순차 처리
+            wb = openpyxl.load_workbook(tmp_path, read_only=True, data_only=True)
+            for sheet_idx, sn in enumerate(wb.sheetnames):
+                ws = wb[sn]
+                filtered_path = tmp_path + f".sheet{sheet_idx}.csv"
+                header_row = None
+                avail_indices = []
+                row_count_sheet = 0
+                with open(filtered_path, "w", encoding="utf-8", newline="") as f:
+                    import csv as _csv_mod
+                    writer = _csv_mod.writer(f)
+                    for row_idx, row in enumerate(ws.iter_rows(values_only=True)):
+                        if row_idx == 0:
+                            header_row = [str(c) if c is not None else "" for c in row]
+                            avail_indices = [i for i, h in enumerate(header_row) if h in CALLNAME_USE_COLS]
+                            if not avail_indices:
+                                break
+                            writer.writerow([header_row[i] for i in avail_indices])
+                            continue
+                        writer.writerow([str(row[i]) if i < len(row) and row[i] is not None else "" for i in avail_indices])
+                        row_count_sheet += 1
+                if avail_indices:
+                    filtered_paths.append((f"sheet_{sn}", filtered_path))
+                    logger.info(f"호출명칭 Excel 시트 '{sn}': {row_count_sheet:,}행 추출")
+                else:
+                    try:
+                        os.unlink(filtered_path)
+                    except OSError:
+                        pass
+            wb.close()
+            del wb
         else:
-            if not HAS_PANDAS:
-                raise HTTPException(status_code=500, detail="pandas 미설치")
-            buf = io.BytesIO(content)
-            engine = "openpyxl" if ext == "xlsx" else "xlrd"
-            xls = pd.ExcelFile(buf, engine=engine)
-            for idx, sheet_name in enumerate(xls.sheet_names):
-                sheet_df = pd.read_excel(xls, sheet_name=sheet_name, dtype=str, na_filter=False)
-                csv_buf = io.BytesIO()
-                sheet_df.to_csv(csv_buf, index=False, encoding="utf-8")
-                csv_bytes = csv_buf.getvalue()
-                s3_key = f"{CALLNAME_CSV_PREFIX}sheet{idx}.csv"
-                get_s3_client().put_object(Bucket=S3_BUCKET_NAME, Key=s3_key, Body=csv_bytes)
-                logger.info(f"호출명칭 시트 '{sheet_name}' → {s3_key} ({len(csv_bytes):,} bytes)")
-                del sheet_df, csv_buf, csv_bytes
-            del xls, buf
+            # xls (xlrd)
+            if not HAS_XLRD:
+                raise HTTPException(status_code=500, detail="xlrd 미설치")
+            xls_book = xlrd.open_workbook(tmp_path)
+            for sheet_idx in range(xls_book.nsheets):
+                ws = xls_book.sheet_by_index(sheet_idx)
+                sn = ws.name
+                if ws.nrows == 0:
+                    continue
+                header_row = [str(ws.cell_value(0, c)) for c in range(ws.ncols)]
+                avail_indices = [i for i, h in enumerate(header_row) if h in CALLNAME_USE_COLS]
+                if not avail_indices:
+                    continue
+                filtered_path = tmp_path + f".sheet{sheet_idx}.csv"
+                filtered_paths.append((f"sheet_{sn}", filtered_path))
+                with open(filtered_path, "w", encoding="utf-8", newline="") as f:
+                    import csv as _csv_mod
+                    writer = _csv_mod.writer(f)
+                    writer.writerow([header_row[i] for i in avail_indices])
+                    for r in range(1, ws.nrows):
+                        writer.writerow([str(ws.cell_value(r, i)) for i in avail_indices])
+            xls_book.release_resources()
+            del xls_book
 
-        del content
-        # 캐시 무효화 → 재로드
+        # 원본 임시파일 즉시 삭제 (디스크 절약)
+        os.unlink(tmp_path)
+        tmp_path = None
+        gc.collect()
+
+        if not filtered_paths:
+            raise HTTPException(status_code=400, detail="필요한 컬럼(zpwina, zpwino 등)이 포함된 시트가 없습니다.")
+
+        # 3) S3 업로드 (replace=true일 때만 기존 파일 삭제)
+        if replace:
+            try:
+                resp = get_s3_client().list_objects_v2(
+                    Bucket=S3_BUCKET_NAME, Prefix=CALLNAME_CSV_PREFIX)
+                for obj in resp.get("Contents", []):
+                    get_s3_client().delete_object(
+                        Bucket=S3_BUCKET_NAME, Key=obj["Key"])
+                logger.info("호출명칭 DB 기존 파일 전체 삭제 (replace 모드)")
+            except Exception:
+                pass
+
+        total_size = 0
+        uploaded_keys = []
+        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+        for label, fpath in filtered_paths:
+            s3_key = f"{CALLNAME_CSV_PREFIX}{base_name}_{label}_{timestamp}.csv"
+            file_size = os.path.getsize(fpath)
+            total_size += file_size
+            with open(fpath, "rb") as f:
+                get_s3_client().put_object(Bucket=S3_BUCKET_NAME, Key=s3_key, Body=f)
+            uploaded_keys.append(s3_key)
+            logger.info(f"호출명칭 DB 업로드: {s3_key} ({file_size:,} bytes)")
+
+        # 4) 캐시 무효화 → 재로드 → 즉시 해제
         global _callname_df, _callname_df_loaded_at, _callname_db_row_count
         _callname_df = None
         _callname_df_loaded_at = 0
         await asyncio.to_thread(_load_callname_cache)
         row_count = _callname_db_row_count
-        # DB 로드 확인 후 즉시 해제 (메모리 절약)
         _release_callname_df()
-        return {"success": True, "message": f"DB 업로드 완료 ({row_count:,}행 로드됨)"}
+        file_count = len(filtered_paths)
+        return {
+            "success": True,
+            "message": f"DB 업로드 완료 ({file_count}개 파일, 총 {row_count:,}행)",
+            "files": uploaded_keys,
+            "total_rows": row_count,
+        }
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"호출명칭 CSV 업로드 실패: {e}")
         raise HTTPException(status_code=500, detail="서버 내부 오류")
+    finally:
+        if tmp_path:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+        for _, fpath in filtered_paths:
+            try:
+                os.unlink(fpath)
+            except OSError:
+                pass
 
 
 @app.get("/callname/db-status")
@@ -5282,6 +5401,544 @@ async def callname_download(process_id: str, request: Request):
         return {"url": url, "filename": output_filename}
     except Exception as e:
         logger.error(f"호출명칭 결과 다운로드 실패: {e}")
+        raise HTTPException(status_code=500, detail="서버 내부 오류")
+
+
+# ============================================================
+# 설치확인서 API
+# ============================================================
+
+# PDF/HWPX 생성 모듈 (optional import)
+try:
+    from pdf_generator import generate_certificate_pdf
+    HAS_REPORTLAB = True
+except ImportError:
+    HAS_REPORTLAB = False
+
+try:
+    from hwp_generator import generate_certificate_hwp
+    HAS_HWP_GEN = True
+except ImportError:
+    HAS_HWP_GEN = False
+
+CERT_IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.tiff', '.tif'}
+CERT_BLUEPRINT_KEYWORDS = {'도면', 'blueprint', 'bp', 'design', '설계'}
+CERT_PHOTO_KEYWORDS = {'사진', 'photo', 'pic', 'img', '현장'}
+CERT_SESSION_TTL = 1800  # 30분
+_cert_sessions: Dict[str, dict] = {}
+_cert_batch_lock = asyncio.Lock()
+
+
+def _cleanup_cert_sessions():
+    now = time.time()
+    expired = [k for k, v in _cert_sessions.items()
+               if (now - v.get("ts", 0)) > CERT_SESSION_TTL]
+    for k in expired:
+        # S3 temp 정리
+        prefix = _cert_sessions[k].get("s3_prefix")
+        if prefix:
+            try:
+                resp = get_s3_client().list_objects_v2(
+                    Bucket=S3_BUCKET_NAME, Prefix=prefix)
+                for obj in resp.get("Contents", []):
+                    get_s3_client().delete_object(
+                        Bucket=S3_BUCKET_NAME, Key=obj["Key"])
+            except Exception:
+                pass
+        del _cert_sessions[k]
+
+
+def _cert_lookup_single(query: str) -> dict:
+    """callname_df에서 3방향 조회 → 설치확인서 필드 반환"""
+    cdf = _get_callname_df()
+    if cdf is None or cdf.empty:
+        return {}
+    for col in ["zpwino", "zpwina", "zpwiadr"]:
+        if col not in cdf.columns:
+            continue
+        mask = cdf[col] == query
+        if mask.any():
+            row = cdf.loc[mask].iloc[0]
+            return {c: str(row.get(c, "") or "") for c in CALLNAME_USE_COLS}
+    return {}
+
+
+def _cert_batch_lookup(zpwino_list: list) -> dict:
+    """callname_df에서 일괄 조회"""
+    cdf = _get_callname_df()
+    if cdf is None or cdf.empty:
+        return {}
+    results = {}
+    val_set = set(zpwino_list)
+    for col in ["zpwino", "zpwina"]:
+        if col not in cdf.columns:
+            continue
+        remaining = val_set - set(results.keys())
+        if not remaining:
+            break
+        mask = cdf[col].isin(remaining)
+        if not mask.any():
+            continue
+        for _, row in cdf.loc[mask].iterrows():
+            key = str(row[col])
+            if key in remaining and key not in results:
+                results[key] = {c: str(row.get(c, "") or "") for c in CALLNAME_USE_COLS}
+    return results
+
+
+def _parse_photo_zip_to_s3(zip_path: str, job_id: str) -> dict:
+    """ZIP에서 이미지 추출 → S3 cert-temp/{job_id}/ 에 개별 저장.
+    Returns: {zpwino: {has_blueprint: bool, photo_count: int, photo_keys: [...], bp_key: str|None}}
+    """
+    s3_prefix = f"cert-temp/{job_id}/"
+    summary = {}
+    s3 = get_s3_client()
+
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        for name in zf.namelist():
+            if name.endswith("/"):
+                continue
+            basename = os.path.basename(name)
+            if basename.startswith(".") or "__MACOSX" in name:
+                continue
+            ext = os.path.splitext(basename)[1].lower()
+            if ext not in CERT_IMAGE_EXTENSIONS:
+                continue
+
+            fname_no_ext = os.path.splitext(basename)[0]
+            parts = name.replace("\\", "/").split("/")
+
+            zpwino = None
+            is_blueprint = False
+            photo_order = 0
+
+            if len(parts) >= 2:
+                folder = parts[-2]
+                folder_digits = re.sub(r"[^0-9]", "", folder)
+                if len(folder_digits) >= 5:
+                    zpwino = folder_digits
+                    fname_lower = fname_no_ext.lower()
+                    if any(kw in fname_lower for kw in CERT_BLUEPRINT_KEYWORDS):
+                        is_blueprint = True
+                    else:
+                        nums = re.findall(r"\d+", fname_no_ext)
+                        photo_order = int(nums[-1]) if nums else 0
+
+            if not zpwino:
+                match = re.match(r"^(\d[\d\-]*\d)", fname_no_ext)
+                if match:
+                    zpwino = re.sub(r"[^0-9]", "", match.group(1))
+                    remainder = fname_no_ext[match.end():].strip("_- ")
+                    remainder_lower = remainder.lower()
+                    if any(kw in remainder_lower for kw in CERT_BLUEPRINT_KEYWORDS):
+                        is_blueprint = True
+                    elif any(kw in remainder_lower for kw in CERT_PHOTO_KEYWORDS):
+                        nums = re.findall(r"\d+", remainder)
+                        photo_order = int(nums[0]) if nums else 0
+                    elif not remainder:
+                        is_blueprint = True
+                    else:
+                        nums = re.findall(r"\d+", remainder)
+                        photo_order = int(nums[0]) if nums else 0
+
+            if not zpwino or len(zpwino) < 5:
+                continue
+
+            if zpwino not in summary:
+                summary[zpwino] = {
+                    "has_blueprint": False, "photo_count": 0,
+                    "bp_key": None, "photo_entries": [],
+                }
+
+            file_bytes = zf.read(name)
+            if not file_bytes:
+                continue
+
+            if is_blueprint:
+                s3_key = f"{s3_prefix}{zpwino}/blueprint{ext}"
+                s3.put_object(Bucket=S3_BUCKET_NAME, Key=s3_key, Body=file_bytes)
+                summary[zpwino]["has_blueprint"] = True
+                summary[zpwino]["bp_key"] = s3_key
+            else:
+                if summary[zpwino]["photo_count"] < 6:
+                    s3_key = f"{s3_prefix}{zpwino}/photo_{photo_order:03d}{ext}"
+                    s3.put_object(Bucket=S3_BUCKET_NAME, Key=s3_key, Body=file_bytes)
+                    summary[zpwino]["photo_entries"].append((photo_order, s3_key))
+                    summary[zpwino]["photo_count"] += 1
+
+            del file_bytes
+
+    # 사진 정렬 + photo_keys 생성
+    for zpwino in summary:
+        entries = sorted(summary[zpwino]["photo_entries"], key=lambda x: x[0])
+        summary[zpwino]["photo_keys"] = [k for _, k in entries[:6]]
+        del summary[zpwino]["photo_entries"]
+
+    return summary
+
+
+def _decode_base64_image(data_url):
+    if not data_url:
+        return None
+    try:
+        if "," in data_url:
+            data_url = data_url.split(",", 1)[1]
+        return base64.b64decode(data_url)
+    except Exception:
+        return None
+
+
+@app.post("/cert/lookup")
+async def cert_lookup(request: Request):
+    """허가번호/호출명칭으로 설치확인서용 DB 조회"""
+    await _verify_auth(request)
+    body = await request.json()
+    query = str(body.get("query", "")).strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="허가번호 또는 호출명칭을 입력하세요.")
+
+    try:
+        result = await asyncio.to_thread(_cert_lookup_single, query)
+        _release_callname_df()
+        if result:
+            return {"found": True, **result}
+        return {"found": False}
+    except Exception as e:
+        _release_callname_df()
+        logger.error(f"설치확인서 조회 실패: {e}")
+        raise HTTPException(status_code=500, detail="서버 내부 오류")
+
+
+@app.post("/cert/generate")
+async def cert_generate(request: Request):
+    """개별 설치확인서 생성 (PDF 또는 HWPX)"""
+    await _verify_auth(request)
+    body = await request.json()
+
+    fmt = body.get("format", "pdf").lower()
+    form_data = body.get("form_data", {})
+    photos_b64 = body.get("photos", [])
+    blueprint_b64 = body.get("blueprint")
+
+    if fmt == "pdf" and not HAS_REPORTLAB:
+        raise HTTPException(status_code=503, detail="서버에 reportlab이 설치되지 않았습니다.")
+    if fmt == "hwpx" and not HAS_HWP_GEN:
+        raise HTTPException(status_code=503, detail="HWPX 생성 모듈 로드 실패")
+
+    try:
+        photo_list = []
+        for p in photos_b64[:6]:
+            decoded = _decode_base64_image(p)
+            if decoded:
+                photo_list.append(decoded)
+
+        blueprint_bytes = _decode_base64_image(blueprint_b64)
+
+        if fmt == "hwpx":
+            output = await asyncio.to_thread(
+                generate_certificate_hwp, form_data,
+                photo_list or None, blueprint_bytes)
+            media = "application/hwp+zip"
+            ext = "hwpx"
+        else:
+            output = await asyncio.to_thread(
+                generate_certificate_pdf, form_data,
+                photo_list or None, blueprint_bytes)
+            media = "application/pdf"
+            ext = "pdf"
+
+        zpwino = form_data.get("zpwino", "certificate")
+        filename = f"설치확인서_{zpwino}.{ext}"
+        data = output.getvalue()
+        del output, photo_list, blueprint_bytes
+
+        return StreamingResponse(
+            iter([data]),
+            media_type=media,
+            headers={
+                "Content-Disposition": f"attachment; filename*=UTF-8''{filename}",
+                "Content-Length": str(len(data)),
+            },
+        )
+    except Exception as e:
+        logger.error(f"설치확인서 생성 실패: {e}")
+        raise HTTPException(status_code=500, detail=f"생성 실패: {str(e)}")
+
+
+@app.post("/cert/batch/lookup")
+async def cert_batch_lookup(request: Request):
+    """허가번호 목록 일괄 조회 (최대 500건)"""
+    await _verify_auth(request)
+    body = await request.json()
+    zpwino_list = body.get("zpwino_list", [])
+    zpwino_list = list(dict.fromkeys([str(z).strip() for z in zpwino_list if str(z).strip()]))
+
+    if not zpwino_list:
+        raise HTTPException(status_code=400, detail="허가번호를 입력해주세요.")
+    if len(zpwino_list) > 500:
+        raise HTTPException(status_code=400, detail="한 번에 최대 500건까지 조회 가능합니다.")
+
+    try:
+        results = await asyncio.to_thread(_cert_batch_lookup, zpwino_list)
+        _release_callname_df()
+
+        items = []
+        for z in zpwino_list:
+            if z in results:
+                items.append({"input_zpwino": z, "found": True, **results[z]})
+            else:
+                items.append({"input_zpwino": z, "found": False})
+
+        found_count = sum(1 for it in items if it["found"])
+        return {"total": len(items), "found": found_count,
+                "not_found": len(items) - found_count, "items": items}
+    except Exception as e:
+        _release_callname_df()
+        logger.error(f"일괄 조회 실패: {e}")
+        raise HTTPException(status_code=500, detail="서버 내부 오류")
+
+
+@app.post("/cert/batch/upload-photos")
+async def cert_batch_upload_photos(request: Request, file: UploadFile = File(...)):
+    """사진 ZIP 업로드 → 허가번호별 자동 매칭 → S3 temp 저장"""
+    await _verify_auth(request)
+
+    if not file.filename or not file.filename.lower().endswith(".zip"):
+        raise HTTPException(status_code=400, detail="ZIP 파일만 가능합니다.")
+
+    tmp_path = None
+    try:
+        # 디스크 임시 저장 (메모리 절약)
+        with _tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as tmp:
+            tmp_path = tmp.name
+            while True:
+                chunk = await file.read(8 * 1024 * 1024)
+                if not chunk:
+                    break
+                tmp.write(chunk)
+
+        job_id = str(uuid.uuid4())
+        summary = await asyncio.to_thread(_parse_photo_zip_to_s3, tmp_path, job_id)
+
+        _cert_sessions[job_id] = {
+            "type": "photos", "ts": time.time(),
+            "s3_prefix": f"cert-temp/{job_id}/",
+            "summary": summary,
+        }
+
+        # 클라이언트용 요약 (S3 키 제외)
+        client_summary = {}
+        for zpwino, data in summary.items():
+            client_summary[zpwino] = {
+                "has_blueprint": data["has_blueprint"],
+                "photo_count": data["photo_count"],
+            }
+
+        return {
+            "photo_job_id": job_id,
+            "matched_count": len(summary),
+            "summary": client_summary,
+        }
+    except zipfile.BadZipFile:
+        raise HTTPException(status_code=400, detail="올바른 ZIP 파일이 아닙니다.")
+    except Exception as e:
+        logger.error(f"사진 ZIP 처리 실패: {e}")
+        raise HTTPException(status_code=500, detail="서버 내부 오류")
+    finally:
+        if tmp_path:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+
+@app.post("/cert/batch/generate")
+async def cert_batch_generate(request: Request):
+    """일괄 설치확인서 생성 (SSE 스트리밍, PDF만)"""
+    await _verify_auth(request)
+    if not HAS_REPORTLAB:
+        raise HTTPException(status_code=503, detail="서버에 reportlab이 설치되지 않았습니다.")
+
+    body = await request.json()
+    items = body.get("items", [])
+    common = body.get("common", {})
+    photo_job_id = body.get("photo_job_id")
+
+    if not items:
+        raise HTTPException(status_code=400, detail="생성할 항목이 없습니다.")
+    if len(items) > 500:
+        raise HTTPException(status_code=400, detail="최대 500건까지 생성 가능합니다.")
+
+    # 동시 일괄 생성 1건 제한
+    if _cert_batch_lock.locked():
+        raise HTTPException(status_code=429, detail="다른 일괄 생성이 진행 중입니다. 잠시 후 다시 시도하세요.")
+
+    photo_summary = {}
+    if photo_job_id and photo_job_id in _cert_sessions:
+        photo_summary = _cert_sessions[photo_job_id].get("summary", {})
+
+    installer_name = common.get("installer_name", "에스케이텔레콤 주식회사")
+    sharing_type = common.get("sharing_type", "")
+    antenna_frame_type = common.get("antenna_frame_type", "")
+    antenna_count = common.get("antenna_count", 1)
+    other_antenna_count = common.get("other_antenna_count", 0)
+    co_installer_name = common.get("co_installer_name", "")
+    co_zpwino_common = common.get("co_zpwino", "")
+    date_str = common.get("date", datetime.now().strftime("%Y년 %m월 %d일"))
+
+    async def stream():
+        async with _cert_batch_lock:
+            job_id = str(uuid.uuid4())
+            tmp_dir = os.path.join(_tempfile.gettempdir(), f"cert_batch_{job_id}")
+            os.makedirs(tmp_dir, exist_ok=True)
+            s3 = get_s3_client()
+
+            total = len(items)
+            success_count = 0
+            fail_count = 0
+            pdf_files = []
+
+            yield f"data: {json.dumps({'type': 'start', 'total': total, 'job_id': job_id})}\n\n"
+
+            for idx, item in enumerate(items):
+                zpwino = item.get("zpwino", "")
+                zpwina = item.get("zpwina", "")
+
+                try:
+                    form_data = {
+                        "zpwino": zpwino,
+                        "zpwina": zpwina,
+                        "zpwiadr": item.get("zpwiadr", ""),
+                        "installer_name": installer_name,
+                        "antenna_count": antenna_count,
+                        "other_antenna_count": other_antenna_count,
+                        "sharing_type": sharing_type,
+                        "antenna_frame_type": item.get("antenna_frame_type") or item.get("zpirty3") or antenna_frame_type,
+                        "co_installer_name": co_installer_name,
+                        "co_zpwino": co_zpwino_common,
+                        "remark": item.get("remark", ""),
+                        "date": date_str,
+                    }
+
+                    photo_list = None
+                    blueprint_bytes = None
+
+                    # S3에서 사진 로드 (1건씩, 메모리 안전)
+                    ps = photo_summary.get(zpwino)
+                    if ps:
+                        if ps.get("bp_key"):
+                            try:
+                                obj = s3.get_object(Bucket=S3_BUCKET_NAME, Key=ps["bp_key"])
+                                blueprint_bytes = obj["Body"].read()
+                            except Exception:
+                                pass
+                        if ps.get("photo_keys"):
+                            photo_list = []
+                            for pk in ps["photo_keys"]:
+                                try:
+                                    obj = s3.get_object(Bucket=S3_BUCKET_NAME, Key=pk)
+                                    photo_list.append(obj["Body"].read())
+                                except Exception:
+                                    pass
+                            if not photo_list:
+                                photo_list = None
+
+                    output = await asyncio.to_thread(
+                        generate_certificate_pdf, form_data,
+                        photo_list, blueprint_bytes)
+
+                    filename = f"{zpwino}.pdf"
+                    filepath = os.path.join(tmp_dir, filename)
+                    with open(filepath, "wb") as f:
+                        f.write(output.getvalue())
+                    pdf_files.append((filename, filepath))
+                    success_count += 1
+
+                    del output, photo_list, blueprint_bytes
+
+                    yield f"data: {json.dumps({'type': 'progress', 'current': idx + 1, 'total': total, 'zpwino': zpwino, 'status': 'success'})}\n\n"
+
+                except Exception as e:
+                    fail_count += 1
+                    logger.warning(f"일괄 PDF 생성 실패 ({zpwino}): {e}")
+                    yield f"data: {json.dumps({'type': 'progress', 'current': idx + 1, 'total': total, 'zpwino': zpwino, 'status': 'fail', 'error': str(e)})}\n\n"
+
+            # ZIP 패키징 → S3 업로드
+            result_s3_key = None
+            if pdf_files:
+                zip_path = os.path.join(_tempfile.gettempdir(), f"cert_batch_{job_id}.zip")
+                with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+                    for fname, fpath in pdf_files:
+                        zf.write(fpath, fname)
+
+                result_s3_key = f"cert-results/{job_id}.zip"
+                with open(zip_path, "rb") as f:
+                    s3.put_object(Bucket=S3_BUCKET_NAME, Key=result_s3_key, Body=f)
+
+                try:
+                    os.unlink(zip_path)
+                except OSError:
+                    pass
+
+            # 임시 디렉토리 정리
+            import shutil
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+            # 사진 S3 temp 정리
+            if photo_job_id and photo_job_id in _cert_sessions:
+                prefix = _cert_sessions[photo_job_id].get("s3_prefix")
+                if prefix:
+                    try:
+                        resp = s3.list_objects_v2(Bucket=S3_BUCKET_NAME, Prefix=prefix)
+                        for obj in resp.get("Contents", []):
+                            s3.delete_object(Bucket=S3_BUCKET_NAME, Key=obj["Key"])
+                    except Exception:
+                        pass
+                _cert_sessions.pop(photo_job_id, None)
+
+            # 결과 세션 저장
+            if result_s3_key:
+                _cert_sessions[job_id] = {
+                    "type": "result", "ts": time.time(),
+                    "s3_result_key": result_s3_key,
+                }
+
+            yield f"data: {json.dumps({'type': 'complete', 'job_id': job_id, 'success': success_count, 'fail': fail_count, 'total': total})}\n\n"
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive",
+                 "X-Accel-Buffering": "no"},
+    )
+
+
+@app.get("/cert/batch/download/{job_id}")
+async def cert_batch_download(job_id: str, request: Request):
+    """일괄 생성 결과 ZIP 다운로드 (S3 presigned URL)"""
+    await _verify_auth(request)
+    if job_id not in _cert_sessions:
+        raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다.")
+
+    sess = _cert_sessions[job_id]
+    s3_key = sess.get("s3_result_key")
+    if not s3_key:
+        raise HTTPException(status_code=400, detail="결과 파일이 없습니다.")
+
+    today = datetime.now().strftime("%Y%m%d")
+    filename = f"설치확인서_{today}.zip"
+    try:
+        url = get_s3_client().generate_presigned_url(
+            "get_object",
+            Params={
+                "Bucket": S3_BUCKET_NAME, "Key": s3_key,
+                "ResponseContentDisposition": f"attachment; filename*=UTF-8''{filename}",
+            },
+            ExpiresIn=600,
+        )
+        return {"url": url, "filename": filename}
+    except Exception as e:
+        logger.error(f"일괄 다운로드 실패: {e}")
         raise HTTPException(status_code=500, detail="서버 내부 오류")
 
 
