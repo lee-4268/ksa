@@ -19,5 +19,4 @@ frontend:
   cache:
     paths:
       - flutter/**/*
-      - .dart_tool/**/*
       - .pub-cache/**/*
