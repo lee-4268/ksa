@@ -36,7 +36,12 @@ class CallnameService {
 
   /// 관리자: DB CSV/Excel 업로드 (replace=true면 기존 DB 교체)
   Future<Map<String, dynamic>> uploadDbFile(
-      Uint8List bytes, String filename, {bool replace = true}) async {
+      Uint8List bytes, String filename, {
+      bool replace = true,
+      void Function(String stage, double progress)? onProgress,
+  }) async {
+    onProgress?.call('업로드 준비 중...', 0.0);
+
     final uri = Uri.parse('$_baseUrl/callname/upload-csv')
         .replace(queryParameters: {'replace': replace.toString()});
     final req = http.MultipartRequest('POST', uri)
@@ -44,12 +49,19 @@ class CallnameService {
       ..files.add(http.MultipartFile.fromBytes('file', bytes,
           filename: filename));
 
+    onProgress?.call('서버에 업로드 중...', 0.2);
+
     final streamed = await req.send().timeout(_uploadTimeout);
+
+    onProgress?.call('서버에서 처리 중...', 0.6);
+
     final respBytes = await streamed.stream.toBytes();
     if (streamed.statusCode != 200) {
       throw Exception(
           'DB 업로드 실패: ${utf8.decode(respBytes)}');
     }
+
+    onProgress?.call('완료', 1.0);
     return json.decode(utf8.decode(respBytes)) as Map<String, dynamic>;
   }
 

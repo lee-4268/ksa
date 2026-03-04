@@ -19,6 +19,8 @@ class AdminPanelScreen extends StatefulWidget {
 class _AdminPanelScreenState extends State<AdminPanelScreen> {
   final _callnameService = CallnameService();
   bool _dbUploading = false;
+  double _uploadProgress = 0;
+  String _uploadStage = '';
   String? _dbStatus;
   bool _initialized = false;
 
@@ -58,12 +60,24 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
     final file = result.files.first;
     if (file.bytes == null) return;
 
-    setState(() => _dbUploading = true);
+    setState(() {
+      _dbUploading = true;
+      _uploadProgress = 0;
+      _uploadStage = '업로드 준비 중...';
+    });
     try {
       final resp = await _callnameService.uploadDbFile(
         Uint8List.fromList(file.bytes!),
         file.name,
         replace: replace,
+        onProgress: (stage, progress) {
+          if (mounted) {
+            setState(() {
+              _uploadStage = stage;
+              _uploadProgress = progress;
+            });
+          }
+        },
       );
       final msg = resp['message'] as String? ?? '업로드 완료';
       if (mounted) {
@@ -79,7 +93,13 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
         );
       }
     } finally {
-      if (mounted) setState(() => _dbUploading = false);
+      if (mounted) {
+        setState(() {
+          _dbUploading = false;
+          _uploadProgress = 0;
+          _uploadStage = '';
+        });
+      }
     }
   }
 
@@ -199,7 +219,24 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
             ),
             const SizedBox(height: 12),
             if (_dbUploading)
-              const Center(child: CircularProgressIndicator())
+              Column(
+                children: [
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(4),
+                    child: LinearProgressIndicator(
+                      value: _uploadProgress > 0 ? _uploadProgress : null,
+                      minHeight: 6,
+                      backgroundColor: Colors.orange.shade100,
+                      valueColor: AlwaysStoppedAnimation<Color>(Colors.orange.shade600),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    _uploadStage,
+                    style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                  ),
+                ],
+              )
             else
               Row(
                 children: [

@@ -4766,19 +4766,25 @@ async def callname_upload_csv(
             uploaded_keys.append(s3_key)
             logger.info(f"호출명칭 DB 업로드: {s3_key} ({file_size:,} bytes)")
 
-        # 4) 캐시 무효화 → 재로드 → 즉시 해제
+        # 4) 업로드한 파일의 행 수만 집계 (DataFrame 전체 로드 X → OOM 방지)
+        uploaded_rows = 0
+        for _, fpath in filtered_paths:
+            with open(fpath, encoding="utf-8") as cnt_f:
+                uploaded_rows += sum(1 for _ in cnt_f) - 1  # header 제외
+
+        # 캐시 무효화 (다음 매칭 요청 시 lazy-load)
         global _callname_df, _callname_df_loaded_at, _callname_db_row_count
         _callname_df = None
         _callname_df_loaded_at = 0
-        await asyncio.to_thread(_load_callname_cache)
-        row_count = _callname_db_row_count
-        _release_callname_df()
+        _callname_db_row_count = 0
+        gc.collect()
+
         file_count = len(filtered_paths)
         return {
             "success": True,
-            "message": f"DB 업로드 완료 ({file_count}개 파일, 총 {row_count:,}행)",
+            "message": f"DB 업로드 완료 ({file_count}개 파일, 총 {uploaded_rows:,}행)",
             "files": uploaded_keys,
-            "total_rows": row_count,
+            "total_rows": uploaded_rows,
         }
     except HTTPException:
         raise
