@@ -11,6 +11,7 @@ external void _jsExportDsFromS3(
   JSString metaJson,
   JSFunction progressCallback,
   JSFunction completionCallback,
+  JSString? authToken,
 );
 
 /// DB 폴백 Export (JSON → xlsx)
@@ -28,6 +29,7 @@ external void _jsDownloadXlsxFromUrl(
   JSString filename,
   JSFunction progressCallback,
   JSFunction completionCallback,
+  JSString? authToken,
 );
 
 /// pre-built xlsx를 S3 presigned URL에서 직접 다운로드
@@ -35,6 +37,7 @@ Future<String> downloadXlsxFromUrl({
   required String url,
   required String filename,
   required void Function(String stage, double percent) onProgress,
+  String? authToken,
 }) async {
   final completer = Completer<String>();
 
@@ -55,6 +58,7 @@ Future<String> downloadXlsxFromUrl({
     filename.toJS,
     progressHandler.toJS,
     completionHandler.toJS,
+    authToken?.toJS,
   );
 
   return completer.future.timeout(
@@ -68,6 +72,7 @@ Future<String> exportDsFromS3({
   required String s3Url,
   required String metaJson,
   required void Function(String stage, double percent) onProgress,
+  String? authToken,
 }) async {
   final completer = Completer<String>();
 
@@ -88,6 +93,7 @@ Future<String> exportDsFromS3({
     metaJson.toJS,
     progressHandler.toJS,
     completionHandler.toJS,
+    authToken?.toJS,
   );
 
   return completer.future.timeout(

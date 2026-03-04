@@ -1,6 +1,8 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import '../services/auth_service.dart';
 import '../services/ds_data_service.dart';
 
 /// DS 데이터 조회 화면 - 시트별 탭 + 데이터 테이블 + 서버 검색 + 페이징
@@ -49,8 +51,13 @@ class _DsDataScreenState extends State<DsDataScreen> with SingleTickerProviderSt
     _sheetNames = widget.sheetStats.keys.toList();
     _tabController = TabController(length: _sheetNames.length, vsync: this);
     _tabController.addListener(_onTabChanged);
+  }
 
-    if (_sheetNames.isNotEmpty) {
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _dataService.setAuthToken(context.read<AuthService>().authToken);
+    if (_sheetCache.isEmpty && _sheetNames.isNotEmpty) {
       _loadSheetData(_sheetNames.first);
     }
   }

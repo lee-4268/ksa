@@ -198,8 +198,8 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
       }
 
       // S3 presign 확인 → type별 분기
+      final authToken = context.read<AuthService>().authToken;
       try {
-        final authToken = context.read<AuthService>().authToken;
         final presignUri =
             Uri.parse('$_baseUrl/ds/export-presign').replace(queryParameters: params);
         final presignResp =
@@ -229,6 +229,7 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
                 s3Url: proxyUri.toString(),
                 metaJson: metaJson,
                 onProgress: onProgress,
+                authToken: authToken,
               );
               if (mounted) {
                 setState(() => _exportingId = null);
@@ -267,6 +268,7 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
         url: exportUri.toString(),
         filename: filename,
         onProgress: onProgress,
+        authToken: authToken,
       );
 
       if (mounted) {

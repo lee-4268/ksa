@@ -13,15 +13,20 @@
  * @param {String} metaJson - { divisionName, divisionCode, importDate, ... }
  * @param {Function} progressCallback - (stage, percent)
  * @param {Function} completionCallback - (success, message)
+ * @param {String} authToken - Bearer auth token (optional)
  */
-async function _exportDsFromS3(s3Url, metaJson, progressCallback, completionCallback) {
+async function _exportDsFromS3(s3Url, metaJson, progressCallback, completionCallback, authToken) {
   try {
     progressCallback('S3에서 원본 파일 다운로드 중...', 3);
 
     var meta = JSON.parse(metaJson);
 
     // S3에서 ZIP 다운로드
-    var response = await fetch(s3Url);
+    var fetchOpts = {};
+    if (authToken) {
+      fetchOpts.headers = { 'Authorization': 'Bearer ' + authToken };
+    }
+    var response = await fetch(s3Url, fetchOpts);
     if (!response.ok) {
       completionCallback(false, '파일 다운로드 실패: ' + response.status);
       return;
@@ -291,12 +296,17 @@ async function _exportDsFromS3(s3Url, metaJson, progressCallback, completionCall
  * @param {String} filename - 저장 파일명
  * @param {Function} progressCallback - (stage, percent)
  * @param {Function} completionCallback - (success, message)
+ * @param {String} authToken - Bearer auth token (optional)
  */
-async function _downloadXlsxFromUrl(url, filename, progressCallback, completionCallback) {
+async function _downloadXlsxFromUrl(url, filename, progressCallback, completionCallback, authToken) {
   try {
     progressCallback('xlsx 다운로드 중...', 20);
 
-    var response = await fetch(url);
+    var fetchOpts = {};
+    if (authToken) {
+      fetchOpts.headers = { 'Authorization': 'Bearer ' + authToken };
+    }
+    var response = await fetch(url, fetchOpts);
     if (!response.ok) {
       completionCallback(false, 'xlsx 다운로드 실패: ' + response.status);
       return;
