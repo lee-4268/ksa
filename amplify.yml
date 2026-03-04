@@ -7,8 +7,10 @@ frontend:
         - export PATH="$PATH:`pwd`/flutter/bin"
         - flutter precache --web
         - flutter pub get
+        - flutter clean
     build:
       commands:
+        - flutter pub get
         - flutter build web --no-tree-shake-icons --dart-define=KAKAO_JS_KEY=$KAKAO_JS_KEY --dart-define=KAKAO_REST_KEY=$KAKAO_REST_KEY --dart-define=KAKAO_NATIVE_KEY=$KAKAO_NATIVE_KEY --dart-define=KMA_SERVICE_KEY=$KMA_SERVICE_KEY
   artifacts:
     baseDirectory: build/web
