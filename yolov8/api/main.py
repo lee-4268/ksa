@@ -271,7 +271,7 @@ def _verify_token(token: str) -> str | None:
 
 
 async def _verify_auth(request: Request) -> str:
-    """Bearer 토큰 검증. 폴백: X-User-Id (마이그레이션 기간). 실패 시 401."""
+    """Bearer 토큰 검증. 실패 시 401."""
     auth_header = request.headers.get("Authorization", "")
     if auth_header.startswith("Bearer "):
         token = auth_header[7:]
@@ -279,11 +279,6 @@ async def _verify_auth(request: Request) -> str:
         if empno:
             return empno
         raise HTTPException(status_code=401, detail="토큰이 만료되었거나 유효하지 않습니다")
-
-    # 하위 호환: X-User-Id (프론트 마이그레이션 후 제거 예정)
-    empno = request.headers.get("X-User-Id", "").strip()
-    if empno:
-        return empno
 
     raise HTTPException(status_code=401, detail="인증 정보 없음")
 
@@ -699,6 +694,7 @@ app = FastAPI(
 # CORS: 환경변수로 허용 도메인 설정 (쉼표 구분)
 _cors_env = os.environ.get("CORS_ALLOWED_ORIGINS", "")
 ALLOWED_ORIGINS = [x.strip() for x in _cors_env.split(",") if x.strip()] or [
+    "https://main.d3fueh5qj86kgy.amplifyapp.com",
     "http://localhost:3000",
     "http://localhost:8080",
 ]
@@ -1826,17 +1822,20 @@ async def set_user_role(req: SetRoleRequest, request: Request):
 
     # 인증: admin 역할 또는 부트스트랩 키
     admin_key = request.headers.get("X-Admin-Key", "").strip()
-    caller_id = request.headers.get("X-User-Id", "").strip()
 
     authorized = False
     if ADMIN_BOOTSTRAP_KEY and admin_key == ADMIN_BOOTSTRAP_KEY:
         authorized = True
         logger.info(f"role 변경 (부트스트랩): {req.empno} → {req.role}")
-    elif caller_id:
-        caller_role = await asyncio.to_thread(_get_user_role_sync, caller_id)
-        if caller_role == "admin":
-            authorized = True
-            logger.info(f"role 변경 (admin {caller_id}): {req.empno} → {req.role}")
+    else:
+        try:
+            caller_id = await _verify_auth(request)
+            caller_role = await asyncio.to_thread(_get_user_role_sync, caller_id)
+            if caller_role == "admin":
+                authorized = True
+                logger.info(f"role 변경 (admin {caller_id}): {req.empno} → {req.role}")
+        except HTTPException:
+            pass
 
     if not authorized:
         raise HTTPException(status_code=403, detail="권한 없음 (admin 또는 부트스트랩 키 필요)")
@@ -4071,7 +4070,10 @@ async def ds_delete_data(
             logger.info(f"DS delete complete ({storage_type}, no records): {divisionId}/{upload_sk}")
 
         # 6. 감사 로그
-        empno = request.headers.get("X-User-Id", "").strip()
+        try:
+            empno = await _verify_auth(request)
+        except HTTPException:
+            empno = "unknown"
         await asyncio.to_thread(
             _record_audit_log_sync, "DELETE", "DSData",
             f"{divisionId}/{importDate}", empno,
@@ -4237,7 +4239,10 @@ async def ds_enqueue(request: Request, req: DsEnqueueRequest):
         logger.info(f"DS job enqueued: {job_id} ({req.fileName}, 큐 {queue_position}번째)")
 
         # 감사 로그
-        empno = request.headers.get("X-User-Id", "").strip() or req.uploadedBy
+        try:
+            empno = await _verify_auth(request)
+        except HTTPException:
+            empno = req.uploadedBy
         await asyncio.to_thread(
             _record_audit_log_sync, "CREATE", "DSData", req.s3Key, empno,
             {"newData": json.dumps({"fileName": req.fileName, "jobId": job_id})},

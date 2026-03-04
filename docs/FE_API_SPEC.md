@@ -2,8 +2,8 @@
 
 ## Frontend Services Specification
 
-**버전:** 1.3.1
-**최종 수정일:** 2026-03-03
+**버전:** 1.4.0
+**최종 수정일:** 2026-03-04
 
 ---
 
@@ -11,33 +11,80 @@
 
 **파일:** `lib/services/auth_service.dart`
 
-AWS Cognito 기반 사용자 인증을 담당합니다.
+i-NET SSO 기반 사용자 인증 + HMAC 토큰 관리를 담당합니다.
 
 ### Properties
 
 | Property | Type | Description |
 |----------|------|-------------|
-| `currentUserEmail` | `String?` | 현재 로그인된 사용자 이메일 |
-| `currentUserName` | `String?` | 현재 사용자 이름 |
-| `currentUserPhoneNumber` | `String?` | 현재 사용자 전화번호 |
-| `isLoggedIn` | `bool` | 로그인 상태 |
+| `userId` | `String?` | 현재 로그인된 사번 |
+| `userName` | `String?` | 사용자 이름 |
+| `userDepartment` | `String?` | 소속 본부 |
+| `userTeam` | `String?` | 소속 팀 |
+| `isSignedIn` | `bool` | 로그인 상태 |
+| `authToken` | `String?` | HMAC Bearer 토큰 |
+| `authHeaders` | `Map<String, String>` | `{'Authorization': 'Bearer $token'}` (토큰 있을 때) |
+| `isAdmin` | `bool` | admin 역할 여부 |
+| `isManager` | `bool` | manager 이상 역할 여부 |
 
 ### Methods
 
 | 메서드 | 시그니처 | 설명 |
 |--------|---------|------|
-| `signUp` | `Future<SignUpResult?>` | 이메일 기반 회원가입 |
-| `confirmSignUp` | `Future<bool>` | 이메일 인증 코드 확인 |
-| `signIn` | `Future<bool>` | 로그인 |
-| `signOut` | `Future<void>` | 로그아웃 |
-| `resetPassword` | `Future<bool>` | 비밀번호 재설정 요청 |
-| `confirmResetPassword` | `Future<bool>` | 비밀번호 재설정 완료 |
-| `getCurrentUser` | `Future<AuthUser?>` | 현재 사용자 정보 |
+| `signIn` | `Future<bool> signIn(String username, String password)` | SSO 로그인 → 토큰 발급·저장 |
+| `signOut` | `Future<void>` | 로그아웃 → 토큰·세션 삭제 |
 | `updateActivity` | `void` | 세션 타임아웃 연장 |
+
+### 토큰 관리
+
+- 로그인 성공 시 서버 응답의 `token` 필드를 `SharedPreferences`에 저장
+- 앱 재시작 시 `SharedPreferences`에서 토큰 복원
+- 로그아웃 시 토큰 삭제
+- 토큰 만료: 서버에서 2시간, 클라이언트 세션 타임아웃도 2시간
+- `authHeaders` getter로 모든 서비스에서 일관된 인증 헤더 사용
 
 ---
 
-## 2. CloudDataService
+## 2. AdminService (v1.4.0)
+
+**파일:** `lib/services/admin_service.dart`
+
+관리자 패널 기능을 담당합니다. Bearer 토큰 인증 사용.
+
+### Methods
+
+| 메서드 | 시그니처 | 설명 |
+|--------|---------|------|
+| `setCurrentUser` | `void setCurrentUser(String empno, {String? token})` | 인증 토큰 설정 |
+| `loadAllUsers` | `Future<void>` | `GET /admin/users` — 전체 사용자 목록 조회 |
+| `updateUserRole` | `Future<bool> updateUserRole(String profileId, UserRole newRole)` | `PUT /admin/set-role` — 역할 변경 |
+
+### Properties
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `allUsers` | `List<AppUserProfile>` | 전체 사용자 목록 |
+| `isLoading` | `bool` | 로딩 상태 |
+| `errorMessage` | `String?` | 오류 메시지 |
+
+---
+
+## 3. AuditService (v1.4.0)
+
+**파일:** `lib/services/audit_service.dart`
+
+감사 로그 조회를 담당합니다. Bearer 토큰 인증 사용.
+
+### Methods
+
+| 메서드 | 시그니처 | 설명 |
+|--------|---------|------|
+| `setUserContext` | `void setUserContext(String userId, {String? token})` | 인증 토큰 설정 |
+| `fetchLogs` | `Future<void>` | `GET /admin/audit-logs` — 감사 로그 조회 |
+
+---
+
+## 4. CloudDataService
 
 **파일:** `lib/services/cloud_data_service.dart`
 
@@ -376,6 +423,8 @@ class WeatherInfo {
 | DS 데이터 관리 | `ds_dashboard_screen.dart` | DS 데이터 관리 |
 | DS 데이터 조회 | `ds_data_screen.dart` | (DsDashboardScreen 내부) |
 | DS 파일 병합 | `ds_merge_screen.dart` | (Drawer 미노출, 직접 접근) |
+| 사용자 관리 (관리자) | `admin/user_management_screen.dart` | 관리자 패널 > 사용자 관리 |
+| 감사 로그 (관리자) | `admin/audit_log_screen.dart` | 관리자 패널 > 감사 로그 |
 
 ### Drawer 메뉴 구성
 
@@ -433,18 +482,37 @@ AppBar: "DS 데이터 관리" [새로고침]
 
 ---
 
-## 15. 환경 변수 / 빌드 설정
+## 17. 환경 변수 / 빌드 설정
+
+### 빌드 시 `--dart-define` 변수
 
 | 변수 | 기본값 | 설명 |
 |------|--------|------|
 | `API_BASE_URL` | `https://api-sko-kca.skons.net` | DS API 서버 URL |
+| `KAKAO_JS_KEY` | (없음) | 카카오 JavaScript 키 (웹/지도용) |
+| `KAKAO_REST_KEY` | (없음) | 카카오 REST API 키 (지오코딩용) |
+| `KAKAO_NATIVE_KEY` | (없음) | 카카오 Native 앱 키 (Android/iOS용) |
+| `KMA_SERVICE_KEY` | (없음) | 기상청 API 서비스 키 |
 
 **Web 빌드 시:**
 ```bash
-flutter build web --dart-define=API_BASE_URL=https://api-sko-kca.skons.net
+flutter build web --release \
+  --dart-define=KAKAO_JS_KEY=xxx \
+  --dart-define=KAKAO_REST_KEY=xxx \
+  --dart-define=KAKAO_NATIVE_KEY=xxx \
+  --dart-define=KMA_SERVICE_KEY=xxx
 ```
 
-**배포:** `deploy.ps1` — S3 sync (`s3://radio-inspection-web`) 또는 AWS Amplify 자동 배포
+**Amplify 자동 빌드:** `amplify.yml`에서 환경변수 참조 (`$KAKAO_JS_KEY` 등), Amplify 콘솔 Environment variables에 설정.
+
+**배포:** AWS Amplify 자동 배포 (git push) 또는 `deploy.ps1` — S3 sync
+
+### 인증 헤더
+
+모든 인증 필요 API 호출 시 `Authorization: Bearer <token>` 헤더 사용.
+- 토큰: `AuthService.authToken`에서 취득
+- 각 서비스에 `setAuthToken(String? token)` 메서드로 전달
+- `main.dart`의 `_propagateAuthToken()`에서 로그인/로그아웃 시 자동 전파
 
 ---
 
@@ -456,3 +524,4 @@ flutter build web --dart-define=API_BASE_URL=https://api-sko-kca.skons.net
 | 1.2.0 | 2026-01-27 | TowerClassificationService, WeatherService, ExcelService.exportWithOriginalFormat 추가 |
 | 1.3.0 | 2026-02-26 | DsDataService, DsUploadService, DsExportService 추가, Drawer 구성 변경, DsDashboardScreen 구조 명세, JS 파일 목록, 빌드 설정 추가 |
 | 1.3.1 | 2026-03-03 | Upload-Zero-Build 반영: _maxPollDuration 35분→3분, DsDashboardScreen 자동 갱신 타이머 추가, DsUploadService 설명 업데이트 |
+| 1.4.0 | 2026-03-04 | 보안 강화: AuthService SSO+토큰 전환, AdminService·AuditService 추가, 전 서비스 Bearer 토큰 인증, API 키 dart-define 분리, X-User-Id 완전 제거, 관리자 화면(사용자 관리/감사 로그) 추가 |

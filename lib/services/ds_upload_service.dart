@@ -111,7 +111,7 @@ class DsUploadService {
       'POST',
       Uri.parse('$_baseUrl/ds/upload-raw'),
     )
-      ..headers['X-User-Id'] = uploadedBy
+      ..headers['Authorization'] = 'Bearer ${_authToken ?? ''}'
       ..files.add(http.MultipartFile.fromBytes(
         'file',
         bytes,
@@ -143,7 +143,6 @@ class DsUploadService {
       Uri.parse('$_baseUrl/ds/enqueue'),
       headers: {
         'Content-Type': 'application/json',
-        'X-User-Id': uploadedBy,
         if (_authToken != null) 'Authorization': 'Bearer $_authToken',
       },
       body: jsonEncode({

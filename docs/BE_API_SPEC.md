@@ -1,7 +1,7 @@
 # KSA Backend API 명세서
 
-**버전:** 1.3.1
-**최종 수정일:** 2026-03-03
+**버전:** 1.4.0
+**최종 수정일:** 2026-03-04
 **API 타입:** AWS AppSync GraphQL + FastAPI REST (2개 서버)
 
 ---
@@ -23,7 +23,9 @@ https://api-sko-kca.skons.net
 - Framework: FastAPI + Uvicorn
 - Service: systemd (kca-api)
 - S3 Bucket: sko-kca-s3
-- DynamoDB Tables: kca-ds-records, kca-ds-uploads, kca-ds-jobs
+- DynamoDB Tables: kca-ds-records, kca-ds-uploads, kca-ds-jobs, kca-user-roles
+- 인증: HMAC-SHA256 Bearer 토큰 (2시간 만료)
+- CORS: 환경변수 `CORS_ALLOWED_ORIGINS` 또는 기본 허용 목록
 
 ### 1.3 AI 분류 서버 (FastAPI on EC2 + API Gateway)
 ```
@@ -34,7 +36,85 @@ https://c3jictzagh.execute-api.ap-northeast-2.amazonaws.com
 
 ---
 
-## 2. GraphQL API (무선국 관리)
+## 2. 인증 및 보안 (v1.4.0)
+
+### 2.1 HMAC 토큰 인증
+
+모든 인증 필요 엔드포인트는 `Authorization: Bearer <token>` 헤더가 필수입니다.
+
+**토큰 형식:** `base64url(empno:expiry_unix:hmac_sha256(SECRET, empno:expiry_unix))`
+- 만료: 2시간 (`AUTH_TOKEN_EXPIRY = 7200`)
+- 시크릿: 환경변수 `AUTH_TOKEN_SECRET` (미설정 시 dev-fallback 자동 생성, 운영 시 필수 설정)
+- 타이밍 공격 방지: `hmac.compare_digest` 사용
+
+**토큰 발급:** `POST /auth/login` 성공 시 응답에 `token`, `expiresIn` 포함
+
+### 2.2 엔드포인트 인증 분류
+
+| 분류 | 엔드포인트 |
+|------|-----------|
+| **공개** (인증 불필요) | `GET /`, `/health`, `/classes`, `POST /auth/login`, `GET /ds/region-codes` |
+| **인증 필요** (Bearer 토큰) | categories·stations CRUD, upload/photo·excel, download/*, predict, feedback, ds/stats·data·export*, ds/presign-*, ds/upload-raw·enqueue, ds/job/*, users/{empno}, `DELETE /storage/*` |
+| **관리자 전용** (admin/manager 역할) | `GET /admin/users`, `GET /admin/audit-logs`, `PUT /admin/set-role`, `DELETE /ds/data`, `POST /ds/upload-raw`, `POST /ds/enqueue` |
+
+### 2.3 Rate Limiting
+
+dict 기반 슬라이딩 윈도우, 5분 주기 자동 정리.
+
+| 엔드포인트 | 제한 | 윈도우 |
+|-----------|------|--------|
+| `POST /auth/login` | 5회 | 60초 |
+| `POST /predict` | 10회 | 60초 |
+| `POST /predict/ensemble` | 5회 | 60초 |
+| `POST /ds/upload-raw` | 3회 | 60초 |
+| `POST /feedback` | 10회 | 60초 |
+| `DELETE /storage/*` | 10회 | 60초 |
+
+초과 시 `429 Too Many Requests` 반환.
+
+### 2.4 업로드 크기 제한
+
+| 엔드포인트 | 최대 크기 |
+|-----------|----------|
+| `POST /upload/photo`, `/predict`, `/feedback` | 10MB |
+| `POST /upload/excel` | 50MB |
+| `POST /ds/upload-raw` | 200MB |
+
+### 2.5 S3 경로 검증
+
+`..`, `/` 시작 등 경로 탐색 공격 차단.
+
+| 엔드포인트 | 허용 prefix |
+|-----------|------------|
+| `GET /download/presigned` | `photos/`, `excel/`, `feedback/`, `ds-exports/`, `ds-raw/` |
+| `GET /download/photo` | `photos/`, `excel/`, `feedback/` |
+| `DELETE /storage/{key:path}` | `photos/`, `excel/`, `feedback/` |
+
+### 2.6 CORS 정책
+
+```python
+CORS_ALLOWED_ORIGINS=https://main.d3fueh5qj86kgy.amplifyapp.com,http://localhost:3000,http://localhost:8080
+```
+- `allow_methods`: GET, POST, PUT, DELETE, OPTIONS
+- `allow_headers`: Authorization, Content-Type, Accept, X-Admin-Key
+- `expose_headers`: Content-Length, Content-Disposition
+- `max_age`: 3600초
+
+### 2.7 에러 메시지 보안
+
+서버 내부 오류(500) 시 `str(e)` 대신 `"서버 내부 오류"` 반환. 상세 오류는 서버 로그에만 기록.
+
+### 2.8 환경변수
+
+| 변수 | 필수 | 설명 |
+|------|------|------|
+| `AUTH_TOKEN_SECRET` | 운영 필수 | HMAC 토큰 서명 키 (64자 hex 권장) |
+| `ADMIN_BOOTSTRAP_KEY` | 선택 | 초기 관리자 설정용 부트스트랩 키 (미설정 시 비활성화) |
+| `CORS_ALLOWED_ORIGINS` | 선택 | 허용 도메인 (쉼표 구분, 미설정 시 기본값 사용) |
+
+---
+
+## 3. GraphQL API (무선국 관리)
 
 ### 2.1 Schema Types
 
@@ -471,7 +551,106 @@ S3에 저장된 xlsx의 presigned URL 조회 (60분 유효)
 
 ---
 
-## 4. AI 분류 API (FastAPI REST)
+## 4. 인증/관리 API (FastAPI REST)
+
+Base URL: `https://api-sko-kca.skons.net`
+
+### 4.1 SSO 로그인
+
+#### `POST /auth/login`
+i-NET SSO 인증 + HMAC 토큰 발급. Rate Limit: 5회/60초.
+
+**Request Body:**
+```json
+{ "username": "N1104268", "password": "****" }
+```
+
+**Response (성공):**
+```json
+{
+  "result": "ok",
+  "empno": "N1104268",
+  "name": "홍길동",
+  "token": "base64url_encoded_hmac_token",
+  "expiresIn": 7200
+}
+```
+
+### 4.2 사용자 정보 조회
+
+#### `GET /users/{empno}`
+인증 필요. i-NET Users 테이블에서 프로필 조회 + kca-user-roles에서 역할 조회.
+
+**Response:**
+```json
+{
+  "empno": "N1104268",
+  "name": "홍길동",
+  "region": "충청본부",
+  "team": "전파관리팀",
+  "role": "admin"
+}
+```
+
+### 4.3 관리자 — 사용자 목록
+
+#### `GET /admin/users`
+관리자/매니저 전용. kca-user-roles 스캔 + Users 테이블 조회.
+
+**Query Parameters:** `search`, `region`, `role` (선택)
+
+**Response:**
+```json
+{
+  "success": true,
+  "users": [
+    { "empno": "N1104268", "name": "홍길동", "region": "충청본부", "team": "전파관리팀", "role": "admin" }
+  ],
+  "total": 1
+}
+```
+
+### 4.4 관리자 — 역할 변경
+
+#### `PUT /admin/set-role`
+관리자 또는 부트스트랩 키 필요.
+
+**Request Body:**
+```json
+{ "empno": "N1104268", "role": "admin" }
+```
+
+**인증 방식:** `Authorization: Bearer <token>` (admin 역할) 또는 `X-Admin-Key: <bootstrap_key>`
+**유효 역할:** `admin`, `manager`, `member`
+
+### 4.5 관리자 — 감사 로그
+
+#### `GET /admin/audit-logs`
+관리자/매니저 전용.
+
+**Query Parameters:** `entityType`, `action`, `limit` (기본 50)
+
+**Response:**
+```json
+{
+  "success": true,
+  "logs": [
+    {
+      "logId": "uuid",
+      "action": "UPDATE",
+      "entityType": "UserRole",
+      "entityId": "N1104268",
+      "performedBy": "N1104268",
+      "timestamp": "2026-03-04T10:00:00Z",
+      "details": {}
+    }
+  ]
+}
+```
+
+---
+
+## 5. AI 분류 API (FastAPI REST)
 
 Base URL: `https://c3jictzagh.execute-api.ap-northeast-2.amazonaws.com`
 
@@ -549,6 +728,8 @@ Base URL: `https://c3jictzagh.execute-api.ap-northeast-2.amazonaws.com`
 | kca-ds-records | divisionId | sheetName#importDate#divisionCode#rowIndex | DS 레코드 (old 데이터만) |
 | kca-ds-uploads | divisionId | divisionCode#importDate | 업로드 메타/현황 |
 | kca-ds-jobs | jobId | — | 처리 잡 큐 |
+| kca-user-roles | user_id | — | 사용자 역할 관리 (admin/manager/member) |
+| kca-audit-logs | logId | — | 감사 로그 (역할 변경, 데이터 삭제 등) |
 
 ### kca-ds-uploads 주요 속성
 
@@ -572,9 +753,13 @@ Base URL: `https://c3jictzagh.execute-api.ap-northeast-2.amazonaws.com`
 ### DS API 공통
 | Status | 설명 |
 |--------|------|
-| 400 | 잘못된 파라미터 |
+| 400 | 잘못된 파라미터 / S3 경로 탐색 차단 |
+| 401 | 인증 정보 없음 / 토큰 만료·위조 |
+| 403 | 권한 부족 (관리자 전용 엔드포인트) / S3 경로 prefix 불일치 |
 | 404 | 리소스 없음 |
-| 500 | 서버 내부 오류 (DynamoDB, S3) |
+| 413 | 업로드 크기 초과 |
+| 429 | Rate Limit 초과 |
+| 500 | 서버 내부 오류 (상세 정보는 서버 로그에만 기록) |
 | 503 | 의존성 미설치 (xlrd, openpyxl) |
 
 ### GraphQL
@@ -595,3 +780,4 @@ Base URL: `https://c3jictzagh.execute-api.ap-northeast-2.amazonaws.com`
 | 1.2.0 | 2026-01-27 | Category.originalExcelKey, Station.installationType, TowerClassification 타입 추가 |
 | 1.3.0 | 2026-02-26 | DS API 서버 전체 추가 (upload-raw, enqueue, job, stats, export-xlsx, export-presign, data CRUD), S3 경로, DynamoDB 테이블 구조 추가 |
 | 1.3.1 | 2026-03-03 | Upload-Zero-Build: 메타데이터만 파싱 (xlsx 빌드 제거), storageType/fileManifest 추가, 트리플 라우팅 (s3-zip/s3/DynamoDB), export on-demand 빌드, kca-ds-uploads 속성 명세 |
+| 1.4.0 | 2026-03-04 | 보안 강화: HMAC 토큰 인증, SSO 로그인 토큰 발급, 관리자 패널 API (users/audit-logs/set-role), kca-user-roles·kca-audit-logs 테이블, Rate Limiting, 업로드 크기 제한, S3 경로 검증, CORS 제한, 에러 메시지 내부정보 차단, X-User-Id 폴백 제거 |

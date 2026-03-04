@@ -155,7 +155,6 @@ class DsDataService {
 
     final uri = Uri.parse('$_baseUrl/ds/data').replace(queryParameters: params);
     final headers = <String, String>{};
-    if (userId != null) headers['X-User-Id'] = userId;
     if (_authToken != null) headers['Authorization'] = 'Bearer $_authToken';
     final response = await http.delete(uri, headers: headers.isNotEmpty ? headers : null);
 

@@ -15,7 +15,6 @@ class AdminService extends ChangeNotifier {
     defaultValue: 'https://api-sko-kca.skons.net',
   );
 
-  String? _currentUserId;
   String? _authToken;
   final List<AppUserProfile> _allUsers = [];
   bool _isLoading = false;
@@ -31,7 +30,6 @@ class AdminService extends ChangeNotifier {
   int get pendingCount => 0;
 
   void setCurrentUser(String empno, {String? token}) {
-    _currentUserId = empno;
     _authToken = token;
   }
 
@@ -69,7 +67,6 @@ class AdminService extends ChangeNotifier {
       final uri = Uri.parse('$_baseUrl/admin/users');
       final response = await http.get(uri, headers: {
         'Accept': 'application/json',
-        'X-User-Id': _currentUserId ?? '',
         if (_authToken != null) 'Authorization': 'Bearer $_authToken',
       });
 
@@ -129,7 +126,6 @@ class AdminService extends ChangeNotifier {
         Uri.parse('$_baseUrl/admin/set-role'),
         headers: {
           'Content-Type': 'application/json',
-          'X-User-Id': _currentUserId ?? '',
           if (_authToken != null) 'Authorization': 'Bearer $_authToken',
         },
         body: jsonEncode({'empno': profileId, 'role': backendRole}),

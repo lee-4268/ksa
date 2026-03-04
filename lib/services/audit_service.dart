@@ -207,7 +207,6 @@ class AuditService extends ChangeNotifier {
           .replace(queryParameters: params);
       final response = await http.get(uri, headers: {
         'Accept': 'application/json',
-        'X-User-Id': _currentUserId ?? '',
         if (_authToken != null) 'Authorization': 'Bearer $_authToken',
       });
 
