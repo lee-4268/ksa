@@ -4679,29 +4679,43 @@ async def callname_upload_csv(
                     del chunk_df
         elif ext == "xlsx":
             # openpyxl read_only 모드: 전체 메모리 로드 없이 시트별 순차 처리
+            logger.info(f"호출명칭 xlsx 파싱 시작: {file.filename}")
+            import csv as _csv_mod
             wb = openpyxl.load_workbook(tmp_path, read_only=True, data_only=True)
+            logger.info(f"호출명칭 xlsx 시트 목록: {wb.sheetnames}")
             for sheet_idx, sn in enumerate(wb.sheetnames):
                 ws = wb[sn]
                 filtered_path = tmp_path + f".sheet{sheet_idx}.csv"
                 header_row = None
                 avail_indices = []
                 row_count_sheet = 0
-                with open(filtered_path, "w", encoding="utf-8", newline="") as f:
-                    import csv as _csv_mod
-                    writer = _csv_mod.writer(f)
-                    for row_idx, row in enumerate(ws.iter_rows(values_only=True)):
-                        if row_idx == 0:
-                            header_row = [str(c) if c is not None else "" for c in row]
-                            avail_indices = [i for i, h in enumerate(header_row) if h in CALLNAME_USE_COLS]
-                            if not avail_indices:
-                                break
-                            writer.writerow([header_row[i] for i in avail_indices])
-                            continue
-                        writer.writerow([str(row[i]) if i < len(row) and row[i] is not None else "" for i in avail_indices])
-                        row_count_sheet += 1
+                try:
+                    with open(filtered_path, "w", encoding="utf-8", newline="") as f:
+                        writer = _csv_mod.writer(f)
+                        for row_idx, row in enumerate(ws.iter_rows(values_only=True)):
+                            if row_idx == 0:
+                                header_row = [str(c) if c is not None else "" for c in row]
+                                logger.info(f"호출명칭 시트 '{sn}' 헤더: {header_row[:10]}...")
+                                avail_indices = [i for i, h in enumerate(header_row) if h in CALLNAME_USE_COLS]
+                                if not avail_indices:
+                                    logger.warning(f"호출명칭 시트 '{sn}': 필요 컬럼 없음")
+                                    break
+                                writer.writerow([header_row[i] for i in avail_indices])
+                                continue
+                            writer.writerow([str(row[i]) if i < len(row) and row[i] is not None else "" for i in avail_indices])
+                            row_count_sheet += 1
+                            if row_count_sheet % 100000 == 0:
+                                logger.info(f"호출명칭 시트 '{sn}': {row_count_sheet:,}행 처리 중...")
+                except Exception as sheet_err:
+                    logger.error(f"호출명칭 시트 '{sn}' 처리 오류: {sheet_err}")
+                    try:
+                        os.unlink(filtered_path)
+                    except OSError:
+                        pass
+                    continue
                 if avail_indices:
                     filtered_paths.append((f"sheet_{sn}", filtered_path))
-                    logger.info(f"호출명칭 Excel 시트 '{sn}': {row_count_sheet:,}행 추출")
+                    logger.info(f"호출명칭 Excel 시트 '{sn}': {row_count_sheet:,}행 추출 완료")
                 else:
                     try:
                         os.unlink(filtered_path)
@@ -4709,6 +4723,7 @@ async def callname_upload_csv(
                         pass
             wb.close()
             del wb
+            logger.info(f"호출명칭 xlsx 파싱 완료: {len(filtered_paths)}개 시트")
         else:
             # xls (xlrd)
             if not HAS_XLRD:
@@ -4776,7 +4791,7 @@ async def callname_upload_csv(
         global _callname_df, _callname_df_loaded_at, _callname_db_row_count
         _callname_df = None
         _callname_df_loaded_at = 0
-        _callname_db_row_count = 0
+        _callname_db_row_count = uploaded_rows
         gc.collect()
 
         file_count = len(filtered_paths)
@@ -4806,21 +4821,78 @@ async def callname_upload_csv(
 
 @app.get("/callname/db-status")
 async def callname_db_status(request: Request):
-    """호출명칭 DB 캐시 상태 조회 (S3 파일 존재 기반)"""
+    """호출명칭 DB 상태 조회 (S3 파일 목록 기반)"""
     await _verify_auth(request)
-    # S3에 CSV 파일이 있는지만 확인 (메모리 사용 X)
-    has_csv = False
+    files = []
+    total_size = 0
     try:
         resp = get_s3_client().list_objects_v2(
-            Bucket=S3_BUCKET_NAME, Prefix=CALLNAME_CSV_PREFIX, MaxKeys=1)
-        has_csv = bool(resp.get("Contents"))
+            Bucket=S3_BUCKET_NAME, Prefix=CALLNAME_CSV_PREFIX)
+        for obj in resp.get("Contents", []):
+            key = obj["Key"]
+            if not key.lower().endswith(".csv"):
+                continue
+            size = obj.get("Size", 0)
+            total_size += size
+            files.append({
+                "name": key.split("/")[-1],
+                "size": size,
+                "last_modified": obj["LastModified"].isoformat() if obj.get("LastModified") else None,
+            })
     except Exception:
         pass
     return {
-        "loaded": has_csv,
+        "loaded": len(files) > 0,
         "rows": _callname_db_row_count,
-        "loaded_at": datetime.fromtimestamp(_callname_df_loaded_at, tz=timezone.utc).isoformat() if _callname_df_loaded_at else None,
+        "file_count": len(files),
+        "total_size": total_size,
+        "files": files,
     }
+
+
+@app.get("/callname/db-preview")
+async def callname_db_preview(request: Request, limit: int = Query(50, ge=1, le=200)):
+    """호출명칭 DB 미리보기 — S3 CSV에서 첫 N행 반환 (메모리 최소 사용)"""
+    await _verify_auth(request)
+    import csv as _csv_mod
+    s3 = get_s3_client()
+    result_files = []
+    try:
+        resp = s3.list_objects_v2(Bucket=S3_BUCKET_NAME, Prefix=CALLNAME_CSV_PREFIX)
+        for obj in resp.get("Contents", []):
+            key = obj["Key"]
+            if not key.lower().endswith(".csv"):
+                continue
+            s3_obj = s3.get_object(Bucket=S3_BUCKET_NAME, Key=key)
+            body_bytes = b""
+            # 미리보기용: 최대 1MB만 읽기 (전체 로드 방지)
+            for chunk in s3_obj["Body"].iter_chunks(1024 * 1024):
+                body_bytes = chunk
+                break
+            text = body_bytes.decode("utf-8", errors="replace")
+            lines = text.split("\n")
+            reader = _csv_mod.reader(lines)
+            headers = []
+            rows = []
+            for i, row in enumerate(reader):
+                if i == 0:
+                    headers = row
+                    continue
+                if not any(row):
+                    continue
+                rows.append(row)
+                if len(rows) >= limit:
+                    break
+            result_files.append({
+                "name": key.split("/")[-1],
+                "headers": headers,
+                "rows": rows,
+                "preview_count": len(rows),
+            })
+    except Exception as e:
+        logger.error(f"호출명칭 DB 미리보기 실패: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    return {"files": result_files}
 
 
 @app.post("/callname/upload")

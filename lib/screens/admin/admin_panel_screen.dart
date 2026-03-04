@@ -21,7 +21,8 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
   bool _dbUploading = false;
   double _uploadProgress = 0;
   String _uploadStage = '';
-  String? _dbStatus;
+  String? _dbStatusText;
+  List<dynamic> _dbFiles = [];
   bool _initialized = false;
 
   @override
@@ -39,14 +40,20 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
     try {
       final status = await _callnameService.getDbStatus();
       if (mounted) {
-        final rows = status['rows'] as int? ?? 0;
-        final loaded = status['loaded'] as bool? ?? false;
+        final fileCount = status['file_count'] as int? ?? 0;
+        final totalSize = status['total_size'] as int? ?? 0;
+        final files = status['files'] as List<dynamic>? ?? [];
         setState(() {
-          _dbStatus = loaded ? '${_formatNumber(rows)}행 로드됨' : '미로드';
+          _dbFiles = files;
+          if (fileCount == 0) {
+            _dbStatusText = '업로드된 파일 없음';
+          } else {
+            _dbStatusText = '파일 $fileCount개 (${_formatBytes(totalSize)})';
+          }
         });
       }
     } catch (_) {
-      if (mounted) setState(() => _dbStatus = '조회 실패');
+      if (mounted) setState(() => _dbStatusText = '조회 실패');
     }
   }
 
@@ -103,9 +110,44 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
     }
   }
 
-  String _formatNumber(int n) {
-    return n.toString().replaceAllMapped(
-        RegExp(r'(\d)(?=(\d{3})+(?!\d))'), (m) => '${m[1]},');
+  Future<void> _showDataPreview() async {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const Center(child: CircularProgressIndicator()),
+    );
+
+    try {
+      final preview = await _callnameService.getDbPreview(limit: 50);
+      if (!mounted) return;
+      Navigator.pop(context); // 로딩 닫기
+
+      final files = preview['files'] as List<dynamic>? ?? [];
+      if (files.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('미리볼 데이터가 없습니다.')),
+        );
+        return;
+      }
+
+      showDialog(
+        context: context,
+        builder: (ctx) => _DataPreviewDialog(files: files),
+      );
+    } catch (e) {
+      if (mounted) {
+        Navigator.pop(context);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('미리보기 실패: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+
+  String _formatBytes(int bytes) {
+    if (bytes < 1024) return '${bytes}B';
+    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)}KB';
+    return '${(bytes / (1024 * 1024)).toStringAsFixed(1)}MB';
   }
 
   @override
@@ -204,7 +246,7 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
                           style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
                       const SizedBox(height: 2),
                       Text(
-                        _dbStatus ?? '로딩 중...',
+                        _dbStatusText ?? '로딩 중...',
                         style: TextStyle(color: Colors.grey.shade600, fontSize: 13),
                       ),
                     ],
@@ -212,6 +254,34 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
                 ),
               ],
             ),
+            // 파일 목록
+            if (_dbFiles.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              ...(_dbFiles.map((f) {
+                final name = f['name'] as String? ?? '';
+                final size = f['size'] as int? ?? 0;
+                return Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 2),
+                  child: Row(
+                    children: [
+                      Icon(Icons.description_outlined, size: 14, color: Colors.grey.shade500),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          name,
+                          style: TextStyle(fontSize: 11, color: Colors.grey.shade700),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      Text(
+                        _formatBytes(size),
+                        style: TextStyle(fontSize: 11, color: Colors.grey.shade500),
+                      ),
+                    ],
+                  ),
+                );
+              })),
+            ],
             const SizedBox(height: 12),
             Text(
               '호출명칭 매칭에 사용되는 DB 파일을 업데이트합니다.\nCSV/Excel 파일을 업로드할 수 있습니다.',
@@ -238,29 +308,47 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
                 ],
               )
             else
-              Row(
+              Column(
                 children: [
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed: () => _uploadDbFile(replace: false),
-                      icon: const Icon(Icons.add_circle_outline, size: 18),
-                      label: const Text('파일 추가'),
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: Colors.orange.shade700,
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: () => _uploadDbFile(replace: false),
+                          icon: const Icon(Icons.add_circle_outline, size: 18),
+                          label: const Text('파일 추가'),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: Colors.orange.shade700,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: () => _uploadDbFile(replace: true),
+                          icon: const Icon(Icons.swap_horiz, size: 18),
+                          label: const Text('전체 교체'),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: Colors.red.shade600,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  if (_dbFiles.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton.icon(
+                        onPressed: _showDataPreview,
+                        icon: const Icon(Icons.visibility_outlined, size: 18),
+                        label: const Text('데이터 미리보기'),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: Colors.blue.shade700,
+                        ),
                       ),
                     ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed: () => _uploadDbFile(replace: true),
-                      icon: const Icon(Icons.swap_horiz, size: 18),
-                      label: const Text('전체 교체'),
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: Colors.red.shade600,
-                      ),
-                    ),
-                  ),
+                  ],
                 ],
               ),
           ],
@@ -365,5 +453,154 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
       case AppUserRole.member:
         return '일반 멤버';
     }
+  }
+}
+
+/// 데이터 미리보기 다이얼로그
+class _DataPreviewDialog extends StatelessWidget {
+  final List<dynamic> files;
+
+  const _DataPreviewDialog({required this.files});
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      insetPadding: const EdgeInsets.all(16),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxWidth: 900,
+          maxHeight: MediaQuery.of(context).size.height * 0.8,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // 헤더
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              decoration: BoxDecoration(
+                color: Colors.blue.shade50,
+                borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.visibility, color: Colors.blue.shade700, size: 20),
+                  const SizedBox(width: 8),
+                  Text(
+                    '호출명칭 DB 미리보기 (최대 50행)',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      fontSize: 15,
+                      color: Colors.blue.shade700,
+                    ),
+                  ),
+                  const Spacer(),
+                  IconButton(
+                    icon: const Icon(Icons.close, size: 20),
+                    onPressed: () => Navigator.pop(context),
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
+                  ),
+                ],
+              ),
+            ),
+            // 내용
+            Flexible(
+              child: DefaultTabController(
+                length: files.length,
+                child: Column(
+                  children: [
+                    if (files.length > 1)
+                      TabBar(
+                        isScrollable: true,
+                        labelColor: Colors.blue.shade700,
+                        tabs: files.map((f) {
+                          final name = f['name'] as String? ?? '';
+                          return Tab(text: name.length > 30 ? '${name.substring(0, 30)}...' : name);
+                        }).toList(),
+                      ),
+                    Expanded(
+                      child: TabBarView(
+                        children: files.map((f) {
+                          final headers = (f['headers'] as List<dynamic>?)
+                                  ?.map((h) => h.toString())
+                                  .toList() ??
+                              [];
+                          final rows = (f['rows'] as List<dynamic>?)
+                                  ?.map((r) => (r as List<dynamic>)
+                                      .map((c) => c.toString())
+                                      .toList())
+                                  .toList() ??
+                              [];
+                          final count = f['preview_count'] as int? ?? 0;
+
+                          if (headers.isEmpty) {
+                            return const Center(child: Text('데이터 없음'));
+                          }
+
+                          return Column(
+                            children: [
+                              Padding(
+                                padding: const EdgeInsets.all(8),
+                                child: Text(
+                                  '$count행 표시',
+                                  style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                                ),
+                              ),
+                              Expanded(
+                                child: Scrollbar(
+                                  child: SingleChildScrollView(
+                                    scrollDirection: Axis.horizontal,
+                                    child: SingleChildScrollView(
+                                      child: DataTable(
+                                        headingRowHeight: 36,
+                                        dataRowMinHeight: 28,
+                                        dataRowMaxHeight: 36,
+                                        columnSpacing: 16,
+                                        headingTextStyle: const TextStyle(
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 12,
+                                          color: Colors.black87,
+                                        ),
+                                        dataTextStyle: const TextStyle(
+                                          fontSize: 11,
+                                          color: Colors.black87,
+                                        ),
+                                        columns: headers
+                                            .map((h) => DataColumn(label: Text(h)))
+                                            .toList(),
+                                        rows: rows.map((row) {
+                                          return DataRow(
+                                            cells: List.generate(headers.length, (i) {
+                                              final val = i < row.length ? row[i] : '';
+                                              return DataCell(
+                                                ConstrainedBox(
+                                                  constraints: const BoxConstraints(maxWidth: 200),
+                                                  child: Text(
+                                                    val,
+                                                    overflow: TextOverflow.ellipsis,
+                                                  ),
+                                                ),
+                                              );
+                                            }),
+                                          );
+                                        }).toList(),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          );
+                        }).toList(),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }

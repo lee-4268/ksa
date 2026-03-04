@@ -34,6 +34,21 @@ class CallnameService {
     return json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
   }
 
+  /// 호출명칭 DB 미리보기 (첫 N행)
+  Future<Map<String, dynamic>> getDbPreview({int limit = 50}) async {
+    final resp = await http
+        .get(
+          Uri.parse('$_baseUrl/callname/db-preview')
+              .replace(queryParameters: {'limit': limit.toString()}),
+          headers: _headers,
+        )
+        .timeout(_apiTimeout);
+    if (resp.statusCode != 200) {
+      throw Exception('DB 미리보기 실패: ${resp.statusCode}');
+    }
+    return json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+  }
+
   /// 관리자: DB CSV/Excel 업로드 (replace=true면 기존 DB 교체)
   Future<Map<String, dynamic>> uploadDbFile(
       Uint8List bytes, String filename, {
