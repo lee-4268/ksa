@@ -4493,6 +4493,7 @@ _callname_df = None            # pandas DataFrame (S3 CSV 캐시, lazy load)
 _callname_df_loaded_at = 0.0
 _callname_db_row_count = 0     # 행 수 캐시 (df 해제 후에도 상태 조회용)
 _callname_sessions: Dict[str, dict] = {}  # upload_id/process_id → 세션 (경량 메타만)
+_callname_upload_jobs: Dict[str, dict] = {}  # jobId → {status, stage, percent, ...}
 
 
 def _detect_column(df_columns, candidates):
@@ -4629,39 +4630,19 @@ def _query_callname_db(zpwina_values: list, zpwino_values: list) -> dict:
 
 # ── 호출명칭 매칭 API ──────────────────────────────────────
 
-@app.post("/callname/upload-csv")
-async def callname_upload_csv(
-    request: Request,
-    file: UploadFile = File(...),
-    replace: bool = Query(False, description="True면 기존 DB 전체 교체, False면 추가/병합"),
-):
-    """관리자: S3에 호출명칭 DB CSV/Excel 업로드 → 6컬럼 필터링 → 캐시 갱신
-    - CSV: chunksize로 메모리 절약 파싱
-    - Excel: 시트별 순차 처리 (read_only 모드, OOM 방지)
-    - replace=false(기본): 기존 파일 유지 + 추가 (여러 파일 업로드 지원)
-    - replace=true: 기존 파일 전부 삭제 후 교체
-    """
-    await _require_role(request, {"admin"})
-    if not file.filename.lower().endswith((".csv", ".xlsx", ".xls")):
-        raise HTTPException(status_code=400, detail="CSV 또는 Excel 파일만 가능합니다.")
-    if not HAS_PANDAS:
-        raise HTTPException(status_code=500, detail="pandas 미설치")
-
-    ext = file.filename.rsplit(".", 1)[-1].lower()
-    tmp_path = None
+def _process_callname_upload_sync(job_id: str, tmp_path: str, filename: str,
+                                   ext: str, replace: bool):
+    """백그라운드: 호출명칭 DB 파일 파싱 → S3 업로드 (동기, to_thread에서 실행)"""
+    import csv as _csv_mod
+    global _callname_df, _callname_df_loaded_at, _callname_db_row_count
+    job = _callname_upload_jobs[job_id]
     filtered_paths = []
     try:
-        # 1) 업로드 파일 → 디스크 임시 저장 (메모리에 전체 로드 X)
-        with _tempfile.NamedTemporaryFile(delete=False, suffix=f".{ext}") as tmp:
-            tmp_path = tmp.name
-            while True:
-                chunk = await file.read(8 * 1024 * 1024)  # 8MB 청크
-                if not chunk:
-                    break
-                tmp.write(chunk)
+        job["stage"] = "파일 분석 중..."
+        job["percent"] = 10
+        base_name = filename.rsplit(".", 1)[0].replace(" ", "_")
 
-        # 2) 6개 필요 컬럼만 추출 → 시트별 필터링된 CSV 생성
-        base_name = file.filename.rsplit(".", 1)[0].replace(" ", "_")
+        # ── 파일 형식별 파싱 → 필터링된 CSV 생성 ──
         if ext == "csv":
             filtered_path = tmp_path + ".filtered.csv"
             filtered_paths.append(("csv", filtered_path))
@@ -4677,13 +4658,21 @@ async def callname_upload_csv(
                     chunk_df[avail].to_csv(f, index=False, header=first_chunk)
                     first_chunk = False
                     del chunk_df
+            job["stage"] = "CSV 필터링 완료"
+            job["percent"] = 50
+
         elif ext == "xlsx":
-            # openpyxl read_only 모드: 전체 메모리 로드 없이 시트별 순차 처리
-            logger.info(f"호출명칭 xlsx 파싱 시작: {file.filename}")
-            import csv as _csv_mod
+            logger.info(f"호출명칭 xlsx 파싱 시작: {filename}")
             wb = openpyxl.load_workbook(tmp_path, read_only=True, data_only=True)
-            logger.info(f"호출명칭 xlsx 시트 목록: {wb.sheetnames}")
-            for sheet_idx, sn in enumerate(wb.sheetnames):
+            sheet_names = wb.sheetnames
+            logger.info(f"호출명칭 xlsx 시트 목록: {sheet_names}")
+            total_sheets = len(sheet_names)
+
+            for sheet_idx, sn in enumerate(sheet_names):
+                pct = 10 + int(40 * sheet_idx / max(total_sheets, 1))
+                job["stage"] = f"시트 '{sn}' 처리 중... ({sheet_idx+1}/{total_sheets})"
+                job["percent"] = pct
+
                 ws = wb[sn]
                 filtered_path = tmp_path + f".sheet{sheet_idx}.csv"
                 header_row = None
@@ -4705,7 +4694,8 @@ async def callname_upload_csv(
                             writer.writerow([str(row[i]) if i < len(row) and row[i] is not None else "" for i in avail_indices])
                             row_count_sheet += 1
                             if row_count_sheet % 100000 == 0:
-                                logger.info(f"호출명칭 시트 '{sn}': {row_count_sheet:,}행 처리 중...")
+                                job["stage"] = f"시트 '{sn}': {row_count_sheet:,}행 처리 중..."
+                                logger.info(job["stage"])
                 except Exception as sheet_err:
                     logger.error(f"호출명칭 시트 '{sn}' 처리 오류: {sheet_err}")
                     try:
@@ -4723,11 +4713,11 @@ async def callname_upload_csv(
                         pass
             wb.close()
             del wb
-            logger.info(f"호출명칭 xlsx 파싱 완료: {len(filtered_paths)}개 시트")
-        else:
-            # xls (xlrd)
+            job["percent"] = 50
+
+        elif ext == "xls":
             if not HAS_XLRD:
-                raise HTTPException(status_code=500, detail="xlrd 미설치")
+                raise RuntimeError("xlrd 미설치")
             xls_book = xlrd.open_workbook(tmp_path)
             for sheet_idx in range(xls_book.nsheets):
                 ws = xls_book.sheet_by_index(sheet_idx)
@@ -4741,23 +4731,31 @@ async def callname_upload_csv(
                 filtered_path = tmp_path + f".sheet{sheet_idx}.csv"
                 filtered_paths.append((f"sheet_{sn}", filtered_path))
                 with open(filtered_path, "w", encoding="utf-8", newline="") as f:
-                    import csv as _csv_mod
                     writer = _csv_mod.writer(f)
                     writer.writerow([header_row[i] for i in avail_indices])
                     for r in range(1, ws.nrows):
                         writer.writerow([str(ws.cell_value(r, i)) for i in avail_indices])
             xls_book.release_resources()
             del xls_book
+            job["percent"] = 50
 
-        # 원본 임시파일 즉시 삭제 (디스크 절약)
-        os.unlink(tmp_path)
-        tmp_path = None
+        # 원본 임시파일 삭제
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
         gc.collect()
 
         if not filtered_paths:
-            raise HTTPException(status_code=400, detail="필요한 컬럼(zpwina, zpwino 등)이 포함된 시트가 없습니다.")
+            job["status"] = "failed"
+            job["stage"] = "필요한 컬럼이 포함된 시트가 없습니다."
+            job["percent"] = 100
+            return
 
-        # 3) S3 업로드 (replace=true일 때만 기존 파일 삭제)
+        # ── S3 업로드 ──
+        job["stage"] = "S3에 업로드 중..."
+        job["percent"] = 60
+
         if replace:
             try:
                 resp = get_s3_client().list_objects_v2(
@@ -4769,54 +4767,119 @@ async def callname_upload_csv(
             except Exception:
                 pass
 
-        total_size = 0
         uploaded_keys = []
         timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-        for label, fpath in filtered_paths:
+        for i, (label, fpath) in enumerate(filtered_paths):
             s3_key = f"{CALLNAME_CSV_PREFIX}{base_name}_{label}_{timestamp}.csv"
             file_size = os.path.getsize(fpath)
-            total_size += file_size
             with open(fpath, "rb") as f:
                 get_s3_client().put_object(Bucket=S3_BUCKET_NAME, Key=s3_key, Body=f)
             uploaded_keys.append(s3_key)
+            pct = 60 + int(25 * (i + 1) / len(filtered_paths))
+            job["stage"] = f"S3 업로드 중... ({i+1}/{len(filtered_paths)})"
+            job["percent"] = pct
             logger.info(f"호출명칭 DB 업로드: {s3_key} ({file_size:,} bytes)")
 
-        # 4) 업로드한 파일의 행 수만 집계 (DataFrame 전체 로드 X → OOM 방지)
+        # ── 행 수 집계 ──
+        job["stage"] = "행 수 집계 중..."
+        job["percent"] = 90
         uploaded_rows = 0
         for _, fpath in filtered_paths:
             with open(fpath, encoding="utf-8") as cnt_f:
-                uploaded_rows += sum(1 for _ in cnt_f) - 1  # header 제외
+                uploaded_rows += sum(1 for _ in cnt_f) - 1
 
-        # 캐시 무효화 (다음 매칭 요청 시 lazy-load)
-        global _callname_df, _callname_df_loaded_at, _callname_db_row_count
+        # 캐시 무효화
         _callname_df = None
         _callname_df_loaded_at = 0
         _callname_db_row_count = uploaded_rows
-        gc.collect()
 
         file_count = len(filtered_paths)
-        return {
-            "success": True,
+        job["status"] = "completed"
+        job["stage"] = "완료"
+        job["percent"] = 100
+        job["result"] = {
             "message": f"DB 업로드 완료 ({file_count}개 파일, 총 {uploaded_rows:,}행)",
             "files": uploaded_keys,
             "total_rows": uploaded_rows,
         }
-    except HTTPException:
-        raise
+        logger.info(f"호출명칭 DB 업로드 완료: {file_count}개 파일, {uploaded_rows:,}행")
+
     except Exception as e:
-        logger.error(f"호출명칭 CSV 업로드 실패: {e}")
-        raise HTTPException(status_code=500, detail="서버 내부 오류")
+        logger.error(f"호출명칭 DB 업로드 실패: {e}")
+        job["status"] = "failed"
+        job["stage"] = f"업로드 실패: {str(e)[:200]}"
+        job["percent"] = 100
     finally:
-        if tmp_path:
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
+        # 임시파일 정리
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
         for _, fpath in filtered_paths:
             try:
                 os.unlink(fpath)
             except OSError:
                 pass
+        gc.collect()
+
+
+@app.post("/callname/upload-csv")
+async def callname_upload_csv(
+    request: Request,
+    file: UploadFile = File(...),
+    replace: bool = Query(False, description="True면 기존 DB 전체 교체, False면 추가/병합"),
+):
+    """관리자: 파일 → 디스크 저장 → jobId 즉시 반환 → 백그라운드 처리"""
+    await _require_role(request, {"admin"})
+    if not file.filename.lower().endswith((".csv", ".xlsx", ".xls")):
+        raise HTTPException(status_code=400, detail="CSV 또는 Excel 파일만 가능합니다.")
+    if not HAS_PANDAS:
+        raise HTTPException(status_code=500, detail="pandas 미설치")
+
+    ext = file.filename.rsplit(".", 1)[-1].lower()
+
+    # 1) 파일 → 디스크 임시 저장 (메모리에 전체 로드 X)
+    with _tempfile.NamedTemporaryFile(delete=False, suffix=f".{ext}") as tmp:
+        tmp_path = tmp.name
+        while True:
+            chunk = await file.read(8 * 1024 * 1024)  # 8MB 청크
+            if not chunk:
+                break
+            tmp.write(chunk)
+
+    # 2) 잡 생성 + 즉시 반환
+    job_id = str(uuid.uuid4())
+    _callname_upload_jobs[job_id] = {
+        "status": "processing",
+        "stage": "파일 수신 완료, 처리 시작...",
+        "percent": 5,
+        "filename": file.filename,
+        "replace": replace,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    # 3) 백그라운드 스레드에서 처리
+    asyncio.get_event_loop().run_in_executor(
+        None, _process_callname_upload_sync,
+        job_id, tmp_path, file.filename, ext, replace,
+    )
+
+    return {"success": True, "jobId": job_id}
+
+
+@app.get("/callname/upload-job/{job_id}")
+async def callname_upload_job_status(job_id: str, request: Request):
+    """호출명칭 DB 업로드 잡 상태 조회 (프론트에서 2초 간격 폴링)"""
+    await _verify_auth(request)
+    job = _callname_upload_jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return {
+        "status": job["status"],
+        "stage": job["stage"],
+        "percent": job["percent"],
+        "result": job.get("result"),
+    }
 
 
 @app.get("/callname/db-status")
@@ -5730,11 +5793,13 @@ async def cert_generate(request: Request):
         data = output.getvalue()
         del output, photo_list, blueprint_bytes
 
+        from urllib.parse import quote
+        filename_encoded = quote(filename, safe="")
         return StreamingResponse(
             iter([data]),
             media_type=media,
             headers={
-                "Content-Disposition": f"attachment; filename*=UTF-8''{filename}",
+                "Content-Disposition": f"attachment; filename*=UTF-8''{filename_encoded}",
                 "Content-Length": str(len(data)),
             },
         )

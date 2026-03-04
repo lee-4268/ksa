@@ -49,14 +49,11 @@ class CallnameService {
     return json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
   }
 
-  /// 관리자: DB CSV/Excel 업로드 (replace=true면 기존 DB 교체)
-  Future<Map<String, dynamic>> uploadDbFile(
+  /// 관리자: DB CSV/Excel 업로드 → jobId 반환 (비동기 처리)
+  Future<String> uploadDbFile(
       Uint8List bytes, String filename, {
       bool replace = true,
-      void Function(String stage, double progress)? onProgress,
   }) async {
-    onProgress?.call('업로드 준비 중...', 0.0);
-
     final uri = Uri.parse('$_baseUrl/callname/upload-csv')
         .replace(queryParameters: {'replace': replace.toString()});
     final req = http.MultipartRequest('POST', uri)
@@ -64,20 +61,29 @@ class CallnameService {
       ..files.add(http.MultipartFile.fromBytes('file', bytes,
           filename: filename));
 
-    onProgress?.call('서버에 업로드 중...', 0.2);
-
     final streamed = await req.send().timeout(_uploadTimeout);
-
-    onProgress?.call('서버에서 처리 중...', 0.6);
-
     final respBytes = await streamed.stream.toBytes();
     if (streamed.statusCode != 200) {
       throw Exception(
           'DB 업로드 실패: ${utf8.decode(respBytes)}');
     }
 
-    onProgress?.call('완료', 1.0);
-    return json.decode(utf8.decode(respBytes)) as Map<String, dynamic>;
+    final data = json.decode(utf8.decode(respBytes)) as Map<String, dynamic>;
+    return data['jobId'] as String;
+  }
+
+  /// 업로드 잡 상태 폴링
+  Future<Map<String, dynamic>> getUploadJobStatus(String jobId) async {
+    final resp = await http
+        .get(
+          Uri.parse('$_baseUrl/callname/upload-job/$jobId'),
+          headers: _headers,
+        )
+        .timeout(_apiTimeout);
+    if (resp.statusCode != 200) {
+      throw Exception('잡 상태 조회 실패: ${resp.statusCode}');
+    }
+    return json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
   }
 
   /// Excel 파일 업로드 → 컬럼 감지 + 매칭 대상 건수

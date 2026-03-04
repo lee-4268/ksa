@@ -101,11 +101,17 @@ class _IndividualTabState extends State<_IndividualTab>
   final _zpwinaCtrl = TextEditingController();
   final _addressCtrl = TextEditingController();
   final _installerCtrl = TextEditingController(text: '에스케이텔레콤 주식회사');
-  final _antennaFrameCtrl = TextEditingController();
   final _antennaCountCtrl = TextEditingController(text: '1');
   final _otherAntennaCtrl = TextEditingController(text: '0');
   final _coZpwinoCtrl = TextEditingController();
   final _remarkCtrl = TextEditingController();
+
+  String _antennaFrameType = '-';
+  final List<String> _antennaFrameOptions = [
+    '-', '철탑(지면)', '강관주', '통신주', '원폴(건물)', '옥내, 터널, 지하, 차량',
+    '쌍통신주', '기설물', '옥내외 혼합형', '간이폴 및 비기준 설치대',
+    '한전주(KT통신주)', '철탑(건물)', '프레임', '복합형(원폴, 분산프레임 등)', '모노폴',
+  ];
 
   String _sharingType = '-';
   final List<String> _sharingOptions = ['-', '단독', '공용'];
@@ -135,7 +141,6 @@ class _IndividualTabState extends State<_IndividualTab>
     _zpwinaCtrl.dispose();
     _addressCtrl.dispose();
     _installerCtrl.dispose();
-    _antennaFrameCtrl.dispose();
     _antennaCountCtrl.dispose();
     _otherAntennaCtrl.dispose();
     _coZpwinoCtrl.dispose();
@@ -145,9 +150,9 @@ class _IndividualTabState extends State<_IndividualTab>
 
   String get _coInstallerName {
     final parts = <String>[];
-    if (_coSkt) parts.add('에스케이텔레콤(주)');
-    if (_coKt) parts.add('주식회사 케이티');
-    if (_coLgu) parts.add('주식회사 엘지유플러스');
+    if (_coSkt) parts.add('SKT');
+    if (_coKt) parts.add('KT');
+    if (_coLgu) parts.add('LGU+');
     return parts.join(', ');
   }
 
@@ -168,7 +173,8 @@ class _IndividualTabState extends State<_IndividualTab>
         _zpwinoCtrl.text = res['zpwino'] ?? '';
         _zpwinaCtrl.text = res['zpwina'] ?? '';
         _addressCtrl.text = res['zpwiadr'] ?? '';
-        _antennaFrameCtrl.text = res['zpirty3'] ?? '';
+        final frame = res['zpirty3'] ?? '';
+        _antennaFrameType = _antennaFrameOptions.contains(frame) ? frame : '-';
         _lookupError = null;
       } else {
         _lookupError = '조회 결과가 없습니다.';
@@ -222,7 +228,7 @@ class _IndividualTabState extends State<_IndividualTab>
       'zpwino': _zpwinoCtrl.text,
       'zpwina': _zpwinaCtrl.text,
       'zpwiadr': _addressCtrl.text,
-      'antenna_frame_type': _antennaFrameCtrl.text,
+      'antenna_frame_type': _antennaFrameType == '-' ? '' : _antennaFrameType,
       'sharing_type': _sharingType == '-' ? '' : _sharingType,
       'antenna_count': int.tryParse(_antennaCountCtrl.text) ?? 1,
       'other_antenna_count': int.tryParse(_otherAntennaCtrl.text) ?? 0,
@@ -354,7 +360,25 @@ class _IndividualTabState extends State<_IndividualTab>
 
           _formLabel('안테나설치대 형태'),
           const SizedBox(height: 6),
-          _formField(_antennaFrameCtrl, '자동 입력 (수정 가능)'),
+          Container(
+            height: 48,
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: Colors.grey.shade300),
+            ),
+            child: DropdownButtonHideUnderline(
+              child: DropdownButton<String>(
+                value: _antennaFrameType,
+                isExpanded: true,
+                style: const TextStyle(color: Colors.black87, fontSize: 14),
+                icon: Icon(Icons.keyboard_arrow_down, color: Colors.grey.shade600),
+                items: _antennaFrameOptions.map((e) => DropdownMenuItem(value: e, child: Text(e))).toList(),
+                onChanged: (v) => setState(() => _antennaFrameType = v ?? '-'),
+              ),
+            ),
+          ),
           const SizedBox(height: 16),
 
           Row(
@@ -390,7 +414,7 @@ class _IndividualTabState extends State<_IndividualTab>
             height: 48,
             padding: const EdgeInsets.symmetric(horizontal: 12),
             decoration: BoxDecoration(
-              color: Colors.grey.shade100,
+              color: Colors.white,
               borderRadius: BorderRadius.circular(8),
               border: Border.all(color: Colors.grey.shade300),
             ),
@@ -676,7 +700,7 @@ class _IndividualTabState extends State<_IndividualTab>
               // 공동신청 시설자명 | 공동신청 허가번호
               _tRow2('공동신청 시설자명\n(필요 시 입력)', _coInstallerName, '공동신청 허가번호\n(필요 시 입력)', _coZpwinoCtrl.text),
               // 안테나설치대 형태 | 호출명칭
-              _tRow('안테나설치대 형태', _antennaFrameCtrl.text, '호출명칭', _zpwinaCtrl.text),
+              _tRow('안테나설치대 형태', _antennaFrameType, '호출명칭', _zpwinaCtrl.text),
               // 공용화 구분 | 안테나 수
               _tRow('공용화 구분', _sharingType, '안테나 수', _antennaCountDisplay),
               // 설치장소

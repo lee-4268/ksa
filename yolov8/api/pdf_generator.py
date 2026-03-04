@@ -162,8 +162,9 @@ def generate_certificate_pdf(form_data, photo_list=None, blueprint_bytes=None):
 
     badge_h = 10 * mm
     safety = 3 * mm
-    fixed_rows_h = (12 + 9 + 11 + 9 + 9 + 9 + 12 + 12) * mm
-    bp_row_h = page_height - badge_h - fixed_rows_h - safety
+    fixed_rows_h = (9 + 11 + 9 + 9 + 9 + 12 + 12) * mm
+    title_h = 12 * mm
+    bp_row_h = page_height - badge_h - title_h - fixed_rows_h - safety
     if not blueprint_bytes:
         bp_row_h = 30 * mm
 
@@ -184,13 +185,28 @@ def generate_certificate_pdf(form_data, photo_list=None, blueprint_bytes=None):
             logger.warning(f"Failed to load blueprint image: {e}")
             bp_content = cc('이미지 로드 실패')
 
+    # 제목 행: 별도 테이블 (셀통합 가운데정렬 보장)
+    title_tbl = Table(
+        [[Paragraph('이동통신무선국 설치 확인서', s_title)]],
+        colWidths=[page_width], rowHeights=[title_h])
+    title_tbl.setStyle(TableStyle([
+        ('LINEABOVE', (0, 0), (-1, 0), 0.4, colors.black),
+        ('LINEBEFORE', (0, 0), (0, -1), 0.4, colors.black),
+        ('LINEAFTER', (-1, 0), (-1, -1), 0.4, colors.black),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('TOPPADDING', (0, 0), (-1, -1), 2*mm),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 2*mm),
+    ]))
+    title_tbl.spaceAfter = 0
+    elements.append(title_tbl)
+
+    # 본문 테이블 (제목 행 제외)
     table_data = [
-        [Paragraph('이동통신무선국 설치 확인서', s_title), '', '', ''],
         [h('시설자명'), c(d.get('installer_name')),
          h('허가번호'), c(d.get('zpwino'))],
         [h_sub('공동신청 시설자명', '(필요 시 입력)'), c(d.get('co_installer_name')),
          h_sub('공동신청 허가번호', '(필요 시 입력)'), c(d.get('co_zpwino'))],
-        [Paragraph('<b>안테나설치대 형태</b>', s_hdr_fit), c(d.get('antenna_frame_type')),
+        [h('안테나설치대 형태'), c(d.get('antenna_frame_type')),
          h('호출명칭'), c(d.get('zpwina'))],
         [h('공용화 구분'), c(d.get('sharing_type')),
          h('안테나 수'), cc(_format_antenna_count(d))],
@@ -205,7 +221,7 @@ def generate_certificate_pdf(form_data, photo_list=None, blueprint_bytes=None):
     ]
 
     row_heights = [
-        12 * mm, 9 * mm, 11 * mm, 9 * mm, 9 * mm,
+        9 * mm, 11 * mm, 9 * mm, 9 * mm,
         9 * mm, 12 * mm, bp_row_h, 12 * mm,
     ]
 
@@ -213,17 +229,17 @@ def generate_certificate_pdf(form_data, photo_list=None, blueprint_bytes=None):
                   rowHeights=row_heights)
     table.setStyle(TableStyle([
         ('GRID', (0, 0), (-1, -1), 0.4, colors.black),
-        ('SPAN', (0, 0), (3, 0)),
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
         ('TOPPADDING', (0, 0), (-1, -1), 2*mm),
         ('BOTTOMPADDING', (0, 0), (-1, -1), 2*mm),
         ('LEFTPADDING', (0, 0), (-1, -1), 2*mm),
         ('RIGHTPADDING', (0, 0), (-1, -1), 2*mm),
+        ('SPAN', (1, 4), (3, 4)),
         ('SPAN', (1, 5), (3, 5)),
         ('SPAN', (1, 6), (3, 6)),
         ('SPAN', (1, 7), (3, 7)),
-        ('SPAN', (1, 8), (3, 8)),
     ]))
+    table.spaceBefore = 0
     elements.append(table)
 
     if has_photos:

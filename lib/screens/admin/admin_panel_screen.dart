@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
@@ -70,28 +71,49 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
     setState(() {
       _dbUploading = true;
       _uploadProgress = 0;
-      _uploadStage = '업로드 준비 중...';
+      _uploadStage = '서버에 파일 전송 중...';
     });
     try {
-      final resp = await _callnameService.uploadDbFile(
+      // 1) 파일 전송 → jobId 반환
+      final jobId = await _callnameService.uploadDbFile(
         Uint8List.fromList(file.bytes!),
         file.name,
         replace: replace,
-        onProgress: (stage, progress) {
-          if (mounted) {
-            setState(() {
-              _uploadStage = stage;
-              _uploadProgress = progress;
-            });
-          }
-        },
       );
-      final msg = resp['message'] as String? ?? '업로드 완료';
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(msg), backgroundColor: Colors.green),
-        );
-        _loadDbStatus();
+
+      // 2) 2초 간격 폴링으로 진행률 추적
+      while (mounted) {
+        await Future.delayed(const Duration(seconds: 2));
+        if (!mounted) break;
+
+        final job = await _callnameService.getUploadJobStatus(jobId);
+        final status = job['status'] as String? ?? '';
+        final stage = job['stage'] as String? ?? '';
+        final percent = (job['percent'] as num?)?.toDouble() ?? 0;
+
+        setState(() {
+          _uploadStage = stage;
+          _uploadProgress = percent / 100;
+        });
+
+        if (status == 'completed') {
+          final result = job['result'] as Map<String, dynamic>?;
+          final msg = result?['message'] as String? ?? '업로드 완료';
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text(msg), backgroundColor: Colors.green),
+            );
+            _loadDbStatus();
+          }
+          break;
+        } else if (status == 'failed') {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text(stage), backgroundColor: Colors.red),
+            );
+          }
+          break;
+        }
       }
     } catch (e) {
       if (mounted) {
