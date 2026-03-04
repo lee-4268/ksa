@@ -17,7 +17,7 @@
  */
 async function _exportDsFromS3(s3Url, metaJson, progressCallback, completionCallback, authToken) {
   try {
-    progressCallback('S3에서 원본 파일 다운로드 중...', 3);
+    progressCallback('데이터 불러오는 중...', 3);
 
     var meta = JSON.parse(metaJson);
 
@@ -34,7 +34,7 @@ async function _exportDsFromS3(s3Url, metaJson, progressCallback, completionCall
     var zipArrayBuffer = await response.arrayBuffer();
     response = null;
 
-    progressCallback('ZIP 압축 해제 중...', 8);
+    progressCallback('파일 처리 중...', 8);
 
     var zip = await JSZip.loadAsync(zipArrayBuffer);
     zipArrayBuffer = null;
@@ -52,7 +52,7 @@ async function _exportDsFromS3(s3Url, metaJson, progressCallback, completionCall
       return;
     }
 
-    progressCallback('파일 분류 중...', 10);
+    progressCallback('파일 분석 중...', 10);
     var classified = _classifyDsFiles(xlsFiles);
 
     if (!classified.base) {
@@ -63,7 +63,7 @@ async function _exportDsFromS3(s3Url, metaJson, progressCallback, completionCall
     // ========================================================
     // 컬럼 너비(preamble) 추출
     // ========================================================
-    progressCallback('서식 정보 추출 중...', 12);
+    progressCallback('서식 준비 중...', 12);
 
     var baseBytes = await zip.files[classified.base].async('arraybuffer');
     var baseWb = XLSX.read(baseBytes, { type: 'array', cellStyles: true });
@@ -151,7 +151,7 @@ async function _exportDsFromS3(s3Url, metaJson, progressCallback, completionCall
 
     for (var bfi = 0; bfi < baseAndNumbered.length; bfi++) {
       var bfName = baseAndNumbered[bfi];
-      progressCallback('파일 읽기 (' + (bfi + 1) + '/' + baseAndNumbered.length + '): ' + bfName.split('/').pop(),
+      progressCallback('데이터 처리 중 (' + (bfi + 1) + '/' + baseAndNumbered.length + ')...',
         15 + Math.round((bfi / baseAndNumbered.length) * 30));
 
       var bfData = await zip.files[bfName].async('arraybuffer');
@@ -177,7 +177,7 @@ async function _exportDsFromS3(s3Url, metaJson, progressCallback, completionCall
 
     // spt 파일
     if (classified.spt) {
-      progressCallback('spt 파일 읽기...', 47);
+      progressCallback('추가 데이터 처리 중...', 47);
       var sptFd = await zip.files[classified.spt].async('arraybuffer');
       var sptWbM = XLSX.read(sptFd, { type: 'array', cellDates: false });
       sptFd = null;
@@ -196,7 +196,7 @@ async function _exportDsFromS3(s3Url, metaJson, progressCallback, completionCall
 
     // (100) 파일 → 일반사항(검사전)
     if (classified.skipped.length > 0) {
-      progressCallback('(100) 파일 읽기...', 48);
+      progressCallback('추가 데이터 처리 중...', 48);
       for (var ski = 0; ski < classified.skipped.length; ski++) {
         var skFd = await zip.files[classified.skipped[ski]].async('arraybuffer');
         var skWbM = XLSX.read(skFd, { type: 'array', cellDates: false });
@@ -226,7 +226,7 @@ async function _exportDsFromS3(s3Url, metaJson, progressCallback, completionCall
 
     for (var sheetIdx = 0; sheetIdx < totalSheets; sheetIdx++) {
       var currentSheet = sheetOrder[sheetIdx];
-      progressCallback(currentSheet + ' 시트 생성 (' + (sheetIdx + 1) + '/' + totalSheets + ')',
+      progressCallback('Excel 작성 중 (' + (sheetIdx + 1) + '/' + totalSheets + ')...',
         50 + Math.round((sheetIdx / totalSheets) * 40));
 
       var mergedRows = allMergedRows[currentSheet];
@@ -245,7 +245,7 @@ async function _exportDsFromS3(s3Url, metaJson, progressCallback, completionCall
     }
     allMergedRows = null;
 
-    progressCallback('메타데이터 생성 중...', 92);
+    progressCallback('Excel 마무리 중...', 92);
 
     xlsxZip.file('[Content_Types].xml', _buildContentTypes(totalSheets));
     xlsxZip.file('_rels/.rels', _buildRootRels());
@@ -253,7 +253,7 @@ async function _exportDsFromS3(s3Url, metaJson, progressCallback, completionCall
     xlsxZip.file('xl/_rels/workbook.xml.rels', _buildWorkbookRels(totalSheets));
     xlsxZip.file('xl/styles.xml', _buildFixedStylesXml());
 
-    progressCallback('파일 압축 중...', 95);
+    progressCallback('다운로드 준비 중...', 95);
 
     var xlsxBlob = await xlsxZip.generateAsync({
       type: 'blob',
@@ -300,7 +300,7 @@ async function _exportDsFromS3(s3Url, metaJson, progressCallback, completionCall
  */
 async function _downloadXlsxFromUrl(url, filename, progressCallback, completionCallback, authToken) {
   try {
-    progressCallback('xlsx 다운로드 중...', 20);
+    progressCallback('Excel 파일 다운로드 중...', 20);
 
     var fetchOpts = {};
     if (authToken) {
@@ -308,11 +308,11 @@ async function _downloadXlsxFromUrl(url, filename, progressCallback, completionC
     }
     var response = await fetch(url, fetchOpts);
     if (!response.ok) {
-      completionCallback(false, 'xlsx 다운로드 실패: ' + response.status);
+      completionCallback(false, '다운로드 실패: ' + response.status);
       return;
     }
 
-    progressCallback('파일 준비 중...', 80);
+    progressCallback('다운로드 준비 중...', 80);
 
     var blob = await response.blob();
 
@@ -342,14 +342,14 @@ async function _downloadXlsxFromUrl(url, filename, progressCallback, completionC
  */
 async function _exportDsToXlsx(jsonString, progressCallback, completionCallback) {
   try {
-    progressCallback('데이터 준비 중...', 5);
+    progressCallback('데이터 불러오는 중...', 5);
 
     var parsed = JSON.parse(jsonString);
     var sheets = parsed.sheets;
     var meta = parsed.meta;
 
     if (!sheets || sheets.length === 0) {
-      completionCallback(false, '내보낼 시트 데이터가 없습니다.');
+      completionCallback(false, '내보낼 데이터가 없습니다.');
       return;
     }
 
@@ -371,14 +371,14 @@ async function _exportDsToXlsx(jsonString, progressCallback, completionCallback)
     }
     parsed = null;
 
-    progressCallback('xlsx 생성 중...', 10);
+    progressCallback('Excel 파일 생성 중...', 10);
 
     var xlsxZip = new JSZip();
     var totalSheets = sheetNames.length;
 
     for (var idx = 0; idx < totalSheets; idx++) {
       var pct = 10 + Math.round((idx / totalSheets) * 70);
-      progressCallback(sheetNames[idx] + ' 시트 생성 (' + (idx + 1) + '/' + totalSheets + ')', pct);
+      progressCallback('Excel 작성 중 (' + (idx + 1) + '/' + totalSheets + ')...', pct);
 
       var sheetBlob = _buildSheetXml(sheetDataArrays[idx], '');
       xlsxZip.file('xl/worksheets/sheet' + (idx + 1) + '.xml', sheetBlob);
@@ -389,7 +389,7 @@ async function _exportDsToXlsx(jsonString, progressCallback, completionCallback)
     }
     sheetDataArrays = null;
 
-    progressCallback('메타데이터 생성 중...', 82);
+    progressCallback('Excel 마무리 중...', 82);
 
     xlsxZip.file('[Content_Types].xml', _buildContentTypes(totalSheets));
     xlsxZip.file('_rels/.rels', _buildRootRels());
@@ -397,7 +397,7 @@ async function _exportDsToXlsx(jsonString, progressCallback, completionCallback)
     xlsxZip.file('xl/_rels/workbook.xml.rels', _buildWorkbookRels(totalSheets));
     xlsxZip.file('xl/styles.xml', _buildFixedStylesXml());
 
-    progressCallback('파일 압축 중...', 88);
+    progressCallback('다운로드 준비 중...', 88);
 
     var xlsxBlob = await xlsxZip.generateAsync({
       type: 'blob',

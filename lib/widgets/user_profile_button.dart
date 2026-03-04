@@ -20,7 +20,7 @@ class UserProfileButton extends StatelessWidget {
       case 'admin':
         return '관리자';
       case 'manager':
-        return '매니저';
+        return '본부관리자';
       default:
         return '일반';
     }

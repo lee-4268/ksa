@@ -215,7 +215,7 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
 
             // 1. 원본 ZIP → EC2 프록시 → 브라우저 병합 (신규 업로드)
             if (type == 'zip') {
-              onProgress('원본 ZIP에서 Excel 생성 중...', 3);
+              onProgress('Excel 파일 생성 준비 중...', 3);
               // EC2 프록시 URL 사용 (S3 CORS 우회)
               final proxyUri = Uri.parse('$_baseUrl/ds/proxy-raw-zip')
                   .replace(queryParameters: params);
@@ -241,7 +241,7 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
 
             // 2. pre-built xlsx → presign 직접 다운로드
             if (type == 'xlsx') {
-              onProgress('xlsx 다운로드 중...', 10);
+              onProgress('Excel 파일 다운로드 중...', 10);
               final result = await platform_export.downloadXlsxFromUrl(
                 url: data['url'] as String,
                 filename: filename,
@@ -261,7 +261,7 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
       }
 
       // 3. 폴백: 서버사이드 빌드 (/ds/export-xlsx) — old DynamoDB 데이터용
-      onProgress('서버에서 Excel 생성 중...', 5);
+      onProgress('Excel 파일 생성 중...', 5);
       final exportUri =
           Uri.parse('$_baseUrl/ds/export-xlsx').replace(queryParameters: params);
       final result = await platform_export.downloadXlsxFromUrl(

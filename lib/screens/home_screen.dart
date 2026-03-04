@@ -11,6 +11,7 @@ import 'dashboard_screen.dart';
 import 'admin/admin_panel_screen.dart';
 import 'ds_dashboard_screen.dart';
 import 'ds_merge_screen.dart';
+import 'callname_screen.dart';
 import '../widgets/user_profile_button.dart';
 
 /// 메인 홈 화면 - 메뉴 선택 인터페이스
@@ -251,6 +252,13 @@ class _HomeScreenState extends State<HomeScreen> {
                   subtitle: 'ZIP 파일을 병합하여 Excel 다운로드',
                   color: const Color(0xFFF57C00),
                   onTap: () => _navigateFromDrawer(const DsMergeScreen()),
+                ),
+                _buildDrawerItem(
+                  icon: Icons.compare_arrows,
+                  title: '호출명칭 매칭',
+                  subtitle: '통시/Access담당/품질개선팀 자동 매칭',
+                  color: const Color(0xFFE53935),
+                  onTap: () => _navigateFromDrawer(const CallnameScreen()),
                 ),
                 // 전체 대상 관리 (본부 담당자만 표시)
                 Consumer<AuthService>(

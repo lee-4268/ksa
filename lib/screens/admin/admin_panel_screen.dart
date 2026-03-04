@@ -1,12 +1,91 @@
+import 'dart:typed_data';
+
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../services/auth_service.dart';
+import '../../services/callname_service.dart';
 import 'user_management_screen.dart';
 import 'audit_log_screen.dart';
 
 /// 관리자 패널 화면 (간소화됨 - 사내 계정 DB 연동 대비)
-class AdminPanelScreen extends StatelessWidget {
+class AdminPanelScreen extends StatefulWidget {
   const AdminPanelScreen({super.key});
+
+  @override
+  State<AdminPanelScreen> createState() => _AdminPanelScreenState();
+}
+
+class _AdminPanelScreenState extends State<AdminPanelScreen> {
+  final _callnameService = CallnameService();
+  bool _dbUploading = false;
+  String? _dbStatus;
+  bool _initialized = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (!_initialized) {
+      _initialized = true;
+      final token = context.read<AuthService>().authToken;
+      _callnameService.setAuthToken(token);
+      _loadDbStatus();
+    }
+  }
+
+  Future<void> _loadDbStatus() async {
+    try {
+      final status = await _callnameService.getDbStatus();
+      if (mounted) {
+        final rows = status['rows'] as int? ?? 0;
+        final loaded = status['loaded'] as bool? ?? false;
+        setState(() {
+          _dbStatus = loaded ? '${_formatNumber(rows)}행 로드됨' : '미로드';
+        });
+      }
+    } catch (_) {
+      if (mounted) setState(() => _dbStatus = '조회 실패');
+    }
+  }
+
+  Future<void> _uploadDbFile() async {
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: ['csv', 'xlsx', 'xls'],
+      withData: true,
+    );
+    if (result == null || result.files.isEmpty) return;
+    final file = result.files.first;
+    if (file.bytes == null) return;
+
+    setState(() => _dbUploading = true);
+    try {
+      final resp = await _callnameService.uploadDbFile(
+        Uint8List.fromList(file.bytes!),
+        file.name,
+      );
+      final msg = resp['message'] as String? ?? '업로드 완료';
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(msg), backgroundColor: Colors.green),
+        );
+        _loadDbStatus();
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('업로드 실패: $e'), backgroundColor: Colors.red),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _dbUploading = false);
+    }
+  }
+
+  String _formatNumber(int n) {
+    return n.toString().replaceAllMapped(
+        RegExp(r'(\d)(?=(\d{3})+(?!\d))'), (m) => '${m[1]},');
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -51,22 +130,88 @@ class AdminPanelScreen extends StatelessWidget {
             },
           ),
 
-          // 감사 로그
-          _buildMenuCard(
-            icon: Icons.history,
-            iconColor: Colors.purple,
-            title: '감사 로그',
-            subtitle: '데이터 변경 이력 조회',
-            onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => const AuditLogScreen(),
-                ),
-              );
-            },
-          ),
+          // 감사 로그 (최고 관리자만)
+          if (authService.userRole == AppUserRole.superAdmin)
+            _buildMenuCard(
+              icon: Icons.history,
+              iconColor: Colors.purple,
+              title: '감사 로그',
+              subtitle: '데이터 변경 이력 조회',
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => const AuditLogScreen(),
+                  ),
+                );
+              },
+            ),
+
+          // 호출명칭 DB 관리 (최고 관리자만)
+          if (authService.userRole == AppUserRole.superAdmin)
+            _buildCallnameDbCard(),
         ],
+      ),
+    );
+  }
+
+  Widget _buildCallnameDbCard() {
+    return Card(
+      margin: const EdgeInsets.only(bottom: 12),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Container(
+                  width: 48,
+                  height: 48,
+                  decoration: BoxDecoration(
+                    color: Colors.orange.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: const Icon(Icons.storage, color: Colors.orange),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('호출명칭 DB 관리',
+                          style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
+                      const SizedBox(height: 2),
+                      Text(
+                        _dbStatus ?? '로딩 중...',
+                        style: TextStyle(color: Colors.grey.shade600, fontSize: 13),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Text(
+              '호출명칭 매칭에 사용되는 DB 파일을 업데이트합니다.\nCSV 또는 Excel 파일을 업로드하면 기존 DB를 교체합니다.',
+              style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
+            ),
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: _dbUploading
+                  ? const Center(child: CircularProgressIndicator())
+                  : OutlinedButton.icon(
+                      onPressed: _uploadDbFile,
+                      icon: const Icon(Icons.upload_file),
+                      label: const Text('DB 파일 업로드'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.orange.shade700,
+                      ),
+                    ),
+            ),
+          ],
+        ),
       ),
     );
   }
