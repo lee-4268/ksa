@@ -15,6 +15,10 @@ class PhotoStorageService {
   static String? _authToken;
   static void setAuthToken(String? token) => _authToken = token;
 
+  /// Image.network 등에서 인증 헤더 사용을 위한 getter
+  static Map<String, String> get authHeaders =>
+      _authToken != null ? {'Authorization': 'Bearer $_authToken'} : {};
+
   /// S3 Storage가 설정되어 있는지 확인
   static bool _isStorageConfigured = true; // EC2 API 사용 시 항상 true
 

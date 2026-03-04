@@ -898,6 +898,7 @@ class _StationDetailSheetState extends State<StationDetailSheet> {
           return Image.network(
             snapshot.data!,
             fit: BoxFit.cover,
+            headers: PhotoStorageService.authHeaders,
             errorBuilder: (context, error, stackTrace) {
               return Container(
                 color: Colors.grey[200],

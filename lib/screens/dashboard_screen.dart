@@ -8,6 +8,8 @@ import 'division_management_screen.dart';
 import 'admin/admin_panel_screen.dart';
 import 'ds_dashboard_screen.dart';
 import 'ds_merge_screen.dart';
+import 'callname_screen.dart';
+import 'certificate_screen.dart';
 import '../widgets/user_profile_button.dart';
 
 /// 전국 현황 대시보드 화면
@@ -258,6 +260,20 @@ class _DashboardScreenState extends State<DashboardScreen>
                   subtitle: 'ZIP 파일을 병합하여 Excel 다운로드',
                   color: const Color(0xFFF57C00),
                   onTap: () => _navigateFromDrawer(const DsMergeScreen()),
+                ),
+                _buildDrawerItem(
+                  icon: Icons.compare_arrows,
+                  title: '호출명칭 매칭',
+                  subtitle: '통시/Access담당/품질개선팀 자동 매칭',
+                  color: const Color(0xFFE53935),
+                  onTap: () => _navigateFromDrawer(const CallnameScreen()),
+                ),
+                _buildDrawerItem(
+                  icon: Icons.article_outlined,
+                  title: '설치확인서',
+                  subtitle: '개별/일괄 설치확인서 생성 (PDF/HWPX)',
+                  color: const Color(0xFF00838F),
+                  onTap: () => _navigateFromDrawer(const CertificateScreen()),
                 ),
                 // 전체 대상 관리 (본부 담당자만 표시)
                 Consumer<AuthService>(
