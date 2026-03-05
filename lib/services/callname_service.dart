@@ -87,23 +87,45 @@ class CallnameService {
   }
 
   /// Excel 파일 업로드 → 컬럼 감지 + 매칭 대상 건수
+  /// 2단계: upload-raw(S3 스트리밍) → upload-complete(파싱)
   Future<Map<String, dynamic>> uploadExcel(
       Uint8List bytes, String filename) async {
-    final req = http.MultipartRequest(
+    // ── Step 1: S3 스트리밍 업로드 (파싱 없음, ALB timeout 방지) ──
+    final rawReq = http.MultipartRequest(
       'POST',
-      Uri.parse('$_baseUrl/callname/upload'),
+      Uri.parse('$_baseUrl/callname/upload-raw'),
     )
       ..headers['Authorization'] = 'Bearer ${_authToken ?? ''}'
       ..files.add(http.MultipartFile.fromBytes('file', bytes,
           filename: filename));
 
-    final streamed = await req.send().timeout(_uploadTimeout);
-    final respBytes = await streamed.stream.toBytes();
-    if (streamed.statusCode != 200) {
-      final body = utf8.decode(respBytes);
+    final rawStreamed = await rawReq.send().timeout(_uploadTimeout);
+    final rawBytes = await rawStreamed.stream.toBytes();
+    if (rawStreamed.statusCode != 200) {
+      final body = utf8.decode(rawBytes);
       throw Exception('업로드 실패: $body');
     }
-    return json.decode(utf8.decode(respBytes)) as Map<String, dynamic>;
+    final rawData = json.decode(utf8.decode(rawBytes)) as Map<String, dynamic>;
+
+    // ── Step 2: 서버에서 S3 파일 파싱 (VPC 내부, 빠름) ──
+    final completeResp = await http
+        .post(
+          Uri.parse('$_baseUrl/callname/upload-complete'),
+          headers: _headers,
+          body: json.encode({
+            'uploadId': rawData['uploadId'],
+            's3Key': rawData['s3Key'],
+            'filename': rawData['filename'],
+            'ext': rawData['ext'],
+          }),
+        )
+        .timeout(const Duration(minutes: 3));
+    if (completeResp.statusCode != 200) {
+      final body = utf8.decode(completeResp.bodyBytes);
+      throw Exception('파싱 실패: $body');
+    }
+    return json.decode(utf8.decode(completeResp.bodyBytes))
+        as Map<String, dynamic>;
   }
 
   /// 컬럼 고유값 조회 (필터 UI용)

@@ -2512,6 +2512,11 @@ def _read_xlsx_paginated_sync(xlsx_path: str, sheet_name: str,
 
             next_offset = offset + len(items)
 
+        # JSON round-trip: items 내 문자열이 sharedStrings 아레나를 참조 →
+        # 새 문자열 객체로 복사하여 아레나 해제 가능하게 함
+        if items:
+            items = json.loads(json.dumps(items, ensure_ascii=False))
+
         _release_memory()
 
         last_key = None
@@ -3935,6 +3940,7 @@ async def ds_export(
 @app.get("/ds/data")
 async def ds_data(
     request: Request,
+    background_tasks: BackgroundTasks,
     divisionId: str = Query(...),
     sheetName: str = Query(...),
     importDate: Optional[str] = Query(None),
@@ -4019,6 +4025,7 @@ async def ds_data(
                 sh = upload_rec.get("sheetHeaders")
                 if sh and sheetName in sh:
                     result["headers"] = sh[sheetName]
+            background_tasks.add_task(_release_memory)
             return result
 
         # ── s3 경로: xlsx 캐시/다운로드 → 페이지네이션 (구버전 호환) ──
@@ -4043,6 +4050,7 @@ async def ds_data(
                 xlsx_path, sheetName, divisionId, importDate,
                 divisionCode, xls_offset, limit, search,
             )
+            background_tasks.add_task(_release_memory)
             return result
 
         # ── DynamoDB fallback (기존 데이터) ──────────────
@@ -4654,80 +4662,120 @@ def _list_xlsx_sheet_names(xlsx_path: str) -> list:
 def _iter_xlsx_rows_light(xlsx_path: str, sheet_name: str = None):
     """xlsx → (0-based_row_num, [str, ...]) 스트리밍 제너레이터.
     openpyxl.load_workbook 대신 ZIP + XML iterparse 사용.
-    메모리: sharedStrings list[str] (~25-50MB) + 현재 행 버퍼만.
-    openpyxl 대비 ~80% 메모리 절감 (Cell 객체/스타일/메타 없음).
+    sharedStrings를 디스크 임시파일 + mmap으로 처리 → RAM ~95% 절감.
+    메모리: offsets 배열(~4MB/50만건) + 현재 행 버퍼만.
     sheet_name: 특정 시트 (None이면 첫 번째 시트)."""
     import xml.etree.ElementTree as ET
+    import struct
+    import mmap as _mmap_mod
+    from array import array
 
-    with zipfile.ZipFile(xlsx_path, "r") as zf:
-        # ── sharedStrings → list[str] (iterparse로 하나씩 파싱 후 clear) ──
-        shared = []
-        ss_names = [n for n in zf.namelist() if n.endswith("sharedStrings.xml")]
-        if ss_names:
-            with zf.open(ss_names[0]) as ssf:
-                for _, elem in ET.iterparse(ssf, events=("end",)):
+    ss_tmp_path = None
+    ss_mmap_obj = None
+    ss_fh = None
+
+    try:
+        with zipfile.ZipFile(xlsx_path, "r") as zf:
+            # ── sharedStrings → 디스크 임시파일 + mmap (RAM에 올리지 않음) ──
+            ss_offsets = array("Q")  # unsigned long long offsets
+
+            ss_names = [n for n in zf.namelist() if n.endswith("sharedStrings.xml")]
+            if ss_names:
+                ss_tmp = _tempfile.NamedTemporaryFile(delete=False, suffix=".ss")
+                ss_tmp_path = ss_tmp.name
+                with zf.open(ss_names[0]) as ssf:
+                    for _, elem in ET.iterparse(ssf, events=("end",)):
+                        tag = elem.tag.rsplit("}", 1)[-1]
+                        if tag == "si":
+                            parts = []
+                            for ch in elem.iter():
+                                if ch.tag.rsplit("}", 1)[-1] == "t" and ch.text:
+                                    parts.append(ch.text)
+                            text = "".join(parts)
+                            encoded = text.encode("utf-8")
+                            ss_offsets.append(ss_tmp.tell())
+                            ss_tmp.write(struct.pack("<I", len(encoded)))
+                            ss_tmp.write(encoded)
+                            elem.clear()
+                ss_tmp.close()
+
+                # mmap으로 랜덤 액세스 (OS가 페이지 관리 → Python 힙 사용 안 함)
+                file_size = os.path.getsize(ss_tmp_path)
+                if file_size > 0:
+                    ss_fh = open(ss_tmp_path, "rb")
+                    ss_mmap_obj = _mmap_mod.mmap(ss_fh.fileno(), 0, access=_mmap_mod.ACCESS_READ)
+
+            def _get_ss(idx):
+                """디스크에서 sharedString 조회 (mmap → OS 페이지캐시 활용)."""
+                if ss_mmap_obj is not None and 0 <= idx < len(ss_offsets):
+                    offset = ss_offsets[idx]
+                    length = struct.unpack_from("<I", ss_mmap_obj, offset)[0]
+                    start = offset + 4
+                    return ss_mmap_obj[start:start + length].decode("utf-8")
+                return ""
+
+            # ── 시트 파일 결정 ──
+            if sheet_name:
+                sp = _resolve_xlsx_sheet_path(zf, sheet_name)
+                if not sp:
+                    return
+            else:
+                sheets = sorted([n for n in zf.namelist() if "worksheets/sheet" in n])
+                sp = sheets[0] if sheets else "xl/worksheets/sheet1.xml"
+
+            # ── sheet XML iterparse (한 행씩 yield) ──
+            _cr = re.compile(r"([A-Z]+)")
+            cells = []
+
+            with zf.open(sp) as sf:
+                for _, elem in ET.iterparse(sf, events=("end",)):
                     tag = elem.tag.rsplit("}", 1)[-1]
-                    if tag == "si":
-                        parts = []
-                        for ch in elem.iter():
-                            if ch.tag.rsplit("}", 1)[-1] == "t" and ch.text:
-                                parts.append(ch.text)
-                        shared.append("".join(parts))
+
+                    if tag == "c":
+                        ct = elem.get("t", "")
+                        val = ""
+                        if ct == "s":
+                            for ch in elem:
+                                if ch.tag.rsplit("}", 1)[-1] == "v" and ch.text:
+                                    si = int(ch.text)
+                                    val = _get_ss(si)
+                                    break
+                        elif ct == "inlineStr":
+                            for ch in elem.iter():
+                                if ch.tag.rsplit("}", 1)[-1] == "t" and ch.text:
+                                    val = ch.text
+                                    break
+                        else:
+                            for ch in elem:
+                                if ch.tag.rsplit("}", 1)[-1] == "v":
+                                    val = ch.text or ""
+                                    break
+                        r_attr = elem.get("r", "")
+                        m = _cr.match(r_attr)
+                        if m:
+                            ci = _col_to_idx(m.group(1))
+                            while len(cells) <= ci:
+                                cells.append("")
+                            cells[ci] = val
                         elem.clear()
 
-        # ── 시트 파일 결정 ──
-        if sheet_name:
-            sp = _resolve_xlsx_sheet_path(zf, sheet_name)
-            if not sp:
-                del shared
-                return
-        else:
-            sheets = sorted([n for n in zf.namelist() if "worksheets/sheet" in n])
-            sp = sheets[0] if sheets else "xl/worksheets/sheet1.xml"
+                    elif tag == "row":
+                        rn = int(elem.get("r", "0")) - 1  # 0-based
+                        yield (rn, cells)
+                        cells = []
+                        elem.clear()
 
-        # ── sheet XML iterparse (한 행씩 yield) ──
-        _cr = re.compile(r"([A-Z]+)")
-        cells = []
-
-        with zf.open(sp) as sf:
-            for _, elem in ET.iterparse(sf, events=("end",)):
-                tag = elem.tag.rsplit("}", 1)[-1]
-
-                if tag == "c":
-                    ct = elem.get("t", "")
-                    val = ""
-                    if ct == "s":
-                        for ch in elem:
-                            if ch.tag.rsplit("}", 1)[-1] == "v" and ch.text:
-                                si = int(ch.text)
-                                val = shared[si] if si < len(shared) else ""
-                                break
-                    elif ct == "inlineStr":
-                        for ch in elem.iter():
-                            if ch.tag.rsplit("}", 1)[-1] == "t" and ch.text:
-                                val = ch.text
-                                break
-                    else:
-                        for ch in elem:
-                            if ch.tag.rsplit("}", 1)[-1] == "v":
-                                val = ch.text or ""
-                                break
-                    r_attr = elem.get("r", "")
-                    m = _cr.match(r_attr)
-                    if m:
-                        ci = _col_to_idx(m.group(1))
-                        while len(cells) <= ci:
-                            cells.append("")
-                        cells[ci] = val
-                    elem.clear()
-
-                elif tag == "row":
-                    rn = int(elem.get("r", "0")) - 1  # 0-based
-                    yield (rn, cells)
-                    cells = []
-                    elem.clear()
-
-        del shared
+    finally:
+        # mmap + 임시파일 정리
+        if ss_mmap_obj is not None:
+            ss_mmap_obj.close()
+        if ss_fh is not None:
+            ss_fh.close()
+        if ss_tmp_path:
+            try:
+                os.remove(ss_tmp_path)
+            except Exception:
+                pass
 
 
 def _detect_column(df_columns, candidates):
@@ -5185,9 +5233,227 @@ async def callname_db_preview(request: Request, limit: int = Query(50, ge=1, le=
     return {"files": result_files}
 
 
+@app.post("/callname/upload-raw")
+async def callname_upload_raw(request: Request, file: UploadFile = File(...)):
+    """호출명칭 Excel → S3 멀티파트 스트리밍 (파싱 없음, 파일 전송만)
+    140MB+ 대용량 파일도 ALB timeout 없이 업로드 가능.
+    메모리: ~16MB (8MB 수신 + 8MB 업로드 파트)"""
+    await _verify_auth(request)
+    _check_memory("호출명칭 업로드")
+    _cleanup_callname_sessions()
+    active = sum(1 for v in _callname_sessions.values() if v.get("status") in ("uploaded", "ready"))
+    if active >= CALLNAME_MAX_SESSIONS:
+        raise HTTPException(status_code=429, detail=f"동시 세션 초과 (최대 {CALLNAME_MAX_SESSIONS})")
+
+    filename = file.filename or "unknown.xlsx"
+    ext = filename.rsplit(".", 1)[-1].lower()
+    if ext not in ("xlsx", "xls"):
+        raise HTTPException(status_code=400, detail="xlsx 또는 xls 파일만 가능합니다.")
+
+    safe_name = re.sub(r"[^\w\-_\.]", "_", filename)
+    upload_id = str(uuid.uuid4())
+    s3_key = f"callname-temp/{upload_id}/{safe_name}"
+    content_type = (
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        if ext == "xlsx" else "application/vnd.ms-excel"
+    )
+    s3 = get_s3_client()
+    mpu_upload_id: Optional[str] = None
+
+    try:
+        mpu = await asyncio.to_thread(
+            lambda: s3.create_multipart_upload(
+                Bucket=S3_BUCKET_NAME, Key=s3_key, ContentType=content_type
+            )
+        )
+        mpu_upload_id = mpu["UploadId"]
+
+        PART_SIZE = 8 * 1024 * 1024
+        buf = b""
+        parts: list = []
+        part_number = 1
+        total_size = 0
+
+        while True:
+            chunk = await file.read(PART_SIZE)
+            if not chunk:
+                break
+            total_size += len(chunk)
+            if total_size > MAX_DS_UPLOAD_SIZE:
+                raise HTTPException(status_code=413, detail="파일 크기 초과 (200MB)")
+            buf += chunk
+            while len(buf) >= PART_SIZE:
+                part_data, buf = buf[:PART_SIZE], buf[PART_SIZE:]
+                pn = part_number
+                resp = await asyncio.to_thread(
+                    lambda pd=part_data, n=pn: s3.upload_part(
+                        Bucket=S3_BUCKET_NAME, Key=s3_key,
+                        UploadId=mpu_upload_id, PartNumber=n, Body=pd,
+                    )
+                )
+                parts.append({"PartNumber": pn, "ETag": resp["ETag"]})
+                part_number += 1
+
+        if buf:
+            pn = part_number
+            resp = await asyncio.to_thread(
+                lambda pd=buf, n=pn: s3.upload_part(
+                    Bucket=S3_BUCKET_NAME, Key=s3_key,
+                    UploadId=mpu_upload_id, PartNumber=n, Body=pd,
+                )
+            )
+            parts.append({"PartNumber": pn, "ETag": resp["ETag"]})
+
+        if not parts:
+            raise ValueError("업로드된 데이터가 없습니다")
+
+        await asyncio.to_thread(
+            lambda: s3.complete_multipart_upload(
+                Bucket=S3_BUCKET_NAME, Key=s3_key, UploadId=mpu_upload_id,
+                MultipartUpload={"Parts": parts},
+            )
+        )
+        logger.info(f"callname upload-raw: {s3_key} ({len(parts)} parts, {total_size // 1024}KB)")
+        return {
+            "success": True,
+            "s3Key": s3_key,
+            "uploadId": upload_id,
+            "filename": filename,
+            "ext": ext,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        if mpu_upload_id:
+            try:
+                await asyncio.to_thread(
+                    lambda: s3.abort_multipart_upload(
+                        Bucket=S3_BUCKET_NAME, Key=s3_key, UploadId=mpu_upload_id,
+                    )
+                )
+            except Exception:
+                pass
+        logger.error(f"호출명칭 upload-raw 실패: {e}")
+        raise HTTPException(status_code=500, detail="서버 내부 오류")
+
+
+@app.post("/callname/upload-complete")
+async def callname_upload_complete(request: Request):
+    """S3 업로드 완료 후 경량 파싱 — 컬럼 감지 + 행 수 집계
+    /callname/upload-raw 이후 호출. S3→EC2 다운로드(VPC 내부, 빠름) + mmap 파싱."""
+    await _verify_auth(request)
+    _check_memory("호출명칭 파싱")
+
+    body = await request.json()
+    upload_id = body.get("uploadId")
+    s3_key = body.get("s3Key")
+    filename = body.get("filename", "unknown.xlsx")
+    ext = body.get("ext", filename.rsplit(".", 1)[-1].lower())
+
+    if not upload_id or not s3_key:
+        raise HTTPException(status_code=400, detail="uploadId, s3Key 필수")
+
+    # 이미 같은 upload_id로 세션이 있으면 중복 방지
+    if upload_id in _callname_sessions:
+        sess = _callname_sessions[upload_id]
+        return {
+            "upload_id": upload_id,
+            "filename": sess.get("filename", filename),
+            **{k: sess.get(k) for k in ("total_rows", "columns", "callname_col",
+                                          "tongsi_col", "zpwina_col", "zpwino_col",
+                                          "filtered_rows")},
+            "detected_callname_col": sess.get("callname_col"),
+            "detected_tongsi_col": sess.get("tongsi_col"),
+            "detected_zpwina_col": sess.get("zpwina_col"),
+            "detected_zpwino_col": sess.get("zpwino_col"),
+        }
+
+    try:
+        # S3 → 디스크 다운로드 (VPC 내부, 빠름)
+        tmp_path = await asyncio.to_thread(_s3_to_tempfile, s3_key, f".{ext}")
+
+        def _parse_lightweight_from_s3():
+            try:
+                if ext == "xlsx":
+                    columns = []
+                    total_rows = 0
+                    tongsi_idx = -1
+                    filtered_rows = 0
+                    for rn, vals in _iter_xlsx_rows_light(tmp_path):
+                        if rn == 0:
+                            columns = vals[:]
+                            tongsi_col = _detect_column(columns, CALLNAME_POSSIBLE_TONGSI_COLS)
+                            tongsi_idx = columns.index(tongsi_col) if tongsi_col and tongsi_col in columns else -1
+                            continue
+                        total_rows += 1
+                        if tongsi_idx >= 0 and tongsi_idx < len(vals):
+                            val = vals[tongsi_idx]
+                            if not val.strip():
+                                filtered_rows += 1
+                    _release_memory()
+                else:
+                    import xlrd
+                    wb = xlrd.open_workbook(tmp_path)
+                    ws = wb.sheet_by_index(0)
+                    columns = [str(ws.cell_value(0, c)) for c in range(ws.ncols)]
+                    total_rows = ws.nrows - 1
+                    tongsi_col = _detect_column(columns, CALLNAME_POSSIBLE_TONGSI_COLS)
+                    tongsi_idx = columns.index(tongsi_col) if tongsi_col and tongsi_col in columns else -1
+                    filtered_rows = 0
+                    if tongsi_idx >= 0:
+                        for r in range(1, ws.nrows):
+                            val = ws.cell_value(r, tongsi_idx)
+                            if val is None or str(val).strip() == "":
+                                filtered_rows += 1
+                    wb.release_resources()
+
+                callname_col = _detect_column(columns, CALLNAME_POSSIBLE_CALLNAME_COLS)
+                zpwina_col = _detect_column(columns, CALLNAME_POSSIBLE_ZPWINA_COLS)
+                zpwino_col = _detect_column(columns, CALLNAME_POSSIBLE_ZPWINO_COLS)
+
+                return {
+                    "total_rows": total_rows, "columns": columns,
+                    "callname_col": callname_col, "tongsi_col": tongsi_col,
+                    "zpwina_col": zpwina_col, "zpwino_col": zpwino_col,
+                    "filtered_rows": filtered_rows,
+                }
+            finally:
+                try:
+                    os.remove(tmp_path)
+                except Exception:
+                    pass
+
+        info = await asyncio.to_thread(_parse_lightweight_from_s3)
+
+        _callname_sessions[upload_id] = {
+            "filename": filename,
+            "s3_temp_key": s3_key,
+            "ext": ext,
+            "status": "uploaded",
+            "created_at_ts": _time_mod.time(),
+            **info,
+        }
+
+        return {
+            "upload_id": upload_id,
+            "filename": filename,
+            **info,
+            "detected_callname_col": info["callname_col"],
+            "detected_tongsi_col": info["tongsi_col"],
+            "detected_zpwina_col": info["zpwina_col"],
+            "detected_zpwino_col": info["zpwino_col"],
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"호출명칭 upload-complete 실패: {e}")
+        raise HTTPException(status_code=500, detail="서버 내부 오류")
+
+
 @app.post("/callname/upload")
 async def callname_upload(request: Request, file: UploadFile = File(...)):
-    """Excel 업로드 → S3 임시저장 + 경량 컬럼 감지 (pandas 없이 헤더만 읽기)"""
+    """Excel 업로드 → S3 임시저장 + 경량 컬럼 감지 (소용량 fallback)"""
     await _verify_auth(request)
     _check_memory("호출명칭 Excel 업로드")
 
@@ -5494,7 +5760,17 @@ async def callname_process(request: Request):
                     while len(vals) < len(columns):
                         vals.append("")
                     _process_row(rn - 1, vals)
-                _release_memory()  # sharedStrings 해제 후 OS 반환
+                # JSON round-trip: 세션 리스트의 문자열을 sharedStrings 아레나에서 분리
+                # → _release_memory()에서 아레나를 OS에 완전 반환 가능
+                if row_zpwina_list:
+                    row_zpwina_list = json.loads(json.dumps(row_zpwina_list, ensure_ascii=False))
+                if row_zpwino_list:
+                    row_zpwino_list = json.loads(json.dumps(row_zpwino_list, ensure_ascii=False))
+                if zpwina_set:
+                    zpwina_set = set(json.loads(json.dumps(list(zpwina_set), ensure_ascii=False)))
+                if zpwino_set:
+                    zpwino_set = set(json.loads(json.dumps(list(zpwino_set), ensure_ascii=False)))
+                _release_memory()  # sharedStrings 아레나 OS 반환
             else:
                 xls_book = xlrd.open_workbook(tmp_path)
                 ws = xls_book.sheet_by_index(0)
