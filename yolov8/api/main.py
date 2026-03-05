@@ -5032,54 +5032,168 @@ def _cleanup_callname_sessions():
 
 
 def _analyze_callname_bg(upload_id: str):
-    """Background: S3 xlsx → SS 캐시 빌드 → 전행 스캔 → 컬럼 통계 + filtered_rows.
+    """Background: xlsx 단일 ZIP 오픈 → SS캐시 빌드 + 전행 스캔 통합.
+    - 컬럼 자동 감지 (첫 행에서 직접 추출, _parse_xlsx_header_fast 실패 보완)
+    - filtered_rows 정확 계산 + 컬럼별 top-100 통계
     upload-complete 이후 백그라운드 스레드에서 실행."""
+    import xml.etree.ElementTree as ET
+    import struct
+    import mmap as _mmap_mod
+    from array import array
+    from collections import Counter
+
     sess = _callname_sessions.get(upload_id)
     if not sess or sess.get("status") != "uploaded":
         return
     try:
         sess["analysis_status"] = "processing"
 
-        # 디스크 캐시된 xlsx 사용 (upload-complete에서 보존)
         tmp_path = sess.get("cached_xlsx_path")
         if not tmp_path or not os.path.exists(tmp_path):
             tmp_path = _s3_to_tempfile(sess["s3_temp_key"], f".{sess['ext']}")
             sess["cached_xlsx_path"] = tmp_path
 
-        columns = sess.get("columns", [])
-        tongsi_col = sess.get("tongsi_col")
-        tongsi_idx = columns.index(tongsi_col) if tongsi_col and tongsi_col in columns else -1
-
-        from collections import Counter
-        col_counters = [Counter() for _ in range(len(columns))]
+        columns = []
         filtered_rows = 0
         total_rows = 0
-
+        col_counters = []
         ss_cache_path = None
         ss_offsets_bytes = None
 
         if sess.get("ext") == "xlsx":
-            # SS 캐시 빌드 (1회 → 이후 column-values/preview/process 재사용)
-            ss_cache_path, ss_offsets_bytes = _build_xlsx_ss_cache(tmp_path)
+            # ── 단일 ZIP 오픈: SS 캐시 빌드 + 행 반복 통합 ──
+            _cr = re.compile(r"([A-Z]+)")
+            ss_offsets = array("Q")
+            ss_tmp_path = None
+            ss_mmap_obj = None
+            ss_fh = None
 
-            for rn, vals in _iter_xlsx_rows_light(
-                    tmp_path, ss_cache_path=ss_cache_path, ss_offsets_bytes=ss_offsets_bytes):
-                if rn == 0:
-                    continue
-                total_rows += 1
-                tongsi_empty = True
-                if 0 <= tongsi_idx < len(vals):
-                    if vals[tongsi_idx].strip():
-                        tongsi_empty = False
-                if tongsi_empty:
-                    filtered_rows += 1
-                for i, v in enumerate(vals):
-                    if v and i < len(col_counters) and len(col_counters[i]) < 200:
-                        col_counters[i][v] += 1
+            try:
+                with zipfile.ZipFile(tmp_path, "r") as zf:
+                    # 1) sharedStrings → 디스크 캐시
+                    ss_names = [n for n in zf.namelist() if n.endswith("sharedStrings.xml")]
+                    if ss_names:
+                        ss_tmp = _tempfile.NamedTemporaryFile(delete=False, suffix=".ss")
+                        ss_tmp_path = ss_tmp.name
+                        with zf.open(ss_names[0]) as ssf:
+                            for _, elem in ET.iterparse(ssf, events=("end",)):
+                                tag = elem.tag.rsplit("}", 1)[-1]
+                                if tag == "si":
+                                    parts = []
+                                    for ch in elem.iter():
+                                        if ch.tag.rsplit("}", 1)[-1] == "t" and ch.text:
+                                            parts.append(ch.text)
+                                    text = "".join(parts)
+                                    encoded = text.encode("utf-8")
+                                    ss_offsets.append(ss_tmp.tell())
+                                    ss_tmp.write(struct.pack("<I", len(encoded)))
+                                    ss_tmp.write(encoded)
+                                    elem.clear()
+                        ss_tmp.close()
+
+                        file_size = os.path.getsize(ss_tmp_path)
+                        if file_size > 0:
+                            ss_fh = open(ss_tmp_path, "rb")
+                            ss_mmap_obj = _mmap_mod.mmap(
+                                ss_fh.fileno(), 0, access=_mmap_mod.ACCESS_READ)
+
+                    def _get_ss(idx):
+                        if ss_mmap_obj is not None and 0 <= idx < len(ss_offsets):
+                            offset = ss_offsets[idx]
+                            length = struct.unpack_from("<I", ss_mmap_obj, offset)[0]
+                            start = offset + 4
+                            return ss_mmap_obj[start:start + length].decode("utf-8")
+                        return ""
+
+                    # 2) sheet XML 행 반복 (SS 캐시 즉시 사용, ZIP 재오픈 없음)
+                    sheets = sorted([n for n in zf.namelist()
+                                     if "worksheets/sheet" in n])
+                    sp = sheets[0] if sheets else "xl/worksheets/sheet1.xml"
+                    cells = []
+
+                    with zf.open(sp) as sf:
+                        for _, elem in ET.iterparse(sf, events=("end",)):
+                            tag = elem.tag.rsplit("}", 1)[-1]
+
+                            if tag == "c":
+                                ct = elem.get("t", "")
+                                val = ""
+                                if ct == "s":
+                                    for ch in elem:
+                                        if ch.tag.rsplit("}", 1)[-1] == "v" and ch.text:
+                                            val = _get_ss(int(ch.text))
+                                            break
+                                elif ct == "inlineStr":
+                                    for ch in elem.iter():
+                                        if ch.tag.rsplit("}", 1)[-1] == "t" and ch.text:
+                                            val = ch.text
+                                            break
+                                else:
+                                    for ch in elem:
+                                        if ch.tag.rsplit("}", 1)[-1] == "v":
+                                            val = ch.text or ""
+                                            break
+                                r_attr = elem.get("r", "")
+                                m = _cr.match(r_attr) if r_attr else None
+                                if m:
+                                    ci = _col_to_idx(m.group(1))
+                                    while len(cells) <= ci:
+                                        cells.append("")
+                                    cells[ci] = val
+                                else:
+                                    cells.append(val)
+                                elem.clear()
+
+                            elif tag == "row":
+                                rn = int(elem.get("r", "0")) - 1
+                                if rn == 0:
+                                    # 첫 행 → 컬럼 헤더
+                                    columns = cells[:]
+                                    while columns and not columns[-1].strip():
+                                        columns.pop()
+                                    col_counters = [Counter() for _ in range(len(columns))]
+                                    # 컬럼 감지
+                                    tongsi_col = _detect_column(columns, CALLNAME_POSSIBLE_TONGSI_COLS)
+                                    callname_col = _detect_column(columns, CALLNAME_POSSIBLE_CALLNAME_COLS)
+                                    zpwina_col = _detect_column(columns, CALLNAME_POSSIBLE_ZPWINA_COLS)
+                                    zpwino_col = _detect_column(columns, CALLNAME_POSSIBLE_ZPWINO_COLS)
+                                    tongsi_idx = columns.index(tongsi_col) if tongsi_col else -1
+                                else:
+                                    total_rows += 1
+                                    tongsi_empty = True
+                                    if 0 <= tongsi_idx < len(cells):
+                                        if cells[tongsi_idx].strip():
+                                            tongsi_empty = False
+                                    if tongsi_empty:
+                                        filtered_rows += 1
+                                    for i, v in enumerate(cells):
+                                        if v and i < len(col_counters) and len(col_counters[i]) < 200:
+                                            col_counters[i][v] += 1
+                                cells = []
+                                elem.clear()
+                            else:
+                                elem.clear()
+
+                # 캐시 경로 저장 (preview/process 재사용)
+                ss_cache_path = ss_tmp_path
+                ss_offsets_bytes = ss_offsets.tobytes() if ss_tmp_path else None
+            finally:
+                if ss_mmap_obj is not None:
+                    ss_mmap_obj.close()
+                if ss_fh is not None:
+                    ss_fh.close()
         else:
+            # xls
             import xlrd
             wb = xlrd.open_workbook(tmp_path)
             ws = wb.sheet_by_index(0)
+            columns = [str(ws.cell_value(0, c)) for c in range(ws.ncols)]
+            col_counters = [Counter() for _ in range(len(columns))]
+            tongsi_col = _detect_column(columns, CALLNAME_POSSIBLE_TONGSI_COLS)
+            callname_col = _detect_column(columns, CALLNAME_POSSIBLE_CALLNAME_COLS)
+            zpwina_col = _detect_column(columns, CALLNAME_POSSIBLE_ZPWINA_COLS)
+            zpwino_col = _detect_column(columns, CALLNAME_POSSIBLE_ZPWINO_COLS)
+            tongsi_idx = columns.index(tongsi_col) if tongsi_col else -1
             for r in range(1, ws.nrows):
                 total_rows += 1
                 vals = [str(ws.cell_value(r, c)) for c in range(ws.ncols)]
@@ -5097,10 +5211,17 @@ def _analyze_callname_bg(upload_id: str):
         # 컬럼별 top-100 값 통계
         column_stats = {}
         for i, col in enumerate(columns):
-            top = col_counters[i].most_common(100)
-            if top:
-                column_stats[col] = [{"value": v, "count": c} for v, c in top]
+            if i < len(col_counters):
+                top = col_counters[i].most_common(100)
+                if top:
+                    column_stats[col] = [{"value": v, "count": c} for v, c in top]
 
+        # 세션 갱신 (컬럼 감지 결과도 덮어쓰기 → _parse_xlsx_header_fast 실패 보완)
+        sess["columns"] = columns
+        sess["callname_col"] = callname_col if 'callname_col' in dir() else sess.get("callname_col")
+        sess["tongsi_col"] = tongsi_col if 'tongsi_col' in dir() else sess.get("tongsi_col")
+        sess["zpwina_col"] = zpwina_col if 'zpwina_col' in dir() else sess.get("zpwina_col")
+        sess["zpwino_col"] = zpwino_col if 'zpwino_col' in dir() else sess.get("zpwino_col")
         sess["filtered_rows"] = filtered_rows
         sess["total_rows"] = total_rows
         sess["column_stats"] = column_stats
@@ -5110,12 +5231,14 @@ def _analyze_callname_bg(upload_id: str):
 
         _release_memory()
         logger.info(f"호출명칭 분석 완료: upload_id={upload_id}, "
-                     f"total={total_rows}, filtered={filtered_rows}")
+                     f"cols={len(columns)}, total={total_rows}, filtered={filtered_rows}")
     except Exception as e:
         sess_ref = _callname_sessions.get(upload_id)
         if sess_ref:
             sess_ref["analysis_status"] = "error"
         logger.error(f"호출명칭 분석 실패: upload_id={upload_id}: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
 
 
 def _query_callname_db(zpwina_values: list, zpwino_values: list) -> dict:
@@ -5712,6 +5835,12 @@ async def callname_analysis_status(upload_id: str, request: Request):
     if status == "complete":
         result["filtered_rows"] = sess.get("filtered_rows", 0)
         result["total_rows"] = sess.get("total_rows", 0)
+        # 컬럼 + 감지 결과 (upload-complete에서 누락됐을 수 있으므로 분석 결과로 갱신)
+        result["columns"] = sess.get("columns", [])
+        result["detected_callname_col"] = sess.get("callname_col")
+        result["detected_tongsi_col"] = sess.get("tongsi_col")
+        result["detected_zpwina_col"] = sess.get("zpwina_col")
+        result["detected_zpwino_col"] = sess.get("zpwino_col")
     return result
 
 

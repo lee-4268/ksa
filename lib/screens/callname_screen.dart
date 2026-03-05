@@ -110,6 +110,20 @@ class _CallnameScreenState extends State<CallnameScreen> {
           setState(() {
             _filteredRows = result['filtered_rows'] as int?;
             _analysisComplete = true;
+            // 분석에서 감지된 컬럼으로 갱신 (upload-complete 누락 보완)
+            final cols = result['columns'] as List?;
+            if (cols != null && cols.isNotEmpty && _uploadResult != null) {
+              _uploadResult!['columns'] = cols;
+              _uploadResult!['total_rows'] = result['total_rows'];
+              _uploadResult!['detected_callname_col'] =
+                  result['detected_callname_col'];
+              _uploadResult!['detected_tongsi_col'] =
+                  result['detected_tongsi_col'];
+              _uploadResult!['detected_zpwina_col'] =
+                  result['detected_zpwina_col'];
+              _uploadResult!['detected_zpwino_col'] =
+                  result['detected_zpwino_col'];
+            }
           });
           break;
         } else if (status == 'error') {
