@@ -28,7 +28,7 @@ class DsDataScreen extends StatefulWidget {
 
 class _DsDataScreenState extends State<DsDataScreen> with SingleTickerProviderStateMixin {
   static const Color _accentColor = Color(0xFF5C6BC0);
-  static const int _pageSize = 100;
+  static const int _pageSize = 50;
 
   final DsDataService _dataService = DsDataService();
   final TextEditingController _searchController = TextEditingController();

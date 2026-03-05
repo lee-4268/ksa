@@ -62,12 +62,57 @@ try:
 except ImportError:
     HAS_PSUTIL = False
 
-try:
-    import pandas as pd
-    HAS_PANDAS = True
-except ImportError:
-    HAS_PANDAS = False
-    logging.warning("pandas not installed - callname matching disabled")
+MEMORY_THRESHOLD_PCT = 80  # 메모리 사용률 이 이상이면 무거운 작업 차단 (2GB RAM 기준)
+
+def _log_mem(label: str):
+    """현재 프로세스 RSS + 시스템 가용 메모리 로깅."""
+    if not HAS_PSUTIL:
+        return
+    proc = psutil.Process()
+    rss_mb = proc.memory_info().rss / (1024 * 1024)
+    vm = psutil.virtual_memory()
+    avail_mb = vm.available / (1024 * 1024)
+    logger.info(f"[MEM] {label} | RSS={rss_mb:.0f}MB | avail={avail_mb:.0f}MB | sys={vm.percent}%")
+
+def _release_memory():
+    """gc.collect + Linux malloc_trim → pymalloc이 해제한 메모리를 OS에 실제 반환."""
+    gc.collect()
+    try:
+        import ctypes
+        libc = ctypes.CDLL("libc.so.6")
+        libc.malloc_trim(0)
+    except Exception:
+        pass  # Windows / non-glibc → skip
+
+def _check_memory(operation: str = "작업"):
+    """메모리 사용률 체크. 임계치 초과 시 HTTPException 발생."""
+    if not HAS_PSUTIL:
+        return
+    mem = psutil.virtual_memory()
+    if mem.percent >= MEMORY_THRESHOLD_PCT:
+        logger.warning(f"메모리 부족 ({mem.percent}%) — {operation} 차단")
+        raise HTTPException(
+            status_code=503,
+            detail=f"서버 메모리 부족 ({mem.percent}%). 잠시 후 다시 시도해주세요."
+        )
+
+# pandas는 lazy import (메모리 ~150MB 절약: 필요할 때만 로드)
+HAS_PANDAS = True
+pd = None  # placeholder
+
+def _get_pandas():
+    """pandas lazy loader — 첫 호출 시에만 import."""
+    global pd, HAS_PANDAS
+    if pd is not None:
+        return pd
+    try:
+        import pandas as _pd
+        pd = _pd
+        return pd
+    except ImportError:
+        HAS_PANDAS = False
+        logging.warning("pandas not installed - callname matching disabled")
+        return None
 
 # ============================================================
 # Configuration
@@ -758,13 +803,19 @@ def load_model():
     return model
 
 
+_bounded_executor = ThreadPoolExecutor(max_workers=2)  # 2GB RAM: 동시 무거운 작업 2개 제한
+
 @app.on_event("startup")
 async def startup_event():
     """서버 시작 - YOLO 모델은 Lazy Loading (첫 분류 요청 시 로드)"""
     global _ds_job_worker_task
     # EC2 메모리 절약: 시작 시 모델 로드 안 함 (~200MB 절약)
     # /predict, /predict/ensemble 첫 호출 시 자동 로드됨
-    print("Server started successfully! (YOLO model: lazy load)")
+    if HAS_PSUTIL:
+        mem = psutil.virtual_memory()
+        print(f"Server started! RAM: {mem.total // (1024*1024)}MB, used: {mem.percent}%")
+    else:
+        print("Server started successfully! (YOLO model: lazy load)")
     # DS 잡 테이블 자동 생성 (없으면) + stuck 잡 복구 + 워커 시작
     asyncio.create_task(_ensure_ds_jobs_table())
     asyncio.create_task(asyncio.to_thread(_ensure_audit_table))
@@ -1009,6 +1060,7 @@ async def predict_single(
     - Returns prediction with confidence score
     """
     await _verify_auth(request)
+    _check_memory("YOLO 이미지 분류")
     _check_rate_limit(request, "predict", 10, 60)
 
     import time
@@ -1066,6 +1118,7 @@ async def predict_ensemble(
     - Methods: mean (average), max (maximum), vote (voting)
     """
     await _verify_auth(request)
+    _check_memory("YOLO 앙상블 분류")
     _check_rate_limit(request, "predict_ensemble", 5, 60)
 
     import time
@@ -2366,64 +2419,47 @@ def _read_xlsx_paginated_sync(xlsx_path: str, sheet_name: str,
                                division_id: str, import_date: str,
                                division_code: str, offset: int = 0,
                                limit: int = 100, search: Optional[str] = None) -> dict:
-    """S3 xlsx에서 페이지네이션 읽기 — GET /ds/data 응답 형식과 100% 동일
-    DynamoDB 경로와 동일한 응답 → 프론트엔드 수정 불필요
-    """
-    if not HAS_OPENPYXL:
-        raise RuntimeError("openpyxl not installed on server")
-
-    try:
-        wb = openpyxl.load_workbook(xlsx_path, read_only=True, data_only=True)
-    except Exception as e:
-        logger.warning(f"DS xlsx read failed ({xlsx_path}): {e}")
-        return {"success": True, "items": [], "count": 0, "lastEvaluatedKey": None}
-
-    # 시트 찾기
-    if sheet_name not in wb.sheetnames:
-        wb.close()
-        return {"success": True, "items": [], "count": 0, "lastEvaluatedKey": None}
-
-    ws = wb[sheet_name]
+    """S3 xlsx에서 페이지네이션 읽기 — 경량 ZIP+XML 파서 사용 (openpyxl 제거).
+    GET /ds/data 응답 형식과 100% 동일 → 프론트엔드 수정 불필요.
+    메모리: sharedStrings list[str]만 임시 로드 후 즉시 해제."""
     dc_part = f"#{division_code}" if division_code else ""
 
     try:
-        # 헤더 읽기 (첫 행)
         headers = []
-        rows_iter = ws.iter_rows()
-        header_row = next(rows_iter, None)
-        if not header_row:
-            wb.close()
-            return {"success": True, "items": [], "count": 0, "lastEvaluatedKey": None}
-        # 헤더 셀을 위치 기반으로 읽기 (None 셀도 포함하여 컬럼 위치 보존)
-        headers = []
-        for cell in header_row:
-            v = cell.value
-            if v is not None and str(v).strip():
-                headers.append(str(v).strip())
-            else:
-                break  # 연속된 헤더 영역 끝
-        num_cols = len(headers)
-
+        num_cols = 0
         items = []
-        row_idx = 0  # 0-based data row index
+        row_idx = 0
+        has_more = False
 
         if search:
-            # 검색 모드: 전체 순회 + case-insensitive 필터
             search_lower = search.lower()
             scanned = 0
-            for row in rows_iter:
-                vals = [str(cell.value or "") for cell in row[:num_cols]]
+            found_limit = False
+
+            for rn, vals in _iter_xlsx_rows_light(xlsx_path, sheet_name=sheet_name):
+                if rn == 0:
+                    # 헤더 (연속된 비어있지 않은 셀만)
+                    for v in vals:
+                        if v.strip():
+                            headers.append(v.strip())
+                        else:
+                            break
+                    num_cols = len(headers)
+                    continue
+
+                trimmed = vals[:num_cols]
                 data = {}
                 for i, h in enumerate(headers):
-                    if i < len(vals) and vals[i]:
-                        data[h] = vals[i]
-
+                    if i < len(trimmed) and trimmed[i]:
+                        data[h] = trimmed[i]
                 if not data:
                     row_idx += 1
                     continue
 
-                # 검색 필터 (현재 DynamoDB 검색과 동일 로직)
                 if any(search_lower in str(v).lower() for v in data.values()):
+                    if found_limit:
+                        has_more = True
+                        break
                     if scanned >= offset:
                         items.append({
                             "divisionId": division_id,
@@ -2434,34 +2470,34 @@ def _read_xlsx_paginated_sync(xlsx_path: str, sheet_name: str,
                             "data": data,
                         })
                         if len(items) >= limit:
-                            row_idx += 1
-                            break
+                            found_limit = True
                     scanned += 1
                 row_idx += 1
 
             next_offset = offset + len(items)
-            # 더 있는지 확인: 남은 행에서 검색 매치 존재 여부
-            has_more = False
-            if len(items) >= limit:
-                for row in rows_iter:
-                    vals = [str(cell.value or "") for cell in row[:num_cols]]
-                    if any(search_lower in str(v).lower() for v in vals if v):
-                        has_more = True
-                        break
         else:
-            # 일반 페이징: offset까지 skip → limit개 읽기
-            for row in rows_iter:
+            for rn, vals in _iter_xlsx_rows_light(xlsx_path, sheet_name=sheet_name):
+                if rn == 0:
+                    for v in vals:
+                        if v.strip():
+                            headers.append(v.strip())
+                        else:
+                            break
+                    num_cols = len(headers)
+                    continue
+
                 if row_idx < offset:
                     row_idx += 1
                     continue
                 if len(items) >= limit:
+                    has_more = True
                     break
 
-                vals = [str(cell.value or "") for cell in row[:num_cols]]
+                trimmed = vals[:num_cols]
                 data = {}
                 for i, h in enumerate(headers):
-                    if i < len(vals) and vals[i]:
-                        data[h] = vals[i]
+                    if i < len(trimmed) and trimmed[i]:
+                        data[h] = trimmed[i]
 
                 if data:
                     items.append({
@@ -2475,10 +2511,8 @@ def _read_xlsx_paginated_sync(xlsx_path: str, sheet_name: str,
                 row_idx += 1
 
             next_offset = offset + len(items)
-            # 다음 행 존재 여부
-            has_more = next(rows_iter, None) is not None
 
-        wb.close()
+        _release_memory()
 
         last_key = None
         if has_more and len(items) >= limit:
@@ -2491,7 +2525,7 @@ def _read_xlsx_paginated_sync(xlsx_path: str, sheet_name: str,
             "lastEvaluatedKey": last_key,
         }
     except Exception as e:
-        wb.close()
+        _release_memory()
         logger.error(f"DS xlsx paginated read error: {e}")
         return {"success": True, "items": [], "count": 0, "lastEvaluatedKey": None}
 
@@ -2935,7 +2969,7 @@ def _process_zip_to_xlsx_sync(zip_temp_path: str, progress_cb=None) -> tuple:
             total_rows += file_rows
             logger.info(f"DS xlsx build: {base_fname} → {file_rows}행")
 
-    gc.collect()
+    _release_memory()
     if progress_cb:
         progress_cb(f"xlsx 파일 생성 중... ({total_rows:,}행)", 76)
 
@@ -2980,11 +3014,44 @@ def _process_zip_to_xlsx_sync(zip_temp_path: str, progress_cb=None) -> tuple:
 
 def _init_upload_record_sync(division_id: str, division_code: str, import_date: str,
                               file_name: str, uploaded_by: str, job_id: str):
-    """동기: 업로드 레코드 초기화 (기존 레코드 삭제 후 새로 생성)"""
+    """동기: 업로드 레코드 초기화 (같은 본부+코드 기존 모두 삭제 후 새로 생성)"""
     uploads_table = _dynamodb_resource.Table(DYNAMODB_TABLES["ds_uploads"])
     records_table = _dynamodb_resource.Table(DYNAMODB_TABLES["ds_records"])
     sk = f"{division_code}#{import_date}" if division_code else import_date
 
+    # ── 같은 본부+지역코드의 기존 업로드 모두 삭제 (날짜 무관) ──
+    if division_code:
+        old_resp = uploads_table.query(
+            KeyConditionExpression="divisionId = :did AND begins_with(importDate, :prefix)",
+            ExpressionAttributeValues={":did": division_id, ":prefix": f"{division_code}#"},
+            ProjectionExpression="importDate, sheetStats, storageType, divisionCode",
+        )
+        for old_item in old_resp.get("Items", []):
+            old_sk = old_item["importDate"]
+            if old_sk == sk:
+                continue  # 동일 날짜 → 아래 existing 로직이 처리
+            old_date = old_sk.split("#", 1)[1] if "#" in old_sk else old_sk
+            old_dc = old_item.get("divisionCode", division_code)
+            old_sheets = list(old_item.get("sheetStats", {}).keys())
+            old_storage = old_item.get("storageType", "")
+            logger.info(f"DS init: 이전 날짜 삭제 {division_id}/{old_sk}")
+            try:
+                s3 = get_s3_client()
+                for s3k in [f"ds-exports/{division_id}/{old_dc}_{old_date}.xlsx",
+                            f"ds-raw/{division_id}/{old_dc}_{old_date}.zip"]:
+                    try:
+                        s3.delete_object(Bucket=S3_BUCKET_NAME, Key=s3k)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+            _evict_cache(division_id, old_dc, old_date)
+            if old_storage not in ("s3", "s3-zip") and old_sheets:
+                _delete_ds_records_targeted(records_table, uploads_table,
+                                            division_id, old_date, old_dc, old_sheets)
+            uploads_table.delete_item(Key={"divisionId": division_id, "importDate": old_sk})
+
+    # ── 동일 날짜 기존 데이터 처리 ──
     existing = uploads_table.get_item(
         Key={"divisionId": division_id, "importDate": sk}
     ).get("Item")
@@ -2994,7 +3061,6 @@ def _init_upload_record_sync(division_id: str, division_code: str, import_date: 
         existing_sheet_names = list(existing.get("sheetStats", {}).keys())
         logger.info(f"DS init: 기존 {division_id}/{sk} 삭제 (storageType={existing_storage})")
 
-        # S3 파일 삭제 (공통)
         try:
             s3 = get_s3_client()
             for s3_key in [
@@ -3008,11 +3074,9 @@ def _init_upload_record_sync(division_id: str, division_code: str, import_date: 
         except Exception:
             pass
 
-        # EC2 캐시 삭제
         _evict_cache(division_id, division_code, import_date)
 
-        # DynamoDB records 삭제: S3 계열 스토리지면 건너뜀 (records 없음)
-        if existing_storage not in ("s3", "s3-zip"):
+        if existing_storage not in ("s3", "s3-zip") and existing_sheet_names:
             _delete_ds_records_targeted(
                 records_table, uploads_table,
                 division_id, import_date, division_code, existing_sheet_names
@@ -3325,7 +3389,7 @@ async def _process_ds_job(job_id: str, job_item: dict):
                 os.remove(zip_temp_path)
         except Exception:
             pass
-        gc.collect()
+        _release_memory()
 
 
 async def _job_worker_loop():
@@ -3518,20 +3582,49 @@ async def ds_upload_init(req: DsUploadInit, request: Request = None):
 
         sk = f"{req.divisionCode}#{req.importDate}" if req.divisionCode else req.importDate
 
-        # 기존 데이터 존재 시 처리
+        # ── 같은 본부+지역코드의 기존 업로드 모두 삭제 (날짜 무관) ──
+        if req.divisionCode:
+            old_resp = uploads_table.query(
+                KeyConditionExpression="divisionId = :did AND begins_with(importDate, :prefix)",
+                ExpressionAttributeValues={":did": req.divisionId, ":prefix": f"{req.divisionCode}#"},
+                ProjectionExpression="importDate, sheetStats, storageType, divisionCode",
+            )
+            for old_item in old_resp.get("Items", []):
+                old_sk = old_item["importDate"]
+                if old_sk == sk:
+                    continue  # 동일 날짜 → 아래 existing 로직이 처리
+                old_date = old_sk.split("#", 1)[1] if "#" in old_sk else old_sk
+                old_dc = old_item.get("divisionCode", req.divisionCode)
+                old_sheets = list(old_item.get("sheetStats", {}).keys())
+                old_storage = old_item.get("storageType", "")
+                logger.info(f"DS upload-init: 이전 날짜 삭제 {req.divisionId}/{old_sk}")
+                # S3 파일 삭제
+                try:
+                    s3 = get_s3_client()
+                    for s3k in [f"ds-exports/{req.divisionId}/{old_dc}_{old_date}.xlsx",
+                                f"ds-raw/{req.divisionId}/{old_dc}_{old_date}.zip"]:
+                        try:
+                            s3.delete_object(Bucket=S3_BUCKET_NAME, Key=s3k)
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+                _evict_cache(req.divisionId, old_dc, old_date)
+                # DynamoDB records 삭제 (S3 계열이면 스킵)
+                if old_storage not in ("s3", "s3-zip") and old_sheets:
+                    await asyncio.to_thread(
+                        _delete_ds_records_targeted, records_table, uploads_table,
+                        req.divisionId, old_date, old_dc, old_sheets
+                    )
+                uploads_table.delete_item(Key={"divisionId": req.divisionId, "importDate": old_sk})
+
+        # ── 동일 날짜 기존 데이터 처리 ──
         existing = uploads_table.get_item(Key={"divisionId": req.divisionId, "importDate": sk}).get("Item")
         if existing:
-            # 이미 completed 상태인 경우: 늦게 도착한 upload-init으로 인한 덮어쓰기 방지
-            # (병렬 배치 처리 중 네트워크 지연으로 upload-init이 finalize 이후 도착할 수 있음)
-            if existing.get("status") == "completed":
-                logger.info(f"DS upload-init: already completed, skip overwrite - {req.divisionId}/{sk}")
-                return {"success": True, "uploadId": f"{req.divisionId}#{sk}"}
-
-            # 시트 목록 미리 추출 (asyncio.to_thread 전에 읽어야 thread-safe)
+            # 이미 completed 상태인 경우에도 덮어쓰기 허용 (이전 날짜 삭제 후 새 업로드이므로)
             existing_sheet_names = list(existing.get("sheetStats", {}).keys())
             logger.info(f"DS upload-init: 기존 데이터 삭제 시작 {req.divisionId}/{sk}, sheets={existing_sheet_names}")
 
-            # 기존 pre-built xlsx S3에서도 삭제 (재업로드 시 이전 xlsx 무효화)
             try:
                 s3 = get_s3_client()
                 s3.delete_object(
@@ -3541,14 +3634,14 @@ async def ds_upload_init(req: DsUploadInit, request: Request = None):
             except Exception:
                 pass
 
-            # asyncio.to_thread: 이벤트 루프 블로킹 없이 병렬 시트 삭제 실행
-            # sheet_names 직접 전달 → uploads_table thread-safe 문제 방지
-            deleted = await asyncio.to_thread(
-                _delete_ds_records_targeted, records_table, uploads_table,
-                req.divisionId, req.importDate, req.divisionCode, existing_sheet_names
-            )
+            existing_storage = existing.get("storageType", "")
+            if existing_storage not in ("s3", "s3-zip") and existing_sheet_names:
+                deleted = await asyncio.to_thread(
+                    _delete_ds_records_targeted, records_table, uploads_table,
+                    req.divisionId, req.importDate, req.divisionCode, existing_sheet_names
+                )
+                logger.info(f"DS upload-init: 기존 {deleted}건 삭제 완료")
             uploads_table.delete_item(Key={"divisionId": req.divisionId, "importDate": sk})
-            logger.info(f"DS upload-init: 기존 {deleted}건 삭제 완료")
 
         now = datetime.now(timezone.utc).isoformat()
         uploads_table.put_item(Item={
@@ -4490,16 +4583,151 @@ async def ds_job_cancel(job_id: str, request: Request = None):
 import tempfile as _tempfile
 
 # ── 글로벌 캐시 & 세션 ──
-_callname_df = None            # pandas DataFrame (S3 CSV 캐시, lazy load)
-_callname_df_loaded_at = 0.0
-_callname_db_row_count = 0     # 행 수 캐시 (df 해제 후에도 상태 조회용)
-
-# ── 설치확인서 조회용 경량 인덱스 (pandas 불필요) ──
-_cert_index = None             # {"by_zpwino": {}, "by_zpwina": {}, "by_zpwiadr": {}}
-_cert_index_loaded_at = 0.0
-_CERT_INDEX_TTL = 600          # 10분 캐시
+_callname_db_row_count = 0     # 행 수 캐시 (상태 조회용)
 _callname_sessions: Dict[str, dict] = {}  # upload_id/process_id → 세션 (경량 메타만)
 _callname_upload_jobs: Dict[str, dict] = {}  # jobId → {status, stage, percent, ...}
+
+
+def _col_to_idx(col_letter: str) -> int:
+    """Excel 컬럼 레터 → 0-based 인덱스. 'A'→0, 'B'→1, 'Z'→25, 'AA'→26."""
+    r = 0
+    for c in col_letter:
+        r = r * 26 + (ord(c) - 64)
+    return r - 1
+
+
+def _resolve_xlsx_sheet_path(zf, sheet_name: str) -> Optional[str]:
+    """xlsx ZIP 내에서 시트이름 → 워크시트 XML 파일경로 매핑.
+    workbook.xml + rels 파싱. 못 찾으면 None."""
+    import xml.etree.ElementTree as ET
+    try:
+        wb_xml = zf.read("xl/workbook.xml")
+        wb_root = ET.fromstring(wb_xml)
+        r_id = None
+        for el in wb_root.iter():
+            tag = el.tag.rsplit("}", 1)[-1]
+            if tag == "sheet" and el.get("name") == sheet_name:
+                # {http://schemas.openxmlformats.org/officeDocument/2006/relationships}id
+                for attr_key in el.attrib:
+                    if attr_key.endswith("}id") or attr_key == "r:id":
+                        r_id = el.attrib[attr_key]
+                        break
+                break
+        del wb_xml, wb_root
+        if not r_id:
+            return None
+        rels_xml = zf.read("xl/_rels/workbook.xml.rels")
+        rels_root = ET.fromstring(rels_xml)
+        for rel in rels_root:
+            if rel.get("Id") == r_id:
+                target = rel.get("Target", "")
+                del rels_xml, rels_root
+                if target.startswith("/"):
+                    return target[1:]
+                return f"xl/{target}"
+        del rels_xml, rels_root
+    except Exception:
+        pass
+    return None
+
+
+def _list_xlsx_sheet_names(xlsx_path: str) -> list:
+    """xlsx 파일의 시트이름 목록 반환 (경량: workbook.xml만 파싱)."""
+    import xml.etree.ElementTree as ET
+    names = []
+    try:
+        with zipfile.ZipFile(xlsx_path, "r") as zf:
+            wb_xml = zf.read("xl/workbook.xml")
+            root = ET.fromstring(wb_xml)
+            for el in root.iter():
+                tag = el.tag.rsplit("}", 1)[-1]
+                if tag == "sheet":
+                    n = el.get("name")
+                    if n:
+                        names.append(n)
+            del wb_xml, root
+    except Exception:
+        pass
+    return names
+
+
+def _iter_xlsx_rows_light(xlsx_path: str, sheet_name: str = None):
+    """xlsx → (0-based_row_num, [str, ...]) 스트리밍 제너레이터.
+    openpyxl.load_workbook 대신 ZIP + XML iterparse 사용.
+    메모리: sharedStrings list[str] (~25-50MB) + 현재 행 버퍼만.
+    openpyxl 대비 ~80% 메모리 절감 (Cell 객체/스타일/메타 없음).
+    sheet_name: 특정 시트 (None이면 첫 번째 시트)."""
+    import xml.etree.ElementTree as ET
+
+    with zipfile.ZipFile(xlsx_path, "r") as zf:
+        # ── sharedStrings → list[str] (iterparse로 하나씩 파싱 후 clear) ──
+        shared = []
+        ss_names = [n for n in zf.namelist() if n.endswith("sharedStrings.xml")]
+        if ss_names:
+            with zf.open(ss_names[0]) as ssf:
+                for _, elem in ET.iterparse(ssf, events=("end",)):
+                    tag = elem.tag.rsplit("}", 1)[-1]
+                    if tag == "si":
+                        parts = []
+                        for ch in elem.iter():
+                            if ch.tag.rsplit("}", 1)[-1] == "t" and ch.text:
+                                parts.append(ch.text)
+                        shared.append("".join(parts))
+                        elem.clear()
+
+        # ── 시트 파일 결정 ──
+        if sheet_name:
+            sp = _resolve_xlsx_sheet_path(zf, sheet_name)
+            if not sp:
+                del shared
+                return
+        else:
+            sheets = sorted([n for n in zf.namelist() if "worksheets/sheet" in n])
+            sp = sheets[0] if sheets else "xl/worksheets/sheet1.xml"
+
+        # ── sheet XML iterparse (한 행씩 yield) ──
+        _cr = re.compile(r"([A-Z]+)")
+        cells = []
+
+        with zf.open(sp) as sf:
+            for _, elem in ET.iterparse(sf, events=("end",)):
+                tag = elem.tag.rsplit("}", 1)[-1]
+
+                if tag == "c":
+                    ct = elem.get("t", "")
+                    val = ""
+                    if ct == "s":
+                        for ch in elem:
+                            if ch.tag.rsplit("}", 1)[-1] == "v" and ch.text:
+                                si = int(ch.text)
+                                val = shared[si] if si < len(shared) else ""
+                                break
+                    elif ct == "inlineStr":
+                        for ch in elem.iter():
+                            if ch.tag.rsplit("}", 1)[-1] == "t" and ch.text:
+                                val = ch.text
+                                break
+                    else:
+                        for ch in elem:
+                            if ch.tag.rsplit("}", 1)[-1] == "v":
+                                val = ch.text or ""
+                                break
+                    r_attr = elem.get("r", "")
+                    m = _cr.match(r_attr)
+                    if m:
+                        ci = _col_to_idx(m.group(1))
+                        while len(cells) <= ci:
+                            cells.append("")
+                        cells[ci] = val
+                    elem.clear()
+
+                elif tag == "row":
+                    rn = int(elem.get("r", "0")) - 1  # 0-based
+                    yield (rn, cells)
+                    cells = []
+                    elem.clear()
+
+        del shared
 
 
 def _detect_column(df_columns, candidates):
@@ -4511,125 +4739,59 @@ def _detect_column(df_columns, candidates):
     return None
 
 
-def _compute_na_mask(df, col):
-    """통시 빈값 마스크: NaN, 빈 문자열 포함."""
-    mask = df[col].isna()
+
+def _s3_to_tempfile(s3_key: str, suffix: str = ".tmp") -> str:
+    """S3 파일을 디스크 임시파일로 스트리밍 다운로드. 경로 반환."""
+    obj = get_s3_client().get_object(Bucket=S3_BUCKET_NAME, Key=s3_key)
+    tmp = _tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+    body = obj["Body"]
     try:
-        mask = mask | (df[col] == "")
-    except Exception:
-        pass
-    return mask
+        while True:
+            chunk = body.read(1024 * 1024)  # 1MB
+            if not chunk:
+                break
+            tmp.write(chunk)
+    finally:
+        body.close()
+    tmp.close()
+    return tmp.name
 
 
-def _load_callname_cache():
-    """S3에서 CSV 파일들을 읽어 pandas DataFrame으로 캐시."""
-    global _callname_df, _callname_df_loaded_at, _callname_db_row_count
-    if not HAS_PANDAS:
-        logger.warning("pandas 미설치 — 호출명칭 매칭 비활성")
-        return
-    try:
-        s3 = get_s3_client()
-        resp = s3.list_objects_v2(Bucket=S3_BUCKET_NAME, Prefix=CALLNAME_CSV_PREFIX)
-        csv_keys = [obj["Key"] for obj in resp.get("Contents", [])
-                    if obj["Key"].lower().endswith(".csv")]
-        if not csv_keys:
-            logger.warning(f"S3 {CALLNAME_CSV_PREFIX} 에 CSV 파일 없음")
-            return
-
-        frames = []
-        for key in csv_keys:
-            logger.info(f"호출명칭 DB 로드: s3://{S3_BUCKET_NAME}/{key}")
-            obj = s3.get_object(Bucket=S3_BUCKET_NAME, Key=key)
-            body = obj["Body"].read()
-            buf = io.BytesIO(body)
-            try:
-                chunk = pd.read_csv(buf, dtype=str, usecols=CALLNAME_USE_COLS, na_filter=False)
-            except ValueError:
-                buf.seek(0)
-                chunk = pd.read_csv(buf, dtype=str, na_filter=False)
-                avail = [c for c in CALLNAME_USE_COLS if c in chunk.columns]
-                chunk = chunk[avail]
-            frames.append(chunk)
-            del body, buf
-
-        _callname_df = pd.concat(frames, ignore_index=True)
-        _callname_df_loaded_at = _time_mod.time()
-        _callname_db_row_count = len(_callname_df)
-        del frames
-        logger.info(f"호출명칭 DB 로드 완료: {_callname_db_row_count:,}행")
-    except Exception as e:
-        logger.error(f"호출명칭 DB 로드 실패: {e}")
+def _get_s3_csv_keys():
+    """S3 호출명칭 CSV 파일 키 목록 반환."""
+    resp = get_s3_client().list_objects_v2(Bucket=S3_BUCKET_NAME, Prefix=CALLNAME_CSV_PREFIX)
+    return [obj["Key"] for obj in resp.get("Contents", [])
+            if obj["Key"].lower().endswith(".csv")]
 
 
-def _get_callname_df():
-    """캐시된 DataFrame 반환. 없으면 로드."""
-    global _callname_df, _callname_df_loaded_at
-    if _callname_df is None:
-        _load_callname_cache()
-    return _callname_df
-
-
-def _release_callname_df():
-    """메모리 해제 (매칭 완료 후 호출)."""
-    global _callname_df
-    _callname_df = None
-    gc.collect()
-    logger.info("호출명칭 DB 메모리 해제")
-
-
-def _load_cert_index():
-    """S3 CSV → 경량 dict 인덱스 (pandas 없이 csv 모듈 사용)."""
+def _stream_s3_csvs():
+    """S3 CSV를 행 단위 스트리밍. 메모리에 전체 로드하지 않음.
+    Yields: dict (각 행, CALLNAME_USE_COLS 키만)"""
     import csv as _csv_mod
-    global _cert_index, _cert_index_loaded_at, _callname_db_row_count
-    try:
-        s3 = get_s3_client()
-        resp = s3.list_objects_v2(Bucket=S3_BUCKET_NAME, Prefix=CALLNAME_CSV_PREFIX)
-        csv_keys = [obj["Key"] for obj in resp.get("Contents", [])
-                    if obj["Key"].lower().endswith(".csv")]
-        if not csv_keys:
-            logger.warning(f"S3 {CALLNAME_CSV_PREFIX} 에 CSV 파일 없음")
-            return
-
-        by_zpwino = {}
-        by_zpwina = {}
-        by_zpwiadr = {}
-        total_rows = 0
-
-        for key in csv_keys:
-            logger.info(f"설치확인서 인덱스 로드: s3://{S3_BUCKET_NAME}/{key}")
-            obj = s3.get_object(Bucket=S3_BUCKET_NAME, Key=key)
-            body = obj["Body"].read().decode("utf-8", errors="replace")
-            reader = _csv_mod.DictReader(io.StringIO(body))
-            del body  # 원본 문자열 즉시 해제
-
+    import codecs
+    csv_keys = _get_s3_csv_keys()
+    for key in csv_keys:
+        obj = get_s3_client().get_object(Bucket=S3_BUCKET_NAME, Key=key)
+        body = obj["Body"]
+        try:
+            stream_reader = codecs.getreader("utf-8")(body, errors="replace")
+            reader = _csv_mod.DictReader(stream_reader)
             for raw_row in reader:
-                row = {c: (raw_row.get(c) or "") for c in CALLNAME_USE_COLS}
-                total_rows += 1
-                zpwino = row.get("zpwino", "")
-                zpwina = row.get("zpwina", "")
-                zpwiadr = row.get("zpwiadr", "")
-                if zpwino and zpwino not in by_zpwino:
-                    by_zpwino[zpwino] = row
-                if zpwina and zpwina not in by_zpwina:
-                    by_zpwina[zpwina] = row
-                if zpwiadr and zpwiadr not in by_zpwiadr:
-                    by_zpwiadr[zpwiadr] = row
-
-        _cert_index = {"by_zpwino": by_zpwino, "by_zpwina": by_zpwina, "by_zpwiadr": by_zpwiadr}
-        _cert_index_loaded_at = _time_mod.time()
-        _callname_db_row_count = total_rows
-        logger.info(f"설치확인서 인덱스 완료: {total_rows:,}행, "
-                    f"zpwino={len(by_zpwino):,}, zpwina={len(by_zpwina):,}, zpwiadr={len(by_zpwiadr):,}")
-    except Exception as e:
-        logger.error(f"설치확인서 인덱스 로드 실패: {e}")
+                yield {c: (raw_row.get(c) or "") for c in CALLNAME_USE_COLS}
+        finally:
+            body.close()
 
 
-def _get_cert_index():
-    """캐시된 인덱스 반환. 없거나 TTL 초과 시 재로드."""
-    global _cert_index
-    if _cert_index is None or (_time_mod.time() - _cert_index_loaded_at > _CERT_INDEX_TTL):
-        _load_cert_index()
-    return _cert_index
+def _cert_lookup_streaming(query: str) -> dict:
+    """설치확인서 단건 조회 — S3 CSV 스트리밍 (메모리 ~0).
+    zpwino/zpwina/zpwiadr 순서로 첫 매칭 반환."""
+    if not query or not query.strip():
+        return {}
+    q = query.strip()
+    for row in _stream_s3_csvs():
+        if row.get("zpwino") == q or row.get("zpwina") == q or row.get("zpwiadr") == q:
+            return row
+    return {}
 
 
 def _cleanup_callname_sessions():
@@ -4649,43 +4811,47 @@ def _cleanup_callname_sessions():
 
 
 def _query_callname_db(zpwina_values: list, zpwino_values: list) -> dict:
-    """6방향 교차 매칭. {lookup_key: {area_hdofc_nm, ons_team_nm, zpcode, zpwiadr}}"""
-    cdf = _get_callname_df()
-    if cdf is None or cdf.empty:
+    """6방향 교차 매칭 — S3 CSV 스트리밍 (메모리에 DB 전체 로드하지 않음).
+    {lookup_key: {area_hdofc_nm, ons_team_nm, zpcode, zpwiadr}}"""
+    zpwina_set = set(str(v) for v in zpwina_values if v)
+    zpwino_set = set(str(v) for v in zpwino_values if v)
+    all_query = zpwina_set | zpwino_set
+    if not all_query:
         return {}
 
     result = {}
-    col_idx = {c: i for i, c in enumerate(CALLNAME_USE_COLS)}
+    total_rows = 0
+    for row in _stream_s3_csvs():
+        total_rows += 1
+        zpwino = row.get("zpwino", "")
+        zpwina = row.get("zpwina", "")
+        zpwiadr = row.get("zpwiadr", "")
+        data = None
+        matched_keys = []
+        # 6방향: 쿼리값이 zpwino/zpwina/zpwiadr 중 하나와 일치하면 매칭
+        if zpwina and zpwina in all_query:
+            matched_keys.append(zpwina)
+        if zpwino and zpwino in all_query:
+            matched_keys.append(zpwino)
+        if zpwiadr and zpwiadr in all_query:
+            matched_keys.append(zpwiadr)
+        if matched_keys:
+            data = {
+                "area_hdofc_nm": row.get("area_hdofc_nm", ""),
+                "ons_team_nm": row.get("ons_team_nm", ""),
+                "zpcode": row.get("zpcode", ""),
+                "zpwiadr": row.get("zpwiadr", ""),
+            }
+            for k in matched_keys:
+                if k not in result:
+                    result[k] = data
+        # 모든 쿼리값이 매칭되면 조기 종료
+        if len(result) >= len(all_query):
+            break
 
-    def _batch_lookup(values, db_col):
-        if not values or db_col not in cdf.columns:
-            return
-        unmapped = [v for v in values if str(v) not in result]
-        if not unmapped:
-            return
-        val_set = set(unmapped)
-        mask = cdf[db_col].isin(val_set)
-        if not mask.any():
-            return
-        hits = cdf.loc[mask, CALLNAME_USE_COLS].values
-        db_col_idx = col_idx.get(db_col, 0)
-        for row in hits:
-            key = str(row[db_col_idx])
-            if key not in result:
-                result[key] = {
-                    "area_hdofc_nm": row[col_idx.get("area_hdofc_nm", 4)] or "",
-                    "ons_team_nm": row[col_idx.get("ons_team_nm", 5)] or "",
-                    "zpcode": row[col_idx.get("zpcode", 3)] or "",
-                    "zpwiadr": row[col_idx.get("zpwiadr", 2)] or "",
-                }
-
-    _batch_lookup(zpwina_values, "zpwina")
-    _batch_lookup(zpwino_values, "zpwino")
-    _batch_lookup(zpwino_values, "zpwina")
-    _batch_lookup(zpwina_values, "zpwino")
-    _batch_lookup(zpwino_values, "zpwiadr")
-    _batch_lookup(zpwina_values, "zpwiadr")
-
+    global _callname_db_row_count
+    if total_rows > 0:
+        _callname_db_row_count = total_rows
     return result
 
 
@@ -4695,7 +4861,7 @@ def _process_callname_upload_sync(job_id: str, tmp_path: str, filename: str,
                                    ext: str, replace: bool):
     """백그라운드: 호출명칭 DB 파일 파싱 → S3 업로드 (동기, to_thread에서 실행)"""
     import csv as _csv_mod
-    global _callname_df, _callname_df_loaded_at, _callname_db_row_count
+    global _callname_db_row_count
     job = _callname_upload_jobs[job_id]
     filtered_paths = []
     try:
@@ -4805,7 +4971,7 @@ def _process_callname_upload_sync(job_id: str, tmp_path: str, filename: str,
             os.unlink(tmp_path)
         except OSError:
             pass
-        gc.collect()
+        _release_memory()
 
         if not filtered_paths:
             job["status"] = "failed"
@@ -4849,9 +5015,7 @@ def _process_callname_upload_sync(job_id: str, tmp_path: str, filename: str,
             with open(fpath, encoding="utf-8") as cnt_f:
                 uploaded_rows += sum(1 for _ in cnt_f) - 1
 
-        # 캐시 무효화
-        _callname_df = None
-        _callname_df_loaded_at = 0
+        # 스트리밍 방식이므로 캐시 무효화 불필요 (항상 S3에서 직접 읽음)
         _callname_db_row_count = uploaded_rows
 
         file_count = len(filtered_paths)
@@ -4881,7 +5045,7 @@ def _process_callname_upload_sync(job_id: str, tmp_path: str, filename: str,
                 os.unlink(fpath)
             except OSError:
                 pass
-        gc.collect()
+        _release_memory()
 
 
 @app.post("/callname/upload-csv")
@@ -4892,8 +5056,10 @@ async def callname_upload_csv(
 ):
     """관리자: 파일 → 디스크 저장 → jobId 즉시 반환 → 백그라운드 처리"""
     await _require_role(request, {"admin"})
+    _check_memory("호출명칭 DB 업로드")
     if not file.filename.lower().endswith((".csv", ".xlsx", ".xls")):
         raise HTTPException(status_code=400, detail="CSV 또는 Excel 파일만 가능합니다.")
+    _get_pandas()
     if not HAS_PANDAS:
         raise HTTPException(status_code=500, detail="pandas 미설치")
 
@@ -4919,9 +5085,9 @@ async def callname_upload_csv(
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
 
-    # 3) 백그라운드 스레드에서 처리
+    # 3) 백그라운드 스레드에서 처리 (제한된 executor)
     asyncio.get_event_loop().run_in_executor(
-        None, _process_callname_upload_sync,
+        _bounded_executor, _process_callname_upload_sync,
         job_id, tmp_path, file.filename, ext, replace,
     )
 
@@ -5021,10 +5187,9 @@ async def callname_db_preview(request: Request, limit: int = Query(50, ge=1, le=
 
 @app.post("/callname/upload")
 async def callname_upload(request: Request, file: UploadFile = File(...)):
-    """Excel 업로드 → S3 임시저장 + 컬럼 감지 (메모리: 파싱 시만 사용, 완료 후 해제)"""
+    """Excel 업로드 → S3 임시저장 + 경량 컬럼 감지 (pandas 없이 헤더만 읽기)"""
     await _verify_auth(request)
-    if not HAS_PANDAS:
-        raise HTTPException(status_code=500, detail="pandas 미설치")
+    _check_memory("호출명칭 Excel 업로드")
 
     _cleanup_callname_sessions()
     active = sum(1 for v in _callname_sessions.values() if v.get("status") in ("uploaded", "ready"))
@@ -5036,34 +5201,70 @@ async def callname_upload(request: Request, file: UploadFile = File(...)):
     if ext not in ("xlsx", "xls"):
         raise HTTPException(status_code=400, detail="xlsx 또는 xls 파일만 가능합니다.")
 
+    # 1) 디스크에 스트리밍 저장 (메모리에 전체 파일 올리지 않음)
+    tmp = _tempfile.NamedTemporaryFile(delete=False, suffix=f".{ext}")
+    tmp_path = tmp.name
+    file_size = 0
     try:
-        content = await file.read()
-        if len(content) > MAX_DS_UPLOAD_SIZE:
-            raise HTTPException(status_code=413, detail="파일 크기 초과 (200MB)")
+        while True:
+            chunk = await file.read(4 * 1024 * 1024)  # 4MB 청크
+            if not chunk:
+                break
+            file_size += len(chunk)
+            if file_size > MAX_DS_UPLOAD_SIZE:
+                tmp.close()
+                os.remove(tmp_path)
+                raise HTTPException(status_code=413, detail="파일 크기 초과 (200MB)")
+            tmp.write(chunk)
+        tmp.close()
 
-        # 1) 원본 파일을 S3 임시 저장 (메모리에서 즉시 제거)
+        # 2) S3 업로드 (디스크에서 스트리밍)
         upload_id = str(uuid.uuid4())
         s3_temp_key = f"callname-temp/{upload_id}/{filename}"
-        get_s3_client().put_object(Bucket=S3_BUCKET_NAME, Key=s3_temp_key, Body=content)
+        with open(tmp_path, "rb") as f:
+            get_s3_client().upload_fileobj(f, S3_BUCKET_NAME, s3_temp_key)
 
-        # 2) 파싱: 컬럼 감지 + 매칭 대상 건수만 계산 후 DataFrame 해제
-        def _parse():
-            buf = io.BytesIO(content)
-            engine = "openpyxl" if ext == "xlsx" else "xlrd"
-            df = pd.read_excel(buf, engine=engine, dtype=str, na_filter=False)
-            columns = df.columns.tolist()
+        # 3) 경량 컬럼 감지: ZIP+XML 직접 파싱 (openpyxl.load_workbook 회피 → 메모리 절감)
+        def _parse_lightweight():
+            if ext == "xlsx":
+                columns = []
+                total_rows = 0
+                tongsi_idx = -1
+                filtered_rows = 0
+                for rn, vals in _iter_xlsx_rows_light(tmp_path):
+                    if rn == 0:
+                        columns = vals[:]
+                        tongsi_col = _detect_column(columns, CALLNAME_POSSIBLE_TONGSI_COLS)
+                        tongsi_idx = columns.index(tongsi_col) if tongsi_col and tongsi_col in columns else -1
+                        continue
+                    total_rows += 1
+                    if tongsi_idx >= 0 and tongsi_idx < len(vals):
+                        val = vals[tongsi_idx]
+                        if not val.strip():
+                            filtered_rows += 1
+                _release_memory()
+            else:
+                # xls: xlrd
+                import xlrd
+                wb = xlrd.open_workbook(tmp_path)
+                ws = wb.sheet_by_index(0)
+                columns = [str(ws.cell_value(0, c)) for c in range(ws.ncols)]
+                total_rows = ws.nrows - 1
+
+                tongsi_col = _detect_column(columns, CALLNAME_POSSIBLE_TONGSI_COLS)
+                tongsi_idx = columns.index(tongsi_col) if tongsi_col and tongsi_col in columns else -1
+                filtered_rows = 0
+                if tongsi_idx >= 0:
+                    for r in range(1, ws.nrows):
+                        val = ws.cell_value(r, tongsi_idx)
+                        if val is None or str(val).strip() == "":
+                            filtered_rows += 1
+                wb.release_resources()
+
             callname_col = _detect_column(columns, CALLNAME_POSSIBLE_CALLNAME_COLS)
-            tongsi_col = _detect_column(columns, CALLNAME_POSSIBLE_TONGSI_COLS)
             zpwina_col = _detect_column(columns, CALLNAME_POSSIBLE_ZPWINA_COLS)
             zpwino_col = _detect_column(columns, CALLNAME_POSSIBLE_ZPWINO_COLS)
 
-            filtered_rows = 0
-            if tongsi_col and tongsi_col in df.columns:
-                na_mask = _compute_na_mask(df, tongsi_col)
-                filtered_rows = int(na_mask.sum())
-
-            total_rows = len(df)
-            del df, buf
             return {
                 "total_rows": total_rows, "columns": columns,
                 "callname_col": callname_col, "tongsi_col": tongsi_col,
@@ -5071,9 +5272,7 @@ async def callname_upload(request: Request, file: UploadFile = File(...)):
                 "filtered_rows": filtered_rows,
             }
 
-        info = await asyncio.to_thread(_parse)
-        del content  # 메모리 해제
-        gc.collect()
+        info = await asyncio.to_thread(_parse_lightweight)
 
         _callname_sessions[upload_id] = {
             "filename": filename,
@@ -5098,6 +5297,11 @@ async def callname_upload(request: Request, file: UploadFile = File(...)):
     except Exception as e:
         logger.error(f"호출명칭 Excel 업로드 실패: {e}")
         raise HTTPException(status_code=500, detail="서버 내부 오류")
+    finally:
+        try:
+            os.remove(tmp_path)
+        except Exception:
+            pass
 
 
 @app.post("/callname/upload/{upload_id}/column-values")
@@ -5116,14 +5320,36 @@ async def callname_column_values(upload_id: str, request: Request):
         raise HTTPException(status_code=400, detail=f"'{col}' 컬럼 없음")
 
     def _calc():
-        obj = get_s3_client().get_object(Bucket=S3_BUCKET_NAME, Key=sess["s3_temp_key"])
-        buf = io.BytesIO(obj["Body"].read())
-        engine = "openpyxl" if sess["ext"] == "xlsx" else "xlrd"
-        df = pd.read_excel(buf, engine=engine, dtype=str, na_filter=False, usecols=[col])
-        vc = df[col].astype(str).value_counts()
-        result = [{"value": str(v), "count": int(c)} for v, c in vc.head(100).items()]
-        del df, buf
-        return result
+        from collections import Counter
+        columns = sess.get("columns", [])
+        col_idx = columns.index(col) if col in columns else -1
+        if col_idx < 0:
+            return []
+        tmp_path = _s3_to_tempfile(sess["s3_temp_key"], suffix=f".{sess['ext']}")
+        try:
+            counter = Counter()
+            if sess["ext"] == "xlsx":
+                for rn, vals in _iter_xlsx_rows_light(tmp_path):
+                    if rn == 0:
+                        continue
+                    v = vals[col_idx] if col_idx < len(vals) else ""
+                    if v:
+                        counter[v] += 1
+                _release_memory()
+            else:
+                xls_book = xlrd.open_workbook(tmp_path)
+                ws = xls_book.sheet_by_index(0)
+                for r in range(1, ws.nrows):
+                    v = str(ws.cell_value(r, col_idx)) if col_idx < ws.ncols else ""
+                    if v:
+                        counter[v] += 1
+                xls_book.release_resources()
+            return [{"value": v, "count": c} for v, c in counter.most_common(100)]
+        finally:
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
 
     values = await asyncio.to_thread(_calc)
     return {"column": col, "values": values}
@@ -5145,25 +5371,54 @@ async def callname_preview(upload_id: str, request: Request):
     callname_col = sess.get("callname_col")
 
     def _calc():
-        obj = get_s3_client().get_object(Bucket=S3_BUCKET_NAME, Key=sess["s3_temp_key"])
-        buf = io.BytesIO(obj["Body"].read())
-        engine = "openpyxl" if sess["ext"] == "xlsx" else "xlrd"
-        df = pd.read_excel(buf, engine=engine, dtype=str, na_filter=False)
-        filtered = df
+        columns = sess.get("columns", [])
+        filter_col_indices = {}
         if filters:
             for c, vals in filters.items():
-                if c in filtered.columns and vals:
-                    str_vals = set(str(v) for v in vals)
-                    filtered = filtered[filtered[c].astype(str).isin(str_vals)]
-        if tongsi_col and tongsi_col in filtered.columns:
-            na_mask = _compute_na_mask(filtered, tongsi_col)
-            filtered = filtered[na_mask]
-        target_callnames = 0
-        if callname_col and callname_col in filtered.columns:
-            target_callnames = int(filtered[callname_col].dropna().nunique())
-        result = {"filtered_rows": len(filtered), "target_callnames": target_callnames}
-        del df, filtered, buf
-        return result
+                if c in columns and vals:
+                    filter_col_indices[columns.index(c)] = set(str(v) for v in vals)
+        tongsi_idx = columns.index(tongsi_col) if tongsi_col and tongsi_col in columns else -1
+        callname_idx = columns.index(callname_col) if callname_col and callname_col in columns else -1
+
+        tmp_path = _s3_to_tempfile(sess["s3_temp_key"], suffix=f".{sess['ext']}")
+        try:
+            filtered_rows = 0
+            callname_set = set()
+
+            def _check_row(vals):
+                nonlocal filtered_rows
+                for ci, allowed in filter_col_indices.items():
+                    if ci < len(vals) and vals[ci] not in allowed:
+                        return
+                if tongsi_idx >= 0:
+                    tv = vals[tongsi_idx] if tongsi_idx < len(vals) else ""
+                    if tv.strip():
+                        return
+                filtered_rows += 1
+                if callname_idx >= 0 and callname_idx < len(vals) and vals[callname_idx]:
+                    callname_set.add(vals[callname_idx])
+
+            if sess["ext"] == "xlsx":
+                for rn, vals in _iter_xlsx_rows_light(tmp_path):
+                    if rn == 0:
+                        continue
+                    _check_row(vals)
+                _release_memory()
+            else:
+                xls_book = xlrd.open_workbook(tmp_path)
+                ws = xls_book.sheet_by_index(0)
+                for r in range(1, ws.nrows):
+                    vals = [str(ws.cell_value(r, c)) for c in range(ws.ncols)]
+                    _check_row(vals)
+                xls_book.release_resources()
+                _release_memory()
+
+            return {"filtered_rows": filtered_rows, "target_callnames": len(callname_set)}
+        finally:
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
 
     result = await asyncio.to_thread(_calc)
     return result
@@ -5193,34 +5448,70 @@ async def callname_process(request: Request):
         raise HTTPException(status_code=400, detail="zpwina/zpwino 컬럼 없음")
 
     def _prepare():
-        obj = get_s3_client().get_object(Bucket=S3_BUCKET_NAME, Key=sess["s3_temp_key"])
-        buf = io.BytesIO(obj["Body"].read())
-        engine = "openpyxl" if sess["ext"] == "xlsx" else "xlrd"
-        df = pd.read_excel(buf, engine=engine, dtype=str, na_filter=False)
-        del buf
-
-        filtered = df
+        columns = sess.get("columns", [])
+        filter_col_indices = {}
         if filters:
             for c, vals in filters.items():
-                if c in filtered.columns and vals:
-                    str_vals = set(str(v) for v in vals)
-                    filtered = filtered[filtered[c].isin(str_vals)]
-        if tongsi_col and tongsi_col in filtered.columns:
-            na_mask = _compute_na_mask(filtered, tongsi_col)
-            filtered = filtered[na_mask]
+                if c in columns and vals:
+                    filter_col_indices[columns.index(c)] = set(str(v) for v in vals)
+        tongsi_idx = columns.index(tongsi_col) if tongsi_col and tongsi_col in columns else -1
+        zpwina_idx = columns.index(zpwina_col) if zpwina_col and zpwina_col in columns else -1
+        zpwino_idx = columns.index(zpwino_col) if zpwino_col and zpwino_col in columns else -1
 
-        zpwina_values = []
-        zpwino_values = []
-        if zpwina_col and zpwina_col in filtered.columns:
-            zpwina_values = filtered[zpwina_col].dropna().astype(str).unique().tolist()
-        if zpwino_col and zpwino_col in filtered.columns:
-            zpwino_values = filtered[zpwino_col].dropna().astype(str).unique().tolist()
+        tmp_path = _s3_to_tempfile(sess["s3_temp_key"], suffix=f".{sess['ext']}")
+        try:
+            zpwina_set = set()
+            zpwino_set = set()
+            original_row_indices = []
+            # 행별 zpwina/zpwino 값 저장 (스트림 단계에서 Excel 재로드 불필요)
+            row_zpwina_list = []
+            row_zpwino_list = []
 
-        original_row_indices = filtered.index.tolist()
-        del df, filtered
-        return zpwina_values, zpwino_values, original_row_indices
+            def _process_row(row_idx, vals):
+                for ci, allowed in filter_col_indices.items():
+                    if ci < len(vals) and vals[ci] not in allowed:
+                        return
+                if tongsi_idx >= 0:
+                    tv = vals[tongsi_idx] if tongsi_idx < len(vals) else ""
+                    if tv.strip():
+                        return
+                original_row_indices.append(row_idx)
+                za = vals[zpwina_idx] if 0 <= zpwina_idx < len(vals) else ""
+                zo = vals[zpwino_idx] if 0 <= zpwino_idx < len(vals) else ""
+                row_zpwina_list.append(za)
+                row_zpwino_list.append(zo)
+                if za:
+                    zpwina_set.add(za)
+                if zo:
+                    zpwino_set.add(zo)
 
-    zpwina_values, zpwino_values, original_row_indices = await asyncio.to_thread(_prepare)
+            if sess["ext"] == "xlsx":
+                # openpyxl.load_workbook 대신 경량 ZIP+XML 파싱 (메모리 ~80% 절감)
+                for rn, vals in _iter_xlsx_rows_light(tmp_path):
+                    if rn == 0:
+                        continue  # 헤더 스킵
+                    # 행 끝 빈 셀 보정 (XML에서 trailing 빈 셀이 누락될 수 있음)
+                    while len(vals) < len(columns):
+                        vals.append("")
+                    _process_row(rn - 1, vals)
+                _release_memory()  # sharedStrings 해제 후 OS 반환
+            else:
+                xls_book = xlrd.open_workbook(tmp_path)
+                ws = xls_book.sheet_by_index(0)
+                for r in range(1, ws.nrows):
+                    vals = [str(ws.cell_value(r, c)) for c in range(ws.ncols)]
+                    _process_row(r - 1, vals)
+                xls_book.release_resources()
+        finally:
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+        return list(zpwina_set), list(zpwino_set), original_row_indices, row_zpwina_list, row_zpwino_list
+
+    zpwina_values, zpwino_values, original_row_indices, row_zpwina_list, row_zpwino_list = await asyncio.to_thread(_prepare)
+    _release_memory()
+    _log_mem("callname_process 완료")
 
     total_values = len(set(zpwina_values + zpwino_values))
     if total_values == 0:
@@ -5231,12 +5522,12 @@ async def callname_process(request: Request):
         "s3_temp_key": sess["s3_temp_key"],
         "ext": sess["ext"],
         "original_row_indices": original_row_indices,
+        "row_zpwina_list": row_zpwina_list,
+        "row_zpwino_list": row_zpwino_list,
         "zpwina_col": zpwina_col,
         "zpwino_col": zpwino_col,
         "zpwina_values": zpwina_values,
         "zpwino_values": zpwino_values,
-        "filters": filters,
-        "tongsi_col": tongsi_col,
         "filename": sess["filename"],
         "columns": sess.get("columns", []),
         "status": "ready",
@@ -5253,13 +5544,14 @@ async def callname_process(request: Request):
 
 @app.get("/callname/process/{process_id}/stream")
 async def callname_stream(process_id: str, request: Request):
-    """SSE 스트리밍 — 메모리 최적화 버전
-    1) callname_df 로드 → 6방향 매칭 → db_data dict 생성 → df 해제
-    2) S3에서 원본 Excel 재다운 → 임시파일로 ZIP XML 행단위 처리
-    3) 결과 ZIP → S3 업로드 → 임시파일 삭제
-    피크 메모리: ~80MB (db_data dict ~20MB + XML 행 버퍼 ~수KB)
+    """SSE 스트리밍 — 메모리 최소 버전
+    1) S3 CSV 스트리밍 6방향 매칭 → db_data dict
+    2) 세션 저장 행별 값으로 row_data_map 생성 (Excel 재로드 없음)
+    3) ZIP XML 512KB 청크 스트리밍 → S3 업로드
+    피크 메모리: ~5MB (db_data + row_data_map + 512KB 버퍼)
     """
     await _verify_auth(request)
+    _check_memory("호출명칭 매칭")
     if process_id not in _callname_sessions:
         raise HTTPException(status_code=404, detail="세션 없음")
 
@@ -5267,131 +5559,91 @@ async def callname_stream(process_id: str, request: Request):
 
     def _generate():
         try:
-            zpwina_col = sess["zpwina_col"]
-            zpwino_col = sess["zpwino_col"]
             zpwina_values = sess["zpwina_values"]
             zpwino_values = sess["zpwino_values"]
             filename = sess["filename"]
             s3_temp_key = sess["s3_temp_key"]
             ext = sess["ext"]
-            tongsi_col = sess.get("tongsi_col")
             original_row_indices = sess.get("original_row_indices", [])
-            filters = sess.get("filters", {})
 
             total_values = len(set(zpwina_values + zpwino_values))
             total_rows = len(original_row_indices)
 
+            _log_mem("stream 시작")
             yield f"data: {json.dumps({'type': 'progress', 'progress': 5, 'message': '파일 분석 완료', 'detail': f'{total_rows:,}행, {total_values:,}개 고유값'})}\n\n"
 
-            # ── 1단계: DB 조회 (callname_df 로드 → 매칭 → 즉시 해제) ──
+            # ── 1단계: DB 조회 ──
+            _log_mem("1단계: DB 조회 시작")
             yield f"data: {json.dumps({'type': 'progress', 'progress': 10, 'message': 'DB 로드 + 6방향 교차 조회 중...'})}\n\n"
 
             db_data = _query_callname_db(zpwina_values, zpwino_values)
-            _release_callname_df()  # 즉시 ~70MB 해제
             db_count = len(db_data)
+            _log_mem("1단계: DB 조회 완료")
 
             yield f"data: {json.dumps({'type': 'progress', 'progress': 40, 'message': 'DB 조회 완료', 'detail': f'{db_count:,}건 매칭됨'})}\n\n"
 
-            # ── 2단계: S3에서 Excel 재다운 → DataFrame 매칭 → row_data_map 생성 ──
+            # ── 2단계: 매칭 ──
+            _log_mem("2단계: 매칭 시작")
             yield f"data: {json.dumps({'type': 'progress', 'progress': 45, 'message': '매칭 데이터 준비 중...'})}\n\n"
 
-            obj = get_s3_client().get_object(Bucket=S3_BUCKET_NAME, Key=s3_temp_key)
-            excel_bytes = obj["Body"].read()
-
-            # DataFrame 재로드 (필터 적용)
-            buf = io.BytesIO(excel_bytes)
-            engine = "openpyxl" if ext == "xlsx" else "xlrd"
-            df = pd.read_excel(buf, engine=engine, dtype=str, na_filter=False)
-            del buf
-
-            # 필터 적용
-            filtered = df
-            if filters:
-                for c, vals in filters.items():
-                    if c in filtered.columns and vals:
-                        str_vals = set(str(v) for v in vals)
-                        filtered = filtered[filtered[c].isin(str_vals)]
-            if tongsi_col and tongsi_col in filtered.columns:
-                na_mask = _compute_na_mask(filtered, tongsi_col)
-                filtered = filtered[na_mask]
+            columns = sess.get("columns", [])
 
             # DB 필드 → Excel 컬럼명 매핑
             db_fields = ["area_hdofc_nm", "ons_team_nm", "zpcode"]
             excel_col_map = {}
             for db_field, candidates in CALLNAME_DB_TO_EXCEL_MAP.items():
-                detected = _detect_column(filtered.columns, candidates)
-                if detected:
-                    excel_col_map[db_field] = detected
-                else:
-                    excel_col_map[db_field] = candidates[0]
-                    filtered[candidates[0]] = ""
+                detected = _detect_column(columns, candidates)
+                excel_col_map[db_field] = detected if detected else candidates[0]
+            target_excel_cols = [excel_col_map[f] for f in db_fields]
 
-            for db_field in db_fields:
-                excel_col = excel_col_map[db_field]
-                filtered[excel_col] = ""
+            # ── 세션 데이터로 row_data_map 직접 생성 (Excel 재로드 불필요) ──
+            row_zpwina_list = sess.get("row_zpwina_list", [])
+            row_zpwino_list = sess.get("row_zpwino_list", [])
+            _log_mem("2단계: S3 temp 다운로드 시작")
+            tmp_excel_path = _s3_to_tempfile(s3_temp_key, suffix=f".{ext}")
+            _log_mem("2단계: S3 temp 다운로드 완료")
 
-            # 벡터화 매칭
             matched_count = 0
             zpwina_matched = 0
             zpwino_matched = 0
             cross_matched = 0
-
-            def _apply_match(mask, series):
-                matched_data = series.map(lambda x: db_data.get(x))
-                for db_field in db_fields:
-                    excel_col = excel_col_map[db_field]
-                    filtered.loc[mask, excel_col] = matched_data.apply(
-                        lambda x: x.get(db_field, "") if x else ""
-                    )
-                zpcode_col = excel_col_map["zpcode"]
-                return int((filtered.loc[mask, zpcode_col] != "").sum())
-
-            if db_data:
-                zpcode_col = excel_col_map["zpcode"]
-                if zpwina_col and zpwina_col in filtered.columns:
-                    m = filtered[zpwina_col].notna() & (filtered[zpwina_col] != "")
-                    zpwina_matched = _apply_match(m, filtered.loc[m, zpwina_col].astype(str))
-                if zpwino_col and zpwino_col in filtered.columns:
-                    unmatch = filtered[zpcode_col].isna() | (filtered[zpcode_col] == "")
-                    m = unmatch & filtered[zpwino_col].notna() & (filtered[zpwino_col] != "")
-                    if m.any():
-                        zpwino_matched = _apply_match(m, filtered.loc[m, zpwino_col].astype(str))
-
-                cross_steps = []
-                if zpwino_col and zpwino_col in filtered.columns:
-                    cross_steps.append(zpwino_col)
-                    cross_steps.append(zpwino_col)
-                if zpwina_col and zpwina_col in filtered.columns:
-                    cross_steps.append(zpwina_col)
-                    cross_steps.append(zpwina_col)
-                for col_name in cross_steps:
-                    unmatch = filtered[zpcode_col].isna() | (filtered[zpcode_col] == "")
-                    has_val = filtered[col_name].notna() & (filtered[col_name] != "")
-                    m = unmatch & has_val
-                    if m.any():
-                        cross_matched += _apply_match(m, filtered.loc[m, col_name].astype(str))
-
-                matched_count = int((filtered[zpcode_col] != "").sum())
-
-            yield f"data: {json.dumps({'type': 'progress', 'progress': 60, 'message': '매칭 완료', 'detail': f'{matched_count:,}/{total_rows:,}행 (zpwina:{zpwina_matched:,}, zpwino:{zpwino_matched:,}, 교차:{cross_matched:,})'})}\n\n"
-
-            # row_data_map 생성 (경량: {행번호: [val1, val2, val3]})
-            target_excel_cols = [excel_col_map[f] for f in db_fields]
-            data_values = filtered[target_excel_cols].fillna("").astype(str).values
             row_data_map = {}
-            for i in range(len(data_values)):
-                excel_row_num = original_row_indices[i] + 2
-                row_data_map[excel_row_num] = data_values[i]
 
-            del df, filtered, data_values, db_data
-            gc.collect()
+            for i, row_idx in enumerate(original_row_indices):
+                excel_row_num = row_idx + 2
+                za = row_zpwina_list[i] if i < len(row_zpwina_list) else ""
+                zo = row_zpwino_list[i] if i < len(row_zpwino_list) else ""
+                hit = None
+                if za:
+                    hit = db_data.get(za)
+                    if hit and hit.get("zpcode"):
+                        row_data_map[excel_row_num] = [
+                            hit.get("area_hdofc_nm", ""),
+                            hit.get("ons_team_nm", ""),
+                            hit.get("zpcode", ""),
+                        ]
+                        zpwina_matched += 1
+                        continue
+                if zo:
+                    hit = db_data.get(zo)
+                    if hit and hit.get("zpcode"):
+                        row_data_map[excel_row_num] = [
+                            hit.get("area_hdofc_nm", ""),
+                            hit.get("ons_team_nm", ""),
+                            hit.get("zpcode", ""),
+                        ]
+                        zpwino_matched += 1
 
-            # ── 3단계: ZIP XML 행단위 처리 (임시파일 스트리밍) ──
+            matched_count = len(row_data_map)
+            del db_data, row_zpwina_list, row_zpwino_list
+            _release_memory()
+            _log_mem("2단계: 매칭 완료")
+
+            yield f"data: {json.dumps({'type': 'progress', 'progress': 60, 'message': '매칭 완료', 'detail': f'{matched_count:,}/{total_rows:,}행 (zpwina:{zpwina_matched:,}, zpwino:{zpwino_matched:,})'})}\n\n"
+
+            # ── 3단계: ZIP XML 행단위 처리 ──
+            _log_mem("3단계: ZIP XML 시작")
             yield f"data: {json.dumps({'type': 'progress', 'progress': 65, 'message': 'Excel 파일 생성 중...'})}\n\n"
-
-            original_zip = io.BytesIO(excel_bytes)
-            del excel_bytes
-            gc.collect()
 
             # 임시 출력 파일
             tmp_output = _tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx")
@@ -5399,142 +5651,114 @@ async def callname_stream(process_id: str, request: Request):
             tmp_output.close()
 
             try:
-                with zipfile.ZipFile(original_zip, "r") as zin:
+                with zipfile.ZipFile(tmp_excel_path, "r") as zin:
                     sheet_files = [f for f in zin.namelist() if "worksheets/sheet" in f]
                     sheet_path = sheet_files[0] if sheet_files else "xl/worksheets/sheet1.xml"
 
-                    # sharedStrings 파싱 (헤더 해석용, 보통 수MB 이하)
-                    shared_strings = []
-                    ss_path = "xl/sharedStrings.xml"
-                    if ss_path in zin.namelist():
-                        ss_xml = zin.read(ss_path).decode("utf-8")
-                        si_blocks = re.findall(r"<si>(.*?)</si>", ss_xml, re.DOTALL)
-                        for si in si_blocks:
-                            texts = re.findall(r"<t[^>]*>(.*?)</t>", si, re.DOTALL)
-                            shared_strings.append("".join(texts))
-                        del ss_xml, si_blocks
-
-                    # 시트 XML → 임시파일에 기록 (행 단위 스트리밍)
-                    sheet_data = zin.read(sheet_path)
-                    sheet_xml = sheet_data.decode("utf-8")
-                    del sheet_data
-
-                    # 헤더 파싱 (첫 행만)
-                    header_end = sheet_xml.find("</row>")
-                    header_section = sheet_xml[:header_end + 6] if header_end > 0 else sheet_xml[:10000]
-                    header_cells = re.findall(r'<c r="([A-Z]+)1"([^>]*)>(.*?)</c>', header_section, re.DOTALL)
-                    col_letter_to_name = {}
-                    for col_letter, attrs, cell_content in header_cells:
-                        cell_value = ""
-                        if 't="s"' in attrs:
-                            v_match = re.search(r"<v>(\d+)</v>", cell_content)
-                            if v_match and shared_strings:
-                                idx = int(v_match.group(1))
-                                if idx < len(shared_strings):
-                                    cell_value = shared_strings[idx]
-                        elif 't="inlineStr"' in attrs:
-                            t_match = re.search(r"<t[^>]*>(.*?)</t>", cell_content)
-                            if t_match:
-                                cell_value = t_match.group(1)
-                        else:
-                            v_match = re.search(r"<v>(.*?)</v>", cell_content)
-                            if v_match:
-                                cell_value = v_match.group(1)
-                        col_letter_to_name[col_letter] = cell_value
-                    del shared_strings
-
+                    # 컬럼 레터 계산 (헤더 파싱 불필요 — 이미 알고 있는 컬럼 순서 사용)
                     target_col_letters = []
                     for ecn in target_excel_cols:
-                        found = False
-                        for letter, name in col_letter_to_name.items():
-                            if name == ecn:
-                                target_col_letters.append(letter)
-                                found = True
-                                break
-                        if not found:
-                            all_cols = list(col_letter_to_name.keys())
-                            last_num = max(openpyxl.utils.column_index_from_string(c) for c in all_cols) if all_cols else 0
-                            target_col_letters.append(get_column_letter(last_num + 1))
+                        if ecn in columns:
+                            idx = columns.index(ecn) + 1
+                            target_col_letters.append(get_column_letter(idx))
+                        else:
+                            target_col_letters.append(get_column_letter(len(columns) + 1 + len(target_col_letters)))
 
                     target_letters_set = set(target_col_letters)
                     cell_pattern = re.compile(r'(<c r="([A-Z]+)\d+"[^>]*(?:>.*?</c>|/>))', re.DOTALL)
 
-                    # 임시파일에 수정된 sheet XML 기록
+                    # ── 시트 XML 청크 스트리밍 (메모리에 전체 로드하지 않음) ──
                     tmp_sheet = _tempfile.NamedTemporaryFile(delete=False, suffix=".xml", mode="w", encoding="utf-8")
                     tmp_sheet_path = tmp_sheet.name
 
-                    row_splits = sheet_xml.split("</row>")
-                    del sheet_xml  # 대량 메모리 해제
-                    gc.collect()
+                    with zin.open(sheet_path) as sheet_stream:
+                        buffer = ""
+                        CHUNK_SIZE = 512 * 1024  # 512KB
+                        while True:
+                            raw = sheet_stream.read(CHUNK_SIZE)
+                            if not raw:
+                                break
+                            buffer += raw.decode("utf-8", errors="replace")
 
-                    for part_idx in range(len(row_splits) - 1):
-                        part = row_splits[part_idx]
-                        r_pos = part.find('<row r="')
-                        if r_pos == -1:
-                            tmp_sheet.write(part)
-                            tmp_sheet.write("</row>")
-                            continue
+                            while "</row>" in buffer:
+                                row_end = buffer.index("</row>") + 6
+                                row_section = buffer[:row_end]
+                                buffer = buffer[row_end:]
 
-                        r_start = r_pos + 8
-                        r_end = part.index('"', r_start)
-                        row_num = int(part[r_start:r_end])
-                        vals = row_data_map.get(row_num)
+                                r_pos = row_section.find('<row r="')
+                                if r_pos == -1:
+                                    tmp_sheet.write(row_section)
+                                    continue
 
-                        if vals is None:
-                            tmp_sheet.write(part)
-                            tmp_sheet.write("</row>")
-                        else:
-                            row_tag_start = part.find('<row r="')
-                            row_tag_end = part.index(">", row_tag_start) + 1
-                            before_row = part[:row_tag_start]
-                            row_tag = part[row_tag_start:row_tag_end]
-                            after_row_tag = part[row_tag_end:]
+                                r_start = r_pos + 8
+                                r_end_q = row_section.index('"', r_start)
+                                row_num = int(row_section[r_start:r_end_q])
+                                vals = row_data_map.get(row_num)
 
-                            cell_dict = {}
-                            for cell_match in cell_pattern.finditer(after_row_tag):
-                                full_cell = cell_match.group(1)
-                                cl = cell_match.group(2)
-                                if cl not in target_letters_set:
-                                    cell_dict[cl] = full_cell
+                                if vals is None:
+                                    tmp_sheet.write(row_section)
+                                else:
+                                    # </row> 제거 후 처리
+                                    part = row_section[:-6]
+                                    row_tag_start = part.find('<row r="')
+                                    row_tag_end = part.index(">", row_tag_start) + 1
+                                    before_row = part[:row_tag_start]
+                                    row_tag = part[row_tag_start:row_tag_end]
+                                    after_row_tag = part[row_tag_end:]
 
-                            for i, val in enumerate(vals):
-                                cl = target_col_letters[i]
-                                safe_val = str(val).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
-                                if safe_val:
-                                    cell_dict[cl] = f'<c r="{cl}{row_num}" t="inlineStr"><is><t>{safe_val}</t></is></c>'
+                                    cell_dict = {}
+                                    for cell_match in cell_pattern.finditer(after_row_tag):
+                                        full_cell = cell_match.group(1)
+                                        cl = cell_match.group(2)
+                                        if cl not in target_letters_set:
+                                            cell_dict[cl] = full_cell
 
-                            sorted_cells = sorted(cell_dict.items(),
-                                key=lambda x: openpyxl.utils.column_index_from_string(x[0]))
-                            tmp_sheet.write(before_row)
-                            tmp_sheet.write(row_tag)
-                            for _, xml in sorted_cells:
-                                tmp_sheet.write(xml)
-                            tmp_sheet.write("</row>")
+                                    for i, val in enumerate(vals):
+                                        cl = target_col_letters[i]
+                                        safe_val = str(val).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+                                        if safe_val:
+                                            cell_dict[cl] = f'<c r="{cl}{row_num}" t="inlineStr"><is><t>{safe_val}</t></is></c>'
 
-                    # 마지막 조각
-                    tmp_sheet.write(row_splits[-1])
+                                    sorted_cells = sorted(cell_dict.items(),
+                                        key=lambda x: openpyxl.utils.column_index_from_string(x[0]))
+                                    tmp_sheet.write(before_row)
+                                    tmp_sheet.write(row_tag)
+                                    for _, xml in sorted_cells:
+                                        tmp_sheet.write(xml)
+                                    tmp_sheet.write("</row>")
+
+                        # 마지막 잔여 (</sheetData></worksheet> 등)
+                        if buffer:
+                            tmp_sheet.write(buffer)
+
                     tmp_sheet.close()
-                    del row_splits, row_data_map
-                    gc.collect()
+                    del row_data_map
+                    _release_memory()
 
+                    _log_mem("3단계: XML 스트리밍 완료")
                     yield f"data: {json.dumps({'type': 'progress', 'progress': 85, 'message': 'ZIP 재조립 중...'})}\n\n"
 
-                    # 새 ZIP 생성 (임시파일에)
+                    # 새 ZIP 생성 (임시파일에, 청크 복사)
                     with zipfile.ZipFile(tmp_output_path, "w", zipfile.ZIP_DEFLATED, compresslevel=1) as zout:
                         for item in zin.infolist():
                             if item.filename == sheet_path:
                                 zout.write(tmp_sheet_path, item.filename)
                             else:
-                                zout.writestr(item.filename, zin.read(item.filename))
+                                with zin.open(item.filename) as src, zout.open(item, "w") as dst:
+                                    while True:
+                                        chunk = src.read(512 * 1024)
+                                        if not chunk:
+                                            break
+                                        dst.write(chunk)
 
                 # 임시 sheet XML 삭제
                 try:
                     os.remove(tmp_sheet_path)
                 except Exception:
                     pass
-                del original_zip
-                gc.collect()
+                _release_memory()
 
+                _log_mem("4단계: ZIP 재조립 완료")
                 yield f"data: {json.dumps({'type': 'progress', 'progress': 92, 'message': 'S3 업로드 중...'})}\n\n"
 
                 # S3 업로드 (임시파일에서 스트리밍)
@@ -5553,17 +5777,30 @@ async def callname_stream(process_id: str, request: Request):
                 sess["output_filename"] = output_filename
                 sess["status"] = "completed"
 
+                # ── 세션 무거운 데이터 즉시 해제 (다운로드에 필요한 것만 유지) ──
+                for _drop_key in ("original_row_indices", "row_zpwina_list", "row_zpwino_list",
+                                  "zpwina_values", "zpwino_values", "columns"):
+                    sess.pop(_drop_key, None)
+
                 yield f"data: {json.dumps({'type': 'complete', 'progress': 100, 'message': f'완료! (매칭: {matched_count:,}/{total_rows:,}건)', 'matched': matched_count, 'total': total_rows, 'zpwina_matched': zpwina_matched, 'zpwino_matched': zpwino_matched, 'cross_matched': cross_matched})}\n\n"
 
             finally:
                 # 임시파일 정리
-                try:
-                    os.remove(tmp_output_path)
-                except Exception:
-                    pass
+                for _p in [tmp_output_path, tmp_excel_path]:
+                    try:
+                        os.remove(_p)
+                    except Exception:
+                        pass
+                _release_memory()
+                _log_mem("stream 종료 (정리 완료)")
 
         except Exception as e:
             logger.exception(f"호출명칭 매칭 스트림 오류: {e}")
+            try:
+                os.remove(tmp_excel_path)
+            except Exception:
+                pass
+            _release_memory()
             yield f"data: {json.dumps({'type': 'error', 'message': '서버 내부 오류'})}\n\n"
 
     return StreamingResponse(
@@ -5632,7 +5869,7 @@ _cert_batch_lock = asyncio.Lock()
 
 
 def _cleanup_cert_sessions():
-    now = time.time()
+    now = _time_mod.time()
     expired = [k for k, v in _cert_sessions.items()
                if (now - v.get("ts", 0)) > CERT_SESSION_TTL]
     for k in expired:
@@ -5651,31 +5888,25 @@ def _cleanup_cert_sessions():
 
 
 def _cert_lookup_single(query: str) -> dict:
-    """경량 인덱스에서 O(1) 조회 → 설치확인서 필드 반환"""
-    idx = _get_cert_index()
-    if idx is None:
-        return {}
-    for key in ["by_zpwino", "by_zpwina", "by_zpwiadr"]:
-        row = idx[key].get(query)
-        if row:
-            return dict(row)
-    return {}
+    """설치확인서 단건 조회 — S3 CSV 스트리밍 (메모리 ~0)"""
+    return _cert_lookup_streaming(query)
 
 
 def _cert_batch_lookup(zpwino_list: list) -> dict:
-    """경량 인덱스에서 일괄 조회"""
-    idx = _get_cert_index()
-    if idx is None:
+    """설치확인서 일괄 조회 — S3 CSV 스트리밍"""
+    if not zpwino_list:
         return {}
+    query_set = set(zpwino_list)
     results = {}
-    for q in zpwino_list:
-        if q in results:
-            continue
-        for key in ["by_zpwino", "by_zpwina"]:
-            row = idx[key].get(q)
-            if row:
-                results[q] = dict(row)
-                break
+    for row in _stream_s3_csvs():
+        zpwino = row.get("zpwino", "")
+        zpwina = row.get("zpwina", "")
+        if zpwino in query_set and zpwino not in results:
+            results[zpwino] = dict(row)
+        elif zpwina in query_set and zpwina not in results:
+            results[zpwina] = dict(row)
+        if len(results) >= len(query_set):
+            break
     return results
 
 
@@ -5804,6 +6035,7 @@ async def cert_lookup(request: Request):
 async def cert_generate(request: Request):
     """개별 설치확인서 생성 (PDF 또는 HWPX)"""
     await _verify_auth(request)
+    _check_memory("설치확인서 생성")
     body = await request.json()
 
     fmt = body.get("format", "pdf").lower()
@@ -5912,7 +6144,7 @@ async def cert_batch_upload_photos(request: Request, file: UploadFile = File(...
         summary = await asyncio.to_thread(_parse_photo_zip_to_s3, tmp_path, job_id)
 
         _cert_sessions[job_id] = {
-            "type": "photos", "ts": time.time(),
+            "type": "photos", "ts": _time_mod.time(),
             "s3_prefix": f"cert-temp/{job_id}/",
             "summary": summary,
         }
@@ -5947,6 +6179,7 @@ async def cert_batch_upload_photos(request: Request, file: UploadFile = File(...
 async def cert_batch_generate(request: Request):
     """일괄 설치확인서 생성 (SSE 스트리밍, PDF만)"""
     await _verify_auth(request)
+    _check_memory("일괄 설치확인서 생성")
     if not HAS_REPORTLAB:
         raise HTTPException(status_code=503, detail="서버에 reportlab이 설치되지 않았습니다.")
 
@@ -6090,7 +6323,7 @@ async def cert_batch_generate(request: Request):
             # 결과 세션 저장
             if result_s3_key:
                 _cert_sessions[job_id] = {
-                    "type": "result", "ts": time.time(),
+                    "type": "result", "ts": _time_mod.time(),
                     "s3_result_key": result_s3_key,
                 }
 
