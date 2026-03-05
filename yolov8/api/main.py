@@ -1854,6 +1854,7 @@ async def set_user_role(req: SetRoleRequest, request: Request):
     admin_key = request.headers.get("X-Admin-Key", "").strip()
 
     authorized = False
+    caller_id = None
     if ADMIN_BOOTSTRAP_KEY and admin_key == ADMIN_BOOTSTRAP_KEY:
         authorized = True
         logger.info(f"role 변경 (부트스트랩): {req.empno} → {req.role}")
@@ -4492,6 +4493,11 @@ import tempfile as _tempfile
 _callname_df = None            # pandas DataFrame (S3 CSV 캐시, lazy load)
 _callname_df_loaded_at = 0.0
 _callname_db_row_count = 0     # 행 수 캐시 (df 해제 후에도 상태 조회용)
+
+# ── 설치확인서 조회용 경량 인덱스 (pandas 불필요) ──
+_cert_index = None             # {"by_zpwino": {}, "by_zpwina": {}, "by_zpwiadr": {}}
+_cert_index_loaded_at = 0.0
+_CERT_INDEX_TTL = 600          # 10분 캐시
 _callname_sessions: Dict[str, dict] = {}  # upload_id/process_id → 세션 (경량 메타만)
 _callname_upload_jobs: Dict[str, dict] = {}  # jobId → {status, stage, percent, ...}
 
@@ -4569,6 +4575,61 @@ def _release_callname_df():
     _callname_df = None
     gc.collect()
     logger.info("호출명칭 DB 메모리 해제")
+
+
+def _load_cert_index():
+    """S3 CSV → 경량 dict 인덱스 (pandas 없이 csv 모듈 사용)."""
+    import csv as _csv_mod
+    global _cert_index, _cert_index_loaded_at, _callname_db_row_count
+    try:
+        s3 = get_s3_client()
+        resp = s3.list_objects_v2(Bucket=S3_BUCKET_NAME, Prefix=CALLNAME_CSV_PREFIX)
+        csv_keys = [obj["Key"] for obj in resp.get("Contents", [])
+                    if obj["Key"].lower().endswith(".csv")]
+        if not csv_keys:
+            logger.warning(f"S3 {CALLNAME_CSV_PREFIX} 에 CSV 파일 없음")
+            return
+
+        by_zpwino = {}
+        by_zpwina = {}
+        by_zpwiadr = {}
+        total_rows = 0
+
+        for key in csv_keys:
+            logger.info(f"설치확인서 인덱스 로드: s3://{S3_BUCKET_NAME}/{key}")
+            obj = s3.get_object(Bucket=S3_BUCKET_NAME, Key=key)
+            body = obj["Body"].read().decode("utf-8", errors="replace")
+            reader = _csv_mod.DictReader(io.StringIO(body))
+            del body  # 원본 문자열 즉시 해제
+
+            for raw_row in reader:
+                row = {c: (raw_row.get(c) or "") for c in CALLNAME_USE_COLS}
+                total_rows += 1
+                zpwino = row.get("zpwino", "")
+                zpwina = row.get("zpwina", "")
+                zpwiadr = row.get("zpwiadr", "")
+                if zpwino and zpwino not in by_zpwino:
+                    by_zpwino[zpwino] = row
+                if zpwina and zpwina not in by_zpwina:
+                    by_zpwina[zpwina] = row
+                if zpwiadr and zpwiadr not in by_zpwiadr:
+                    by_zpwiadr[zpwiadr] = row
+
+        _cert_index = {"by_zpwino": by_zpwino, "by_zpwina": by_zpwina, "by_zpwiadr": by_zpwiadr}
+        _cert_index_loaded_at = _time_mod.time()
+        _callname_db_row_count = total_rows
+        logger.info(f"설치확인서 인덱스 완료: {total_rows:,}행, "
+                    f"zpwino={len(by_zpwino):,}, zpwina={len(by_zpwina):,}, zpwiadr={len(by_zpwiadr):,}")
+    except Exception as e:
+        logger.error(f"설치확인서 인덱스 로드 실패: {e}")
+
+
+def _get_cert_index():
+    """캐시된 인덱스 반환. 없거나 TTL 초과 시 재로드."""
+    global _cert_index
+    if _cert_index is None or (_time_mod.time() - _cert_index_loaded_at > _CERT_INDEX_TTL):
+        _load_cert_index()
+    return _cert_index
 
 
 def _cleanup_callname_sessions():
@@ -5590,40 +5651,31 @@ def _cleanup_cert_sessions():
 
 
 def _cert_lookup_single(query: str) -> dict:
-    """callname_df에서 3방향 조회 → 설치확인서 필드 반환"""
-    cdf = _get_callname_df()
-    if cdf is None or cdf.empty:
+    """경량 인덱스에서 O(1) 조회 → 설치확인서 필드 반환"""
+    idx = _get_cert_index()
+    if idx is None:
         return {}
-    for col in ["zpwino", "zpwina", "zpwiadr"]:
-        if col not in cdf.columns:
-            continue
-        mask = cdf[col] == query
-        if mask.any():
-            row = cdf.loc[mask].iloc[0]
-            return {c: str(row.get(c, "") or "") for c in CALLNAME_USE_COLS}
+    for key in ["by_zpwino", "by_zpwina", "by_zpwiadr"]:
+        row = idx[key].get(query)
+        if row:
+            return dict(row)
     return {}
 
 
 def _cert_batch_lookup(zpwino_list: list) -> dict:
-    """callname_df에서 일괄 조회"""
-    cdf = _get_callname_df()
-    if cdf is None or cdf.empty:
+    """경량 인덱스에서 일괄 조회"""
+    idx = _get_cert_index()
+    if idx is None:
         return {}
     results = {}
-    val_set = set(zpwino_list)
-    for col in ["zpwino", "zpwina"]:
-        if col not in cdf.columns:
+    for q in zpwino_list:
+        if q in results:
             continue
-        remaining = val_set - set(results.keys())
-        if not remaining:
-            break
-        mask = cdf[col].isin(remaining)
-        if not mask.any():
-            continue
-        for _, row in cdf.loc[mask].iterrows():
-            key = str(row[col])
-            if key in remaining and key not in results:
-                results[key] = {c: str(row.get(c, "") or "") for c in CALLNAME_USE_COLS}
+        for key in ["by_zpwino", "by_zpwina"]:
+            row = idx[key].get(q)
+            if row:
+                results[q] = dict(row)
+                break
     return results
 
 
@@ -5740,12 +5792,10 @@ async def cert_lookup(request: Request):
 
     try:
         result = await asyncio.to_thread(_cert_lookup_single, query)
-        _release_callname_df()
         if result:
             return {"found": True, **result}
         return {"found": False}
     except Exception as e:
-        _release_callname_df()
         logger.error(f"설치확인서 조회 실패: {e}")
         raise HTTPException(status_code=500, detail="서버 내부 오류")
 
@@ -5823,7 +5873,6 @@ async def cert_batch_lookup(request: Request):
 
     try:
         results = await asyncio.to_thread(_cert_batch_lookup, zpwino_list)
-        _release_callname_df()
 
         items = []
         for z in zpwino_list:
@@ -5836,7 +5885,6 @@ async def cert_batch_lookup(request: Request):
         return {"total": len(items), "found": found_count,
                 "not_found": len(items) - found_count, "items": items}
     except Exception as e:
-        _release_callname_df()
         logger.error(f"일괄 조회 실패: {e}")
         raise HTTPException(status_code=500, detail="서버 내부 오류")
 

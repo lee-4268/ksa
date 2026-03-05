@@ -162,9 +162,9 @@ def generate_certificate_pdf(form_data, photo_list=None, blueprint_bytes=None):
 
     badge_h = 10 * mm
     safety = 3 * mm
-    fixed_rows_h = (9 + 11 + 9 + 9 + 9 + 12 + 12) * mm
     title_h = 12 * mm
-    bp_row_h = page_height - badge_h - title_h - fixed_rows_h - safety
+    fixed_rows_h = title_h + (9 + 11 + 9 + 9 + 9 + 12 + 12) * mm
+    bp_row_h = page_height - badge_h - fixed_rows_h - safety
     if not blueprint_bytes:
         bp_row_h = 30 * mm
 
@@ -185,35 +185,30 @@ def generate_certificate_pdf(form_data, photo_list=None, blueprint_bytes=None):
             logger.warning(f"Failed to load blueprint image: {e}")
             bp_content = cc('이미지 로드 실패')
 
-    # 제목 행: 별도 테이블 (셀통합 가운데정렬 보장)
-    title_tbl = Table(
-        [[Paragraph('이동통신무선국 설치 확인서', s_title)]],
-        colWidths=[page_width], rowHeights=[title_h])
-    title_tbl.setStyle(TableStyle([
-        ('LINEABOVE', (0, 0), (-1, 0), 0.4, colors.black),
-        ('LINEBEFORE', (0, 0), (0, -1), 0.4, colors.black),
-        ('LINEAFTER', (-1, 0), (-1, -1), 0.4, colors.black),
-        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('TOPPADDING', (0, 0), (-1, -1), 2*mm),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 2*mm),
-    ]))
-    title_tbl.spaceAfter = 0
-    elements.append(title_tbl)
-
-    # 본문 테이블 (제목 행 제외)
+    # 단일 테이블 (제목 행 포함, SPAN으로 통합)
     table_data = [
+        # row 0: 제목 (4칸 통합, 가운데정렬)
+        [Paragraph('이동통신무선국 설치 확인서', s_title), '', '', ''],
+        # row 1
         [h('시설자명'), c(d.get('installer_name')),
          h('허가번호'), c(d.get('zpwino'))],
+        # row 2
         [h_sub('공동신청 시설자명', '(필요 시 입력)'), c(d.get('co_installer_name')),
          h_sub('공동신청 허가번호', '(필요 시 입력)'), c(d.get('co_zpwino'))],
-        [h('안테나설치대 형태'), c(d.get('antenna_frame_type')),
+        # row 3: 안테나설치대 형태 (8pt로 줄바꿈 방지)
+        [Paragraph('<b>안테나설치대 형태</b>', s_hdr_fit), c(d.get('antenna_frame_type')),
          h('호출명칭'), c(d.get('zpwina'))],
+        # row 4
         [h('공용화 구분'), c(d.get('sharing_type')),
          h('안테나 수'), cc(_format_antenna_count(d))],
+        # row 5
         [h('설치장소'), c(d.get('zpwiadr')), '', ''],
+        # row 6
         [Paragraph('특이사항', s_hdr_nb),
          Paragraph(str(d.get('remark')) if d.get('remark') else '-', s_cell_left), '', ''],
+        # row 7
         [h('설계<br/>도면'), bp_content, '', ''],
+        # row 8
         [h('현장<br/>사진'), Paragraph(
             f'<b>{photo_text}</b><br/><font size="7">※ <b>굵은 글씨</b> 항목은 필수 항목</font>',
             s_cell_left
@@ -221,6 +216,7 @@ def generate_certificate_pdf(form_data, photo_list=None, blueprint_bytes=None):
     ]
 
     row_heights = [
+        title_h,
         9 * mm, 11 * mm, 9 * mm, 9 * mm,
         9 * mm, 12 * mm, bp_row_h, 12 * mm,
     ]
@@ -234,12 +230,14 @@ def generate_certificate_pdf(form_data, photo_list=None, blueprint_bytes=None):
         ('BOTTOMPADDING', (0, 0), (-1, -1), 2*mm),
         ('LEFTPADDING', (0, 0), (-1, -1), 2*mm),
         ('RIGHTPADDING', (0, 0), (-1, -1), 2*mm),
-        ('SPAN', (1, 4), (3, 4)),
+        # 제목 행 4칸 통합
+        ('SPAN', (0, 0), (3, 0)),
+        # colspan 3 행들
         ('SPAN', (1, 5), (3, 5)),
         ('SPAN', (1, 6), (3, 6)),
         ('SPAN', (1, 7), (3, 7)),
+        ('SPAN', (1, 8), (3, 8)),
     ]))
-    table.spaceBefore = 0
     elements.append(table)
 
     if has_photos:

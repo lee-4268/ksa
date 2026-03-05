@@ -679,6 +679,21 @@ class _IndividualTabState extends State<_IndividualTab>
                   style: TextStyle(fontSize: 10, color: Colors.grey.shade700)),
             ),
           ),
+          // 제목 행 (통합 셀)
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(vertical: 10),
+            decoration: const BoxDecoration(
+              border: Border(
+                top: BorderSide(color: Colors.black, width: 0.5),
+                left: BorderSide(color: Colors.black, width: 0.5),
+                right: BorderSide(color: Colors.black, width: 0.5),
+              ),
+            ),
+            child: const Text('이동통신무선국 설치 확인서',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
+          ),
           // 테이블
           Table(
             border: TableBorder.all(color: Colors.black, width: 0.5),
@@ -689,18 +704,17 @@ class _IndividualTabState extends State<_IndividualTab>
               3: FlexColumnWidth(1),
             },
             children: [
-              // 제목
-              TableRow(children: [
-                _tCell('이동통신무선국 설치 확인서', colspan: true,
-                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
-                const SizedBox(), const SizedBox(), const SizedBox(),
-              ]),
               // 시설자명 | 허가번호
               _tRow('시설자명', installer, '허가번호', _zpwinoCtrl.text),
               // 공동신청 시설자명 | 공동신청 허가번호
               _tRow2('공동신청 시설자명\n(필요 시 입력)', _coInstallerName, '공동신청 허가번호\n(필요 시 입력)', _coZpwinoCtrl.text),
               // 안테나설치대 형태 | 호출명칭
-              _tRow('안테나설치대 형태', _antennaFrameType, '호출명칭', _zpwinaCtrl.text),
+              TableRow(children: [
+                _tHeaderCellSm('안테나설치대 형태'),
+                _tValueCell(_antennaFrameType),
+                _tHeaderCell('호출명칭'),
+                _tValueCell(_zpwinaCtrl.text),
+              ]),
               // 공용화 구분 | 안테나 수
               _tRow('공용화 구분', _sharingType, '안테나 수', _antennaCountDisplay),
               // 설치장소
@@ -817,17 +831,6 @@ class _IndividualTabState extends State<_IndividualTab>
       const SizedBox(),
       const SizedBox(),
     ]);
-  }
-
-  Widget _tCell(String text, {bool colspan = false, TextStyle? style}) {
-    return TableCell(
-      verticalAlignment: TableCellVerticalAlignment.middle,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
-        child: Text(text, textAlign: TextAlign.center,
-            style: style ?? const TextStyle(fontSize: 11)),
-      ),
-    );
   }
 
   Widget _tHeaderCell(String text) {
