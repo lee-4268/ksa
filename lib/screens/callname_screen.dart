@@ -34,6 +34,7 @@ class _CallnameScreenState extends State<CallnameScreen> {
   final Map<String, List<Map<String, dynamic>>> _columnValues = {};
   int? _filteredRows;
   bool _loadingPreview = false;
+  bool _analysisComplete = false; // 백그라운드 분석 완료 여부
 
   // Step 2: 매칭
   bool _processing = false;
@@ -85,13 +86,40 @@ class _CallnameScreenState extends State<CallnameScreen> {
         _uploadResult = data;
         _uploadId = data['upload_id'] as String?;
         _filteredRows = data['filtered_rows'] as int?;
+        _analysisComplete = false;
         _step = 1;
       });
+      // 백그라운드 분석 폴링 시작
+      _pollAnalysis();
     } catch (e) {
       setState(() {
         _uploading = false;
         _uploadError = e.toString();
       });
+    }
+  }
+
+  // ── 백그라운드 분석 폴링 ──
+
+  Future<void> _pollAnalysis() async {
+    while (mounted && _uploadId != null && _step == 1 && !_analysisComplete) {
+      try {
+        final result = await _service.getAnalysisStatus(_uploadId!);
+        final status = result['status'] as String?;
+        if (status == 'complete') {
+          setState(() {
+            _filteredRows = result['filtered_rows'] as int?;
+            _analysisComplete = true;
+          });
+          break;
+        } else if (status == 'error') {
+          setState(() => _analysisComplete = true);
+          break;
+        }
+      } catch (_) {
+        // 폴링 오류 무시
+      }
+      await Future.delayed(const Duration(seconds: 2));
     }
   }
 
@@ -207,6 +235,7 @@ class _CallnameScreenState extends State<CallnameScreen> {
       _filters.clear();
       _columnValues.clear();
       _filteredRows = null;
+      _analysisComplete = false;
       _processId = null;
       _matchResult = null;
       _processError = null;
@@ -422,8 +451,23 @@ class _CallnameScreenState extends State<CallnameScreen> {
             const Text('필터 설정 (선택사항)',
                 style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
             const SizedBox(height: 8),
-            Text('특정 조건으로 매칭 범위를 좁힐 수 있습니다.',
-                style: TextStyle(color: Colors.grey.shade600, fontSize: 13)),
+            if (!_analysisComplete)
+              Row(
+                children: [
+                  const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2)),
+                  const SizedBox(width: 8),
+                  Text('파일 분석 중... 잠시만 기다려주세요.',
+                      style: TextStyle(
+                          color: Colors.grey.shade600, fontSize: 13)),
+                ],
+              )
+            else
+              Text('특정 조건으로 매칭 범위를 좁힐 수 있습니다.',
+                  style:
+                      TextStyle(color: Colors.grey.shade600, fontSize: 13)),
             const SizedBox(height: 12),
 
             // 필터 가능한 컬럼 칩
@@ -439,7 +483,8 @@ class _CallnameScreenState extends State<CallnameScreen> {
                           color: isSelected ? Colors.white : Colors.black87)),
                   backgroundColor:
                       isSelected ? _primary : Colors.grey.shade200,
-                  onPressed: () => _showFilterDialog(col),
+                  onPressed:
+                      _analysisComplete ? () => _showFilterDialog(col) : null,
                 );
               }).toList(),
             ),

@@ -128,6 +128,20 @@ class CallnameService {
         as Map<String, dynamic>;
   }
 
+  /// 백그라운드 분석 상태 조회 (폴링용)
+  Future<Map<String, dynamic>> getAnalysisStatus(String uploadId) async {
+    final resp = await http
+        .get(
+          Uri.parse('$_baseUrl/callname/upload/$uploadId/analysis'),
+          headers: _headers,
+        )
+        .timeout(_apiTimeout);
+    if (resp.statusCode != 200) {
+      throw Exception('분석 상태 조회 실패: ${resp.statusCode}');
+    }
+    return json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+  }
+
   /// 컬럼 고유값 조회 (필터 UI용)
   Future<List<Map<String, dynamic>>> getColumnValues(
       String uploadId, String column) async {

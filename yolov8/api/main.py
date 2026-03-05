@@ -4659,47 +4659,56 @@ def _list_xlsx_sheet_names(xlsx_path: str) -> list:
     return names
 
 
-def _iter_xlsx_rows_light(xlsx_path: str, sheet_name: str = None):
+def _iter_xlsx_rows_light(xlsx_path: str, sheet_name: str = None, *,
+                          ss_cache_path: str = None, ss_offsets_bytes: bytes = None):
     """xlsx → (0-based_row_num, [str, ...]) 스트리밍 제너레이터.
     openpyxl.load_workbook 대신 ZIP + XML iterparse 사용.
     sharedStrings를 디스크 임시파일 + mmap으로 처리 → RAM ~95% 절감.
     메모리: offsets 배열(~4MB/50만건) + 현재 행 버퍼만.
-    sheet_name: 특정 시트 (None이면 첫 번째 시트)."""
+    sheet_name: 특정 시트 (None이면 첫 번째 시트).
+    ss_cache_path/ss_offsets_bytes: 미리 빌드된 SS 캐시 → 재파싱 스킵."""
     import xml.etree.ElementTree as ET
     import struct
     import mmap as _mmap_mod
     from array import array
 
-    ss_tmp_path = None
+    _owns_ss = ss_cache_path is None  # True면 이 함수에서 SS 생성·정리
+    ss_tmp_path = ss_cache_path
     ss_mmap_obj = None
     ss_fh = None
 
     try:
         with zipfile.ZipFile(xlsx_path, "r") as zf:
-            # ── sharedStrings → 디스크 임시파일 + mmap (RAM에 올리지 않음) ──
-            ss_offsets = array("Q")  # unsigned long long offsets
+            # ── sharedStrings ──
+            if ss_cache_path and ss_offsets_bytes:
+                # 캐시 재사용 (sharedStrings 파싱 스킵)
+                ss_offsets = array("Q")
+                ss_offsets.frombytes(ss_offsets_bytes)
+            else:
+                # 새로 빌드 (기존 로직)
+                ss_offsets = array("Q")
+                ss_names = [n for n in zf.namelist() if n.endswith("sharedStrings.xml")]
+                if ss_names:
+                    ss_tmp = _tempfile.NamedTemporaryFile(delete=False, suffix=".ss")
+                    ss_tmp_path = ss_tmp.name
+                    with zf.open(ss_names[0]) as ssf:
+                        for _, elem in ET.iterparse(ssf, events=("end",)):
+                            tag = elem.tag.rsplit("}", 1)[-1]
+                            if tag == "si":
+                                parts = []
+                                for ch in elem.iter():
+                                    if ch.tag.rsplit("}", 1)[-1] == "t" and ch.text:
+                                        parts.append(ch.text)
+                                text = "".join(parts)
+                                encoded = text.encode("utf-8")
+                                ss_offsets.append(ss_tmp.tell())
+                                ss_tmp.write(struct.pack("<I", len(encoded)))
+                                ss_tmp.write(encoded)
+                                elem.clear()
+                    ss_tmp.close()
 
-            ss_names = [n for n in zf.namelist() if n.endswith("sharedStrings.xml")]
-            if ss_names:
-                ss_tmp = _tempfile.NamedTemporaryFile(delete=False, suffix=".ss")
-                ss_tmp_path = ss_tmp.name
-                with zf.open(ss_names[0]) as ssf:
-                    for _, elem in ET.iterparse(ssf, events=("end",)):
-                        tag = elem.tag.rsplit("}", 1)[-1]
-                        if tag == "si":
-                            parts = []
-                            for ch in elem.iter():
-                                if ch.tag.rsplit("}", 1)[-1] == "t" and ch.text:
-                                    parts.append(ch.text)
-                            text = "".join(parts)
-                            encoded = text.encode("utf-8")
-                            ss_offsets.append(ss_tmp.tell())
-                            ss_tmp.write(struct.pack("<I", len(encoded)))
-                            ss_tmp.write(encoded)
-                            elem.clear()
-                ss_tmp.close()
-
-                # mmap으로 랜덤 액세스 (OS가 페이지 관리 → Python 힙 사용 안 함)
+            # mmap으로 랜덤 액세스 (OS가 페이지 관리 → Python 힙 사용 안 함)
+            if ss_tmp_path:
                 file_size = os.path.getsize(ss_tmp_path)
                 if file_size > 0:
                     ss_fh = open(ss_tmp_path, "rb")
@@ -4766,16 +4775,121 @@ def _iter_xlsx_rows_light(xlsx_path: str, sheet_name: str = None):
                         elem.clear()
 
     finally:
-        # mmap + 임시파일 정리
+        # mmap 핸들 정리
         if ss_mmap_obj is not None:
             ss_mmap_obj.close()
         if ss_fh is not None:
             ss_fh.close()
-        if ss_tmp_path:
+        # 이 함수에서 생성한 SS만 삭제 (캐시 제공 시 삭제 안 함)
+        if _owns_ss and ss_tmp_path:
             try:
                 os.remove(ss_tmp_path)
             except Exception:
                 pass
+
+
+def _parse_xlsx_header_fast(xlsx_path: str) -> dict:
+    """xlsx 헤더(첫 행) + 행 수만 초고속 추출 (sharedStrings 전체 파싱 불필요).
+    1) sheet XML dimension 태그에서 총 행 수
+    2) sheet XML 첫 행에서 shared string 인덱스 수집
+    3) sharedStrings.xml에서 필요 인덱스까지만 파싱 (조기 종료)
+    → 140MB 파일도 수 초 내 완료."""
+    import xml.etree.ElementTree as ET
+    _cr_col = re.compile(r"([A-Z]+)")
+
+    with zipfile.ZipFile(xlsx_path, "r") as zf:
+        sheets = sorted([n for n in zf.namelist() if "worksheets/sheet" in n])
+        sp = sheets[0] if sheets else "xl/worksheets/sheet1.xml"
+
+        # ── Pass 1: sheet XML — dimension + 첫 행 셀 정보 ──
+        total_rows = 0
+        header_cells = []  # [(col_idx, cell_type, raw_value)]
+
+        with zf.open(sp) as sf:
+            for _, elem in ET.iterparse(sf, events=("end",)):
+                tag = elem.tag.rsplit("}", 1)[-1]
+
+                if tag == "dimension":
+                    ref = elem.get("ref", "")
+                    if ":" in ref:
+                        m = re.search(r"(\d+)$", ref.split(":")[1])
+                        if m:
+                            total_rows = int(m.group(1)) - 1
+                    elem.clear()
+                    continue
+
+                if tag == "c":
+                    # row 1의 셀만 수집 (row 속성은 부모 <row>에 있으므로 r 속성에서 판별)
+                    r_attr = elem.get("r", "")
+                    # row 1의 셀: A1, B1, ..., Z1, AA1, ...
+                    if r_attr and r_attr[-1] == "1" and re.match(r"^[A-Z]+1$", r_attr):
+                        ct = elem.get("t", "")
+                        m = _cr_col.match(r_attr)
+                        ci = _col_to_idx(m.group(1)) if m else -1
+
+                        if ct == "s":
+                            for ch in elem:
+                                if ch.tag.rsplit("}", 1)[-1] == "v" and ch.text:
+                                    header_cells.append((ci, "s", int(ch.text)))
+                                    break
+                        elif ct == "inlineStr":
+                            for ch in elem.iter():
+                                if ch.tag.rsplit("}", 1)[-1] == "t" and ch.text:
+                                    header_cells.append((ci, "v", ch.text))
+                                    break
+                        else:
+                            for ch in elem:
+                                if ch.tag.rsplit("}", 1)[-1] == "v":
+                                    header_cells.append((ci, "v", ch.text or ""))
+                                    break
+                    elem.clear()
+                    continue
+
+                if tag == "row":
+                    rn = int(elem.get("r", "0"))
+                    elem.clear()
+                    if rn >= 2:
+                        break  # 첫 행 이후 즉시 중단
+                else:
+                    elem.clear()
+
+        # ── Pass 2: sharedStrings — 필요 인덱스만 파싱 (조기 종료) ──
+        needed = {val for _, typ, val in header_cells if typ == "s"}
+        ss_map = {}
+        if needed:
+            max_idx = max(needed)
+            ss_names = [n for n in zf.namelist() if n.endswith("sharedStrings.xml")]
+            if ss_names:
+                idx = 0
+                with zf.open(ss_names[0]) as ssf:
+                    for _, elem in ET.iterparse(ssf, events=("end",)):
+                        tag = elem.tag.rsplit("}", 1)[-1]
+                        if tag == "si":
+                            if idx in needed:
+                                parts = []
+                                for ch in elem.iter():
+                                    if ch.tag.rsplit("}", 1)[-1] == "t" and ch.text:
+                                        parts.append(ch.text)
+                                ss_map[idx] = "".join(parts)
+                            elem.clear()
+                            idx += 1
+                            if idx > max_idx:
+                                break
+
+        # ── 헤더 조립 ──
+        if header_cells:
+            max_ci = max(ci for ci, _, _ in header_cells)
+            columns = [""] * (max_ci + 1)
+            for ci, typ, val in header_cells:
+                columns[ci] = ss_map.get(val, "") if typ == "s" else str(val)
+        else:
+            columns = []
+
+        # trailing 빈 컬럼 제거
+        while columns and not columns[-1].strip():
+            columns.pop()
+
+        return {"columns": columns, "total_rows": total_rows}
 
 
 def _detect_column(df_columns, candidates):
@@ -4785,6 +4899,52 @@ def _detect_column(df_columns, candidates):
         if name in col_list:
             return name
     return None
+
+
+def _build_xlsx_ss_cache(xlsx_path: str):
+    """xlsx sharedStrings → 디스크 바이너리 캐시 빌드.
+    Returns: (cache_path: str | None, offsets_bytes: bytes | None)
+    호출자가 cache_path 파일 삭제 책임."""
+    import xml.etree.ElementTree as ET
+    import struct
+    from array import array
+
+    with zipfile.ZipFile(xlsx_path, "r") as zf:
+        ss_names = [n for n in zf.namelist() if n.endswith("sharedStrings.xml")]
+        if not ss_names:
+            return None, None
+
+        ss_offsets = array("Q")
+        ss_tmp = _tempfile.NamedTemporaryFile(delete=False, suffix=".ss")
+        cache_path = ss_tmp.name
+        try:
+            with zf.open(ss_names[0]) as ssf:
+                for _, elem in ET.iterparse(ssf, events=("end",)):
+                    tag = elem.tag.rsplit("}", 1)[-1]
+                    if tag == "si":
+                        parts = []
+                        for ch in elem.iter():
+                            if ch.tag.rsplit("}", 1)[-1] == "t" and ch.text:
+                                parts.append(ch.text)
+                        text = "".join(parts)
+                        encoded = text.encode("utf-8")
+                        ss_offsets.append(ss_tmp.tell())
+                        ss_tmp.write(struct.pack("<I", len(encoded)))
+                        ss_tmp.write(encoded)
+                        elem.clear()
+            ss_tmp.close()
+
+            if os.path.getsize(cache_path) == 0:
+                os.remove(cache_path)
+                return None, None
+            return cache_path, ss_offsets.tobytes()
+        except Exception:
+            ss_tmp.close()
+            try:
+                os.remove(cache_path)
+            except Exception:
+                pass
+            raise
 
 
 
@@ -4842,20 +5002,120 @@ def _cert_lookup_streaming(query: str) -> dict:
     return {}
 
 
+def _cleanup_callname_session_files(sess: dict):
+    """세션의 캐시/임시 파일 정리 (디스크 + S3)."""
+    # S3 임시 파일
+    s3_temp = sess.get("s3_temp_key")
+    if s3_temp:
+        try:
+            get_s3_client().delete_object(Bucket=S3_BUCKET_NAME, Key=s3_temp)
+        except Exception:
+            pass
+    # 디스크 캐시 파일 (xlsx + SS mmap)
+    for path_key in ("cached_xlsx_path", "cached_ss_path"):
+        p = sess.get(path_key)
+        if p:
+            try:
+                os.remove(p)
+            except Exception:
+                pass
+
+
 def _cleanup_callname_sessions():
-    """만료된 세션 + S3 임시 파일 정리."""
+    """만료된 세션 + S3/디스크 임시 파일 정리."""
     now = _time_mod.time()
     expired = [k for k, v in _callname_sessions.items()
                if (now - v.get("created_at_ts", 0)) > CALLNAME_SESSION_TTL]
     for k in expired:
-        # S3 임시 원본 정리
-        s3_temp = _callname_sessions[k].get("s3_temp_key")
-        if s3_temp:
-            try:
-                get_s3_client().delete_object(Bucket=S3_BUCKET_NAME, Key=s3_temp)
-            except Exception:
-                pass
+        _cleanup_callname_session_files(_callname_sessions[k])
         del _callname_sessions[k]
+
+
+def _analyze_callname_bg(upload_id: str):
+    """Background: S3 xlsx → SS 캐시 빌드 → 전행 스캔 → 컬럼 통계 + filtered_rows.
+    upload-complete 이후 백그라운드 스레드에서 실행."""
+    sess = _callname_sessions.get(upload_id)
+    if not sess or sess.get("status") != "uploaded":
+        return
+    try:
+        sess["analysis_status"] = "processing"
+
+        # 디스크 캐시된 xlsx 사용 (upload-complete에서 보존)
+        tmp_path = sess.get("cached_xlsx_path")
+        if not tmp_path or not os.path.exists(tmp_path):
+            tmp_path = _s3_to_tempfile(sess["s3_temp_key"], f".{sess['ext']}")
+            sess["cached_xlsx_path"] = tmp_path
+
+        columns = sess.get("columns", [])
+        tongsi_col = sess.get("tongsi_col")
+        tongsi_idx = columns.index(tongsi_col) if tongsi_col and tongsi_col in columns else -1
+
+        from collections import Counter
+        col_counters = [Counter() for _ in range(len(columns))]
+        filtered_rows = 0
+        total_rows = 0
+
+        ss_cache_path = None
+        ss_offsets_bytes = None
+
+        if sess.get("ext") == "xlsx":
+            # SS 캐시 빌드 (1회 → 이후 column-values/preview/process 재사용)
+            ss_cache_path, ss_offsets_bytes = _build_xlsx_ss_cache(tmp_path)
+
+            for rn, vals in _iter_xlsx_rows_light(
+                    tmp_path, ss_cache_path=ss_cache_path, ss_offsets_bytes=ss_offsets_bytes):
+                if rn == 0:
+                    continue
+                total_rows += 1
+                tongsi_empty = True
+                if 0 <= tongsi_idx < len(vals):
+                    if vals[tongsi_idx].strip():
+                        tongsi_empty = False
+                if tongsi_empty:
+                    filtered_rows += 1
+                for i, v in enumerate(vals):
+                    if v and i < len(col_counters) and len(col_counters[i]) < 200:
+                        col_counters[i][v] += 1
+        else:
+            import xlrd
+            wb = xlrd.open_workbook(tmp_path)
+            ws = wb.sheet_by_index(0)
+            for r in range(1, ws.nrows):
+                total_rows += 1
+                vals = [str(ws.cell_value(r, c)) for c in range(ws.ncols)]
+                tongsi_empty = True
+                if 0 <= tongsi_idx < len(vals):
+                    if vals[tongsi_idx].strip():
+                        tongsi_empty = False
+                if tongsi_empty:
+                    filtered_rows += 1
+                for i, v in enumerate(vals):
+                    if v and i < len(col_counters) and len(col_counters[i]) < 200:
+                        col_counters[i][v] += 1
+            wb.release_resources()
+
+        # 컬럼별 top-100 값 통계
+        column_stats = {}
+        for i, col in enumerate(columns):
+            top = col_counters[i].most_common(100)
+            if top:
+                column_stats[col] = [{"value": v, "count": c} for v, c in top]
+
+        sess["filtered_rows"] = filtered_rows
+        sess["total_rows"] = total_rows
+        sess["column_stats"] = column_stats
+        sess["cached_ss_path"] = ss_cache_path
+        sess["cached_ss_offsets"] = ss_offsets_bytes
+        sess["analysis_status"] = "complete"
+
+        _release_memory()
+        logger.info(f"호출명칭 분석 완료: upload_id={upload_id}, "
+                     f"total={total_rows}, filtered={filtered_rows}")
+    except Exception as e:
+        sess_ref = _callname_sessions.get(upload_id)
+        if sess_ref:
+            sess_ref["analysis_status"] = "error"
+        logger.error(f"호출명칭 분석 실패: upload_id={upload_id}: {e}")
 
 
 def _query_callname_db(zpwina_values: list, zpwino_values: list) -> dict:
@@ -5370,59 +5630,37 @@ async def callname_upload_complete(request: Request):
         }
 
     try:
-        # S3 → 디스크 다운로드 (VPC 내부, 빠름)
+        # S3 → 디스크 다운로드 (VPC 내부, 빠름) — 백그라운드 분석용으로 보존
         tmp_path = await asyncio.to_thread(_s3_to_tempfile, s3_key, f".{ext}")
 
         def _parse_lightweight_from_s3():
-            try:
-                if ext == "xlsx":
-                    columns = []
-                    total_rows = 0
-                    tongsi_idx = -1
-                    filtered_rows = 0
-                    for rn, vals in _iter_xlsx_rows_light(tmp_path):
-                        if rn == 0:
-                            columns = vals[:]
-                            tongsi_col = _detect_column(columns, CALLNAME_POSSIBLE_TONGSI_COLS)
-                            tongsi_idx = columns.index(tongsi_col) if tongsi_col and tongsi_col in columns else -1
-                            continue
-                        total_rows += 1
-                        if tongsi_idx >= 0 and tongsi_idx < len(vals):
-                            val = vals[tongsi_idx]
-                            if not val.strip():
-                                filtered_rows += 1
-                    _release_memory()
-                else:
-                    import xlrd
-                    wb = xlrd.open_workbook(tmp_path)
-                    ws = wb.sheet_by_index(0)
-                    columns = [str(ws.cell_value(0, c)) for c in range(ws.ncols)]
-                    total_rows = ws.nrows - 1
-                    tongsi_col = _detect_column(columns, CALLNAME_POSSIBLE_TONGSI_COLS)
-                    tongsi_idx = columns.index(tongsi_col) if tongsi_col and tongsi_col in columns else -1
-                    filtered_rows = 0
-                    if tongsi_idx >= 0:
-                        for r in range(1, ws.nrows):
-                            val = ws.cell_value(r, tongsi_idx)
-                            if val is None or str(val).strip() == "":
-                                filtered_rows += 1
-                    wb.release_resources()
+            # 임시파일 삭제하지 않음 → 백그라운드 분석에서 재사용
+            if ext == "xlsx":
+                fast = _parse_xlsx_header_fast(tmp_path)
+                columns = fast["columns"]
+                total_rows = fast["total_rows"]
+                tongsi_col = _detect_column(columns, CALLNAME_POSSIBLE_TONGSI_COLS)
+                filtered_rows = total_rows  # 정확한 값은 백그라운드 분석 후 갱신
+            else:
+                import xlrd
+                wb = xlrd.open_workbook(tmp_path)
+                ws = wb.sheet_by_index(0)
+                columns = [str(ws.cell_value(0, c)) for c in range(ws.ncols)]
+                total_rows = ws.nrows - 1
+                tongsi_col = _detect_column(columns, CALLNAME_POSSIBLE_TONGSI_COLS)
+                filtered_rows = total_rows
+                wb.release_resources()
 
-                callname_col = _detect_column(columns, CALLNAME_POSSIBLE_CALLNAME_COLS)
-                zpwina_col = _detect_column(columns, CALLNAME_POSSIBLE_ZPWINA_COLS)
-                zpwino_col = _detect_column(columns, CALLNAME_POSSIBLE_ZPWINO_COLS)
+            callname_col = _detect_column(columns, CALLNAME_POSSIBLE_CALLNAME_COLS)
+            zpwina_col = _detect_column(columns, CALLNAME_POSSIBLE_ZPWINA_COLS)
+            zpwino_col = _detect_column(columns, CALLNAME_POSSIBLE_ZPWINO_COLS)
 
-                return {
-                    "total_rows": total_rows, "columns": columns,
-                    "callname_col": callname_col, "tongsi_col": tongsi_col,
-                    "zpwina_col": zpwina_col, "zpwino_col": zpwino_col,
-                    "filtered_rows": filtered_rows,
-                }
-            finally:
-                try:
-                    os.remove(tmp_path)
-                except Exception:
-                    pass
+            return {
+                "total_rows": total_rows, "columns": columns,
+                "callname_col": callname_col, "tongsi_col": tongsi_col,
+                "zpwina_col": zpwina_col, "zpwino_col": zpwino_col,
+                "filtered_rows": filtered_rows,
+            }
 
         info = await asyncio.to_thread(_parse_lightweight_from_s3)
 
@@ -5432,8 +5670,13 @@ async def callname_upload_complete(request: Request):
             "ext": ext,
             "status": "uploaded",
             "created_at_ts": _time_mod.time(),
+            "cached_xlsx_path": tmp_path,  # 백그라운드 분석용 보존
+            "analysis_status": "pending",
             **info,
         }
+
+        # 백그라운드 분석 시작 (전행 스캔 → 정확한 filtered_rows + 컬럼 통계)
+        asyncio.get_event_loop().run_in_executor(None, _analyze_callname_bg, upload_id)
 
         return {
             "upload_id": upload_id,
@@ -5447,8 +5690,29 @@ async def callname_upload_complete(request: Request):
     except HTTPException:
         raise
     except Exception as e:
+        # 실패 시 임시파일 정리
+        if 'tmp_path' in dir():
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
         logger.error(f"호출명칭 upload-complete 실패: {e}")
         raise HTTPException(status_code=500, detail="서버 내부 오류")
+
+
+@app.get("/callname/upload/{upload_id}/analysis")
+async def callname_analysis_status(upload_id: str, request: Request):
+    """백그라운드 분석 상태 조회 — 프론트엔드 폴링용."""
+    await _verify_auth(request)
+    sess = _callname_sessions.get(upload_id)
+    if not sess:
+        raise HTTPException(status_code=404, detail="세션 없음")
+    status = sess.get("analysis_status", "pending")
+    result = {"status": status}
+    if status == "complete":
+        result["filtered_rows"] = sess.get("filtered_rows", 0)
+        result["total_rows"] = sess.get("total_rows", 0)
+    return result
 
 
 @app.post("/callname/upload")
@@ -5585,17 +5849,36 @@ async def callname_column_values(upload_id: str, request: Request):
     if not col or col not in sess.get("columns", []):
         raise HTTPException(status_code=400, detail=f"'{col}' 컬럼 없음")
 
+    # 백그라운드 분석 완료 시 사전 계산된 통계 즉시 반환
+    column_stats = sess.get("column_stats", {})
+    if col in column_stats:
+        return {"column": col, "values": column_stats[col]}
+
+    # 분석 미완료 → S3에서 재로드 (소용량 파일 또는 fallback)
     def _calc():
         from collections import Counter
         columns = sess.get("columns", [])
         col_idx = columns.index(col) if col in columns else -1
         if col_idx < 0:
             return []
-        tmp_path = _s3_to_tempfile(sess["s3_temp_key"], suffix=f".{sess['ext']}")
+
+        cached_xlsx = sess.get("cached_xlsx_path")
+        cached_ss = sess.get("cached_ss_path")
+        cached_ss_off = sess.get("cached_ss_offsets")
+
+        if cached_xlsx and os.path.exists(cached_xlsx):
+            tmp_path = cached_xlsx
+            need_cleanup = False
+        else:
+            tmp_path = _s3_to_tempfile(sess["s3_temp_key"], suffix=f".{sess['ext']}")
+            need_cleanup = True
+            cached_ss = None
+            cached_ss_off = None
         try:
             counter = Counter()
             if sess["ext"] == "xlsx":
-                for rn, vals in _iter_xlsx_rows_light(tmp_path):
+                for rn, vals in _iter_xlsx_rows_light(
+                        tmp_path, ss_cache_path=cached_ss, ss_offsets_bytes=cached_ss_off):
                     if rn == 0:
                         continue
                     v = vals[col_idx] if col_idx < len(vals) else ""
@@ -5612,10 +5895,11 @@ async def callname_column_values(upload_id: str, request: Request):
                 xls_book.release_resources()
             return [{"value": v, "count": c} for v, c in counter.most_common(100)]
         finally:
-            try:
-                os.remove(tmp_path)
-            except OSError:
-                pass
+            if need_cleanup:
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
 
     values = await asyncio.to_thread(_calc)
     return {"column": col, "values": values}
@@ -5636,6 +5920,13 @@ async def callname_preview(upload_id: str, request: Request):
     tongsi_col = sess.get("tongsi_col")
     callname_col = sess.get("callname_col")
 
+    # 필터 없으면 사전 계산된 filtered_rows 즉시 반환
+    if not filters and sess.get("analysis_status") == "complete":
+        return {
+            "filtered_rows": sess.get("filtered_rows", 0),
+            "target_callnames": 0,
+        }
+
     def _calc():
         columns = sess.get("columns", [])
         filter_col_indices = {}
@@ -5646,7 +5937,20 @@ async def callname_preview(upload_id: str, request: Request):
         tongsi_idx = columns.index(tongsi_col) if tongsi_col and tongsi_col in columns else -1
         callname_idx = columns.index(callname_col) if callname_col and callname_col in columns else -1
 
-        tmp_path = _s3_to_tempfile(sess["s3_temp_key"], suffix=f".{sess['ext']}")
+        # 캐시 파일 사용 (백그라운드 분석에서 빌드됨)
+        cached_xlsx = sess.get("cached_xlsx_path")
+        cached_ss = sess.get("cached_ss_path")
+        cached_ss_off = sess.get("cached_ss_offsets")
+
+        if cached_xlsx and os.path.exists(cached_xlsx):
+            tmp_path = cached_xlsx
+            need_cleanup = False
+        else:
+            tmp_path = _s3_to_tempfile(sess["s3_temp_key"], suffix=f".{sess['ext']}")
+            need_cleanup = True
+            cached_ss = None
+            cached_ss_off = None
+
         try:
             filtered_rows = 0
             callname_set = set()
@@ -5665,7 +5969,8 @@ async def callname_preview(upload_id: str, request: Request):
                     callname_set.add(vals[callname_idx])
 
             if sess["ext"] == "xlsx":
-                for rn, vals in _iter_xlsx_rows_light(tmp_path):
+                for rn, vals in _iter_xlsx_rows_light(
+                        tmp_path, ss_cache_path=cached_ss, ss_offsets_bytes=cached_ss_off):
                     if rn == 0:
                         continue
                     _check_row(vals)
@@ -5681,10 +5986,11 @@ async def callname_preview(upload_id: str, request: Request):
 
             return {"filtered_rows": filtered_rows, "target_callnames": len(callname_set)}
         finally:
-            try:
-                os.remove(tmp_path)
-            except OSError:
-                pass
+            if need_cleanup:
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
 
     result = await asyncio.to_thread(_calc)
     return result
@@ -5724,12 +6030,24 @@ async def callname_process(request: Request):
         zpwina_idx = columns.index(zpwina_col) if zpwina_col and zpwina_col in columns else -1
         zpwino_idx = columns.index(zpwino_col) if zpwino_col and zpwino_col in columns else -1
 
-        tmp_path = _s3_to_tempfile(sess["s3_temp_key"], suffix=f".{sess['ext']}")
+        # 캐시 파일 사용 (백그라운드 분석에서 빌드됨)
+        cached_xlsx = sess.get("cached_xlsx_path")
+        cached_ss = sess.get("cached_ss_path")
+        cached_ss_off = sess.get("cached_ss_offsets")
+
+        if cached_xlsx and os.path.exists(cached_xlsx):
+            tmp_path = cached_xlsx
+            need_cleanup = False
+        else:
+            tmp_path = _s3_to_tempfile(sess["s3_temp_key"], suffix=f".{sess['ext']}")
+            need_cleanup = True
+            cached_ss = None
+            cached_ss_off = None
+
         try:
             zpwina_set = set()
             zpwino_set = set()
             original_row_indices = []
-            # 행별 zpwina/zpwino 값 저장 (스트림 단계에서 Excel 재로드 불필요)
             row_zpwina_list = []
             row_zpwino_list = []
 
@@ -5752,16 +6070,14 @@ async def callname_process(request: Request):
                     zpwino_set.add(zo)
 
             if sess["ext"] == "xlsx":
-                # openpyxl.load_workbook 대신 경량 ZIP+XML 파싱 (메모리 ~80% 절감)
-                for rn, vals in _iter_xlsx_rows_light(tmp_path):
+                for rn, vals in _iter_xlsx_rows_light(
+                        tmp_path, ss_cache_path=cached_ss, ss_offsets_bytes=cached_ss_off):
                     if rn == 0:
-                        continue  # 헤더 스킵
-                    # 행 끝 빈 셀 보정 (XML에서 trailing 빈 셀이 누락될 수 있음)
+                        continue
                     while len(vals) < len(columns):
                         vals.append("")
                     _process_row(rn - 1, vals)
-                # JSON round-trip: 세션 리스트의 문자열을 sharedStrings 아레나에서 분리
-                # → _release_memory()에서 아레나를 OS에 완전 반환 가능
+                # JSON round-trip: sharedStrings 아레나에서 분리
                 if row_zpwina_list:
                     row_zpwina_list = json.loads(json.dumps(row_zpwina_list, ensure_ascii=False))
                 if row_zpwino_list:
@@ -5770,7 +6086,7 @@ async def callname_process(request: Request):
                     zpwina_set = set(json.loads(json.dumps(list(zpwina_set), ensure_ascii=False)))
                 if zpwino_set:
                     zpwino_set = set(json.loads(json.dumps(list(zpwino_set), ensure_ascii=False)))
-                _release_memory()  # sharedStrings 아레나 OS 반환
+                _release_memory()
             else:
                 xls_book = xlrd.open_workbook(tmp_path)
                 ws = xls_book.sheet_by_index(0)
@@ -5779,10 +6095,18 @@ async def callname_process(request: Request):
                     _process_row(r - 1, vals)
                 xls_book.release_resources()
         finally:
-            try:
-                os.remove(tmp_path)
-            except OSError:
-                pass
+            # process 완료 → 캐시 파일 정리 (더 이상 불필요)
+            for p in [sess.get("cached_ss_path"), sess.get("cached_xlsx_path") if need_cleanup else None]:
+                if p:
+                    try:
+                        os.remove(p)
+                    except Exception:
+                        pass
+            if need_cleanup and tmp_path:
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
         return list(zpwina_set), list(zpwino_set), original_row_indices, row_zpwina_list, row_zpwino_list
 
     zpwina_values, zpwino_values, original_row_indices, row_zpwina_list, row_zpwino_list = await asyncio.to_thread(_prepare)
@@ -5794,6 +6118,8 @@ async def callname_process(request: Request):
         raise HTTPException(status_code=400, detail="매칭 대상 값이 없습니다.")
 
     process_id = str(uuid.uuid4())
+    # 캐시 파일 정리 (process 세션에는 불필요)
+    _cleanup_callname_session_files(sess)
     _callname_sessions[process_id] = {
         "s3_temp_key": sess["s3_temp_key"],
         "ext": sess["ext"],
