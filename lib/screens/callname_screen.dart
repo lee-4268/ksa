@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
@@ -42,7 +43,9 @@ class _CallnameScreenState extends State<CallnameScreen> {
   final Set<String> _expandedFilters = {};
   final Map<String, String> _filterSearchQueries = {};
   String? _selectedFilterCol;
-  bool _addingFilter = false;
+  final Map<String, bool> _loadingColumnValues = {};
+
+  Timer? _previewDebounce;
 
   // Step 2: 매칭
   bool _processing = false;
@@ -54,6 +57,12 @@ class _CallnameScreenState extends State<CallnameScreen> {
   String? _processError;
 
   bool _initialized = false;
+
+  @override
+  void dispose() {
+    _previewDebounce?.cancel();
+    super.dispose();
+  }
 
   @override
   void didChangeDependencies() {
@@ -163,18 +172,26 @@ class _CallnameScreenState extends State<CallnameScreen> {
     }
   }
 
-  Future<void> _updatePreview() async {
+  void _updatePreview() {
+    _previewDebounce?.cancel();
+    _previewDebounce = Timer(const Duration(milliseconds: 300), () {
+      _fetchPreview();
+    });
+  }
+
+  Future<void> _fetchPreview() async {
     if (_uploadId == null) return;
     setState(() => _loadingPreview = true);
     try {
       final result = await _service.previewFiltered(_uploadId!, _filters);
+      if (!mounted) return;
       setState(() {
         _filteredRows = result['filtered_rows'] as int?;
         _targetCallnames = result['target_callnames'] as int?;
         _loadingPreview = false;
       });
     } catch (e) {
-      setState(() => _loadingPreview = false);
+      if (mounted) setState(() => _loadingPreview = false);
     }
   }
 
@@ -267,7 +284,7 @@ class _CallnameScreenState extends State<CallnameScreen> {
       _expandedFilters.clear();
       _filterSearchQueries.clear();
       _selectedFilterCol = null;
-      _addingFilter = false;
+      _loadingColumnValues.clear();
       _processId = null;
       _matchResult = null;
       _processError = null;
@@ -275,24 +292,34 @@ class _CallnameScreenState extends State<CallnameScreen> {
     });
   }
 
-  /// 필터 추가
-  Future<void> _addFilter(String column) async {
-    setState(() => _addingFilter = true);
-    try {
-      await _loadColumnValues(column);
-      if (!mounted) return;
+  /// 필터 추가 — 드롭다운 선택 즉시 패널 생성, 값은 비동기 로딩
+  void _addFilter(String column) {
+    setState(() {
+      _filters[column] = []; // 빈 상태로 시작 (아무것도 선택 안 됨)
+      _expandedFilters.add(column);
+      _selectedFilterCol = null;
+    });
+    _loadColumnValuesAsync(column);
+  }
 
-      final values = _columnValues[column] ?? [];
+  Future<void> _loadColumnValuesAsync(String column) async {
+    if (_columnValues.containsKey(column)) return;
+    setState(() => _loadingColumnValues[column] = true);
+    try {
+      final values = await _service.getColumnValues(_uploadId!, column);
+      if (!mounted) return;
       setState(() {
+        _columnValues[column] = values;
+        // 처음 로드 시 모든 값 선택
         _filters[column] =
             values.map((v) => v['value'] as String? ?? '').toList();
-        _expandedFilters.add(column);
-        _selectedFilterCol = null;
-        _addingFilter = false;
+        _loadingColumnValues.remove(column);
       });
       _updatePreview();
     } catch (e) {
-      if (mounted) setState(() => _addingFilter = false);
+      if (mounted) {
+        setState(() => _loadingColumnValues.remove(column));
+      }
     }
   }
 
@@ -611,71 +638,33 @@ class _CallnameScreenState extends State<CallnameScreen> {
 
                 const SizedBox(height: 12),
 
-                // 드롭다운 + 추가 버튼
+                // 드롭다운 — 선택 시 바로 필터 추가
                 if (isComplete && availableCols.isNotEmpty)
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Container(
-                          padding:
-                              const EdgeInsets.symmetric(horizontal: 12),
-                          decoration: BoxDecoration(
-                            border:
-                                Border.all(color: Colors.grey.shade300),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: DropdownButtonHideUnderline(
-                            child: DropdownButton<String>(
-                              value: _selectedFilterCol,
-                              hint: const Text('컬럼 선택...',
-                                  style: TextStyle(fontSize: 13)),
-                              isExpanded: true,
-                              items: availableCols.map((col) {
-                                return DropdownMenuItem(
-                                  value: col,
-                                  child: Text(col,
-                                      style:
-                                          const TextStyle(fontSize: 13)),
-                                );
-                              }).toList(),
-                              onChanged: _addingFilter
-                                  ? null
-                                  : (col) => setState(
-                                      () => _selectedFilterCol = col),
-                            ),
-                          ),
-                        ),
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 12),
+                    decoration: BoxDecoration(
+                      border: Border.all(color: Colors.grey.shade300),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: DropdownButtonHideUnderline(
+                      child: DropdownButton<String>(
+                        value: null,
+                        hint: const Text('필터할 컬럼 선택...',
+                            style: TextStyle(fontSize: 13)),
+                        isExpanded: true,
+                        items: availableCols.map((col) {
+                          return DropdownMenuItem(
+                            value: col,
+                            child: Text(col,
+                                style: const TextStyle(fontSize: 13)),
+                          );
+                        }).toList(),
+                        onChanged: (col) {
+                          if (col != null) _addFilter(col);
+                        },
                       ),
-                      const SizedBox(width: 8),
-                      SizedBox(
-                        height: 42,
-                        child: ElevatedButton(
-                          onPressed: _addingFilter ||
-                                  _selectedFilterCol == null
-                              ? null
-                              : () => _addFilter(_selectedFilterCol!),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: _primary,
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 16),
-                            shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(8)),
-                          ),
-                          child: _addingFilter
-                              ? const SizedBox(
-                                  width: 16,
-                                  height: 16,
-                                  child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                      color: Colors.white))
-                              : const Text('+ 추가',
-                                  style: TextStyle(
-                                      fontSize: 13,
-                                      fontWeight: FontWeight.w600)),
-                        ),
-                      ),
-                    ],
+                    ),
                   ),
 
                 // 인라인 필터 그룹
@@ -811,6 +800,7 @@ class _CallnameScreenState extends State<CallnameScreen> {
     final selected = _filters[column] ?? [];
     final isExpanded = _expandedFilters.contains(column);
     final searchQuery = _filterSearchQueries[column] ?? '';
+    final isLoading = _loadingColumnValues[column] == true;
 
     final filteredValues = searchQuery.isEmpty
         ? values
@@ -950,15 +940,25 @@ class _CallnameScreenState extends State<CallnameScreen> {
             const Divider(height: 1),
             ConstrainedBox(
               constraints: const BoxConstraints(maxHeight: 240),
-              child: values.isEmpty
-                  ? const Padding(
-                      padding: EdgeInsets.all(16),
+              child: isLoading || values.isEmpty
+                  ? Padding(
+                      padding: const EdgeInsets.all(16),
                       child: Center(
-                          child: SizedBox(
+                          child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const SizedBox(
                               width: 20,
                               height: 20,
                               child: CircularProgressIndicator(
-                                  strokeWidth: 2))),
+                                  strokeWidth: 2)),
+                          const SizedBox(height: 8),
+                          Text('값 로딩 중...',
+                              style: TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.grey.shade600)),
+                        ],
+                      )),
                     )
                   : ListView.builder(
                       shrinkWrap: true,

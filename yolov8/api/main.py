@@ -4918,6 +4918,23 @@ def _detect_column(df_columns, candidates):
     return None
 
 
+# 통시 NA 값 패턴 (빈 문자열, #N/A 계열, nan 등)
+_TONGSI_NA_VALUES = frozenset({
+    "", "#n/a", "#na", "n/a", "na", "nan", "#ref!", "#value!", "#null!",
+    "null", "none", "-", "--",
+})
+
+
+def _is_tongsi_empty(val: str) -> bool:
+    """통시 컬럼 값이 비어있는지 판단.
+    빈 문자열, #N/A, nan 등 = True (매칭 대상)
+    숫자, 숫자+영문 (통시코드) = False (매칭 제외)"""
+    stripped = val.strip()
+    if not stripped:
+        return True
+    return stripped.lower() in _TONGSI_NA_VALUES
+
+
 def _build_xlsx_ss_cache(xlsx_path: str):
     """xlsx sharedStrings → 디스크 바이너리 캐시 빌드.
     Returns: (cache_path: str | None, offsets_bytes: bytes | None)
@@ -5075,6 +5092,7 @@ def _analyze_callname_bg(upload_id: str):
         total_rows = 0
         callname_set = set()
         col_counters = []
+        filter_cache_rows = []  # tongsi 빈 행의 컬럼값 저장 (preview 즉시 계산용)
         ss_cache_path = None
         ss_offsets_bytes = None
 
@@ -5179,15 +5197,16 @@ def _analyze_callname_bg(upload_id: str):
                                     callname_idx = columns.index(callname_col) if callname_col and callname_col in columns else -1
                                 else:
                                     total_rows += 1
-                                    tongsi_empty = True
-                                    if 0 <= tongsi_idx < len(cells):
-                                        if cells[tongsi_idx].strip():
-                                            tongsi_empty = False
+                                    tongsi_val = cells[tongsi_idx] if 0 <= tongsi_idx < len(cells) else ""
+                                    tongsi_empty = _is_tongsi_empty(tongsi_val)
                                     if tongsi_empty:
                                         filtered_rows += 1
                                         # 호출명칭 중복 제거 카운트
                                         if 0 <= callname_idx < len(cells) and cells[callname_idx].strip():
                                             callname_set.add(cells[callname_idx].strip())
+                                        # preview 즉시 계산용 캐시 (tongsi 빈 행만 저장)
+                                        row_vals = cells[:len(columns)] if len(cells) >= len(columns) else cells + [""] * (len(columns) - len(cells))
+                                        filter_cache_rows.append(row_vals[:])
                                     for i, v in enumerate(cells):
                                         if v and i < len(col_counters) and len(col_counters[i]) < 200:
                                             col_counters[i][v] += 1
@@ -5221,15 +5240,15 @@ def _analyze_callname_bg(upload_id: str):
             for r in range(1, ws.nrows):
                 total_rows += 1
                 vals = [str(ws.cell_value(r, c)) for c in range(ws.ncols)]
-                tongsi_empty = True
-                if 0 <= tongsi_idx < len(vals):
-                    if vals[tongsi_idx].strip():
-                        tongsi_empty = False
+                tongsi_val = vals[tongsi_idx] if 0 <= tongsi_idx < len(vals) else ""
+                tongsi_empty = _is_tongsi_empty(tongsi_val)
                 if tongsi_empty:
                     filtered_rows += 1
                     # 호출명칭 중복 제거 카운트
                     if 0 <= cn_idx < len(vals) and vals[cn_idx].strip():
                         callname_set.add(vals[cn_idx].strip())
+                    # preview 즉시 계산용 캐시
+                    filter_cache_rows.append(vals[:len(columns)])
                 for i, v in enumerate(vals):
                     if v and i < len(col_counters) and len(col_counters[i]) < 200:
                         col_counters[i][v] += 1
@@ -5260,13 +5279,19 @@ def _analyze_callname_bg(upload_id: str):
         sess["target_callnames"] = len(callname_set)
         sess["total_rows"] = total_rows
         sess["column_stats"] = column_stats
+        sess["filter_cache_rows"] = filter_cache_rows  # tongsi 빈 행의 컬럼값 (preview 즉시 계산용)
         sess["cached_ss_path"] = ss_cache_path
         sess["cached_ss_offsets"] = ss_offsets_bytes
         sess["analysis_status"] = "complete"
 
+        # 명시적 해제 (GC가 빠르게 수거하도록)
+        del col_counters, callname_set
+        logger.info(f"filter_cache_rows: {len(filter_cache_rows)}행 캐시됨")
         _release_memory()
+        ss_off_mb = len(ss_offsets_bytes) / (1024*1024) if ss_offsets_bytes else 0
         logger.info(f"호출명칭 분석 완료: upload_id={upload_id}, "
-                     f"cols={len(columns)}, total={total_rows}, filtered={filtered_rows}")
+                     f"cols={len(columns)}, total={total_rows}, filtered={filtered_rows}, "
+                     f"ss_offsets={ss_off_mb:.1f}MB")
     except Exception as e:
         sess_ref = _callname_sessions.get(upload_id)
         if sess_ref:
@@ -6072,7 +6097,7 @@ async def callname_column_values(upload_id: str, request: Request):
 
 @app.post("/callname/upload/{upload_id}/preview")
 async def callname_preview(upload_id: str, request: Request):
-    """필터 미리보기 — S3에서 재로드 후 계산"""
+    """필터 미리보기 — 분석 시 캐시된 tongsi 빈 행 데이터로 즉시 계산 (전행 스캔 불필요)"""
     await _verify_auth(request)
     if upload_id not in _callname_sessions:
         raise HTTPException(status_code=404, detail="세션 없음")
@@ -6082,83 +6107,50 @@ async def callname_preview(upload_id: str, request: Request):
 
     body = await request.json()
     filters = body.get("filters", {})
-    tongsi_col = sess.get("tongsi_col")
     callname_col = sess.get("callname_col")
 
-    # 필터 없으면 사전 계산된 filtered_rows 즉시 반환
+    # 필터 없으면 사전 계산된 값 즉시 반환
     if not filters and sess.get("analysis_status") == "complete":
         return {
             "filtered_rows": sess.get("filtered_rows", 0),
             "target_callnames": sess.get("target_callnames", 0),
         }
 
-    def _calc():
+    # 캐시된 tongsi 빈 행 데이터로 즉시 계산
+    cached_rows = sess.get("filter_cache_rows")
+    if cached_rows is not None:
         columns = sess.get("columns", [])
+        callname_idx = columns.index(callname_col) if callname_col and callname_col in columns else -1
+
+        # 필터 인덱스 빌드
         filter_col_indices = {}
         if filters:
             for c, vals in filters.items():
                 if c in columns and vals:
                     filter_col_indices[columns.index(c)] = set(str(v) for v in vals)
-        tongsi_idx = columns.index(tongsi_col) if tongsi_col and tongsi_col in columns else -1
-        callname_idx = columns.index(callname_col) if callname_col and callname_col in columns else -1
 
-        # 캐시 파일 사용 (백그라운드 분석에서 빌드됨)
-        cached_xlsx = sess.get("cached_xlsx_path")
-        cached_ss = sess.get("cached_ss_path")
-        cached_ss_off = sess.get("cached_ss_offsets")
+        filtered_rows = 0
+        callname_set = set()
+        for row_vals in cached_rows:
+            # 필터 조건 체크
+            passed = True
+            for ci, allowed in filter_col_indices.items():
+                if ci < len(row_vals) and row_vals[ci] not in allowed:
+                    passed = False
+                    break
+            if not passed:
+                continue
+            filtered_rows += 1
+            if 0 <= callname_idx < len(row_vals) and row_vals[callname_idx].strip():
+                callname_set.add(row_vals[callname_idx].strip())
 
-        if cached_xlsx and os.path.exists(cached_xlsx):
-            tmp_path = cached_xlsx
-            need_cleanup = False
-        else:
-            tmp_path = _s3_to_tempfile(sess["s3_temp_key"], suffix=f".{sess['ext']}")
-            need_cleanup = True
-            cached_ss = None
-            cached_ss_off = None
+        return {"filtered_rows": filtered_rows, "target_callnames": len(callname_set)}
 
-        try:
-            filtered_rows = 0
-            callname_set = set()
-
-            def _check_row(vals):
-                nonlocal filtered_rows
-                for ci, allowed in filter_col_indices.items():
-                    if ci < len(vals) and vals[ci] not in allowed:
-                        return
-                if tongsi_idx >= 0:
-                    tv = vals[tongsi_idx] if tongsi_idx < len(vals) else ""
-                    if tv.strip():
-                        return
-                filtered_rows += 1
-                if callname_idx >= 0 and callname_idx < len(vals) and vals[callname_idx]:
-                    callname_set.add(vals[callname_idx])
-
-            if sess["ext"] == "xlsx":
-                for rn, vals in _iter_xlsx_rows_light(
-                        tmp_path, ss_cache_path=cached_ss, ss_offsets_bytes=cached_ss_off):
-                    if rn == 0:
-                        continue
-                    _check_row(vals)
-                _release_memory()
-            else:
-                xls_book = xlrd.open_workbook(tmp_path)
-                ws = xls_book.sheet_by_index(0)
-                for r in range(1, ws.nrows):
-                    vals = [str(ws.cell_value(r, c)) for c in range(ws.ncols)]
-                    _check_row(vals)
-                xls_book.release_resources()
-                _release_memory()
-
-            return {"filtered_rows": filtered_rows, "target_callnames": len(callname_set)}
-        finally:
-            if need_cleanup:
-                try:
-                    os.remove(tmp_path)
-                except OSError:
-                    pass
-
-    result = await asyncio.to_thread(_calc)
-    return result
+    # 분석 미완료 시 기본값 반환
+    return {
+        "filtered_rows": sess.get("filtered_rows", 0),
+        "target_callnames": sess.get("target_callnames", 0),
+    }
 
 
 @app.post("/callname/process")
@@ -6222,7 +6214,7 @@ async def callname_process(request: Request):
                         return
                 if tongsi_idx >= 0:
                     tv = vals[tongsi_idx] if tongsi_idx < len(vals) else ""
-                    if tv.strip():
+                    if not _is_tongsi_empty(tv):
                         return
                 original_row_indices.append(row_idx)
                 za = vals[zpwina_idx] if 0 <= zpwina_idx < len(vals) else ""
@@ -6260,21 +6252,18 @@ async def callname_process(request: Request):
                     _process_row(r - 1, vals)
                 xls_book.release_resources()
         finally:
-            # process 완료 → 캐시 파일 정리 (더 이상 불필요)
-            for p in [sess.get("cached_ss_path"), sess.get("cached_xlsx_path") if need_cleanup else None]:
-                if p:
-                    try:
-                        os.remove(p)
-                    except Exception:
-                        pass
-            if need_cleanup and tmp_path:
+            # SS 캐시만 정리 (xlsx는 stream에서 재사용)
+            ss_p = sess.get("cached_ss_path")
+            if ss_p:
                 try:
-                    os.remove(tmp_path)
-                except OSError:
+                    os.remove(ss_p)
+                except Exception:
                     pass
-        return list(zpwina_set), list(zpwino_set), original_row_indices, row_zpwina_list, row_zpwino_list
+            sess.pop("cached_ss_path", None)
+            sess.pop("cached_ss_offsets", None)
+        return list(zpwina_set), list(zpwino_set), original_row_indices, row_zpwina_list, row_zpwino_list, tmp_path
 
-    zpwina_values, zpwino_values, original_row_indices, row_zpwina_list, row_zpwino_list = await asyncio.to_thread(_prepare)
+    zpwina_values, zpwino_values, original_row_indices, row_zpwina_list, row_zpwino_list, cached_xlsx = await asyncio.to_thread(_prepare)
     _release_memory()
     _log_mem("callname_process 완료")
 
@@ -6283,8 +6272,6 @@ async def callname_process(request: Request):
         raise HTTPException(status_code=400, detail="매칭 대상 값이 없습니다.")
 
     process_id = str(uuid.uuid4())
-    # 캐시 파일 정리 (process 세션에는 불필요)
-    _cleanup_callname_session_files(sess)
     _callname_sessions[process_id] = {
         "s3_temp_key": sess["s3_temp_key"],
         "ext": sess["ext"],
@@ -6297,10 +6284,13 @@ async def callname_process(request: Request):
         "zpwino_values": zpwino_values,
         "filename": sess["filename"],
         "columns": sess.get("columns", []),
+        "cached_xlsx_path": cached_xlsx,  # stream에서 재사용 (S3 재다운로드 방지)
         "status": "ready",
         "created_at_ts": _time_mod.time(),
     }
+    # upload 세션 삭제 (column_stats, cached_ss_offsets 등 대용량 데이터 해제)
     del _callname_sessions[upload_id]
+    _release_memory()
 
     return {
         "process_id": process_id,
@@ -6366,9 +6356,15 @@ async def callname_stream(process_id: str, request: Request):
             # ── 세션 데이터로 row_data_map 직접 생성 (Excel 재로드 불필요) ──
             row_zpwina_list = sess.get("row_zpwina_list", [])
             row_zpwino_list = sess.get("row_zpwino_list", [])
-            _log_mem("2단계: S3 temp 다운로드 시작")
-            tmp_excel_path = _s3_to_tempfile(s3_temp_key, suffix=f".{ext}")
-            _log_mem("2단계: S3 temp 다운로드 완료")
+            # 캐시된 xlsx가 있으면 재사용 (S3 재다운로드 방지)
+            cached_xlsx = sess.get("cached_xlsx_path")
+            if cached_xlsx and os.path.exists(cached_xlsx):
+                tmp_excel_path = cached_xlsx
+                _log_mem("2단계: 캐시된 xlsx 재사용")
+            else:
+                _log_mem("2단계: S3 temp 다운로드 시작")
+                tmp_excel_path = _s3_to_tempfile(s3_temp_key, suffix=f".{ext}")
+                _log_mem("2단계: S3 temp 다운로드 완료")
 
             matched_count = 0
             zpwina_matched = 0
@@ -6546,7 +6542,8 @@ async def callname_stream(process_id: str, request: Request):
 
                 # ── 세션 무거운 데이터 즉시 해제 (다운로드에 필요한 것만 유지) ──
                 for _drop_key in ("original_row_indices", "row_zpwina_list", "row_zpwino_list",
-                                  "zpwina_values", "zpwino_values", "columns"):
+                                  "zpwina_values", "zpwino_values", "columns",
+                                  "cached_xlsx_path", "column_stats", "cached_ss_offsets"):
                     sess.pop(_drop_key, None)
 
                 yield f"data: {json.dumps({'type': 'complete', 'progress': 100, 'message': f'완료! (매칭: {matched_count:,}/{total_rows:,}건)', 'matched': matched_count, 'total': total_rows, 'zpwina_matched': zpwina_matched, 'zpwino_matched': zpwino_matched, 'cross_matched': cross_matched})}\n\n"
