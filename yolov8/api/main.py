@@ -4850,7 +4850,8 @@ def _parse_xlsx_header_fast(xlsx_path: str) -> dict:
                     elem.clear()
                     if rn >= 2:
                         break  # 첫 행 이후 즉시 중단
-                else:
+                elif tag not in ("v", "t"):
+                    # v, t는 부모 c에서 참조하므로 clear하지 않음
                     elem.clear()
 
         # ── Pass 2: sharedStrings — 필요 인덱스만 파싱 (조기 종료) ──
@@ -4893,11 +4894,27 @@ def _parse_xlsx_header_fast(xlsx_path: str) -> dict:
 
 
 def _detect_column(df_columns, candidates):
-    """DataFrame 컬럼 목록에서 후보 이름과 일치하는 첫 번째 컬럼명 반환."""
+    """DataFrame 컬럼 목록에서 후보 이름과 일치하는 첫 번째 컬럼명 반환.
+    3단계 매칭: 정확 일치 → 공백제거+대소문자무시 → 부분 문자열 포함."""
     col_list = list(df_columns)
+    # Pass 1: 정확 일치
     for name in candidates:
         if name in col_list:
             return name
+    # Pass 2: 양쪽 공백 제거 + 대소문자 무시
+    stripped_map = {c.strip().lower(): c for c in col_list if c.strip()}
+    for name in candidates:
+        key = name.strip().lower()
+        if key in stripped_map:
+            return stripped_map[key]
+    # Pass 3: 부분 문자열 포함 (후보가 컬럼명에 포함)
+    for name in candidates:
+        nl = name.strip().lower()
+        if not nl:
+            continue
+        for c in col_list:
+            if nl in c.strip().lower():
+                return c
     return None
 
 
@@ -5176,7 +5193,8 @@ def _analyze_callname_bg(upload_id: str):
                                             col_counters[i][v] += 1
                                 cells = []
                                 elem.clear()
-                            else:
+                            elif tag not in ("v", "t"):
+                                # v, t는 부모 c에서 참조하므로 clear하지 않음
                                 elem.clear()
 
                 # 캐시 경로 저장 (preview/process 재사용)
@@ -5224,6 +5242,13 @@ def _analyze_callname_bg(upload_id: str):
                 top = col_counters[i].most_common(100)
                 if top:
                     column_stats[col] = [{"value": v, "count": c} for v, c in top]
+
+        # 컬럼 감지 디버깅 로그
+        _cn = callname_col if 'callname_col' in dir() else None
+        _ts = tongsi_col if 'tongsi_col' in dir() else None
+        if not _cn or not _ts:
+            logger.warning(f"호출명칭 컬럼 감지 결과 — callname={_cn}, tongsi={_ts}, "
+                           f"파일 컬럼(앞 20개): {columns[:20]}")
 
         # 세션 갱신 (컬럼 감지 결과도 덮어쓰기 → _parse_xlsx_header_fast 실패 보완)
         sess["columns"] = columns

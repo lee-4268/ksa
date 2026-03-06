@@ -9,6 +9,9 @@ import '../services/callname_service.dart';
 import 'callname_download_stub.dart'
     if (dart.library.html) 'callname_download_web.dart' as download_helper;
 
+/// 분석 상태
+enum _AnalysisState { pending, analyzing, complete, error }
+
 /// 호출명칭 매칭 화면 — 3단계 (업로드 → 필터 → 매칭/다운로드)
 class CallnameScreen extends StatefulWidget {
   const CallnameScreen({super.key});
@@ -26,7 +29,7 @@ class _CallnameScreenState extends State<CallnameScreen> {
   // Step 0: 업로드 결과
   bool _uploading = false;
   String? _uploadError;
-  Map<String, dynamic>? _uploadResult; // upload_id, columns, etc.
+  Map<String, dynamic>? _uploadResult;
   String? _uploadId;
 
   // Step 1: 필터
@@ -35,11 +38,11 @@ class _CallnameScreenState extends State<CallnameScreen> {
   int? _filteredRows;
   int? _targetCallnames;
   bool _loadingPreview = false;
-  bool _analysisComplete = false; // 백그라운드 분석 완료 여부
-  final Set<String> _expandedFilters = {}; // 펼쳐진 필터 그룹
-  final Map<String, String> _filterSearchQueries = {}; // 필터 내 검색어
-  String? _selectedFilterCol; // 드롭다운 선택된 컬럼
-  bool _addingFilter = false; // 필터 추가 로딩 중
+  _AnalysisState _analysisState = _AnalysisState.pending;
+  final Set<String> _expandedFilters = {};
+  final Map<String, String> _filterSearchQueries = {};
+  String? _selectedFilterCol;
+  bool _addingFilter = false;
 
   // Step 2: 매칭
   bool _processing = false;
@@ -91,10 +94,9 @@ class _CallnameScreenState extends State<CallnameScreen> {
         _uploadResult = data;
         _uploadId = data['upload_id'] as String?;
         _filteredRows = data['filtered_rows'] as int?;
-        _analysisComplete = false;
+        _analysisState = _AnalysisState.pending;
         _step = 1;
       });
-      // 백그라운드 분석 폴링 시작
       _pollAnalysis();
     } catch (e) {
       setState(() {
@@ -107,19 +109,27 @@ class _CallnameScreenState extends State<CallnameScreen> {
   // ── 백그라운드 분석 폴링 ──
 
   Future<void> _pollAnalysis() async {
-    while (mounted && _uploadId != null && _step == 1 && !_analysisComplete) {
+    if (mounted) {
+      setState(() => _analysisState = _AnalysisState.analyzing);
+    }
+    while (mounted &&
+        _uploadId != null &&
+        _step == 1 &&
+        _analysisState == _AnalysisState.analyzing) {
       try {
         final result = await _service.getAnalysisStatus(_uploadId!);
         final status = result['status'] as String?;
         if (status == 'complete') {
           setState(() {
+            _analysisState = _AnalysisState.complete;
             _filteredRows = result['filtered_rows'] as int?;
             _targetCallnames = result['target_callnames'] as int?;
-            _analysisComplete = true;
-            // 분석에서 감지된 컬럼으로 갱신 (upload-complete 누락 보완)
-            final cols = result['columns'] as List?;
-            if (cols != null && cols.isNotEmpty && _uploadResult != null) {
-              _uploadResult!['columns'] = cols;
+            // 분석에서 감지된 컬럼으로 갱신
+            if (_uploadResult != null) {
+              final cols = result['columns'] as List?;
+              if (cols != null && cols.isNotEmpty) {
+                _uploadResult!['columns'] = cols;
+              }
               _uploadResult!['total_rows'] = result['total_rows'];
               _uploadResult!['detected_callname_col'] =
                   result['detected_callname_col'];
@@ -133,12 +143,10 @@ class _CallnameScreenState extends State<CallnameScreen> {
           });
           break;
         } else if (status == 'error') {
-          setState(() => _analysisComplete = true);
+          setState(() => _analysisState = _AnalysisState.error);
           break;
         }
-      } catch (_) {
-        // 폴링 오류 무시
-      }
+      } catch (_) {}
       await Future.delayed(const Duration(seconds: 2));
     }
   }
@@ -186,7 +194,6 @@ class _CallnameScreenState extends State<CallnameScreen> {
     });
 
     try {
-      // 매칭 시작
       final processResult =
           await _service.startProcess(_uploadId!, _filters);
       final processId = processResult['process_id'] as String;
@@ -196,7 +203,6 @@ class _CallnameScreenState extends State<CallnameScreen> {
         _progressMessage = '매칭 진행 중...';
       });
 
-      // SSE 스트림 구독
       await for (final event in _service.processStream(processId)) {
         final type = event['type'] as String?;
         if (type == 'progress') {
@@ -257,7 +263,7 @@ class _CallnameScreenState extends State<CallnameScreen> {
       _columnValues.clear();
       _filteredRows = null;
       _targetCallnames = null;
-      _analysisComplete = false;
+      _analysisState = _AnalysisState.pending;
       _expandedFilters.clear();
       _filterSearchQueries.clear();
       _selectedFilterCol = null;
@@ -267,6 +273,27 @@ class _CallnameScreenState extends State<CallnameScreen> {
       _processError = null;
       _progress = 0;
     });
+  }
+
+  /// 필터 추가
+  Future<void> _addFilter(String column) async {
+    setState(() => _addingFilter = true);
+    try {
+      await _loadColumnValues(column);
+      if (!mounted) return;
+
+      final values = _columnValues[column] ?? [];
+      setState(() {
+        _filters[column] =
+            values.map((v) => v['value'] as String? ?? '').toList();
+        _expandedFilters.add(column);
+        _selectedFilterCol = null;
+        _addingFilter = false;
+      });
+      _updatePreview();
+    } catch (e) {
+      if (mounted) setState(() => _addingFilter = false);
+    }
   }
 
   // ── Build ──
@@ -326,7 +353,8 @@ class _CallnameScreenState extends State<CallnameScreen> {
                       ? const Icon(Icons.check, color: Colors.white, size: 16)
                       : Text('${i + 1}',
                           style: TextStyle(
-                            color: isActive ? Colors.white : Colors.grey.shade600,
+                            color:
+                                isActive ? Colors.white : Colors.grey.shade600,
                             fontWeight: FontWeight.bold,
                             fontSize: 13,
                           )),
@@ -375,7 +403,7 @@ class _CallnameScreenState extends State<CallnameScreen> {
                 children: [
                   CircularProgressIndicator(),
                   SizedBox(height: 12),
-                  Text('파일 분석 중...'),
+                  Text('파일 업로드 중...'),
                 ],
               )
             else
@@ -407,6 +435,11 @@ class _CallnameScreenState extends State<CallnameScreen> {
     final data = _uploadResult;
     if (data == null) return const SizedBox.shrink();
 
+    final isAnalyzing = _analysisState == _AnalysisState.pending ||
+        _analysisState == _AnalysisState.analyzing;
+    final isComplete = _analysisState == _AnalysisState.complete;
+
+    // 분석 완료 후에만 신뢰할 수 있는 값
     final totalRows = data['total_rows'] as int? ?? 0;
     final columns = (data['columns'] as List?)?.cast<String>() ?? [];
     final detectedCallname = data['detected_callname_col'] as String?;
@@ -414,7 +447,7 @@ class _CallnameScreenState extends State<CallnameScreen> {
     final detectedZpwina = data['detected_zpwina_col'] as String?;
     final detectedZpwino = data['detected_zpwino_col'] as String?;
 
-    // 필터 가능한 컬럼: 감지된 키 컬럼과 통시 제외
+    // 필터 가능한 컬럼
     final excludeCols = {
       detectedCallname,
       detectedTongsi,
@@ -423,8 +456,6 @@ class _CallnameScreenState extends State<CallnameScreen> {
     }.whereType<String>().toSet();
     final filterableCols =
         columns.where((c) => !excludeCols.contains(c)).toList();
-
-    // 아직 추가하지 않은 컬럼만 드롭다운에 표시
     final availableCols =
         filterableCols.where((c) => !_filters.containsKey(c)).toList();
 
@@ -452,39 +483,87 @@ class _CallnameScreenState extends State<CallnameScreen> {
                   ],
                 ),
                 const SizedBox(height: 12),
-                _fileInfoRow(
-                    '전체 행 수', '${_formatNumber(totalRows)}행', null),
-                _fileInfoRow(
+
+                // 분석 중: 로딩 플레이스홀더
+                if (isAnalyzing) ...[
+                  _loadingInfoRow('전체 행 수'),
+                  _loadingInfoRow('호출명칭 컬럼'),
+                  _loadingInfoRow('통시 컬럼'),
+                  const SizedBox(height: 8),
+                  _analyzingBanner(),
+                ],
+
+                // 분석 완료: 실제 값 표시
+                if (isComplete) ...[
+                  _fileInfoRow(
+                      '전체 행 수', '${_formatNumber(totalRows)}행', null),
+                  _fileInfoRow(
                     '호출명칭 컬럼',
                     detectedCallname ?? '감지 안됨',
-                    detectedCallname != null ? '자동감지' : null),
-                _fileInfoRow(
+                    detectedCallname != null ? '자동감지' : null,
+                  ),
+                  _fileInfoRow(
                     '통시 컬럼',
                     detectedTongsi ?? '감지 안됨',
-                    detectedTongsi != null ? '자동감지' : null),
-                const SizedBox(height: 8),
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: Colors.blue.shade50,
-                    borderRadius: BorderRadius.circular(6),
+                    detectedTongsi != null ? '자동감지' : null,
                   ),
-                  child: Row(
-                    children: [
-                      Icon(Icons.info_outline,
-                          size: 16, color: Colors.blue.shade600),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          '통시 값이 비어있는 행만 매칭 대상으로 처리됩니다.',
-                          style: TextStyle(
-                              fontSize: 12, color: Colors.blue.shade700),
-                        ),
+                  // 감지 실패 경고
+                  if (detectedCallname == null || detectedTongsi == null) ...[
+                    const SizedBox(height: 8),
+                    _detectionWarning(detectedCallname, detectedTongsi),
+                  ] else ...[
+                    const SizedBox(height: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: Colors.blue.shade50,
+                        borderRadius: BorderRadius.circular(6),
                       ),
-                    ],
+                      child: Row(
+                        children: [
+                          Icon(Icons.info_outline,
+                              size: 16, color: Colors.blue.shade600),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              '통시 값이 비어있는 행만 매칭 대상으로 처리됩니다.',
+                              style: TextStyle(
+                                  fontSize: 12, color: Colors.blue.shade700),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ],
+
+                // 분석 에러
+                if (_analysisState == _AnalysisState.error) ...[
+                  const SizedBox(height: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: Colors.red.shade50,
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(Icons.error_outline,
+                            size: 16, color: Colors.red.shade600),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            '파일 분석 중 오류가 발생했습니다. 다시 업로드해주세요.',
+                            style: TextStyle(
+                                fontSize: 12, color: Colors.red.shade700),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
-                ),
+                ],
               ],
             ),
           ),
@@ -503,7 +582,8 @@ class _CallnameScreenState extends State<CallnameScreen> {
                     style:
                         TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
                 const SizedBox(height: 4),
-                if (!_analysisComplete)
+
+                if (isAnalyzing)
                   Padding(
                     padding: const EdgeInsets.only(top: 4),
                     child: Row(
@@ -514,27 +594,34 @@ class _CallnameScreenState extends State<CallnameScreen> {
                             child:
                                 CircularProgressIndicator(strokeWidth: 2)),
                         const SizedBox(width: 8),
-                        Text('파일 분석 중... 잠시만 기다려주세요.',
+                        Text('파일 분석 완료 후 필터를 설정할 수 있습니다.',
                             style: TextStyle(
                                 color: Colors.grey.shade600, fontSize: 13)),
                       ],
                     ),
                   )
-                else
+                else if (isComplete && filterableCols.isNotEmpty)
                   Text('특정 조건으로 매칭 범위를 좁힐 수 있습니다.',
                       style: TextStyle(
+                          color: Colors.grey.shade600, fontSize: 13))
+                else if (isComplete && filterableCols.isEmpty)
+                  Text('필터 가능한 컬럼이 없습니다.',
+                      style: TextStyle(
                           color: Colors.grey.shade600, fontSize: 13)),
+
                 const SizedBox(height: 12),
 
-                // 컬럼 드롭다운 + 추가 버튼
-                if (_analysisComplete && availableCols.isNotEmpty)
+                // 드롭다운 + 추가 버튼
+                if (isComplete && availableCols.isNotEmpty)
                   Row(
                     children: [
                       Expanded(
                         child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 12),
+                          padding:
+                              const EdgeInsets.symmetric(horizontal: 12),
                           decoration: BoxDecoration(
-                            border: Border.all(color: Colors.grey.shade300),
+                            border:
+                                Border.all(color: Colors.grey.shade300),
                             borderRadius: BorderRadius.circular(8),
                           ),
                           child: DropdownButtonHideUnderline(
@@ -547,15 +634,14 @@ class _CallnameScreenState extends State<CallnameScreen> {
                                 return DropdownMenuItem(
                                   value: col,
                                   child: Text(col,
-                                      style: const TextStyle(fontSize: 13)),
+                                      style:
+                                          const TextStyle(fontSize: 13)),
                                 );
                               }).toList(),
                               onChanged: _addingFilter
                                   ? null
-                                  : (col) {
-                                      setState(
-                                          () => _selectedFilterCol = col);
-                                    },
+                                  : (col) => setState(
+                                      () => _selectedFilterCol = col),
                             ),
                           ),
                         ),
@@ -592,7 +678,7 @@ class _CallnameScreenState extends State<CallnameScreen> {
                     ],
                   ),
 
-                // 인라인 필터 그룹들
+                // 인라인 필터 그룹
                 ..._filters.keys.map((col) => _buildFilterGroup(col)),
               ],
             ),
@@ -605,60 +691,77 @@ class _CallnameScreenState extends State<CallnameScreen> {
         Card(
           child: Padding(
             padding: const EdgeInsets.all(20),
-            child: _loadingPreview
-                ? const Center(
-                    child: Padding(
-                      padding: EdgeInsets.all(16),
-                      child: CircularProgressIndicator(),
-                    ),
-                  )
-                : Row(
+            child: isAnalyzing
+                ? Row(
                     children: [
+                      const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2)),
+                      const SizedBox(width: 12),
                       Expanded(
-                        child: Column(
-                          children: [
-                            Text(
-                              _formatNumber(_targetCallnames ?? 0),
-                              style: TextStyle(
-                                fontSize: 28,
-                                fontWeight: FontWeight.bold,
-                                color: _primary,
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            Text('고유 호출명칭',
-                                style: TextStyle(
-                                    fontSize: 13,
-                                    color: Colors.grey.shade600)),
-                          ],
-                        ),
-                      ),
-                      Container(
-                        width: 1,
-                        height: 48,
-                        color: Colors.grey.shade300,
-                      ),
-                      Expanded(
-                        child: Column(
-                          children: [
-                            Text(
-                              _formatNumber(_filteredRows ?? 0),
-                              style: TextStyle(
-                                fontSize: 28,
-                                fontWeight: FontWeight.bold,
-                                color: _primary,
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            Text('매칭 대상 행',
-                                style: TextStyle(
-                                    fontSize: 13,
-                                    color: Colors.grey.shade600)),
-                          ],
+                        child: Text(
+                          '분석 완료 후 매칭 대상 수가 표시됩니다.',
+                          style: TextStyle(
+                              fontSize: 13, color: Colors.grey.shade600),
                         ),
                       ),
                     ],
-                  ),
+                  )
+                : _loadingPreview
+                    ? const Center(
+                        child: Padding(
+                          padding: EdgeInsets.all(16),
+                          child: CircularProgressIndicator(),
+                        ),
+                      )
+                    : Row(
+                        children: [
+                          Expanded(
+                            child: Column(
+                              children: [
+                                Text(
+                                  _formatNumber(_targetCallnames ?? 0),
+                                  style: TextStyle(
+                                    fontSize: 28,
+                                    fontWeight: FontWeight.bold,
+                                    color: _primary,
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                Text('고유 호출명칭',
+                                    style: TextStyle(
+                                        fontSize: 13,
+                                        color: Colors.grey.shade600)),
+                              ],
+                            ),
+                          ),
+                          Container(
+                            width: 1,
+                            height: 48,
+                            color: Colors.grey.shade300,
+                          ),
+                          Expanded(
+                            child: Column(
+                              children: [
+                                Text(
+                                  _formatNumber(_filteredRows ?? 0),
+                                  style: TextStyle(
+                                    fontSize: 28,
+                                    fontWeight: FontWeight.bold,
+                                    color: _primary,
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                Text('매칭 대상 행',
+                                    style: TextStyle(
+                                        fontSize: 13,
+                                        color: Colors.grey.shade600)),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
           ),
         ),
 
@@ -668,7 +771,11 @@ class _CallnameScreenState extends State<CallnameScreen> {
         SizedBox(
           width: double.infinity,
           child: ElevatedButton.icon(
-            onPressed: (_filteredRows ?? 0) > 0 ? _startMatching : null,
+            onPressed: isComplete &&
+                    (_filteredRows ?? 0) > 0 &&
+                    detectedCallname != null
+                ? _startMatching
+                : null,
             icon: const Icon(Icons.play_arrow),
             label: const Text('매칭 시작'),
             style: ElevatedButton.styleFrom(
@@ -697,38 +804,14 @@ class _CallnameScreenState extends State<CallnameScreen> {
     );
   }
 
-  /// 필터 추가 (드롭다운 선택 후 + 추가 버튼 클릭)
-  Future<void> _addFilter(String column) async {
-    setState(() => _addingFilter = true);
-    try {
-      await _loadColumnValues(column);
-      if (!mounted) return;
+  // ── 필터 그룹 위젯 ──
 
-      final values = _columnValues[column] ?? [];
-      // 기본: 모두 선택
-      setState(() {
-        _filters[column] =
-            values.map((v) => v['value'] as String? ?? '').toList();
-        _expandedFilters.add(column);
-        _selectedFilterCol = null;
-        _addingFilter = false;
-      });
-      _updatePreview();
-    } catch (e) {
-      if (mounted) {
-        setState(() => _addingFilter = false);
-      }
-    }
-  }
-
-  /// 필터 그룹 위젯 (인라인)
   Widget _buildFilterGroup(String column) {
     final values = _columnValues[column] ?? [];
     final selected = _filters[column] ?? [];
     final isExpanded = _expandedFilters.contains(column);
     final searchQuery = _filterSearchQueries[column] ?? '';
 
-    // 검색 필터링
     final filteredValues = searchQuery.isEmpty
         ? values
         : values
@@ -740,14 +823,12 @@ class _CallnameScreenState extends State<CallnameScreen> {
     final selectedCount = selected.length;
     final totalCount = values.length;
 
-    // 보이는 항목 기준으로 모두 선택/부분 선택 판별
-    final visibleValues = filteredValues
-        .map((v) => v['value'] as String? ?? '')
-        .toList();
+    final visibleValues =
+        filteredValues.map((v) => v['value'] as String? ?? '').toList();
     final visibleCheckedCount =
         visibleValues.where((v) => selected.contains(v)).length;
-    final allVisibleSelected =
-        visibleValues.isNotEmpty && visibleCheckedCount == visibleValues.length;
+    final allVisibleSelected = visibleValues.isNotEmpty &&
+        visibleCheckedCount == visibleValues.length;
     final someVisibleSelected =
         visibleCheckedCount > 0 && visibleCheckedCount < visibleValues.length;
 
@@ -761,17 +842,16 @@ class _CallnameScreenState extends State<CallnameScreen> {
         children: [
           // 헤더
           InkWell(
-            onTap: () {
-              setState(() {
-                if (isExpanded) {
-                  _expandedFilters.remove(column);
-                } else {
-                  _expandedFilters.add(column);
-                }
-              });
-            },
+            onTap: () => setState(() {
+              if (isExpanded) {
+                _expandedFilters.remove(column);
+              } else {
+                _expandedFilters.add(column);
+              }
+            }),
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
               child: Row(
                 children: [
                   Icon(
@@ -788,8 +868,8 @@ class _CallnameScreenState extends State<CallnameScreen> {
                             fontWeight: FontWeight.w600, fontSize: 13)),
                   ),
                   Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 8, vertical: 2),
                     decoration: BoxDecoration(
                       color: _primary.withValues(alpha: 0.1),
                       borderRadius: BorderRadius.circular(10),
@@ -817,18 +897,15 @@ class _CallnameScreenState extends State<CallnameScreen> {
             ),
           ),
 
-          // 펼쳐진 내용
           if (isExpanded) ...[
             const Divider(height: 1),
-            // 검색 입력
             Padding(
               padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
               child: TextField(
                 decoration: InputDecoration(
                   hintText: '검색...',
                   hintStyle: const TextStyle(fontSize: 13),
-                  prefixIcon:
-                      const Icon(Icons.search, size: 18),
+                  prefixIcon: const Icon(Icons.search, size: 18),
                   isDense: true,
                   contentPadding: const EdgeInsets.symmetric(
                       horizontal: 8, vertical: 8),
@@ -838,12 +915,10 @@ class _CallnameScreenState extends State<CallnameScreen> {
                   ),
                 ),
                 style: const TextStyle(fontSize: 13),
-                onChanged: (q) {
-                  setState(() => _filterSearchQueries[column] = q);
-                },
+                onChanged: (q) =>
+                    setState(() => _filterSearchQueries[column] = q),
               ),
             ),
-            // 모두 선택 체크박스 (tristate: 일부 선택 시 null)
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 4),
               child: CheckboxListTile(
@@ -862,7 +937,6 @@ class _CallnameScreenState extends State<CallnameScreen> {
                   setState(() {
                     final newSelected = Set<String>.from(selected);
                     if (v == true || v == null) {
-                      // null(indeterminate) 클릭 시에도 모두 선택
                       newSelected.addAll(visibleValues);
                     } else {
                       newSelected.removeAll(visibleValues);
@@ -874,7 +948,6 @@ class _CallnameScreenState extends State<CallnameScreen> {
               ),
             ),
             const Divider(height: 1),
-            // 값 목록
             ConstrainedBox(
               constraints: const BoxConstraints(maxHeight: 240),
               child: values.isEmpty
@@ -930,38 +1003,6 @@ class _CallnameScreenState extends State<CallnameScreen> {
     );
   }
 
-  Widget _fileInfoRow(String label, String value, String? badge) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 6),
-      child: Row(
-        children: [
-          SizedBox(
-            width: 100,
-            child: Text(label,
-                style: TextStyle(
-                    fontSize: 13, color: Colors.grey.shade600)),
-          ),
-          Text(value, style: const TextStyle(fontSize: 13)),
-          if (badge != null) ...[
-            const SizedBox(width: 8),
-            Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-              decoration: BoxDecoration(
-                color: Colors.green.shade50,
-                borderRadius: BorderRadius.circular(4),
-                border: Border.all(color: Colors.green.shade200),
-              ),
-              child: Text(badge,
-                  style: TextStyle(
-                      fontSize: 10, color: Colors.green.shade700)),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-
   // ── Step 2: 매칭 진행 + 결과 UI ──
 
   Widget _buildProcessStep() {
@@ -997,13 +1038,13 @@ class _CallnameScreenState extends State<CallnameScreen> {
               ],
             ],
             if (_processError != null) ...[
-              const Icon(Icons.error_outline,
-                  color: Colors.red, size: 48),
+              const Icon(Icons.error_outline, color: Colors.red, size: 48),
               const SizedBox(height: 12),
               Text(_processError!,
                   style: const TextStyle(color: Colors.red)),
               const SizedBox(height: 16),
-              OutlinedButton(onPressed: _reset, child: const Text('다시 시도')),
+              OutlinedButton(
+                  onPressed: _reset, child: const Text('다시 시도')),
             ],
             if (_matchResult != null) ...[
               const Icon(Icons.check_circle,
@@ -1015,8 +1056,7 @@ class _CallnameScreenState extends State<CallnameScreen> {
                       fontWeight: FontWeight.bold,
                       color: Colors.green.shade700)),
               const SizedBox(height: 12),
-              _resultRow(
-                  '총 매칭',
+              _resultRow('총 매칭',
                   '${_formatNumber(_matchResult!['matched'] ?? 0)} / ${_formatNumber(_matchResult!['total'] ?? 0)}행'),
               _resultRow('zpwina 매칭',
                   '${_formatNumber(_matchResult!['zpwina_matched'] ?? 0)}행'),
@@ -1037,7 +1077,8 @@ class _CallnameScreenState extends State<CallnameScreen> {
                 ),
               ),
               const SizedBox(height: 12),
-              TextButton(onPressed: _reset, child: const Text('새 파일 매칭')),
+              TextButton(
+                  onPressed: _reset, child: const Text('새 파일 매칭')),
             ],
           ],
         ),
@@ -1047,6 +1088,119 @@ class _CallnameScreenState extends State<CallnameScreen> {
 
   // ── Helpers ──
 
+  Widget _fileInfoRow(String label, String value, String? badge) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 100,
+            child: Text(label,
+                style: TextStyle(
+                    fontSize: 13, color: Colors.grey.shade600)),
+          ),
+          Text(value, style: const TextStyle(fontSize: 13)),
+          if (badge != null) ...[
+            const SizedBox(width: 8),
+            Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: Colors.green.shade50,
+                borderRadius: BorderRadius.circular(4),
+                border: Border.all(color: Colors.green.shade200),
+              ),
+              child: Text(badge,
+                  style: TextStyle(
+                      fontSize: 10, color: Colors.green.shade700)),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _loadingInfoRow(String label) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 100,
+            child: Text(label,
+                style: TextStyle(
+                    fontSize: 13, color: Colors.grey.shade600)),
+          ),
+          Container(
+            width: 80,
+            height: 14,
+            decoration: BoxDecoration(
+              color: Colors.grey.shade200,
+              borderRadius: BorderRadius.circular(4),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _analyzingBanner() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: Colors.orange.shade50,
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: Colors.orange.shade200),
+      ),
+      child: Row(
+        children: [
+          SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(
+                  strokeWidth: 2, color: Colors.orange.shade600)),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              '대용량 파일 분석 중입니다. 잠시만 기다려주세요...',
+              style:
+                  TextStyle(fontSize: 12, color: Colors.orange.shade800),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _detectionWarning(String? callnameCol, String? tongsiCol) {
+    final missing = <String>[];
+    if (callnameCol == null) missing.add('호출명칭');
+    if (tongsiCol == null) missing.add('통시');
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.red.shade50,
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: Colors.red.shade200),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.warning_amber, size: 16, color: Colors.red.shade600),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              '${missing.join(", ")} 컬럼을 자동 감지하지 못했습니다. '
+              '파일의 첫 번째 행에 해당 컬럼명이 있는지 확인해주세요.',
+              style:
+                  TextStyle(fontSize: 12, color: Colors.red.shade700),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _resultRow(String label, String value) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 4),
@@ -1054,10 +1208,11 @@ class _CallnameScreenState extends State<CallnameScreen> {
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           Text('$label: ',
-              style: TextStyle(fontSize: 14, color: Colors.grey.shade700)),
-          Text(value,
               style:
-                  const TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
+                  TextStyle(fontSize: 14, color: Colors.grey.shade700)),
+          Text(value,
+              style: const TextStyle(
+                  fontSize: 14, fontWeight: FontWeight.bold)),
         ],
       ),
     );
