@@ -769,6 +769,7 @@ app = FastAPI(
 _cors_env = os.environ.get("CORS_ALLOWED_ORIGINS", "")
 ALLOWED_ORIGINS = [x.strip() for x in _cors_env.split(",") if x.strip()] or [
     "https://main.d3fueh5qj86kgy.amplifyapp.com",
+    "https://kca.skons.net",
     "http://localhost:3000",
     "http://localhost:8080",
 ]
@@ -5037,7 +5038,7 @@ def _cert_lookup_streaming(query: str) -> dict:
 
 
 def _cleanup_callname_session_files(sess: dict):
-    """세션의 캐시/임시 파일 정리 (디스크 + S3)."""
+    """세션의 캐시/임시 파일 정리 (디스크 + S3) + 대용량 데이터 해제."""
     # S3 임시 파일
     s3_temp = sess.get("s3_temp_key")
     if s3_temp:
@@ -5053,6 +5054,12 @@ def _cleanup_callname_session_files(sess: dict):
                 os.remove(p)
             except Exception:
                 pass
+    # 대용량 데이터 명시적 해제 (GC 지원)
+    for data_key in ("filter_cache_rows", "filter_cache_row_indices",
+                      "column_stats", "cached_ss_offsets",
+                      "original_row_indices", "row_zpwina_list", "row_zpwino_list",
+                      "zpwina_values", "zpwino_values"):
+        sess.pop(data_key, None)
 
 
 def _cleanup_callname_sessions():
@@ -5093,6 +5100,7 @@ def _analyze_callname_bg(upload_id: str):
         callname_set = set()
         col_counters = []
         filter_cache_rows = []  # tongsi 빈 행의 컬럼값 저장 (preview 즉시 계산용)
+        filter_cache_row_indices = []  # tongsi 빈 행의 원본 행번호 (process에서 사용)
         ss_cache_path = None
         ss_offsets_bytes = None
 
@@ -5207,6 +5215,7 @@ def _analyze_callname_bg(upload_id: str):
                                         # preview 즉시 계산용 캐시 (tongsi 빈 행만 저장)
                                         row_vals = cells[:len(columns)] if len(cells) >= len(columns) else cells + [""] * (len(columns) - len(cells))
                                         filter_cache_rows.append(row_vals[:])
+                                        filter_cache_row_indices.append(rn + 1)  # XML row number (1-based)
                                     for i, v in enumerate(cells):
                                         if v and i < len(col_counters) and len(col_counters[i]) < 200:
                                             col_counters[i][v] += 1
@@ -5249,6 +5258,7 @@ def _analyze_callname_bg(upload_id: str):
                         callname_set.add(vals[cn_idx].strip())
                     # preview 즉시 계산용 캐시
                     filter_cache_rows.append(vals[:len(columns)])
+                    filter_cache_row_indices.append(r + 1)  # 원본 행번호 (1-based, 헤더=row1이므로 r+1)
                 for i, v in enumerate(vals):
                     if v and i < len(col_counters) and len(col_counters[i]) < 200:
                         col_counters[i][v] += 1
@@ -5280,18 +5290,27 @@ def _analyze_callname_bg(upload_id: str):
         sess["total_rows"] = total_rows
         sess["column_stats"] = column_stats
         sess["filter_cache_rows"] = filter_cache_rows  # tongsi 빈 행의 컬럼값 (preview 즉시 계산용)
+        sess["filter_cache_row_indices"] = filter_cache_row_indices  # 원본 행번호 (process에서 사용)
         sess["cached_ss_path"] = ss_cache_path
         sess["cached_ss_offsets"] = ss_offsets_bytes
         sess["analysis_status"] = "complete"
+
+        # SS 캐시는 분석 완료 후 즉시 해제 (process에서 더 이상 사용 안 함)
+        if ss_cache_path:
+            try:
+                os.remove(ss_cache_path)
+            except Exception:
+                pass
+        sess.pop("cached_ss_path", None)
+        sess.pop("cached_ss_offsets", None)
+        del ss_offsets_bytes, ss_cache_path
 
         # 명시적 해제 (GC가 빠르게 수거하도록)
         del col_counters, callname_set
         logger.info(f"filter_cache_rows: {len(filter_cache_rows)}행 캐시됨")
         _release_memory()
-        ss_off_mb = len(ss_offsets_bytes) / (1024*1024) if ss_offsets_bytes else 0
         logger.info(f"호출명칭 분석 완료: upload_id={upload_id}, "
-                     f"cols={len(columns)}, total={total_rows}, filtered={filtered_rows}, "
-                     f"ss_offsets={ss_off_mb:.1f}MB")
+                     f"cols={len(columns)}, total={total_rows}, filtered={filtered_rows}")
     except Exception as e:
         sess_ref = _callname_sessions.get(upload_id)
         if sess_ref:
@@ -6155,7 +6174,7 @@ async def callname_preview(upload_id: str, request: Request):
 
 @app.post("/callname/process")
 async def callname_process(request: Request):
-    """매칭 시작 — S3에서 Excel 재로드 → 필터 → zpwina/zpwino 수집 → 메타 저장"""
+    """매칭 시작 — filter_cache_rows 캐시 활용 (Excel 재스캔 불필요, 즉시 완료)"""
     await _verify_auth(request)
     _check_rate_limit(request, "callname_process", 3, 60)
 
@@ -6171,103 +6190,59 @@ async def callname_process(request: Request):
 
     zpwina_col = sess.get("zpwina_col")
     zpwino_col = sess.get("zpwino_col")
-    tongsi_col = sess.get("tongsi_col")
 
     if not zpwina_col and not zpwino_col:
         raise HTTPException(status_code=400, detail="zpwina/zpwino 컬럼 없음")
 
-    def _prepare():
-        columns = sess.get("columns", [])
-        filter_col_indices = {}
-        if filters:
-            for c, vals in filters.items():
-                if c in columns and vals:
-                    filter_col_indices[columns.index(c)] = set(str(v) for v in vals)
-        tongsi_idx = columns.index(tongsi_col) if tongsi_col and tongsi_col in columns else -1
-        zpwina_idx = columns.index(zpwina_col) if zpwina_col and zpwina_col in columns else -1
-        zpwino_idx = columns.index(zpwino_col) if zpwino_col and zpwino_col in columns else -1
+    columns = sess.get("columns", [])
+    cached_rows = sess.get("filter_cache_rows")
+    if cached_rows is None:
+        raise HTTPException(status_code=400, detail="분석 미완료 — 잠시 후 다시 시도해주세요.")
 
-        # 캐시 파일 사용 (백그라운드 분석에서 빌드됨)
-        cached_xlsx = sess.get("cached_xlsx_path")
-        cached_ss = sess.get("cached_ss_path")
-        cached_ss_off = sess.get("cached_ss_offsets")
+    # 컬럼 인덱스 계산
+    zpwina_idx = columns.index(zpwina_col) if zpwina_col and zpwina_col in columns else -1
+    zpwino_idx = columns.index(zpwino_col) if zpwino_col and zpwino_col in columns else -1
 
-        if cached_xlsx and os.path.exists(cached_xlsx):
-            tmp_path = cached_xlsx
-            need_cleanup = False
-        else:
-            tmp_path = _s3_to_tempfile(sess["s3_temp_key"], suffix=f".{sess['ext']}")
-            need_cleanup = True
-            cached_ss = None
-            cached_ss_off = None
+    # 필터 인덱스
+    filter_col_indices = {}
+    if filters:
+        for c, vals in filters.items():
+            if c in columns and vals:
+                filter_col_indices[columns.index(c)] = set(str(v) for v in vals)
 
-        try:
-            zpwina_set = set()
-            zpwino_set = set()
-            original_row_indices = []
-            row_zpwina_list = []
-            row_zpwino_list = []
+    # filter_cache_rows + row_indices에서 즉시 추출 (Excel 재스캔 불필요)
+    cached_row_indices = sess.get("filter_cache_row_indices", [])
+    zpwina_set = set()
+    zpwino_set = set()
+    original_row_indices = []
+    row_zpwina_list = []
+    row_zpwino_list = []
 
-            def _process_row(row_idx, vals):
-                for ci, allowed in filter_col_indices.items():
-                    if ci < len(vals) and vals[ci] not in allowed:
-                        return
-                if tongsi_idx >= 0:
-                    tv = vals[tongsi_idx] if tongsi_idx < len(vals) else ""
-                    if not _is_tongsi_empty(tv):
-                        return
-                original_row_indices.append(row_idx)
-                za = vals[zpwina_idx] if 0 <= zpwina_idx < len(vals) else ""
-                zo = vals[zpwino_idx] if 0 <= zpwino_idx < len(vals) else ""
-                row_zpwina_list.append(za)
-                row_zpwino_list.append(zo)
-                if za:
-                    zpwina_set.add(za)
-                if zo:
-                    zpwino_set.add(zo)
+    for i, row_vals in enumerate(cached_rows):
+        # 사용자 필터 적용
+        passed = True
+        for ci, allowed in filter_col_indices.items():
+            if ci < len(row_vals) and row_vals[ci] not in allowed:
+                passed = False
+                break
+        if not passed:
+            continue
 
-            if sess["ext"] == "xlsx":
-                for rn, vals in _iter_xlsx_rows_light(
-                        tmp_path, ss_cache_path=cached_ss, ss_offsets_bytes=cached_ss_off):
-                    if rn == 0:
-                        continue
-                    while len(vals) < len(columns):
-                        vals.append("")
-                    _process_row(rn - 1, vals)
-                # JSON round-trip: sharedStrings 아레나에서 분리
-                if row_zpwina_list:
-                    row_zpwina_list = json.loads(json.dumps(row_zpwina_list, ensure_ascii=False))
-                if row_zpwino_list:
-                    row_zpwino_list = json.loads(json.dumps(row_zpwino_list, ensure_ascii=False))
-                if zpwina_set:
-                    zpwina_set = set(json.loads(json.dumps(list(zpwina_set), ensure_ascii=False)))
-                if zpwino_set:
-                    zpwino_set = set(json.loads(json.dumps(list(zpwino_set), ensure_ascii=False)))
-                _release_memory()
-            else:
-                xls_book = xlrd.open_workbook(tmp_path)
-                ws = xls_book.sheet_by_index(0)
-                for r in range(1, ws.nrows):
-                    vals = [str(ws.cell_value(r, c)) for c in range(ws.ncols)]
-                    _process_row(r - 1, vals)
-                xls_book.release_resources()
-        finally:
-            # SS 캐시만 정리 (xlsx는 stream에서 재사용)
-            ss_p = sess.get("cached_ss_path")
-            if ss_p:
-                try:
-                    os.remove(ss_p)
-                except Exception:
-                    pass
-            sess.pop("cached_ss_path", None)
-            sess.pop("cached_ss_offsets", None)
-        return list(zpwina_set), list(zpwino_set), original_row_indices, row_zpwina_list, row_zpwino_list, tmp_path
+        # 원본 Excel 행번호 (1-based)
+        excel_row = cached_row_indices[i] if i < len(cached_row_indices) else (i + 2)
+        original_row_indices.append(excel_row)
+        za = row_vals[zpwina_idx] if 0 <= zpwina_idx < len(row_vals) else ""
+        zo = row_vals[zpwino_idx] if 0 <= zpwino_idx < len(row_vals) else ""
+        row_zpwina_list.append(za)
+        row_zpwino_list.append(zo)
+        if za:
+            zpwina_set.add(za)
+        if zo:
+            zpwino_set.add(zo)
 
-    zpwina_values, zpwino_values, original_row_indices, row_zpwina_list, row_zpwino_list, cached_xlsx = await asyncio.to_thread(_prepare)
-    _release_memory()
-    _log_mem("callname_process 완료")
+    _log_mem("callname_process 완료 (캐시 활용)")
 
-    total_values = len(set(zpwina_values + zpwino_values))
+    total_values = len(zpwina_set | zpwino_set)
     if total_values == 0:
         raise HTTPException(status_code=400, detail="매칭 대상 값이 없습니다.")
 
@@ -6280,22 +6255,22 @@ async def callname_process(request: Request):
         "row_zpwino_list": row_zpwino_list,
         "zpwina_col": zpwina_col,
         "zpwino_col": zpwino_col,
-        "zpwina_values": zpwina_values,
-        "zpwino_values": zpwino_values,
+        "zpwina_values": list(zpwina_set),
+        "zpwino_values": list(zpwino_set),
         "filename": sess["filename"],
-        "columns": sess.get("columns", []),
-        "cached_xlsx_path": cached_xlsx,  # stream에서 재사용 (S3 재다운로드 방지)
+        "columns": columns,
+        "cached_xlsx_path": sess.get("cached_xlsx_path"),
         "status": "ready",
         "created_at_ts": _time_mod.time(),
     }
-    # upload 세션 삭제 (column_stats, cached_ss_offsets 등 대용량 데이터 해제)
+    # upload 세션 삭제 (filter_cache_rows 등 대용량 데이터 해제)
     del _callname_sessions[upload_id]
     _release_memory()
 
     return {
         "process_id": process_id,
         "total_values": total_values,
-        "total_rows": len(original_row_indices),
+        "total_rows": len(row_zpwina_list),
     }
 
 
@@ -6373,7 +6348,7 @@ async def callname_stream(process_id: str, request: Request):
             row_data_map = {}
 
             for i, row_idx in enumerate(original_row_indices):
-                excel_row_num = row_idx + 2
+                excel_row_num = row_idx  # 이미 1-based xlsx row number
                 za = row_zpwina_list[i] if i < len(row_zpwina_list) else ""
                 zo = row_zpwino_list[i] if i < len(row_zpwino_list) else ""
                 hit = None

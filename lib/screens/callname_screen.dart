@@ -923,13 +923,15 @@ class _CallnameScreenState extends State<CallnameScreen> {
                     : someVisibleSelected
                         ? null
                         : false,
-                onChanged: (v) {
+                onChanged: (_) {
                   setState(() {
                     final newSelected = Set<String>.from(selected);
-                    if (v == true || v == null) {
-                      newSelected.addAll(visibleValues);
-                    } else {
+                    if (allVisibleSelected) {
+                      // 전체 선택 상태 → 전체 해제
                       newSelected.removeAll(visibleValues);
+                    } else {
+                      // 미선택 또는 부분 선택 → 전체 선택
+                      newSelected.addAll(visibleValues);
                     }
                     _filters[column] = newSelected.toList();
                   });

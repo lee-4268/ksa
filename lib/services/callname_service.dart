@@ -13,6 +13,7 @@ class CallnameService {
 
   static const _uploadTimeout = Duration(minutes: 5);
   static const _apiTimeout = Duration(seconds: 30);
+  static const _processTimeout = Duration(minutes: 5);
 
   String? _authToken;
   void setAuthToken(String? token) => _authToken = token;
@@ -184,7 +185,7 @@ class CallnameService {
           headers: _headers,
           body: json.encode({'upload_id': uploadId, 'filters': filters}),
         )
-        .timeout(_apiTimeout);
+        .timeout(_processTimeout);
     if (resp.statusCode != 200) {
       final body = utf8.decode(resp.bodyBytes);
       throw Exception('매칭 시작 실패: $body');
