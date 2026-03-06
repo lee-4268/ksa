@@ -77,15 +77,25 @@ class _CallnameScreenState extends State<CallnameScreen> {
   // ── Step 0: 파일 업로드 ──
 
   Future<void> _pickAndUpload() async {
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: ['xlsx', 'xls'],
-      withData: true,
-    );
+    // Flutter Web: 첫 호출 시 FilePicker가 초기화되지 않아 null 반환하는 경우 대비
+    FilePickerResult? result;
+    try {
+      result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['xlsx', 'xls'],
+        withData: true,
+      );
+    } catch (e) {
+      debugPrint('FilePicker 오류: $e');
+      return;
+    }
     if (result == null || result.files.isEmpty) return;
 
     final file = result.files.first;
-    if (file.bytes == null) return;
+    if (file.bytes == null) {
+      debugPrint('FilePicker: bytes가 null (파일 읽기 실패)');
+      return;
+    }
 
     setState(() {
       _uploading = true;
@@ -641,23 +651,33 @@ class _CallnameScreenState extends State<CallnameScreen> {
                 // 드롭다운 — 선택 시 바로 필터 추가
                 if (isComplete && availableCols.isNotEmpty)
                   Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 12),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 4),
                     decoration: BoxDecoration(
+                      color: Colors.white,
                       border: Border.all(color: Colors.grey.shade300),
-                      borderRadius: BorderRadius.circular(8),
+                      borderRadius: BorderRadius.circular(10),
                     ),
                     child: DropdownButtonHideUnderline(
                       child: DropdownButton<String>(
                         value: null,
-                        hint: const Text('필터할 컬럼 선택...',
-                            style: TextStyle(fontSize: 13)),
+                        hint: Text('필터할 컬럼 선택...',
+                            style: TextStyle(
+                                fontSize: 13,
+                                color: Colors.grey.shade500)),
                         isExpanded: true,
+                        isDense: true,
+                        icon: Icon(Icons.arrow_drop_down,
+                            color: _primary, size: 20),
+                        dropdownColor: Colors.white,
+                        style: const TextStyle(
+                          color: Colors.black87,
+                          fontSize: 13,
+                        ),
                         items: availableCols.map((col) {
                           return DropdownMenuItem(
                             value: col,
-                            child: Text(col,
-                                style: const TextStyle(fontSize: 13)),
+                            child: Text(col),
                           );
                         }).toList(),
                         onChanged: (col) {

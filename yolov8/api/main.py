@@ -765,14 +765,12 @@ app = FastAPI(
 )
 
 # CORS Configuration for Flutter Web/PWA
-# CORS: 환경변수로 허용 도메인 설정 (쉼표 구분)
+# CORS_ALLOWED_ORIGINS 환경변수로 허용 도메인 관리 (쉼표 구분)
 _cors_env = os.environ.get("CORS_ALLOWED_ORIGINS", "")
-ALLOWED_ORIGINS = [x.strip() for x in _cors_env.split(",") if x.strip()] or [
-    "https://main.d3fueh5qj86kgy.amplifyapp.com",
-    "https://kca.skons.net",
-    "http://localhost:3000",
-    "http://localhost:8080",
-]
+ALLOWED_ORIGINS = [x.strip() for x in _cors_env.split(",") if x.strip()]
+if not ALLOWED_ORIGINS:
+    logger.warning("CORS_ALLOWED_ORIGINS 환경변수 미설정 — localhost만 허용")
+    ALLOWED_ORIGINS = ["http://localhost:3000", "http://localhost:8080"]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
@@ -6567,12 +6565,14 @@ async def callname_download(process_id: str, request: Request):
         raise HTTPException(status_code=500, detail="결과 파일 없음")
 
     try:
+        from urllib.parse import quote
+        encoded_filename = quote(output_filename, safe="")
         url = get_s3_client().generate_presigned_url(
             "get_object",
             Params={
                 "Bucket": S3_BUCKET_NAME,
                 "Key": s3_key,
-                "ResponseContentDisposition": f"attachment; filename*=UTF-8''{output_filename}",
+                "ResponseContentDisposition": f"attachment; filename*=UTF-8''{encoded_filename}",
             },
             ExpiresIn=600,
         )
