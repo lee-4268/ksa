@@ -33,8 +33,13 @@ class _CallnameScreenState extends State<CallnameScreen> {
   final Map<String, List<String>> _filters = {};
   final Map<String, List<Map<String, dynamic>>> _columnValues = {};
   int? _filteredRows;
+  int? _targetCallnames;
   bool _loadingPreview = false;
   bool _analysisComplete = false; // 백그라운드 분석 완료 여부
+  final Set<String> _expandedFilters = {}; // 펼쳐진 필터 그룹
+  final Map<String, String> _filterSearchQueries = {}; // 필터 내 검색어
+  String? _selectedFilterCol; // 드롭다운 선택된 컬럼
+  bool _addingFilter = false; // 필터 추가 로딩 중
 
   // Step 2: 매칭
   bool _processing = false;
@@ -109,6 +114,7 @@ class _CallnameScreenState extends State<CallnameScreen> {
         if (status == 'complete') {
           setState(() {
             _filteredRows = result['filtered_rows'] as int?;
+            _targetCallnames = result['target_callnames'] as int?;
             _analysisComplete = true;
             // 분석에서 감지된 컬럼으로 갱신 (upload-complete 누락 보완)
             final cols = result['columns'] as List?;
@@ -156,6 +162,7 @@ class _CallnameScreenState extends State<CallnameScreen> {
       final result = await _service.previewFiltered(_uploadId!, _filters);
       setState(() {
         _filteredRows = result['filtered_rows'] as int?;
+        _targetCallnames = result['target_callnames'] as int?;
         _loadingPreview = false;
       });
     } catch (e) {
@@ -249,7 +256,12 @@ class _CallnameScreenState extends State<CallnameScreen> {
       _filters.clear();
       _columnValues.clear();
       _filteredRows = null;
+      _targetCallnames = null;
       _analysisComplete = false;
+      _expandedFilters.clear();
+      _filterSearchQueries.clear();
+      _selectedFilterCol = null;
+      _addingFilter = false;
       _processId = null;
       _matchResult = null;
       _processError = null;
@@ -397,243 +409,556 @@ class _CallnameScreenState extends State<CallnameScreen> {
 
     final totalRows = data['total_rows'] as int? ?? 0;
     final columns = (data['columns'] as List?)?.cast<String>() ?? [];
+    final detectedCallname = data['detected_callname_col'] as String?;
     final detectedTongsi = data['detected_tongsi_col'] as String?;
     final detectedZpwina = data['detected_zpwina_col'] as String?;
     final detectedZpwino = data['detected_zpwino_col'] as String?;
 
     // 필터 가능한 컬럼: 감지된 키 컬럼과 통시 제외
-    final excludeCols = {detectedTongsi, detectedZpwina, detectedZpwino}
-        .whereType<String>()
-        .toSet();
+    final excludeCols = {
+      detectedCallname,
+      detectedTongsi,
+      detectedZpwina,
+      detectedZpwino,
+    }.whereType<String>().toSet();
     final filterableCols =
         columns.where((c) => !excludeCols.contains(c)).toList();
 
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // 파일 정보
-            _infoRow('파일명', data['filename'] as String? ?? ''),
-            _infoRow('총 행수', '${_formatNumber(totalRows)}행'),
-            _infoRow('감지 컬럼',
-                '호출명칭=${detectedZpwina ?? "없음"}, 허가번호=${detectedZpwino ?? "없음"}, 통시=${detectedTongsi ?? "없음"}'),
+    // 아직 추가하지 않은 컬럼만 드롭다운에 표시
+    final availableCols =
+        filterableCols.where((c) => !_filters.containsKey(c)).toList();
 
-            const Divider(height: 32),
-
-            // 매칭 대상 건수
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: _primary.withValues(alpha: 0.08),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Row(
-                children: [
-                  Icon(Icons.filter_alt, color: _primary),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text('매칭 대상 (통시 빈값)',
-                            style: TextStyle(
-                                fontWeight: FontWeight.w600, fontSize: 14)),
-                        const SizedBox(height: 2),
-                        _loadingPreview
-                            ? const SizedBox(
-                                width: 80,
-                                child: LinearProgressIndicator())
-                            : Text(
-                                '${_formatNumber(_filteredRows ?? 0)}행',
-                                style: TextStyle(
-                                    color: _primary,
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 16),
-                              ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-
-            const SizedBox(height: 20),
-
-            // 필터 선택
-            const Text('필터 설정 (선택사항)',
-                style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
-            const SizedBox(height: 8),
-            if (!_analysisComplete)
-              Row(
-                children: [
-                  const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2)),
-                  const SizedBox(width: 8),
-                  Text('파일 분석 중... 잠시만 기다려주세요.',
-                      style: TextStyle(
-                          color: Colors.grey.shade600, fontSize: 13)),
-                ],
-              )
-            else
-              Text('특정 조건으로 매칭 범위를 좁힐 수 있습니다.',
-                  style:
-                      TextStyle(color: Colors.grey.shade600, fontSize: 13)),
-            const SizedBox(height: 12),
-
-            // 필터 가능한 컬럼 칩
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: filterableCols.take(10).map((col) {
-                final isSelected = _filters.containsKey(col);
-                return ActionChip(
-                  label: Text(col,
-                      style: TextStyle(
-                          fontSize: 12,
-                          color: isSelected ? Colors.white : Colors.black87)),
-                  backgroundColor:
-                      isSelected ? _primary : Colors.grey.shade200,
-                  onPressed:
-                      _analysisComplete ? () => _showFilterDialog(col) : null,
-                );
-              }).toList(),
-            ),
-
-            // 활성 필터 표시
-            if (_filters.isNotEmpty) ...[
-              const SizedBox(height: 12),
-              ..._filters.entries.map((e) => Padding(
-                    padding: const EdgeInsets.only(bottom: 4),
-                    child: Row(
-                      children: [
-                        Icon(Icons.filter_list, size: 14, color: _primary),
-                        const SizedBox(width: 4),
-                        Expanded(
-                          child: Text(
-                            '${e.key}: ${e.value.join(", ")}',
-                            style: const TextStyle(fontSize: 12),
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                        InkWell(
-                          onTap: () {
-                            setState(() => _filters.remove(e.key));
-                            _updatePreview();
-                          },
-                          child: const Icon(Icons.close, size: 16),
-                        ),
-                      ],
-                    ),
-                  )),
-            ],
-
-            const SizedBox(height: 24),
-
-            // 버튼
-            Row(
+    return Column(
+      children: [
+        // ── 파일 정보 카드 ──
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                OutlinedButton(
-                  onPressed: _reset,
-                  child: const Text('처음으로'),
+                Row(
+                  children: [
+                    Icon(Icons.description, color: _primary, size: 20),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        data['filename'] as String? ?? '',
+                        style: const TextStyle(
+                            fontWeight: FontWeight.bold, fontSize: 15),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ],
                 ),
-                const Spacer(),
-                ElevatedButton.icon(
-                  onPressed:
-                      (_filteredRows ?? 0) > 0 ? _startMatching : null,
-                  icon: const Icon(Icons.play_arrow),
-                  label: const Text('매칭 시작'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: _primary,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 28, vertical: 14),
+                const SizedBox(height: 12),
+                _fileInfoRow(
+                    '전체 행 수', '${_formatNumber(totalRows)}행', null),
+                _fileInfoRow(
+                    '호출명칭 컬럼',
+                    detectedCallname ?? '감지 안됨',
+                    detectedCallname != null ? '자동감지' : null),
+                _fileInfoRow(
+                    '통시 컬럼',
+                    detectedTongsi ?? '감지 안됨',
+                    detectedTongsi != null ? '자동감지' : null),
+                const SizedBox(height: 8),
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: Colors.blue.shade50,
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.info_outline,
+                          size: 16, color: Colors.blue.shade600),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          '통시 값이 비어있는 행만 매칭 대상으로 처리됩니다.',
+                          style: TextStyle(
+                              fontSize: 12, color: Colors.blue.shade700),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ],
             ),
-          ],
+          ),
         ),
-      ),
+
+        const SizedBox(height: 16),
+
+        // ── 필터 설정 카드 ──
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('필터 설정',
+                    style:
+                        TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
+                const SizedBox(height: 4),
+                if (!_analysisComplete)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Row(
+                      children: [
+                        const SizedBox(
+                            width: 14,
+                            height: 14,
+                            child:
+                                CircularProgressIndicator(strokeWidth: 2)),
+                        const SizedBox(width: 8),
+                        Text('파일 분석 중... 잠시만 기다려주세요.',
+                            style: TextStyle(
+                                color: Colors.grey.shade600, fontSize: 13)),
+                      ],
+                    ),
+                  )
+                else
+                  Text('특정 조건으로 매칭 범위를 좁힐 수 있습니다.',
+                      style: TextStyle(
+                          color: Colors.grey.shade600, fontSize: 13)),
+                const SizedBox(height: 12),
+
+                // 컬럼 드롭다운 + 추가 버튼
+                if (_analysisComplete && availableCols.isNotEmpty)
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 12),
+                          decoration: BoxDecoration(
+                            border: Border.all(color: Colors.grey.shade300),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: DropdownButtonHideUnderline(
+                            child: DropdownButton<String>(
+                              value: _selectedFilterCol,
+                              hint: const Text('컬럼 선택...',
+                                  style: TextStyle(fontSize: 13)),
+                              isExpanded: true,
+                              items: availableCols.map((col) {
+                                return DropdownMenuItem(
+                                  value: col,
+                                  child: Text(col,
+                                      style: const TextStyle(fontSize: 13)),
+                                );
+                              }).toList(),
+                              onChanged: _addingFilter
+                                  ? null
+                                  : (col) {
+                                      setState(
+                                          () => _selectedFilterCol = col);
+                                    },
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      SizedBox(
+                        height: 42,
+                        child: ElevatedButton(
+                          onPressed: _addingFilter ||
+                                  _selectedFilterCol == null
+                              ? null
+                              : () => _addFilter(_selectedFilterCol!),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: _primary,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 16),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(8)),
+                          ),
+                          child: _addingFilter
+                              ? const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      color: Colors.white))
+                              : const Text('+ 추가',
+                                  style: TextStyle(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w600)),
+                        ),
+                      ),
+                    ],
+                  ),
+
+                // 인라인 필터 그룹들
+                ..._filters.keys.map((col) => _buildFilterGroup(col)),
+              ],
+            ),
+          ),
+        ),
+
+        const SizedBox(height: 16),
+
+        // ── 매칭 대상 요약 카드 ──
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: _loadingPreview
+                ? const Center(
+                    child: Padding(
+                      padding: EdgeInsets.all(16),
+                      child: CircularProgressIndicator(),
+                    ),
+                  )
+                : Row(
+                    children: [
+                      Expanded(
+                        child: Column(
+                          children: [
+                            Text(
+                              _formatNumber(_targetCallnames ?? 0),
+                              style: TextStyle(
+                                fontSize: 28,
+                                fontWeight: FontWeight.bold,
+                                color: _primary,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text('고유 호출명칭',
+                                style: TextStyle(
+                                    fontSize: 13,
+                                    color: Colors.grey.shade600)),
+                          ],
+                        ),
+                      ),
+                      Container(
+                        width: 1,
+                        height: 48,
+                        color: Colors.grey.shade300,
+                      ),
+                      Expanded(
+                        child: Column(
+                          children: [
+                            Text(
+                              _formatNumber(_filteredRows ?? 0),
+                              style: TextStyle(
+                                fontSize: 28,
+                                fontWeight: FontWeight.bold,
+                                color: _primary,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text('매칭 대상 행',
+                                style: TextStyle(
+                                    fontSize: 13,
+                                    color: Colors.grey.shade600)),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+          ),
+        ),
+
+        const SizedBox(height: 16),
+
+        // ── 버튼 ──
+        SizedBox(
+          width: double.infinity,
+          child: ElevatedButton.icon(
+            onPressed: (_filteredRows ?? 0) > 0 ? _startMatching : null,
+            icon: const Icon(Icons.play_arrow),
+            label: const Text('매칭 시작'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _primary,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8)),
+            ),
+          ),
+        ),
+        const SizedBox(height: 8),
+        SizedBox(
+          width: double.infinity,
+          child: OutlinedButton(
+            onPressed: _reset,
+            style: OutlinedButton.styleFrom(
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8)),
+            ),
+            child: const Text('다시 업로드'),
+          ),
+        ),
+      ],
     );
   }
 
-  Future<void> _showFilterDialog(String column) async {
-    await _loadColumnValues(column);
-    if (!mounted) return;
+  /// 필터 추가 (드롭다운 선택 후 + 추가 버튼 클릭)
+  Future<void> _addFilter(String column) async {
+    setState(() => _addingFilter = true);
+    try {
+      await _loadColumnValues(column);
+      if (!mounted) return;
 
+      final values = _columnValues[column] ?? [];
+      // 기본: 모두 선택
+      setState(() {
+        _filters[column] =
+            values.map((v) => v['value'] as String? ?? '').toList();
+        _expandedFilters.add(column);
+        _selectedFilterCol = null;
+        _addingFilter = false;
+      });
+      _updatePreview();
+    } catch (e) {
+      if (mounted) {
+        setState(() => _addingFilter = false);
+      }
+    }
+  }
+
+  /// 필터 그룹 위젯 (인라인)
+  Widget _buildFilterGroup(String column) {
     final values = _columnValues[column] ?? [];
-    final selected = Set<String>.from(_filters[column] ?? []);
+    final selected = _filters[column] ?? [];
+    final isExpanded = _expandedFilters.contains(column);
+    final searchQuery = _filterSearchQueries[column] ?? '';
 
-    await showDialog(
-      context: context,
-      builder: (ctx) {
-        return StatefulBuilder(builder: (ctx, setDialogState) {
-          return AlertDialog(
-            title: Text('$column 필터', style: const TextStyle(fontSize: 16)),
-            content: SizedBox(
-              width: 350,
-              height: 400,
+    // 검색 필터링
+    final filteredValues = searchQuery.isEmpty
+        ? values
+        : values
+            .where((v) => (v['value'] as String? ?? '')
+                .toLowerCase()
+                .contains(searchQuery.toLowerCase()))
+            .toList();
+
+    final selectedCount = selected.length;
+    final totalCount = values.length;
+
+    // 보이는 항목 기준으로 모두 선택/부분 선택 판별
+    final visibleValues = filteredValues
+        .map((v) => v['value'] as String? ?? '')
+        .toList();
+    final visibleCheckedCount =
+        visibleValues.where((v) => selected.contains(v)).length;
+    final allVisibleSelected =
+        visibleValues.isNotEmpty && visibleCheckedCount == visibleValues.length;
+    final someVisibleSelected =
+        visibleCheckedCount > 0 && visibleCheckedCount < visibleValues.length;
+
+    return Container(
+      margin: const EdgeInsets.only(top: 12),
+      decoration: BoxDecoration(
+        border: Border.all(color: Colors.grey.shade300),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        children: [
+          // 헤더
+          InkWell(
+            onTap: () {
+              setState(() {
+                if (isExpanded) {
+                  _expandedFilters.remove(column);
+                } else {
+                  _expandedFilters.add(column);
+                }
+              });
+            },
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              child: Row(
+                children: [
+                  Icon(
+                    isExpanded
+                        ? Icons.keyboard_arrow_up
+                        : Icons.keyboard_arrow_down,
+                    size: 20,
+                    color: Colors.grey.shade600,
+                  ),
+                  const SizedBox(width: 4),
+                  Expanded(
+                    child: Text(column,
+                        style: const TextStyle(
+                            fontWeight: FontWeight.w600, fontSize: 13)),
+                  ),
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: _primary.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Text(
+                      '$selectedCount / $totalCount개 선택',
+                      style: TextStyle(fontSize: 11, color: _primary),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  InkWell(
+                    onTap: () {
+                      setState(() {
+                        _filters.remove(column);
+                        _expandedFilters.remove(column);
+                        _filterSearchQueries.remove(column);
+                      });
+                      _updatePreview();
+                    },
+                    child: Icon(Icons.close,
+                        size: 18, color: Colors.grey.shade500),
+                  ),
+                ],
+              ),
+            ),
+          ),
+
+          // 펼쳐진 내용
+          if (isExpanded) ...[
+            const Divider(height: 1),
+            // 검색 입력
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+              child: TextField(
+                decoration: InputDecoration(
+                  hintText: '검색...',
+                  hintStyle: const TextStyle(fontSize: 13),
+                  prefixIcon:
+                      const Icon(Icons.search, size: 18),
+                  isDense: true,
+                  contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 8, vertical: 8),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(6),
+                    borderSide: BorderSide(color: Colors.grey.shade300),
+                  ),
+                ),
+                style: const TextStyle(fontSize: 13),
+                onChanged: (q) {
+                  setState(() => _filterSearchQueries[column] = q);
+                },
+              ),
+            ),
+            // 모두 선택 체크박스 (tristate: 일부 선택 시 null)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              child: CheckboxListTile(
+                dense: true,
+                controlAffinity: ListTileControlAffinity.leading,
+                tristate: true,
+                title: const Text('(모두 선택)',
+                    style:
+                        TextStyle(fontSize: 13, fontWeight: FontWeight.w500)),
+                value: allVisibleSelected
+                    ? true
+                    : someVisibleSelected
+                        ? null
+                        : false,
+                onChanged: (v) {
+                  setState(() {
+                    final newSelected = Set<String>.from(selected);
+                    if (v == true || v == null) {
+                      // null(indeterminate) 클릭 시에도 모두 선택
+                      newSelected.addAll(visibleValues);
+                    } else {
+                      newSelected.removeAll(visibleValues);
+                    }
+                    _filters[column] = newSelected.toList();
+                  });
+                  _updatePreview();
+                },
+              ),
+            ),
+            const Divider(height: 1),
+            // 값 목록
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 240),
               child: values.isEmpty
-                  ? const Center(child: CircularProgressIndicator())
+                  ? const Padding(
+                      padding: EdgeInsets.all(16),
+                      child: Center(
+                          child: SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(
+                                  strokeWidth: 2))),
+                    )
                   : ListView.builder(
-                      itemCount: values.length,
+                      shrinkWrap: true,
+                      itemCount: filteredValues.length,
                       itemBuilder: (_, i) {
-                        final v = values[i];
+                        final v = filteredValues[i];
                         final val = v['value'] as String? ?? '';
                         final count = v['count'] as int? ?? 0;
                         final checked = selected.contains(val);
                         return CheckboxListTile(
                           dense: true,
-                          title: Text(val, style: const TextStyle(fontSize: 13)),
-                          subtitle: Text('${_formatNumber(count)}건',
-                              style: const TextStyle(fontSize: 11)),
+                          controlAffinity: ListTileControlAffinity.leading,
+                          title: Text(val.isEmpty ? '(빈 값)' : val,
+                              style: TextStyle(
+                                  fontSize: 13,
+                                  fontStyle: val.isEmpty
+                                      ? FontStyle.italic
+                                      : FontStyle.normal)),
+                          secondary: Text(_formatNumber(count),
+                              style: TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.grey.shade600)),
                           value: checked,
                           onChanged: (v) {
-                            setDialogState(() {
+                            setState(() {
                               if (v == true) {
                                 selected.add(val);
                               } else {
                                 selected.remove(val);
                               }
+                              _filters[column] = List.from(selected);
                             });
+                            _updatePreview();
                           },
                         );
                       },
                     ),
             ),
-            actions: [
-              TextButton(
-                onPressed: () {
-                  setDialogState(() => selected.clear());
-                },
-                child: const Text('초기화'),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _fileInfoRow(String label, String value, String? badge) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 100,
+            child: Text(label,
+                style: TextStyle(
+                    fontSize: 13, color: Colors.grey.shade600)),
+          ),
+          Text(value, style: const TextStyle(fontSize: 13)),
+          if (badge != null) ...[
+            const SizedBox(width: 8),
+            Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: Colors.green.shade50,
+                borderRadius: BorderRadius.circular(4),
+                border: Border.all(color: Colors.green.shade200),
               ),
-              TextButton(
-                onPressed: () => Navigator.pop(ctx),
-                child: const Text('취소'),
-              ),
-              ElevatedButton(
-                onPressed: () {
-                  setState(() {
-                    if (selected.isEmpty) {
-                      _filters.remove(column);
-                    } else {
-                      _filters[column] = selected.toList();
-                    }
-                  });
-                  Navigator.pop(ctx);
-                  _updatePreview();
-                },
-                child: const Text('적용'),
-              ),
-            ],
-          );
-        });
-      },
+              child: Text(badge,
+                  style: TextStyle(
+                      fontSize: 10, color: Colors.green.shade700)),
+            ),
+          ],
+        ],
+      ),
     );
   }
 
@@ -721,28 +1046,6 @@ class _CallnameScreenState extends State<CallnameScreen> {
   }
 
   // ── Helpers ──
-
-  Widget _infoRow(String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 6),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SizedBox(
-            width: 80,
-            child: Text(label,
-                style: TextStyle(
-                    fontSize: 13,
-                    color: Colors.grey.shade600,
-                    fontWeight: FontWeight.w500)),
-          ),
-          Expanded(
-              child: Text(value,
-                  style: const TextStyle(fontSize: 13))),
-        ],
-      ),
-    );
-  }
 
   Widget _resultRow(String label, String value) {
     return Padding(

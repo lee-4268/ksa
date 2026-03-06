@@ -69,7 +69,6 @@ flutter:
 
   assets:
     - image/
-    - assets/data/
 
   fonts:
     - family: SamsungOne

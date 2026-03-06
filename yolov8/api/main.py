@@ -5056,6 +5056,7 @@ def _analyze_callname_bg(upload_id: str):
         columns = []
         filtered_rows = 0
         total_rows = 0
+        callname_set = set()
         col_counters = []
         ss_cache_path = None
         ss_offsets_bytes = None
@@ -5158,6 +5159,7 @@ def _analyze_callname_bg(upload_id: str):
                                     zpwina_col = _detect_column(columns, CALLNAME_POSSIBLE_ZPWINA_COLS)
                                     zpwino_col = _detect_column(columns, CALLNAME_POSSIBLE_ZPWINO_COLS)
                                     tongsi_idx = columns.index(tongsi_col) if tongsi_col else -1
+                                    callname_idx = columns.index(callname_col) if callname_col and callname_col in columns else -1
                                 else:
                                     total_rows += 1
                                     tongsi_empty = True
@@ -5166,6 +5168,9 @@ def _analyze_callname_bg(upload_id: str):
                                             tongsi_empty = False
                                     if tongsi_empty:
                                         filtered_rows += 1
+                                        # 호출명칭 중복 제거 카운트
+                                        if 0 <= callname_idx < len(cells) and cells[callname_idx].strip():
+                                            callname_set.add(cells[callname_idx].strip())
                                     for i, v in enumerate(cells):
                                         if v and i < len(col_counters) and len(col_counters[i]) < 200:
                                             col_counters[i][v] += 1
@@ -5194,6 +5199,7 @@ def _analyze_callname_bg(upload_id: str):
             zpwina_col = _detect_column(columns, CALLNAME_POSSIBLE_ZPWINA_COLS)
             zpwino_col = _detect_column(columns, CALLNAME_POSSIBLE_ZPWINO_COLS)
             tongsi_idx = columns.index(tongsi_col) if tongsi_col else -1
+            cn_idx = columns.index(callname_col) if callname_col and callname_col in columns else -1
             for r in range(1, ws.nrows):
                 total_rows += 1
                 vals = [str(ws.cell_value(r, c)) for c in range(ws.ncols)]
@@ -5203,6 +5209,9 @@ def _analyze_callname_bg(upload_id: str):
                         tongsi_empty = False
                 if tongsi_empty:
                     filtered_rows += 1
+                    # 호출명칭 중복 제거 카운트
+                    if 0 <= cn_idx < len(vals) and vals[cn_idx].strip():
+                        callname_set.add(vals[cn_idx].strip())
                 for i, v in enumerate(vals):
                     if v and i < len(col_counters) and len(col_counters[i]) < 200:
                         col_counters[i][v] += 1
@@ -5223,6 +5232,7 @@ def _analyze_callname_bg(upload_id: str):
         sess["zpwina_col"] = zpwina_col if 'zpwina_col' in dir() else sess.get("zpwina_col")
         sess["zpwino_col"] = zpwino_col if 'zpwino_col' in dir() else sess.get("zpwino_col")
         sess["filtered_rows"] = filtered_rows
+        sess["target_callnames"] = len(callname_set)
         sess["total_rows"] = total_rows
         sess["column_stats"] = column_stats
         sess["cached_ss_path"] = ss_cache_path
@@ -5834,6 +5844,7 @@ async def callname_analysis_status(upload_id: str, request: Request):
     result = {"status": status}
     if status == "complete":
         result["filtered_rows"] = sess.get("filtered_rows", 0)
+        result["target_callnames"] = sess.get("target_callnames", 0)
         result["total_rows"] = sess.get("total_rows", 0)
         # 컬럼 + 감지 결과 (upload-complete에서 누락됐을 수 있으므로 분석 결과로 갱신)
         result["columns"] = sess.get("columns", [])
@@ -6053,7 +6064,7 @@ async def callname_preview(upload_id: str, request: Request):
     if not filters and sess.get("analysis_status") == "complete":
         return {
             "filtered_rows": sess.get("filtered_rows", 0),
-            "target_callnames": 0,
+            "target_callnames": sess.get("target_callnames", 0),
         }
 
     def _calc():
