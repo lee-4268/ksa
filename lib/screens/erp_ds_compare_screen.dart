@@ -791,10 +791,9 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
 
     try {
       final excel = excel_pkg.Excel.createExcel();
-      final defaultSheet = excel.getDefaultSheet()!;
       final sheetName = '전산자료비교';
+      excel.rename(excel.getDefaultSheet()!, sheetName);
       final sheet = excel[sheetName];
-      excel.delete(defaultSheet);
 
       // 헤더
       final headers = [
