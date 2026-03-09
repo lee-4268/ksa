@@ -7622,7 +7622,7 @@ def _scan_ds_sheets_by_zpwino(
                 sn = row["serial_no"]
                 if z not in result["장치"]:
                     result["장치"][z] = []
-                if sn:
+                if sn and sn not in result["장치"][z]:
                     result["장치"][z].append(sn)
 
         # 안테나: 허가번호별 설치형태

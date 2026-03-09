@@ -73,6 +73,15 @@ class MyApp extends StatelessWidget {
             backgroundColor: Colors.white,
             foregroundColor: Colors.black87,
             elevation: 0,
+            scrolledUnderElevation: 0,
+            surfaceTintColor: Colors.transparent,
+          ),
+          dialogTheme: const DialogThemeData(
+            backgroundColor: Colors.white,
+            surfaceTintColor: Colors.transparent,
+          ),
+          dropdownMenuTheme: const DropdownMenuThemeData(
+            textStyle: TextStyle(fontFamily: 'SamsungOne'),
           ),
           cardTheme: CardThemeData(
             elevation: 0,

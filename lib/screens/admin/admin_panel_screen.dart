@@ -480,6 +480,8 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
 
 /// 데이터 미리보기 다이얼로그
 class _DataPreviewDialog extends StatelessWidget {
+  static const Color _themeColor = Color(0xFF1565C0);
+
   final List<dynamic> files;
 
   const _DataPreviewDialog({required this.files});
@@ -487,7 +489,10 @@ class _DataPreviewDialog extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Dialog(
+      backgroundColor: Colors.white,
+      surfaceTintColor: Colors.transparent,
       insetPadding: const EdgeInsets.all(16),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: ConstrainedBox(
         constraints: BoxConstraints(
           maxWidth: 900,
@@ -498,26 +503,33 @@ class _DataPreviewDialog extends StatelessWidget {
           children: [
             // 헤더
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-              decoration: BoxDecoration(
-                color: Colors.blue.shade50,
-                borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+              decoration: const BoxDecoration(
+                color: Color(0xFFF5F7FA),
+                borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
               ),
               child: Row(
                 children: [
-                  Icon(Icons.visibility, color: Colors.blue.shade700, size: 20),
-                  const SizedBox(width: 8),
-                  Text(
+                  Container(
+                    padding: const EdgeInsets.all(6),
+                    decoration: BoxDecoration(
+                      color: _themeColor,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Icon(Icons.visibility, color: Colors.white, size: 18),
+                  ),
+                  const SizedBox(width: 10),
+                  const Text(
                     '호출명칭 DB 미리보기 (최대 50행)',
                     style: TextStyle(
                       fontWeight: FontWeight.w600,
                       fontSize: 15,
-                      color: Colors.blue.shade700,
+                      color: Colors.black87,
                     ),
                   ),
                   const Spacer(),
                   IconButton(
-                    icon: const Icon(Icons.close, size: 20),
+                    icon: const Icon(Icons.close, size: 20, color: Colors.black54),
                     onPressed: () => Navigator.pop(context),
                     padding: EdgeInsets.zero,
                     constraints: const BoxConstraints(),
@@ -532,13 +544,22 @@ class _DataPreviewDialog extends StatelessWidget {
                 child: Column(
                   children: [
                     if (files.length > 1)
-                      TabBar(
-                        isScrollable: true,
-                        labelColor: Colors.blue.shade700,
-                        tabs: files.map((f) {
-                          final name = f['name'] as String? ?? '';
-                          return Tab(text: name.length > 30 ? '${name.substring(0, 30)}...' : name);
-                        }).toList(),
+                      Container(
+                        color: Colors.white,
+                        child: TabBar(
+                          isScrollable: true,
+                          labelColor: _themeColor,
+                          unselectedLabelColor: Colors.grey.shade600,
+                          indicatorColor: _themeColor,
+                          labelStyle: const TextStyle(
+                            fontWeight: FontWeight.w600,
+                            fontSize: 13,
+                          ),
+                          tabs: files.map((f) {
+                            final name = f['name'] as String? ?? '';
+                            return Tab(text: name.length > 30 ? '${name.substring(0, 30)}...' : name);
+                          }).toList(),
+                        ),
                       ),
                     Expanded(
                       child: TabBarView(
@@ -556,16 +577,30 @@ class _DataPreviewDialog extends StatelessWidget {
                           final count = f['preview_count'] as int? ?? 0;
 
                           if (headers.isEmpty) {
-                            return const Center(child: Text('데이터 없음'));
+                            return const Center(
+                              child: Text('데이터 없음',
+                                  style: TextStyle(color: Colors.grey, fontSize: 14)),
+                            );
                           }
 
                           return Column(
                             children: [
                               Padding(
-                                padding: const EdgeInsets.all(8),
-                                child: Text(
-                                  '$count행 표시',
-                                  style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                                padding: const EdgeInsets.all(10),
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                  decoration: BoxDecoration(
+                                    color: _themeColor.withValues(alpha: 0.1),
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  child: Text(
+                                    '$count행 표시',
+                                    style: const TextStyle(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w600,
+                                      color: _themeColor,
+                                    ),
+                                  ),
                                 ),
                               ),
                               Expanded(
@@ -574,12 +609,15 @@ class _DataPreviewDialog extends StatelessWidget {
                                     scrollDirection: Axis.horizontal,
                                     child: SingleChildScrollView(
                                       child: DataTable(
-                                        headingRowHeight: 36,
-                                        dataRowMinHeight: 28,
-                                        dataRowMaxHeight: 36,
+                                        headingRowColor: WidgetStateProperty.all(
+                                            const Color(0xFFF5F7FA)),
+                                        headingRowHeight: 38,
+                                        dataRowMinHeight: 30,
+                                        dataRowMaxHeight: 38,
                                         columnSpacing: 16,
+                                        horizontalMargin: 16,
                                         headingTextStyle: const TextStyle(
-                                          fontWeight: FontWeight.bold,
+                                          fontWeight: FontWeight.w600,
                                           fontSize: 12,
                                           color: Colors.black87,
                                         ),
