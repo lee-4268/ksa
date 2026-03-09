@@ -110,7 +110,8 @@ class _IndividualTabState extends State<_IndividualTab>
   final List<String> _antennaFrameOptions = [
     '-', '철탑(지면)', '강관주', '통신주', '원폴(건물)', '옥내, 터널, 지하, 차량',
     '쌍통신주', '기설물', '옥내외 혼합형', '간이폴 및 비기준 설치대',
-    '한전주(KT통신주)', '철탑(건물)', '프레임', '복합형(원폴, 분산프레임 등)', '모노폴',
+    '한전주(KT통신주)', '철탑(건물)', '프레임', '환경친화형',
+    '복합형(원폴,분산프레임 등)', '모노폴',
   ];
 
   String _sharingType = '-';
@@ -173,7 +174,7 @@ class _IndividualTabState extends State<_IndividualTab>
         _zpwinoCtrl.text = res['zpwino'] ?? '';
         _zpwinaCtrl.text = res['zpwina'] ?? '';
         _addressCtrl.text = res['zpwiadr'] ?? '';
-        final frame = res['zpirty3'] ?? '';
+        final frame = _mapAntennaFrame(res['zpirty3'] ?? '');
         _antennaFrameType = _antennaFrameOptions.contains(frame) ? frame : '-';
         _lookupError = null;
       } else {
@@ -184,6 +185,24 @@ class _IndividualTabState extends State<_IndividualTab>
     } finally {
       if (mounted) setState(() => _isLooking = false);
     }
+  }
+
+  /// DB zpirty3 값 → 프론트 안테나설치대형태 옵션 매핑
+  String _mapAntennaFrame(String dbValue) {
+    if (dbValue.isEmpty) return '-';
+    const mapping = {
+      '간이폴': '간이폴 및 비기준 설치대',
+      '분산폴': '복합형(원폴,분산프레임 등)',
+      '통신주(CP주)': '통신주',
+      '옥내,터널,지하등': '옥내, 터널, 지하, 차량',
+      'IP주': '기설물',
+      '기타': '기설물',
+      '환경친화형(확인필요)': '환경친화형',
+      '환경친화형 프레임': '환경친화형',
+      '환경친화형(건물)': '환경친화형',
+    };
+    if (mapping.containsKey(dbValue)) return mapping[dbValue]!;
+    return dbValue;
   }
 
   /// FilePicker wrapper — 첫 호출 focus race condition 자동 재시도

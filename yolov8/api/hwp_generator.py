@@ -5,6 +5,7 @@ HWPX는 한컴오피스의 Open XML 기반 포맷 (ZIP 안에 XML).
 OWPML(KS X 6101) 스펙에 따라 XML을 구성하여 HWPX 파일을 생성합니다.
 """
 import io
+import struct
 import zipfile
 import logging
 from xml.sax.saxutils import escape
@@ -43,6 +44,41 @@ def _detect_image_type(data: bytes):
     return 'jpg', 'image/jpeg'
 
 
+def _get_image_size(data: bytes):
+    """이미지 바이트에서 (width, height) 픽셀 크기 추출. 실패 시 (0, 0) 반환."""
+    try:
+        # PNG
+        if data[:8] == b'\x89PNG\r\n\x1a\n':
+            w, h = struct.unpack('>II', data[16:24])
+            return w, h
+        # JPEG — SOF0/SOF2 마커에서 크기 추출
+        if data[:2] == b'\xff\xd8':
+            i = 2
+            while i < len(data) - 8:
+                if data[i] != 0xFF:
+                    break
+                marker = data[i + 1]
+                if marker in (0xC0, 0xC2):  # SOF0, SOF2
+                    h, w = struct.unpack('>HH', data[i + 5:i + 9])
+                    return w, h
+                length = struct.unpack('>H', data[i + 2:i + 4])[0]
+                i += 2 + length
+        # WEBP
+        if data[:4] == b'RIFF' and data[8:12] == b'WEBP':
+            if data[12:16] == b'VP8 ':
+                w = struct.unpack('<H', data[26:28])[0] & 0x3FFF
+                h = struct.unpack('<H', data[28:30])[0] & 0x3FFF
+                return w, h
+            elif data[12:16] == b'VP8L':
+                bits = struct.unpack('<I', data[21:25])[0]
+                w = (bits & 0x3FFF) + 1
+                h = ((bits >> 14) & 0x3FFF) + 1
+                return w, h
+    except Exception:
+        pass
+    return 0, 0
+
+
 def _format_antenna(d):
     ac = int(d.get('antenna_count', 0))
     oac = int(d.get('other_antenna_count', 0))
@@ -63,6 +99,7 @@ def generate_certificate_hwp(form_data, photo_list=None, blueprint_bytes=None):
         bp_ext, bp_mime = _detect_image_type(blueprint_bytes)
         bp_bin_id = 'blueprint'
         image_items.append((bp_bin_id, f'blueprint.{bp_ext}', bp_mime))
+    photo_sizes = {}  # bin_id → (pixel_w, pixel_h)
     if photo_list:
         for i, p in enumerate(photo_list):
             if p:
@@ -70,6 +107,9 @@ def generate_certificate_hwp(form_data, photo_list=None, blueprint_bytes=None):
                 photo_bin_ids.append(pid)
                 p_ext, p_mime = _detect_image_type(p)
                 image_items.append((pid, f'photo{i}.{p_ext}', p_mime))
+                pw, ph = _get_image_size(p)
+                if pw > 0 and ph > 0:
+                    photo_sizes[pid] = (pw, ph)
 
     has_photos = photo_list and len(photo_list) > 0
 
@@ -89,7 +129,8 @@ def generate_certificate_hwp(form_data, photo_list=None, blueprint_bytes=None):
         zf.writestr('Contents/section0.xml',
                      _section_xml(form_data, has_photos, bool(blueprint_bytes),
                                   photo_bin_ids=photo_bin_ids,
-                                  bp_bin_id=bp_bin_id))
+                                  bp_bin_id=bp_bin_id,
+                                  photo_sizes=photo_sizes))
 
         if blueprint_bytes:
             zf.writestr(f'BinData/blueprint.{bp_ext}', blueprint_bytes)
@@ -493,13 +534,23 @@ def _table_cell(text, col_addr, row_addr, width, height=1200,
       </hp:tc>'''
 
 
-def _image_table_cell(bin_item_id, col_addr, row_addr, width, height, col_span=1):
-    """이미지가 포함된 테이블 셀"""
+def _image_table_cell(bin_item_id, col_addr, row_addr, width, height,
+                      col_span=1, orig_px=None):
+    """이미지가 포함된 테이블 셀.
+    orig_px: (pixel_w, pixel_h) 원본 크기. 제공 시 비율 유지하여 셀 안에 맞춤."""
     sid = _uid()
     pid = _uid()
-    # 이미지를 셀 내부에 꽉 채우되 마진 제외
-    img_w = width - 284  # 좌우 마진 제외
-    img_h = height - 84   # 상하 마진 제외
+    max_w = width - 284   # 좌우 마진 제외
+    max_h = height - 84   # 상하 마진 제외
+    if orig_px and orig_px[0] > 0 and orig_px[1] > 0:
+        # 원본 비율 유지하면서 셀 내 최대 크기로 축소
+        pw, ph = orig_px
+        ratio = min(max_w / pw, max_h / ph)
+        img_w = int(pw * ratio)
+        img_h = int(ph * ratio)
+    else:
+        img_w = max_w
+        img_h = max_h
     return f'''      <hp:tc name="" header="0" hasMargin="0" protect="0"
           editable="0" dirty="0" borderFillIDRef="{_BF_SOLID}">
         <hp:subList id="{sid}" textDirection="HORIZONTAL"
@@ -572,7 +623,7 @@ def _empty_table_cell(col_addr, row_addr, width, height):
 
 
 def _section_xml(form_data, has_photos=False, has_blueprint=False,
-                 photo_bin_ids=None, bp_bin_id=None):
+                 photo_bin_ids=None, bp_bin_id=None, photo_sizes=None):
     d = form_data
     photo_text = "붙임' 참조" if has_photos else '-'
 
@@ -760,10 +811,67 @@ def _section_xml(form_data, has_photos=False, has_blueprint=False,
   </hp:run>
 </hp:p>'''
 
-    # 현장사진 이미지 (동적 행수 테이블) - 2페이지
+    # 현장사진 이미지 - 2페이지 (7~8장: 2×2 테이블 2개로 2/3페이지 분할)
     photo_section = ''
     if has_photos and photo_bin_ids:
-        # pageBreak="1"로 2페이지 상단에 배치
+        photo_count = len(photo_bin_ids)
+        photo_col_w = content_w // 2  # 90mm
+        _sizes = photo_sizes or {}
+
+        def _build_photo_table(ids_slice, start_idx, row_h, num_rows, page_break=False):
+            """2열 사진 테이블 XML 생성. ids_slice: 해당 테이블에 들어갈 bin_id 리스트."""
+            nonlocal photo_section
+            # 테이블 앞에 페이지 브레이크가 필요하면 빈 단락 추가
+            if page_break:
+                _bp_pid = _uid()
+                photo_section += f'''<hp:p id="{_bp_pid}" paraPrIDRef="{_PPR_LEFT}" styleIDRef="0"
+    pageBreak="1" columnBreak="0" merged="0">
+  <hp:run charPrIDRef="{_CPR_BODY}">
+    <hp:t> </hp:t>
+  </hp:run>
+</hp:p>'''
+
+            rows_xml = ''
+            for row_idx in range(num_rows):
+                rows_xml += '    <hp:tr>\n'
+                for col_idx in range(2):
+                    slot = row_idx * 2 + col_idx
+                    if slot < len(ids_slice):
+                        bid = ids_slice[slot]
+                        orig = _sizes.get(bid)
+                        rows_xml += _image_table_cell(
+                            bid, col_idx, row_idx,
+                            photo_col_w, row_h, orig_px=orig)
+                    else:
+                        rows_xml += _empty_table_cell(
+                            col_idx, row_idx, photo_col_w, row_h)
+                    rows_xml += '\n'
+                rows_xml += '    </hp:tr>\n'
+
+            tbl_id = _uid()
+            tbl_p_id = _uid()
+            total_h = row_h * num_rows
+            photo_section += f'''<hp:p id="{tbl_p_id}" paraPrIDRef="{_PPR_JUSTIFY}" styleIDRef="0"
+    pageBreak="0" columnBreak="0" merged="0">
+  <hp:run charPrIDRef="{_CPR_BODY}">
+    <hp:tbl id="{tbl_id}" zOrder="0" numberingType="TABLE"
+      textWrap="TOP_AND_BOTTOM" textFlow="BOTH_SIDES" lock="0"
+      dropcapstyle="None" pageBreak="CELL" repeatHeader="0"
+      rowCnt="{num_rows}" colCnt="2" cellSpacing="0" borderFillIDRef="{_BF_SOLID}"
+      noAdjust="0">
+      <hp:sz width="{content_w}" widthRelTo="ABSOLUTE"
+        height="{total_h}" heightRelTo="ABSOLUTE" protect="0"/>
+      <hp:pos treatAsChar="1" affectLSpacing="0" flowWithText="1"
+        allowOverlap="0" holdAnchorAndSO="0" vertRelTo="PARA"
+        horzRelTo="COLUMN" vertAlign="TOP" horzAlign="LEFT"
+        vertOffset="0" horzOffset="0"/>
+      <hp:outMargin left="0" right="0" top="0" bottom="0"/>
+      <hp:inMargin left="0" right="0" top="0" bottom="0"/>
+{rows_xml}    </hp:tbl>
+  </hp:run>
+</hp:p>'''
+
+        # [붙임] 제목 (pageBreak="1"로 2페이지 상단에 배치)
         _pb_pid = _uid()
         photo_section += f'''<hp:p id="{_pb_pid}" paraPrIDRef="{_PPR_LEFT}" styleIDRef="0"
     pageBreak="1" columnBreak="0" merged="0">
@@ -772,58 +880,16 @@ def _section_xml(form_data, has_photos=False, has_blueprint=False,
   </hp:run>
 </hp:p>'''
 
-        # 사진 수에 따라 행수 동적 결정: 1~4장→2행, 5~6장→3행, 7~8장→4행
-        photo_count = len(photo_bin_ids)
         if photo_count <= 4:
-            num_photo_rows = 2
+            # 1~4장: 2×2 테이블 1개 (2페이지)
+            _build_photo_table(photo_bin_ids[:4], 0, 30000, 2)
         elif photo_count <= 6:
-            num_photo_rows = 3
+            # 5~6장: 2×3 테이블 1개 (2페이지)
+            _build_photo_table(photo_bin_ids[:6], 0, 21000, 3)
         else:
-            num_photo_rows = 4
-
-        # 행 높이: 페이지 내 수용되도록 행수별 조정
-        # 페이지 콘텐츠 영역 ~69162 HWPU, [붙임] 텍스트 ~3000 HWPU
-        photo_row_heights = {2: 30000, 3: 21000, 4: 16000}
-        photo_row_h = photo_row_heights[num_photo_rows]
-
-        photo_col_w = content_w // 2  # 90mm
-        photo_rows_xml = ''
-        for row_idx in range(num_photo_rows):
-            photo_rows_xml += '    <hp:tr>\n'
-            for col_idx in range(2):
-                photo_idx = row_idx * 2 + col_idx
-                if photo_idx < photo_count:
-                    photo_rows_xml += _image_table_cell(
-                        photo_bin_ids[photo_idx], col_idx, row_idx,
-                        photo_col_w, photo_row_h)
-                else:
-                    photo_rows_xml += _empty_table_cell(
-                        col_idx, row_idx, photo_col_w, photo_row_h)
-                photo_rows_xml += '\n'
-            photo_rows_xml += '    </hp:tr>\n'
-
-        photo_tbl_id = _uid()
-        photo_tbl_p_id = _uid()
-        total_photo_h = photo_row_h * num_photo_rows
-        photo_section += f'''<hp:p id="{photo_tbl_p_id}" paraPrIDRef="{_PPR_JUSTIFY}" styleIDRef="0"
-    pageBreak="0" columnBreak="0" merged="0">
-  <hp:run charPrIDRef="{_CPR_BODY}">
-    <hp:tbl id="{photo_tbl_id}" zOrder="0" numberingType="TABLE"
-      textWrap="TOP_AND_BOTTOM" textFlow="BOTH_SIDES" lock="0"
-      dropcapstyle="None" pageBreak="CELL" repeatHeader="0"
-      rowCnt="{num_photo_rows}" colCnt="2" cellSpacing="0" borderFillIDRef="{_BF_SOLID}"
-      noAdjust="0">
-      <hp:sz width="{content_w}" widthRelTo="ABSOLUTE"
-        height="{total_photo_h}" heightRelTo="ABSOLUTE" protect="0"/>
-      <hp:pos treatAsChar="1" affectLSpacing="0" flowWithText="1"
-        allowOverlap="0" holdAnchorAndSO="0" vertRelTo="PARA"
-        horzRelTo="COLUMN" vertAlign="TOP" horzAlign="LEFT"
-        vertOffset="0" horzOffset="0"/>
-      <hp:outMargin left="0" right="0" top="0" bottom="0"/>
-      <hp:inMargin left="0" right="0" top="0" bottom="0"/>
-{photo_rows_xml}    </hp:tbl>
-  </hp:run>
-</hp:p>'''
+            # 7~8장: 2×2 테이블 2개 (2페이지 + 3페이지)
+            _build_photo_table(photo_bin_ids[:4], 0, 30000, 2)
+            _build_photo_table(photo_bin_ids[4:], 4, 30000, 2, page_break=True)
 
     secpr_pid = _uid()
 

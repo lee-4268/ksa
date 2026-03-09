@@ -245,55 +245,60 @@ def generate_certificate_pdf(form_data, photo_list=None, blueprint_bytes=None):
         elements.append(Paragraph('[붙임] 현장사진', s_photo_title))
 
         photo_count = len(photo_list)
-        # 사진 수에 따라 행수 동적 결정: 1~4장→2행, 5~6장→3행, 7~8장→4행
-        if photo_count <= 4:
-            num_rows = 2
-        elif photo_count <= 6:
-            num_rows = 3
-        else:
-            num_rows = 4
         cell_w = page_width / 2
-        row_heights = {2: 110 * mm, 3: 78 * mm, 4: 62 * mm}
-        cell_h = row_heights[num_rows]
         cell_pad = 0.5 * mm
 
-        photo_table_data = []
-        for row_idx in range(num_rows):
-            row = []
-            for col_idx in range(2):
-                photo_idx = row_idx * 2 + col_idx
-                if photo_idx < photo_count and photo_list[photo_idx]:
-                    try:
-                        img_io = io.BytesIO(photo_list[photo_idx])
-                        img = Image(img_io)
-                        iw, ih = img.drawWidth, img.drawHeight
-                        max_w = cell_w - cell_pad * 2
-                        max_h = cell_h - cell_pad * 2
-                        ratio = min(max_w / iw, max_h / ih)
-                        img.drawWidth = iw * ratio
-                        img.drawHeight = ih * ratio
-                        img.hAlign = 'CENTER'
-                        row.append(img)
-                    except Exception as e:
-                        logger.warning(f"Failed to add photo {photo_idx}: {e}")
+        def _build_pdf_photo_table(photos_slice, num_rows, cell_h):
+            """2열 사진 테이블 생성"""
+            table_data = []
+            for row_idx in range(num_rows):
+                row = []
+                for col_idx in range(2):
+                    slot = row_idx * 2 + col_idx
+                    if slot < len(photos_slice) and photos_slice[slot]:
+                        try:
+                            img_io = io.BytesIO(photos_slice[slot])
+                            img = Image(img_io)
+                            iw, ih = img.drawWidth, img.drawHeight
+                            max_w = cell_w - cell_pad * 2
+                            max_h = cell_h - cell_pad * 2
+                            ratio = min(max_w / iw, max_h / ih)
+                            img.drawWidth = iw * ratio
+                            img.drawHeight = ih * ratio
+                            img.hAlign = 'CENTER'
+                            row.append(img)
+                        except Exception as e:
+                            logger.warning(f"Failed to add photo: {e}")
+                            row.append('')
+                    else:
                         row.append('')
-                else:
-                    row.append('')
-            photo_table_data.append(row)
+                table_data.append(row)
 
-        photo_table = Table(photo_table_data,
-                            colWidths=[cell_w, cell_w],
-                            rowHeights=[cell_h] * num_rows)
-        photo_table.setStyle(TableStyle([
-            ('GRID', (0, 0), (-1, -1), 0.5, colors.black),
-            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ('TOPPADDING', (0, 0), (-1, -1), cell_pad),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), cell_pad),
-            ('LEFTPADDING', (0, 0), (-1, -1), cell_pad),
-            ('RIGHTPADDING', (0, 0), (-1, -1), cell_pad),
-        ]))
-        elements.append(photo_table)
+            tbl = Table(table_data,
+                        colWidths=[cell_w, cell_w],
+                        rowHeights=[cell_h] * num_rows)
+            tbl.setStyle(TableStyle([
+                ('GRID', (0, 0), (-1, -1), 0.5, colors.black),
+                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('TOPPADDING', (0, 0), (-1, -1), cell_pad),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), cell_pad),
+                ('LEFTPADDING', (0, 0), (-1, -1), cell_pad),
+                ('RIGHTPADDING', (0, 0), (-1, -1), cell_pad),
+            ]))
+            return tbl
+
+        if photo_count <= 4:
+            # 1~4장: 2×2 테이블 1개 (2페이지)
+            elements.append(_build_pdf_photo_table(photo_list[:4], 2, 110 * mm))
+        elif photo_count <= 6:
+            # 5~6장: 2×3 테이블 1개 (2페이지)
+            elements.append(_build_pdf_photo_table(photo_list[:6], 3, 78 * mm))
+        else:
+            # 7~8장: 2×2 테이블 2개 (2페이지 + 3페이지)
+            elements.append(_build_pdf_photo_table(photo_list[:4], 2, 110 * mm))
+            elements.append(PageBreak())
+            elements.append(_build_pdf_photo_table(photo_list[4:], 2, 110 * mm))
 
     doc.build(elements)
     output.seek(0)

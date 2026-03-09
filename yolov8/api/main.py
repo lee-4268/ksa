@@ -6789,7 +6789,7 @@ async def cert_generate(request: Request):
 
     try:
         photo_list = []
-        for p in photos_b64[:6]:
+        for p in photos_b64[:8]:
             decoded = _decode_base64_image(p)
             if decoded:
                 photo_list.append(decoded)
