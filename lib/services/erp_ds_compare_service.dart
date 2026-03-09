@@ -56,6 +56,7 @@ class ErpDsCompareResult {
   final List<String> warnings;
   final Map<String, int> summary;
   final List<CompareItem> items;
+  final Map<String, Map<String, String>> resolveMap; // {zpwino: {input, type}}
 
   ErpDsCompareResult({
     required this.total,
@@ -65,10 +66,19 @@ class ErpDsCompareResult {
     required this.warnings,
     required this.summary,
     required this.items,
+    required this.resolveMap,
   });
 
   factory ErpDsCompareResult.fromJson(Map<String, dynamic> json) {
     final summaryRaw = json['summary'] as Map<String, dynamic>? ?? {};
+    final resolveRaw = json['resolve_map'] as Map<String, dynamic>? ?? {};
+    final resolveMap = resolveRaw.map((k, v) {
+      final m = v as Map<String, dynamic>? ?? {};
+      return MapEntry(k, {
+        'input': m['input']?.toString() ?? '',
+        'type': m['type']?.toString() ?? '',
+      });
+    });
     return ErpDsCompareResult(
       total: json['total'] as int? ?? 0,
       erpFound: json['erp_found'] as int? ?? 0,
@@ -80,6 +90,7 @@ class ErpDsCompareResult {
               ?.map((e) => CompareItem.fromJson(e as Map<String, dynamic>))
               .toList() ??
           [],
+      resolveMap: resolveMap,
     );
   }
 }

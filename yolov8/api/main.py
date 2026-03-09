@@ -7050,7 +7050,7 @@ async def cert_batch_lookup(request: Request):
     await _verify_auth(request)
     body = await request.json()
     zpwino_list = body.get("zpwino_list", [])
-    zpwino_list = list(dict.fromkeys([str(z).strip() for z in zpwino_list if str(z).strip()]))
+    zpwino_list = list(dict.fromkeys([str(z).strip().replace("-", "") for z in zpwino_list if str(z).strip()]))
 
     if not zpwino_list:
         raise HTTPException(status_code=400, detail="허가번호를 입력해주세요.")
@@ -7325,28 +7325,37 @@ async def cert_batch_download(job_id: str, request: Request):
 # ============================================================
 
 # ERP zpirty3 → DS 공중선주설치형태명 정규화 매핑
+# DS 기준 14개 값: 철탑(지면), 강관주, 통신주, 원폴(건물), 옥내/터널/지하/차량,
+#   쌍통신주, 기설물, 옥내외혼합형, 간이폴및비기준설치대, 한전주(KT통신주),
+#   철탑(건물), 프레임, 복합형(원폴,분산프레임등), 모노폴
 _TOWER_TYPE_NORMALIZE = {
-    "간이폴": "간이폴",
-    "강관주": "강관주",
+    # ERP → DS (lowercase 키)
     "철탑(지면)": "철탑(지면)",
-    "철탑(건물)": "철탑(건물)",
-    "분산폴": "분산폴",
+    "강관주": "강관주",
     "통신주(cp주)": "통신주",
     "통신주": "통신주",
     "원폴(건물)": "원폴(건물)",
+    "옥내,터널,지하등": "옥내, 터널, 지하, 차량",
     "쌍통신주": "쌍통신주",
-    "IP주": "기설물",
+    "ip주": "기설물",
     "기설물": "기설물",
-    "옥내,터널,지하등": "옥내",
-    "모노폴": "모노폴",
-    "한전주(kt통신주)": "한전주",
-    "한전주": "한전주",
+    "간이폴": "간이폴 및 비기준 설치대",
+    "한전주(kt통신주)": "한전주(KT통신주)",
+    "한전주": "한전주(KT통신주)",
+    "철탑(건물)": "철탑(건물)",
     "프레임": "프레임",
-    "환경친화형(확인필요)": "환경친화형",
-    "환경친화형 프레임": "환경친화형",
-    "환경친화형(건물)": "환경친화형",
-    "환경친화형": "환경친화형",
-    "기타": "기타",
+    "환경친화형(확인필요)": "프레임",
+    "환경친화형 프레임": "프레임",
+    "환경친화형(건물)": "프레임",
+    "환경친화형": "프레임",
+    "분산폴": "복합형(원폴,분산프레임 등)",
+    "모노폴": "모노폴",
+    "기타": "기설물",
+    # DS 값 자체 (이미 정규화된 경우)
+    "옥내, 터널, 지하, 차량": "옥내, 터널, 지하, 차량",
+    "옥내외 혼합형": "옥내외 혼합형",
+    "간이폴 및 비기준 설치대": "간이폴 및 비기준 설치대",
+    "복합형(원폴,분산프레임 등)": "복합형(원폴,분산프레임 등)",
 }
 
 
@@ -7387,38 +7396,61 @@ def _compare_values(erp_val: str, ds_val: str, normalize_fn=None) -> str:
         return "불일치"
 
 
-def _scan_ds_sheets_by_zpwino(
+# ── DS SQLite 캐시 (ZIP → SQLite 인덱스 조회) ────────────────
+_ds_compare_cache = {}  # {cache_key: {"db_path": str, "ts": float}}
+_ds_compare_cache_lock = threading.Lock()
+DS_COMPARE_CACHE_TTL = 3600  # 1시간
+
+
+def _get_ds_compare_cache_key(division_id: str, division_code: str, import_date: str) -> str:
+    return f"{division_id}_{division_code}_{import_date}"
+
+
+def _build_ds_compare_cache(
     zip_cache_path: str,
     file_manifest: dict,
-    target_zpwinos: set,
-) -> dict:
-    """DS ZIP에서 장치/안테나 시트를 스캔하여 허가번호 기준으로 데이터 추출.
-
-    Returns: {
-        "장치": {zpwino: ["serial1", "serial2", ...]},
-        "안테나": {zpwino: "공중선주설치형태명"},
-        "warnings": ["..."]
-    }
+    cache_key: str,
+) -> tuple:
+    """DS ZIP → SQLite DB 빌드. 장치/안테나 시트에서 허가번호+값 추출.
+    Returns: (db_path, warnings)
     """
-    result = {"장치": {}, "안테나": {}, "warnings": []}
+    import sqlite3
+    warnings = []
 
-    # 시트별 설정: (시트명 후보들, 조인키 컬럼명 후보, 값 컬럼명 후보)
+    db_path = os.path.join(_tempfile.gettempdir(), f"ds_compare_{cache_key}.db")
+    tmp_path = db_path + ".tmp"
+
+    conn = sqlite3.connect(tmp_path)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=OFF")
+    conn.execute("""CREATE TABLE IF NOT EXISTS ds_device (
+        zpwino TEXT, serial_no TEXT
+    )""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS ds_antenna (
+        zpwino TEXT, tower_type TEXT
+    )""")
+    conn.execute("DELETE FROM ds_device")
+    conn.execute("DELETE FROM ds_antenna")
+
     sheet_configs = {
         "장치": {
+            "table": "ds_device",
             "sheet_candidates": ["장치"],
             "key_cols": ["허가번호"],
             "val_cols": ["기기일련번호"],
+            "val_db_col": "serial_no",
         },
         "안테나": {
+            "table": "ds_antenna",
             "sheet_candidates": ["안테나"],
             "key_cols": ["허가번호"],
             "val_cols": ["공중선주 설치형태명", "공중선주설치형태명"],
+            "val_db_col": "tower_type",
         },
     }
 
     with zipfile.ZipFile(zip_cache_path, "r") as zf:
         for sheet_type, cfg in sheet_configs.items():
-            # file_manifest에서 해당 시트의 엔트리 찾기
             manifest_entries = []
             matched_sheet_name = None
             for candidate in cfg["sheet_candidates"]:
@@ -7426,7 +7458,6 @@ def _scan_ds_sheets_by_zpwino(
                     manifest_entries = file_manifest[candidate]
                     matched_sheet_name = candidate
                     break
-            # 부분 매칭: file_manifest 키에 시트명이 포함된 경우
             if not manifest_entries:
                 for fm_key in file_manifest:
                     for candidate in cfg["sheet_candidates"]:
@@ -7438,10 +7469,10 @@ def _scan_ds_sheets_by_zpwino(
                         break
 
             if not manifest_entries:
-                result["warnings"].append(f"DS 파일에 '{sheet_type}' 시트가 없습니다")
+                warnings.append(f"DS 파일에 '{sheet_type}' 시트가 없습니다")
                 continue
 
-            sheet_data = {}
+            batch = []
             for entry in manifest_entries:
                 fname = entry["f"]
                 xls_sheet_name = entry.get("orig", matched_sheet_name)
@@ -7463,7 +7494,6 @@ def _scan_ds_sheets_by_zpwino(
                     del xls_bytes
                     continue
 
-                # 헤더에서 키/값 컬럼 인덱스 찾기
                 header = []
                 for col in range(target_sheet.ncols):
                     h = _xlrd_cell_to_str(target_sheet, 0, col)
@@ -7488,75 +7518,272 @@ def _scan_ds_sheets_by_zpwino(
                         break
 
                 if key_col_idx is None:
-                    result["warnings"].append(
-                        f"'{sheet_type}' 시트에 허가번호 컬럼이 없습니다 (헤더: {header[:10]})")
+                    warnings.append(f"'{sheet_type}' 시트에 허가번호 컬럼이 없습니다 (헤더: {header[:10]})")
                     wb.release_resources()
                     del xls_bytes
                     continue
                 if val_col_idx is None:
-                    val_col_name = cfg["val_cols"][0]
-                    result["warnings"].append(
-                        f"'{sheet_type}' 시트에 '{val_col_name}' 컬럼이 없습니다 (헤더: {header[:10]})")
+                    warnings.append(f"'{sheet_type}' 시트에 '{cfg['val_cols'][0]}' 컬럼이 없습니다")
                     wb.release_resources()
                     del xls_bytes
                     continue
 
-                # 데이터 행 스캔
                 for row_i in range(1, target_sheet.nrows):
                     key_val = _xlrd_cell_to_str(target_sheet, row_i, key_col_idx)
                     if not key_val:
                         continue
-                    key_val = key_val.strip()
-                    if key_val not in target_zpwinos:
-                        continue
                     cell_val = _xlrd_cell_to_str(target_sheet, row_i, val_col_idx) or ""
-
-                    if sheet_type == "장치":
-                        # 장치: 같은 허가번호에 여러 일련번호 가능
-                        if key_val not in sheet_data:
-                            sheet_data[key_val] = []
-                        if cell_val.strip():
-                            sheet_data[key_val].append(cell_val.strip())
-                    else:
-                        # 안테나: 허가번호당 하나의 설치형태
-                        if key_val not in sheet_data:
-                            sheet_data[key_val] = cell_val.strip()
+                    batch.append((key_val.strip(), cell_val.strip()))
+                    if len(batch) >= 5000:
+                        conn.executemany(f"INSERT INTO {cfg['table']} VALUES (?,?)", batch)
+                        batch.clear()
 
                 wb.release_resources()
                 del xls_bytes
 
-            result[sheet_type] = sheet_data
+            if batch:
+                conn.executemany(f"INSERT INTO {cfg['table']} VALUES (?,?)", batch)
+
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_device_zpwino ON ds_device(zpwino)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_antenna_zpwino ON ds_antenna(zpwino)")
+    conn.commit()
+    conn.close()
+
+    if os.path.exists(db_path):
+        try:
+            os.remove(db_path)
+        except Exception:
+            pass
+    os.rename(tmp_path, db_path)
+
+    return db_path, warnings
+
+
+def _get_ds_compare_db(
+    zip_cache_path: str,
+    file_manifest: dict,
+    division_id: str,
+    division_code: str,
+    import_date: str,
+) -> tuple:
+    """DS 비교용 SQLite 캐시 반환. 없으면 빌드."""
+    cache_key = _get_ds_compare_cache_key(division_id, division_code, import_date)
+    now = _time_mod.time()
+
+    cached = _ds_compare_cache.get(cache_key)
+    if cached and os.path.exists(cached["db_path"]) and (now - cached["ts"]) < DS_COMPARE_CACHE_TTL:
+        return cached["db_path"], []
+
+    with _ds_compare_cache_lock:
+        cached = _ds_compare_cache.get(cache_key)
+        if cached and os.path.exists(cached["db_path"]) and (_time_mod.time() - cached["ts"]) < DS_COMPARE_CACHE_TTL:
+            return cached["db_path"], []
+
+        logger.info(f"DS 비교 SQLite 캐시 빌드: {cache_key}")
+        t0 = _time_mod.time()
+        db_path, warnings = _build_ds_compare_cache(zip_cache_path, file_manifest, cache_key)
+        _ds_compare_cache[cache_key] = {"db_path": db_path, "ts": _time_mod.time()}
+        logger.info(f"DS 비교 SQLite 캐시 빌드 완료: {_time_mod.time() - t0:.1f}초")
+        return db_path, warnings
+
+
+def _scan_ds_sheets_by_zpwino(
+    zip_cache_path: str,
+    file_manifest: dict,
+    target_zpwinos: set,
+    division_id: str = "",
+    division_code: str = "",
+    import_date: str = "",
+) -> dict:
+    """DS SQLite 캐시에서 허가번호 기준 배치 조회.
+    첫 호출 시 ZIP → SQLite 빌드, 이후 인덱스 O(1) 조회.
+    """
+    import sqlite3
+    BATCH = 900
+
+    db_path, warnings = _get_ds_compare_db(
+        zip_cache_path, file_manifest, division_id, division_code, import_date)
+
+    result = {"장치": {}, "안테나": {}, "warnings": warnings}
+    zpwino_list = list(target_zpwinos)
+
+    try:
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+
+        # 장치: 허가번호별 일련번호 목록
+        for i in range(0, len(zpwino_list), BATCH):
+            batch = zpwino_list[i:i + BATCH]
+            placeholders = ",".join("?" * len(batch))
+            cur = conn.execute(
+                f"SELECT zpwino, serial_no FROM ds_device WHERE zpwino IN ({placeholders})", batch)
+            for row in cur.fetchall():
+                z = row["zpwino"]
+                sn = row["serial_no"]
+                if z not in result["장치"]:
+                    result["장치"][z] = []
+                if sn:
+                    result["장치"][z].append(sn)
+
+        # 안테나: 허가번호별 설치형태
+        for i in range(0, len(zpwino_list), BATCH):
+            batch = zpwino_list[i:i + BATCH]
+            placeholders = ",".join("?" * len(batch))
+            cur = conn.execute(
+                f"SELECT zpwino, tower_type FROM ds_antenna WHERE zpwino IN ({placeholders})", batch)
+            for row in cur.fetchall():
+                z = row["zpwino"]
+                if z not in result["안테나"]:
+                    result["안테나"][z] = row["tower_type"] or ""
+
+        conn.close()
+    except Exception as e:
+        logger.warning(f"DS 비교 캐시 조회 실패: {e}")
+        result["warnings"].append(f"DS 캐시 조회 실패: {e}")
 
     return result
 
 
 @app.post("/erp-ds/compare")
 async def erp_ds_compare(request: Request):
-    """ERP vs DS 전산자료 비교 (철탑형태 + 일련번호)"""
+    """ERP vs DS 전산자료 비교 (철탑형태 + 일련번호)
+    입력: 허가번호, 호출명칭, 주소 혼합 가능 → 자동으로 허가번호 변환
+    """
     await _verify_auth(request)
     body = await request.json()
-    zpwino_list = body.get("zpwino_list", [])
+    raw_list = body.get("zpwino_list", [])
     division_id = body.get("division_id", "")
     division_code = body.get("division_code", "")
     import_date = body.get("import_date", "")
 
-    # 입력 검증
-    zpwino_list = list(dict.fromkeys([str(z).strip() for z in zpwino_list if str(z).strip()]))
-    if not zpwino_list:
-        raise HTTPException(status_code=400, detail="허가번호를 입력해주세요.")
-    if len(zpwino_list) > 500:
+    # 입력 정제 (하이픈 자동 제거, 중복 제거)
+    raw_list = list(dict.fromkeys([str(z).strip() for z in raw_list if str(z).strip()]))
+    if not raw_list:
+        raise HTTPException(status_code=400, detail="검색어를 입력해주세요.")
+    if len(raw_list) > 500:
         raise HTTPException(status_code=400, detail="한 번에 최대 500건까지 비교 가능합니다.")
     if not division_id or not import_date:
         raise HTTPException(status_code=400, detail="본부 및 DS 업로드 정보가 필요합니다.")
 
     try:
+        # 호출명칭/주소 → 허가번호 변환
+        zpwino_list, resolve_map = await asyncio.to_thread(_resolve_inputs_to_zpwino, raw_list)
         result = await asyncio.to_thread(
             _erp_ds_compare_sync, zpwino_list, division_id, division_code, import_date
         )
+        # 원본 입력값 매핑 정보 추가
+        result["resolve_map"] = resolve_map
         return result
     except Exception as e:
         logger.error(f"ERP-DS 비교 실패: {e}")
         raise HTTPException(status_code=500, detail=f"비교 처리 중 오류: {e}")
+
+
+def _resolve_inputs_to_zpwino(raw_list: list) -> tuple:
+    """입력값을 허가번호로 변환 (배치 최적화).
+    - 숫자만 → 허가번호 (하이픈 제거)
+    - 문자 포함 → 호출명칭/주소 배치 조회로 zpwino 변환
+
+    Returns: (zpwino_list, resolve_map)
+    """
+    import sqlite3
+    _cert_cache_load()
+
+    zpwino_list = []
+    resolve_map = {}
+    text_inputs = []  # 숫자가 아닌 입력 (호출명칭/주소)
+
+    # 1단계: 숫자/텍스트 분리
+    for raw in raw_list:
+        cleaned = raw.replace("-", "").strip()
+        if cleaned.isdigit():
+            if cleaned not in resolve_map:
+                zpwino_list.append(cleaned)
+                resolve_map[cleaned] = {"input": raw, "type": "허가번호"}
+        else:
+            text_inputs.append(raw)
+
+    if not text_inputs:
+        return zpwino_list, resolve_map
+
+    # 2단계: 텍스트 입력 배치 조회 (WHERE IN)
+    BATCH = 900
+    try:
+        conn = sqlite3.connect(_cert_cache_db_path)
+        conn.row_factory = sqlite3.Row
+        remaining = list(text_inputs)
+
+        # 2a) 호출명칭 정확 매칭 (배치)
+        unresolved = []
+        for i in range(0, len(remaining), BATCH):
+            batch = remaining[i:i + BATCH]
+            placeholders = ",".join("?" * len(batch))
+            cur = conn.execute(
+                f"SELECT zpwino, zpwina FROM cert WHERE zpwina IN ({placeholders})", batch)
+            found = {row["zpwina"]: row["zpwino"] for row in cur.fetchall()}
+            for raw in batch:
+                if raw in found and found[raw]:
+                    zpwino = found[raw]
+                    if zpwino not in resolve_map:
+                        zpwino_list.append(zpwino)
+                        resolve_map[zpwino] = {"input": raw, "type": "호출명칭"}
+                else:
+                    unresolved.append(raw)
+        remaining = unresolved
+
+        # 2b) 주소 정확 매칭 (배치)
+        if remaining:
+            unresolved = []
+            for i in range(0, len(remaining), BATCH):
+                batch = remaining[i:i + BATCH]
+                placeholders = ",".join("?" * len(batch))
+                cur = conn.execute(
+                    f"SELECT zpwino, zpwiadr FROM cert WHERE zpwiadr IN ({placeholders})", batch)
+                found = {row["zpwiadr"]: row["zpwino"] for row in cur.fetchall()}
+                for raw in batch:
+                    if raw in found and found[raw]:
+                        zpwino = found[raw]
+                        if zpwino not in resolve_map:
+                            zpwino_list.append(zpwino)
+                            resolve_map[zpwino] = {"input": raw, "type": "주소"}
+                    else:
+                        unresolved.append(raw)
+            remaining = unresolved
+
+        # 2c) 나머지: LIKE 부분 검색 (건별, 최소화됨)
+        for raw in remaining:
+            found_zpwino = None
+            found_type = None
+            # 호출명칭 부분
+            cur = conn.execute("SELECT zpwino FROM cert WHERE zpwina LIKE ? LIMIT 1", (f"%{raw}%",))
+            row = cur.fetchone()
+            if row and row["zpwino"]:
+                found_zpwino = row["zpwino"]
+                found_type = "호출명칭(부분)"
+            else:
+                # 주소 부분
+                cur = conn.execute("SELECT zpwino FROM cert WHERE zpwiadr LIKE ? LIMIT 1", (f"%{raw}%",))
+                row = cur.fetchone()
+                if row and row["zpwino"]:
+                    found_zpwino = row["zpwino"]
+                    found_type = "주소(부분)"
+
+            if found_zpwino and found_zpwino not in resolve_map:
+                zpwino_list.append(found_zpwino)
+                resolve_map[found_zpwino] = {"input": raw, "type": found_type}
+            elif not found_zpwino and raw not in resolve_map:
+                zpwino_list.append(raw)
+                resolve_map[raw] = {"input": raw, "type": "미확인"}
+
+        conn.close()
+    except Exception as e:
+        logger.warning(f"입력값 변환 실패: {e}")
+        for raw in text_inputs:
+            if raw not in resolve_map:
+                zpwino_list.append(raw)
+                resolve_map[raw] = {"input": raw, "type": "미확인"}
+
+    return zpwino_list, resolve_map
 
 
 def _erp_ds_compare_sync(
@@ -7622,9 +7849,11 @@ def _erp_ds_compare_sync(
     if not file_manifest:
         logger.warning(f"DS fileManifest 없음: {division_id}/{upload_sk}")
 
-    # 4) DS 시트 스캔
+    # 4) DS 시트 스캔 (SQLite 캐시 활용)
     target_set = set(zpwino_list)
-    ds_data = _scan_ds_sheets_by_zpwino(zip_path, file_manifest, target_set)
+    ds_data = _scan_ds_sheets_by_zpwino(
+        zip_path, file_manifest, target_set,
+        division_id, division_code, import_date)
 
     ds_device = ds_data["장치"]    # {zpwino: [serial, ...]}
     ds_antenna = ds_data["안테나"]  # {zpwino: tower_type}
