@@ -822,8 +822,9 @@ async def startup_event():
     asyncio.create_task(_recover_stuck_jobs())
     _ds_job_worker_task = asyncio.create_task(_job_worker_loop())
 
-    # 설치확인서 조회 캐시 미리 빌드 (백그라운드)
+    # 설치확인서 조회 캐시 미리 빌드 (백그라운드) + 매일 00:00 자동 갱신
     asyncio.create_task(asyncio.to_thread(_cert_cache_load))
+    asyncio.create_task(_cert_cache_daily_scheduler())
 
     # Rate limiter + 호출명칭 세션 5분 주기 정리
     async def _rl_cleanup():
@@ -5042,7 +5043,7 @@ def _cert_lookup_streaming(query: str) -> dict:
 _cert_cache_lock = threading.Lock()
 _cert_cache_ts: float = 0.0
 _cert_cache_db_path: str = ""
-CERT_CACHE_TTL = 3600  # 1시간
+CERT_CACHE_TTL = 86400  # 24시간
 
 
 def _cert_cache_load():
@@ -5107,6 +5108,31 @@ def _cert_cache_load():
         _cert_cache_db_path = db_path
         _cert_cache_ts = _time_mod.time()
         logger.info(f"설치확인서 SQLite 캐시 빌드 완료: {total}행, {_cert_cache_ts - t0:.1f}초")
+
+
+def _cert_cache_force_rebuild():
+    """캐시 TTL 무시하고 강제 재빌드."""
+    global _cert_cache_ts
+    _cert_cache_ts = 0.0  # TTL 만료시켜서 재빌드 유도
+    _cert_cache_load()
+
+
+async def _cert_cache_daily_scheduler():
+    """매일 00:00 (KST) 에 캐시 자동 재빌드."""
+    from datetime import datetime, timedelta, timezone
+    KST = timezone(timedelta(hours=9))
+    while True:
+        now = datetime.now(KST)
+        tomorrow_midnight = (now + timedelta(days=1)).replace(
+            hour=0, minute=0, second=0, microsecond=0)
+        wait_seconds = (tomorrow_midnight - now).total_seconds()
+        logger.info(f"설치확인서 캐시 다음 갱신: {tomorrow_midnight.strftime('%Y-%m-%d %H:%M')} KST ({wait_seconds:.0f}초 후)")
+        await asyncio.sleep(wait_seconds)
+        try:
+            await asyncio.to_thread(_cert_cache_force_rebuild)
+            logger.info("설치확인서 캐시 자정 자동 갱신 완료")
+        except Exception as e:
+            logger.error(f"설치확인서 캐시 자정 갱신 실패: {e}")
 
 
 def _cert_lookup_cached(query: str) -> dict:
@@ -5443,14 +5469,95 @@ def _analyze_callname_bg(upload_id: str):
 
 
 def _query_callname_db(zpwina_values: list, zpwino_values: list) -> dict:
-    """6방향 교차 매칭 — S3 CSV 스트리밍 (메모리에 DB 전체 로드하지 않음).
+    """6방향 교차 매칭 — SQLite 캐시 활용 (인덱스 조회).
     {lookup_key: {area_hdofc_nm, ons_team_nm, zpcode, zpwiadr}}"""
+    import sqlite3
     zpwina_set = set(str(v) for v in zpwina_values if v)
     zpwino_set = set(str(v) for v in zpwino_values if v)
     all_query = zpwina_set | zpwino_set
     if not all_query:
         return {}
 
+    _cert_cache_load()  # SQLite 캐시 보장
+
+    result = {}
+    try:
+        conn = sqlite3.connect(_cert_cache_db_path)
+        conn.row_factory = sqlite3.Row
+
+        # 배치 크기 제한 (SQLite 변수 최대 999개)
+        query_list = list(all_query)
+        BATCH = 900
+        for offset in range(0, len(query_list), BATCH):
+            batch = query_list[offset:offset + BATCH]
+            placeholders = ",".join("?" * len(batch))
+
+            # zpwina 매칭
+            cur = conn.execute(
+                f"SELECT zpwina, zpwino, zpwiadr, zpcode, area_hdofc_nm, ons_team_nm "
+                f"FROM cert WHERE zpwina IN ({placeholders})", batch)
+            for row in cur:
+                data = {
+                    "area_hdofc_nm": row["area_hdofc_nm"] or "",
+                    "ons_team_nm": row["ons_team_nm"] or "",
+                    "zpcode": row["zpcode"] or "",
+                    "zpwiadr": row["zpwiadr"] or "",
+                }
+                for key in (row["zpwina"], row["zpwino"], row["zpwiadr"]):
+                    if key and key in all_query and key not in result:
+                        result[key] = data
+
+            # zpwino 매칭 (zpwina에서 못 찾은 것만)
+            remaining = [q for q in batch if q not in result]
+            if remaining:
+                ph2 = ",".join("?" * len(remaining))
+                cur = conn.execute(
+                    f"SELECT zpwina, zpwino, zpwiadr, zpcode, area_hdofc_nm, ons_team_nm "
+                    f"FROM cert WHERE zpwino IN ({ph2})", remaining)
+                for row in cur:
+                    data = {
+                        "area_hdofc_nm": row["area_hdofc_nm"] or "",
+                        "ons_team_nm": row["ons_team_nm"] or "",
+                        "zpcode": row["zpcode"] or "",
+                        "zpwiadr": row["zpwiadr"] or "",
+                    }
+                    for key in (row["zpwina"], row["zpwino"], row["zpwiadr"]):
+                        if key and key in all_query and key not in result:
+                            result[key] = data
+
+            # zpwiadr 매칭 (아직 못 찾은 것만)
+            remaining2 = [q for q in batch if q not in result]
+            if remaining2:
+                ph3 = ",".join("?" * len(remaining2))
+                cur = conn.execute(
+                    f"SELECT zpwina, zpwino, zpwiadr, zpcode, area_hdofc_nm, ons_team_nm "
+                    f"FROM cert WHERE zpwiadr IN ({ph3})", remaining2)
+                for row in cur:
+                    data = {
+                        "area_hdofc_nm": row["area_hdofc_nm"] or "",
+                        "ons_team_nm": row["ons_team_nm"] or "",
+                        "zpcode": row["zpcode"] or "",
+                        "zpwiadr": row["zpwiadr"] or "",
+                    }
+                    for key in (row["zpwina"], row["zpwino"], row["zpwiadr"]):
+                        if key and key in all_query and key not in result:
+                            result[key] = data
+
+        conn.close()
+    except Exception as e:
+        logger.warning(f"호출명칭 SQLite 매칭 실패, 스트리밍 fallback: {e}")
+        return _query_callname_db_streaming(zpwina_values, zpwino_values)
+
+    return result
+
+
+def _query_callname_db_streaming(zpwina_values: list, zpwino_values: list) -> dict:
+    """6방향 교차 매칭 — S3 CSV 스트리밍 fallback."""
+    zpwina_set = set(str(v) for v in zpwina_values if v)
+    zpwino_set = set(str(v) for v in zpwino_values if v)
+    all_query = zpwina_set | zpwino_set
+    if not all_query:
+        return {}
     result = {}
     total_rows = 0
     for row in _stream_s3_csvs():
@@ -5458,9 +5565,7 @@ def _query_callname_db(zpwina_values: list, zpwino_values: list) -> dict:
         zpwino = row.get("zpwino", "")
         zpwina = row.get("zpwina", "")
         zpwiadr = row.get("zpwiadr", "")
-        data = None
         matched_keys = []
-        # 6방향: 쿼리값이 zpwino/zpwina/zpwiadr 중 하나와 일치하면 매칭
         if zpwina and zpwina in all_query:
             matched_keys.append(zpwina)
         if zpwino and zpwino in all_query:
@@ -5477,10 +5582,8 @@ def _query_callname_db(zpwina_values: list, zpwino_values: list) -> dict:
             for k in matched_keys:
                 if k not in result:
                     result[k] = data
-        # 모든 쿼리값이 매칭되면 조기 종료
         if len(result) >= len(all_query):
             break
-
     global _callname_db_row_count
     if total_rows > 0:
         _callname_db_row_count = total_rows
