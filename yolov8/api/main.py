@@ -6810,7 +6810,7 @@ async def cert_generate(request: Request):
             ext = "pdf"
 
         zpwino = form_data.get("zpwino", "certificate")
-        filename = f"설치확인서_{zpwino}.{ext}"
+        filename = f"{zpwino}.{ext}"
         data = output.getvalue()
         del output, photo_list, blueprint_bytes
 

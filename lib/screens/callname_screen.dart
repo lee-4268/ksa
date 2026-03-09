@@ -76,20 +76,36 @@ class _CallnameScreenState extends State<CallnameScreen> {
 
   // ── Step 0: 파일 업로드 ──
 
-  Future<void> _pickAndUpload() async {
-    // Flutter Web: 첫 호출 시 FilePicker가 초기화되지 않아 null 반환하는 경우 대비
-    FilePickerResult? result;
+  Future<FilePickerResult?> _tryPickFile() async {
     try {
-      result = await FilePicker.platform.pickFiles(
+      return await FilePicker.platform.pickFiles(
         type: FileType.custom,
         allowedExtensions: ['xlsx', 'xls'],
         withData: true,
       );
     } catch (e) {
       debugPrint('FilePicker 오류: $e');
+      return null;
+    }
+  }
+
+  Future<void> _pickAndUpload() async {
+    // Flutter Web file_picker 8.x: 화면 진입 후 첫 호출 시
+    // window focus 이벤트가 change 이벤트보다 먼저 발생하여
+    // null을 반환하는 알려진 이슈.
+    // 해결: 다이얼로그가 열린 시간을 측정하여 비정상적으로 빠르면 재시도.
+    final stopwatch = Stopwatch()..start();
+    var result = await _tryPickFile();
+    stopwatch.stop();
+
+    if ((result == null || result.files.isEmpty) &&
+        stopwatch.elapsedMilliseconds < 2000) {
+      // 2초 미만에 null 반환 → 사용자가 취소한 것이 아닌 focus race condition
+      result = await _tryPickFile();
+      if (result == null || result.files.isEmpty) return;
+    } else if (result == null || result.files.isEmpty) {
       return;
     }
-    if (result == null || result.files.isEmpty) return;
 
     final file = result.files.first;
     if (file.bytes == null) {

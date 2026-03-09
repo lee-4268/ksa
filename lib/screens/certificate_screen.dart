@@ -186,9 +186,31 @@ class _IndividualTabState extends State<_IndividualTab>
     }
   }
 
+  /// FilePicker wrapper — 첫 호출 focus race condition 자동 재시도
+  Future<FilePickerResult?> _tryPickImage() async {
+    try {
+      return await FilePicker.platform
+          .pickFiles(type: FileType.image, withData: true);
+    } catch (e) {
+      debugPrint('FilePicker 오류: $e');
+      return null;
+    }
+  }
+
+  Future<FilePickerResult?> _pickImageSafe() async {
+    final sw = Stopwatch()..start();
+    var result = await _tryPickImage();
+    sw.stop();
+    if ((result == null || result.files.isEmpty) &&
+        sw.elapsedMilliseconds < 2000) {
+      result = await _tryPickImage();
+    }
+    return result;
+  }
+
   Future<void> _pickBlueprint() async {
-    final result = await FilePicker.platform.pickFiles(type: FileType.image, withData: true);
-    if (result != null && result.files.single.bytes != null) {
+    final result = await _pickImageSafe();
+    if (result != null && result.files.isNotEmpty && result.files.single.bytes != null) {
       setState(() {
         _blueprintBytes = result.files.single.bytes;
         _blueprintName = result.files.single.name;
@@ -197,8 +219,8 @@ class _IndividualTabState extends State<_IndividualTab>
   }
 
   Future<void> _pickPhoto(int index) async {
-    final result = await FilePicker.platform.pickFiles(type: FileType.image, withData: true);
-    if (result != null && result.files.single.bytes != null) {
+    final result = await _pickImageSafe();
+    if (result != null && result.files.isNotEmpty && result.files.single.bytes != null) {
       setState(() {
         if (index < _photoBytes.length) {
           _photoBytes[index] = result.files.single.bytes!;
@@ -255,7 +277,7 @@ class _IndividualTabState extends State<_IndividualTab>
       );
       final ext = format == 'hwpx' ? 'hwpx' : 'pdf';
       final zpwino = _zpwinoCtrl.text.isNotEmpty ? _zpwinoCtrl.text : 'cert';
-      dl.downloadFileBytes(bytes, '설치확인서_$zpwino.$ext');
+      dl.downloadFileBytes(bytes, '$zpwino.$ext');
       if (mounted) _showSnack('설치확인서 다운로드 완료');
     } catch (e) {
       if (mounted) _showSnack(e.toString().replaceFirst('Exception: ', ''));
@@ -492,14 +514,14 @@ class _IndividualTabState extends State<_IndividualTab>
           ),
           const SizedBox(height: 16),
 
-          _formLabel('현장사진 (최대 6장)'),
+          _formLabel('현장사진 (최대 8장)'),
           const SizedBox(height: 8),
           GridView.builder(
             shrinkWrap: true,
             physics: const NeverScrollableScrollPhysics(),
-            itemCount: 6,
+            itemCount: 8,
             gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: 3, mainAxisSpacing: 8, crossAxisSpacing: 8, childAspectRatio: 1,
+              crossAxisCount: 4, mainAxisSpacing: 8, crossAxisSpacing: 8, childAspectRatio: 1,
             ),
             itemBuilder: (_, i) {
               final hasPhoto = i < _photoBytes.length;
@@ -787,7 +809,7 @@ class _IndividualTabState extends State<_IndividualTab>
           GridView.builder(
             shrinkWrap: true,
             physics: const NeverScrollableScrollPhysics(),
-            itemCount: 6,
+            itemCount: 8,
             gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
               crossAxisCount: 2, mainAxisSpacing: 4, crossAxisSpacing: 4, childAspectRatio: 1,
             ),

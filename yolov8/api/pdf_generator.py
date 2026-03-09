@@ -13,7 +13,7 @@ reportlab을 사용하여 A4 크기의 설치확인서 PDF를 생성합니다.
   현장 사진 | 붙임' 참조 (colspan 3)
   ※ 굵은 글씨 항목은 필수 항목
 
-2페이지: [붙임] 현장사진 (6칸 그리드, 2x3)
+2페이지: [붙임] 현장사진 (8칸 그리드, 4x2)
 """
 import io
 import os
@@ -91,7 +91,7 @@ def generate_certificate_pdf(form_data, photo_list=None, blueprint_bytes=None):
     """
     Args:
         form_data: dict
-        photo_list: list of bytes (최대 6장) 또는 None
+        photo_list: list of bytes (최대 8장) 또는 None
         blueprint_bytes: bytes 또는 None
     Returns:
         io.BytesIO with PDF content
@@ -245,9 +245,9 @@ def generate_certificate_pdf(form_data, photo_list=None, blueprint_bytes=None):
         elements.append(Paragraph('[붙임] 현장사진', s_photo_title))
 
         photo_count = len(photo_list)
-        num_rows = 2 if photo_count <= 4 else 3
+        num_rows = 4  # 항상 4행 2열 (최대 8장)
         cell_w = page_width / 2
-        cell_h = 125 * mm if num_rows == 2 else 85 * mm
+        cell_h = 62 * mm  # 4행이 A4에 맞도록 조정
         cell_pad = 0.5 * mm
 
         photo_table_data = []
