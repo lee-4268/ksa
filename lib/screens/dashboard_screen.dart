@@ -10,6 +10,7 @@ import 'ds_dashboard_screen.dart';
 import 'ds_merge_screen.dart';
 import 'callname_screen.dart';
 import 'certificate_screen.dart';
+import 'erp_ds_compare_screen.dart';
 import '../widgets/user_profile_button.dart';
 
 /// 전국 현황 대시보드 화면
@@ -274,6 +275,13 @@ class _DashboardScreenState extends State<DashboardScreen>
                   subtitle: '개별/일괄 설치확인서 생성 (PDF/HWPX)',
                   color: const Color(0xFF00838F),
                   onTap: () => _navigateFromDrawer(const CertificateScreen()),
+                ),
+                _buildDrawerItem(
+                  icon: Icons.compare_arrows,
+                  title: '전산자료 비교',
+                  subtitle: 'ERP vs DS 설치대/일련번호 비교',
+                  color: const Color(0xFF1565C0),
+                  onTap: () => _navigateFromDrawer(const ErpDsCompareScreen()),
                 ),
                 // 전체 대상 관리 (본부 담당자만 표시)
                 Consumer<AuthService>(

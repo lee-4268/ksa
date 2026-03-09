@@ -168,7 +168,7 @@ CALLNAME_CSV_PREFIX = "callname-db/"
 CALLNAME_CACHE_TTL = 86400  # 24시간
 CALLNAME_SESSION_TTL = 1800  # 30분
 CALLNAME_MAX_SESSIONS = 3
-CALLNAME_USE_COLS = ["zpwina", "zpwino", "zpwiadr", "zpcode", "area_hdofc_nm", "ons_team_nm", "zpirty3"]
+CALLNAME_USE_COLS = ["zpwina", "zpwino", "zpwiadr", "zpcode", "area_hdofc_nm", "ons_team_nm", "zpirty3", "eqp_ser_no"]
 CALLNAME_POSSIBLE_CALLNAME_COLS = ["호출명칭", "callname", "CALLNAME", "호출명", "call_name"]
 CALLNAME_POSSIBLE_TONGSI_COLS = ["통시", "통합시설코드", "zpcode"]
 CALLNAME_POSSIBLE_ZPWINA_COLS = ["zpwina", "ZPWINA", "Zpwina", "호출명칭", "호출명"]
@@ -5070,7 +5070,8 @@ def _cert_cache_load():
         conn.execute("PRAGMA synchronous=OFF")
         conn.execute("""CREATE TABLE IF NOT EXISTS cert (
             zpwino TEXT, zpwina TEXT, zpwiadr TEXT,
-            zpcode TEXT, area_hdofc_nm TEXT, ons_team_nm TEXT, zpirty3 TEXT
+            zpcode TEXT, area_hdofc_nm TEXT, ons_team_nm TEXT, zpirty3 TEXT,
+            eqp_ser_no TEXT
         )""")
         conn.execute("DELETE FROM cert")
 
@@ -5081,14 +5082,14 @@ def _cert_cache_load():
                 row.get("zpwino", ""), row.get("zpwina", ""),
                 row.get("zpwiadr", ""), row.get("zpcode", ""),
                 row.get("area_hdofc_nm", ""), row.get("ons_team_nm", ""),
-                row.get("zpirty3", ""),
+                row.get("zpirty3", ""), row.get("eqp_ser_no", ""),
             ))
             if len(batch) >= 5000:
-                conn.executemany("INSERT INTO cert VALUES (?,?,?,?,?,?,?)", batch)
+                conn.executemany("INSERT INTO cert VALUES (?,?,?,?,?,?,?,?)", batch)
                 total += len(batch)
                 batch.clear()
         if batch:
-            conn.executemany("INSERT INTO cert VALUES (?,?,?,?,?,?,?)", batch)
+            conn.executemany("INSERT INTO cert VALUES (?,?,?,?,?,?,?,?)", batch)
             total += len(batch)
 
         conn.execute("CREATE INDEX IF NOT EXISTS idx_zpwino ON cert(zpwino)")
@@ -5142,7 +5143,7 @@ def _cert_lookup_cached(query: str) -> dict:
         return {}
     _cert_cache_load()
     q = query.strip()
-    cols = ["zpwino", "zpwina", "zpwiadr", "zpcode", "area_hdofc_nm", "ons_team_nm", "zpirty3"]
+    cols = ["zpwino", "zpwina", "zpwiadr", "zpcode", "area_hdofc_nm", "ons_team_nm", "zpirty3", "eqp_ser_no"]
     try:
         conn = sqlite3.connect(_cert_cache_db_path)
         conn.row_factory = sqlite3.Row
@@ -5165,7 +5166,7 @@ def _cert_batch_lookup_cached(zpwino_list: list) -> dict:
     if not zpwino_list:
         return {}
     _cert_cache_load()
-    cols = ["zpwino", "zpwina", "zpwiadr", "zpcode", "area_hdofc_nm", "ons_team_nm", "zpirty3"]
+    cols = ["zpwino", "zpwina", "zpwiadr", "zpcode", "area_hdofc_nm", "ons_team_nm", "zpirty3", "eqp_ser_no"]
     results = {}
     try:
         conn = sqlite3.connect(_cert_cache_db_path)
@@ -7317,6 +7318,367 @@ async def cert_batch_download(job_id: str, request: Request):
     except Exception as e:
         logger.error(f"일괄 다운로드 실패: {e}")
         raise HTTPException(status_code=500, detail="서버 내부 오류")
+
+
+# ============================================================
+# ERP vs DS 전산자료 비교
+# ============================================================
+
+# ERP zpirty3 → DS 공중선주설치형태명 정규화 매핑
+_TOWER_TYPE_NORMALIZE = {
+    "간이폴": "간이폴",
+    "강관주": "강관주",
+    "철탑(지면)": "철탑(지면)",
+    "철탑(건물)": "철탑(건물)",
+    "분산폴": "분산폴",
+    "통신주(cp주)": "통신주",
+    "통신주": "통신주",
+    "원폴(건물)": "원폴(건물)",
+    "쌍통신주": "쌍통신주",
+    "IP주": "기설물",
+    "기설물": "기설물",
+    "옥내,터널,지하등": "옥내",
+    "모노폴": "모노폴",
+    "한전주(kt통신주)": "한전주",
+    "한전주": "한전주",
+    "프레임": "프레임",
+    "환경친화형(확인필요)": "환경친화형",
+    "환경친화형 프레임": "환경친화형",
+    "환경친화형(건물)": "환경친화형",
+    "환경친화형": "환경친화형",
+    "기타": "기타",
+}
+
+
+def _normalize_tower(val: str) -> str:
+    """철탑형태 문자열을 정규화하여 비교 가능하게 변환."""
+    if not val:
+        return ""
+    v = val.strip().lower()
+    return _TOWER_TYPE_NORMALIZE.get(v, v)
+
+
+def _parse_serial_strings(s: str) -> list:
+    """쉼표로 구분된 일련번호 문자열을 리스트로 변환."""
+    if not s:
+        return []
+    return [x.strip().lower() for x in s.split(",") if x.strip()]
+
+
+def _compare_values(erp_val: str, ds_val: str, normalize_fn=None) -> str:
+    """ERP vs DS 값 비교. 일치/부분일치/불일치/확인필요 반환."""
+    if not ds_val:
+        return "확인필요"
+    if not erp_val:
+        return "확인필요"
+    if normalize_fn:
+        erp_parts = [normalize_fn(x.strip()) for x in erp_val.split(",") if x.strip()]
+        ds_parts = [normalize_fn(x.strip()) for x in ds_val.split(",") if x.strip()]
+    else:
+        erp_parts = _parse_serial_strings(erp_val)
+        ds_parts = _parse_serial_strings(ds_val)
+    if not erp_parts or not ds_parts:
+        return "확인필요"
+    if set(erp_parts) == set(ds_parts) and len(erp_parts) == len(ds_parts):
+        return "일치"
+    elif set(erp_parts).intersection(ds_parts):
+        return "부분일치"
+    else:
+        return "불일치"
+
+
+def _scan_ds_sheets_by_zpwino(
+    zip_cache_path: str,
+    file_manifest: dict,
+    target_zpwinos: set,
+) -> dict:
+    """DS ZIP에서 장치/안테나 시트를 스캔하여 허가번호 기준으로 데이터 추출.
+
+    Returns: {
+        "장치": {zpwino: ["serial1", "serial2", ...]},
+        "안테나": {zpwino: "공중선주설치형태명"},
+        "warnings": ["..."]
+    }
+    """
+    result = {"장치": {}, "안테나": {}, "warnings": []}
+
+    # 시트별 설정: (시트명 후보들, 조인키 컬럼명 후보, 값 컬럼명 후보)
+    sheet_configs = {
+        "장치": {
+            "sheet_candidates": ["장치"],
+            "key_cols": ["허가번호"],
+            "val_cols": ["기기일련번호"],
+        },
+        "안테나": {
+            "sheet_candidates": ["안테나"],
+            "key_cols": ["허가번호"],
+            "val_cols": ["공중선주 설치형태명", "공중선주설치형태명"],
+        },
+    }
+
+    with zipfile.ZipFile(zip_cache_path, "r") as zf:
+        for sheet_type, cfg in sheet_configs.items():
+            # file_manifest에서 해당 시트의 엔트리 찾기
+            manifest_entries = []
+            matched_sheet_name = None
+            for candidate in cfg["sheet_candidates"]:
+                if candidate in file_manifest:
+                    manifest_entries = file_manifest[candidate]
+                    matched_sheet_name = candidate
+                    break
+            # 부분 매칭: file_manifest 키에 시트명이 포함된 경우
+            if not manifest_entries:
+                for fm_key in file_manifest:
+                    for candidate in cfg["sheet_candidates"]:
+                        if candidate in fm_key:
+                            manifest_entries = file_manifest[fm_key]
+                            matched_sheet_name = fm_key
+                            break
+                    if manifest_entries:
+                        break
+
+            if not manifest_entries:
+                result["warnings"].append(f"DS 파일에 '{sheet_type}' 시트가 없습니다")
+                continue
+
+            sheet_data = {}
+            for entry in manifest_entries:
+                fname = entry["f"]
+                xls_sheet_name = entry.get("orig", matched_sheet_name)
+                try:
+                    xls_bytes = zf.read(fname)
+                    wb = xlrd.open_workbook(file_contents=xls_bytes)
+                except Exception:
+                    continue
+
+                target_sheet = None
+                for si in range(wb.nsheets):
+                    s = wb.sheet_by_index(si)
+                    if s.name.strip() == xls_sheet_name:
+                        target_sheet = s
+                        break
+
+                if target_sheet is None or target_sheet.nrows < 2:
+                    wb.release_resources()
+                    del xls_bytes
+                    continue
+
+                # 헤더에서 키/값 컬럼 인덱스 찾기
+                header = []
+                for col in range(target_sheet.ncols):
+                    h = _xlrd_cell_to_str(target_sheet, 0, col)
+                    header.append(h.strip() if h else "")
+
+                key_col_idx = None
+                for kc in cfg["key_cols"]:
+                    for i, h in enumerate(header):
+                        if h == kc:
+                            key_col_idx = i
+                            break
+                    if key_col_idx is not None:
+                        break
+
+                val_col_idx = None
+                for vc in cfg["val_cols"]:
+                    for i, h in enumerate(header):
+                        if h == vc:
+                            val_col_idx = i
+                            break
+                    if val_col_idx is not None:
+                        break
+
+                if key_col_idx is None:
+                    result["warnings"].append(
+                        f"'{sheet_type}' 시트에 허가번호 컬럼이 없습니다 (헤더: {header[:10]})")
+                    wb.release_resources()
+                    del xls_bytes
+                    continue
+                if val_col_idx is None:
+                    val_col_name = cfg["val_cols"][0]
+                    result["warnings"].append(
+                        f"'{sheet_type}' 시트에 '{val_col_name}' 컬럼이 없습니다 (헤더: {header[:10]})")
+                    wb.release_resources()
+                    del xls_bytes
+                    continue
+
+                # 데이터 행 스캔
+                for row_i in range(1, target_sheet.nrows):
+                    key_val = _xlrd_cell_to_str(target_sheet, row_i, key_col_idx)
+                    if not key_val:
+                        continue
+                    key_val = key_val.strip()
+                    if key_val not in target_zpwinos:
+                        continue
+                    cell_val = _xlrd_cell_to_str(target_sheet, row_i, val_col_idx) or ""
+
+                    if sheet_type == "장치":
+                        # 장치: 같은 허가번호에 여러 일련번호 가능
+                        if key_val not in sheet_data:
+                            sheet_data[key_val] = []
+                        if cell_val.strip():
+                            sheet_data[key_val].append(cell_val.strip())
+                    else:
+                        # 안테나: 허가번호당 하나의 설치형태
+                        if key_val not in sheet_data:
+                            sheet_data[key_val] = cell_val.strip()
+
+                wb.release_resources()
+                del xls_bytes
+
+            result[sheet_type] = sheet_data
+
+    return result
+
+
+@app.post("/erp-ds/compare")
+async def erp_ds_compare(request: Request):
+    """ERP vs DS 전산자료 비교 (철탑형태 + 일련번호)"""
+    await _verify_auth(request)
+    body = await request.json()
+    zpwino_list = body.get("zpwino_list", [])
+    division_id = body.get("division_id", "")
+    division_code = body.get("division_code", "")
+    import_date = body.get("import_date", "")
+
+    # 입력 검증
+    zpwino_list = list(dict.fromkeys([str(z).strip() for z in zpwino_list if str(z).strip()]))
+    if not zpwino_list:
+        raise HTTPException(status_code=400, detail="허가번호를 입력해주세요.")
+    if len(zpwino_list) > 500:
+        raise HTTPException(status_code=400, detail="한 번에 최대 500건까지 비교 가능합니다.")
+    if not division_id or not import_date:
+        raise HTTPException(status_code=400, detail="본부 및 DS 업로드 정보가 필요합니다.")
+
+    try:
+        result = await asyncio.to_thread(
+            _erp_ds_compare_sync, zpwino_list, division_id, division_code, import_date
+        )
+        return result
+    except Exception as e:
+        logger.error(f"ERP-DS 비교 실패: {e}")
+        raise HTTPException(status_code=500, detail=f"비교 처리 중 오류: {e}")
+
+
+def _erp_ds_compare_sync(
+    zpwino_list: list,
+    division_id: str,
+    division_code: str,
+    import_date: str,
+) -> dict:
+    """ERP vs DS 비교 동기 처리."""
+    import sqlite3
+
+    # 1) ERP 데이터 조회
+    erp_data = _cert_batch_lookup_cached(zpwino_list)
+
+    # 2) DS ZIP 파일 확보
+    zip_path = _get_cached_file(division_id, division_code, import_date, "zip")
+    if not zip_path:
+        s3_key = f"ds-raw/{division_id}/{division_code}_{import_date}.zip"
+        cache_path = _get_cache_path(division_id, division_code, import_date, "zip")
+        os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+        try:
+            get_s3_client().download_file(S3_BUCKET_NAME, s3_key, cache_path)
+            zip_path = cache_path
+        except Exception as e:
+            logger.warning(f"DS ZIP 다운로드 실패 ({s3_key}): {e}")
+            # ZIP 없이 ERP 데이터만 반환
+            items = []
+            for z in zpwino_list:
+                erp = erp_data.get(z)
+                items.append({
+                    "zpwino": z,
+                    "zpwina": erp.get("zpwina", "") if erp else "",
+                    "area_hdofc_nm": erp.get("area_hdofc_nm", "") if erp else "",
+                    "erp_found": bool(erp),
+                    "erp_zpirty3": erp.get("zpirty3", "") if erp else "",
+                    "erp_serial": erp.get("eqp_ser_no", "") if erp else "",
+                    "ds_tower_type": "",
+                    "ds_serial": "",
+                    "tower_match": "확인필요",
+                    "serial_match": "확인필요",
+                })
+            return {
+                "success": True, "total": len(items),
+                "erp_found": sum(1 for it in items if it["erp_found"]),
+                "ds_device_found": 0, "ds_antenna_found": 0,
+                "warnings": [f"DS ZIP 파일을 찾을 수 없습니다: {s3_key}"],
+                "summary": {"tower_match": 0, "tower_mismatch": 0, "tower_check": len(items),
+                             "serial_match": 0, "serial_mismatch": 0, "serial_check": len(items)},
+                "items": items,
+            }
+
+    # 3) DynamoDB에서 fileManifest 조회
+    dynamodb = get_dynamodb_resource()
+    uploads_table = dynamodb.Table(DYNAMODB_TABLES["ds_uploads"])
+    upload_sk = f"{division_code}#{import_date}" if division_code else import_date
+    resp = uploads_table.get_item(
+        Key={"divisionId": division_id, "importDate": upload_sk},
+        ProjectionExpression="fileManifest",
+    )
+    upload_rec = resp.get("Item")
+    file_manifest = upload_rec.get("fileManifest", {}) if upload_rec else {}
+
+    if not file_manifest:
+        logger.warning(f"DS fileManifest 없음: {division_id}/{upload_sk}")
+
+    # 4) DS 시트 스캔
+    target_set = set(zpwino_list)
+    ds_data = _scan_ds_sheets_by_zpwino(zip_path, file_manifest, target_set)
+
+    ds_device = ds_data["장치"]    # {zpwino: [serial, ...]}
+    ds_antenna = ds_data["안테나"]  # {zpwino: tower_type}
+    warnings = ds_data["warnings"]
+
+    # 5) 비교 결과 생성
+    items = []
+    summary = {
+        "tower_match": 0, "tower_mismatch": 0, "tower_check": 0,
+        "tower_partial": 0,
+        "serial_match": 0, "serial_mismatch": 0, "serial_check": 0,
+        "serial_partial": 0,
+    }
+
+    for z in zpwino_list:
+        erp = erp_data.get(z)
+        erp_zpirty3 = erp.get("zpirty3", "") if erp else ""
+        erp_serial = erp.get("eqp_ser_no", "") if erp else ""
+        ds_tower = ds_antenna.get(z, "")
+        ds_serials = ds_device.get(z, [])
+        ds_serial_str = ", ".join(ds_serials) if ds_serials else ""
+
+        # 철탑형태 비교
+        tower_result = _compare_values(erp_zpirty3, ds_tower, _normalize_tower)
+        # 일련번호 비교
+        serial_result = _compare_values(erp_serial, ds_serial_str)
+
+        summary_key_map = {"일치": "match", "부분일치": "partial", "불일치": "mismatch", "확인필요": "check"}
+        summary[f"tower_{summary_key_map.get(tower_result, 'check')}"] += 1
+        summary[f"serial_{summary_key_map.get(serial_result, 'check')}"] += 1
+
+        items.append({
+            "zpwino": z,
+            "zpwina": erp.get("zpwina", "") if erp else "",
+            "area_hdofc_nm": erp.get("area_hdofc_nm", "") if erp else "",
+            "erp_found": bool(erp),
+            "erp_zpirty3": erp_zpirty3,
+            "erp_serial": erp_serial,
+            "ds_tower_type": ds_tower,
+            "ds_serial": ds_serial_str,
+            "tower_match": tower_result,
+            "serial_match": serial_result,
+        })
+
+    return {
+        "success": True,
+        "total": len(items),
+        "erp_found": sum(1 for it in items if it["erp_found"]),
+        "ds_device_found": len(ds_device),
+        "ds_antenna_found": len(ds_antenna),
+        "warnings": warnings,
+        "summary": summary,
+        "items": items,
+    }
 
 
 # ============================================================
