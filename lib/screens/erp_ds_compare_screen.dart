@@ -837,7 +837,7 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
         sheet.setColumnWidth(i, widths[i]);
       }
 
-      final bytes = excel.save();
+      final bytes = excel.encode();
       if (bytes == null) return;
 
       final now = DateTime.now();
