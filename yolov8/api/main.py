@@ -5038,88 +5038,124 @@ def _cert_lookup_streaming(query: str) -> dict:
     return {}
 
 
-# ── 설치확인서 조회 캐시 (O(1) 딕셔너리 인덱스) ─────────────────
+# ── 설치확인서 조회 캐시 (SQLite 디스크 기반 — 메모리 ~0) ────────
 _cert_cache_lock = threading.Lock()
-_cert_cache_data: list = []            # 전체 행 리스트
-_cert_cache_by_zpwino: dict = {}       # zpwino → row index
-_cert_cache_by_zpwina: dict = {}       # zpwina → row index
-_cert_cache_by_zpwiadr: dict = {}      # zpwiadr → row index
-_cert_cache_ts: float = 0.0            # 마지막 빌드 시각
-CERT_CACHE_TTL = 3600                  # 1시간 캐시
+_cert_cache_ts: float = 0.0
+_cert_cache_db_path: str = ""
+CERT_CACHE_TTL = 3600  # 1시간
 
 
 def _cert_cache_load():
-    """S3 CSV를 메모리에 로드하여 인덱스 구축. 캐시 TTL 만료 시 재빌드."""
-    global _cert_cache_data, _cert_cache_by_zpwino, _cert_cache_by_zpwina
-    global _cert_cache_by_zpwiadr, _cert_cache_ts
+    """S3 CSV → SQLite DB 파일로 캐싱. 메모리 사용 최소화."""
+    global _cert_cache_ts, _cert_cache_db_path
+    import sqlite3
 
     now = _time_mod.time()
-    if _cert_cache_data and (now - _cert_cache_ts) < CERT_CACHE_TTL:
-        return  # 캐시 유효
+    if _cert_cache_db_path and os.path.exists(_cert_cache_db_path) and (now - _cert_cache_ts) < CERT_CACHE_TTL:
+        return
 
     with _cert_cache_lock:
-        # double-check 패턴
-        if _cert_cache_data and (_time_mod.time() - _cert_cache_ts) < CERT_CACHE_TTL:
+        if _cert_cache_db_path and os.path.exists(_cert_cache_db_path) and (_time_mod.time() - _cert_cache_ts) < CERT_CACHE_TTL:
             return
 
-        logger.info("설치확인서 캐시 빌드 시작...")
+        logger.info("설치확인서 SQLite 캐시 빌드 시작...")
         t0 = _time_mod.time()
-        rows = []
-        idx_zpwino = {}
-        idx_zpwina = {}
-        idx_zpwiadr = {}
 
+        db_path = os.path.join(_tempfile.gettempdir(), "cert_cache.db")
+        tmp_path = db_path + ".tmp"
+
+        conn = sqlite3.connect(tmp_path)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=OFF")
+        conn.execute("""CREATE TABLE IF NOT EXISTS cert (
+            zpwino TEXT, zpwina TEXT, zpwiadr TEXT,
+            zpcode TEXT, area_hdofc_nm TEXT, ons_team_nm TEXT, zpirty3 TEXT
+        )""")
+        conn.execute("DELETE FROM cert")
+
+        batch = []
+        total = 0
         for row in _stream_s3_csvs():
-            i = len(rows)
-            rows.append(row)
-            zpwino = row.get("zpwino", "")
-            zpwina = row.get("zpwina", "")
-            zpwiadr = row.get("zpwiadr", "")
-            if zpwino and zpwino not in idx_zpwino:
-                idx_zpwino[zpwino] = i
-            if zpwina and zpwina not in idx_zpwina:
-                idx_zpwina[zpwina] = i
-            if zpwiadr and zpwiadr not in idx_zpwiadr:
-                idx_zpwiadr[zpwiadr] = i
+            batch.append((
+                row.get("zpwino", ""), row.get("zpwina", ""),
+                row.get("zpwiadr", ""), row.get("zpcode", ""),
+                row.get("area_hdofc_nm", ""), row.get("ons_team_nm", ""),
+                row.get("zpirty3", ""),
+            ))
+            if len(batch) >= 5000:
+                conn.executemany("INSERT INTO cert VALUES (?,?,?,?,?,?,?)", batch)
+                total += len(batch)
+                batch.clear()
+        if batch:
+            conn.executemany("INSERT INTO cert VALUES (?,?,?,?,?,?,?)", batch)
+            total += len(batch)
 
-        _cert_cache_data = rows
-        _cert_cache_by_zpwino = idx_zpwino
-        _cert_cache_by_zpwina = idx_zpwina
-        _cert_cache_by_zpwiadr = idx_zpwiadr
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_zpwino ON cert(zpwino)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_zpwina ON cert(zpwina)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_zpwiadr ON cert(zpwiadr)")
+        conn.commit()
+        conn.close()
+
+        # 원자적 교체
+        if os.path.exists(db_path):
+            try:
+                os.remove(db_path)
+            except Exception:
+                pass
+        os.rename(tmp_path, db_path)
+
+        _cert_cache_db_path = db_path
         _cert_cache_ts = _time_mod.time()
-        logger.info(f"설치확인서 캐시 빌드 완료: {len(rows)}행, {_cert_cache_ts - t0:.1f}초")
+        logger.info(f"설치확인서 SQLite 캐시 빌드 완료: {total}행, {_cert_cache_ts - t0:.1f}초")
 
 
 def _cert_lookup_cached(query: str) -> dict:
-    """설치확인서 단건 조회 — 메모리 캐시 O(1) 조회."""
+    """설치확인서 단건 조회 — SQLite 인덱스 O(1) 조회."""
+    import sqlite3
     if not query or not query.strip():
         return {}
     _cert_cache_load()
     q = query.strip()
-    idx = _cert_cache_by_zpwino.get(q)
-    if idx is None:
-        idx = _cert_cache_by_zpwina.get(q)
-    if idx is None:
-        idx = _cert_cache_by_zpwiadr.get(q)
-    if idx is not None:
-        return dict(_cert_cache_data[idx])
+    cols = ["zpwino", "zpwina", "zpwiadr", "zpcode", "area_hdofc_nm", "ons_team_nm", "zpirty3"]
+    try:
+        conn = sqlite3.connect(_cert_cache_db_path)
+        conn.row_factory = sqlite3.Row
+        for col in ("zpwino", "zpwina", "zpwiadr"):
+            cur = conn.execute(f"SELECT * FROM cert WHERE {col}=? LIMIT 1", (q,))
+            row = cur.fetchone()
+            if row:
+                result = {c: (row[c] or "") for c in cols}
+                conn.close()
+                return result
+        conn.close()
+    except Exception as e:
+        logger.warning(f"설치확인서 캐시 조회 실패: {e}")
     return {}
 
 
 def _cert_batch_lookup_cached(zpwino_list: list) -> dict:
-    """설치확인서 일괄 조회 — 메모리 캐시 O(1) 조회."""
+    """설치확인서 일괄 조회 — SQLite 인덱스 O(1) 조회."""
+    import sqlite3
     if not zpwino_list:
         return {}
     _cert_cache_load()
+    cols = ["zpwino", "zpwina", "zpwiadr", "zpcode", "area_hdofc_nm", "ons_team_nm", "zpirty3"]
     results = {}
-    for q in zpwino_list:
-        if q in results:
-            continue
-        idx = _cert_cache_by_zpwino.get(q)
-        if idx is None:
-            idx = _cert_cache_by_zpwina.get(q)
-        if idx is not None:
-            results[q] = dict(_cert_cache_data[idx])
+    try:
+        conn = sqlite3.connect(_cert_cache_db_path)
+        conn.row_factory = sqlite3.Row
+        for q in zpwino_list:
+            if q in results:
+                continue
+            for col in ("zpwino", "zpwina"):
+                cur = conn.execute(f"SELECT * FROM cert WHERE {col}=? LIMIT 1", (q,))
+                row = cur.fetchone()
+                if row:
+                    results[q] = {c: (row[c] or "") for c in cols}
+                    break
+        conn.close()
+    except Exception as e:
+        logger.warning(f"설치확인서 배치 캐시 조회 실패: {e}")
     return results
 
 
