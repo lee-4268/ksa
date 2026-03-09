@@ -1,9 +1,14 @@
+import 'package:excel/excel.dart' as excel_pkg;
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../services/auth_service.dart';
 import '../services/ds_data_service.dart';
 import '../services/erp_ds_compare_service.dart';
+import '../services/excel_export_stub.dart'
+    if (dart.library.io) '../services/excel_export_mobile.dart'
+    if (dart.library.html) '../services/excel_export_web.dart' as platform_export;
 import '../widgets/user_profile_button.dart';
 
 class ErpDsCompareScreen extends StatefulWidget {
@@ -670,6 +675,22 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
                   ),
                 ),
               ),
+              const Spacer(),
+              ElevatedButton.icon(
+                onPressed: _exportExcel,
+                icon: const Icon(Icons.download, size: 16),
+                label: const Text('엑셀 다운로드', style: TextStyle(fontSize: 13)),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF2E7D32),
+                  foregroundColor: Colors.white,
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  elevation: 0,
+                ),
+              ),
             ]),
             const SizedBox(height: 12),
             SingleChildScrollView(
@@ -760,6 +781,89 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
         ),
       ],
     );
+  }
+
+  // ── Excel Export ──
+
+  Future<void> _exportExcel() async {
+    final r = _result;
+    if (r == null) return;
+
+    try {
+      final excel = excel_pkg.Excel.createExcel();
+      final sheetName = '전산자료비교';
+      excel.rename(excel.getDefaultSheet()!, sheetName);
+      final sheet = excel[sheetName];
+
+      // 헤더
+      final headers = [
+        '입력값', '허가번호', '호출명칭', '본부',
+        'ERP 설치대', 'DS 설치대', '설치대 비교',
+        'ERP 일련번호', 'DS 일련번호', '일련번호 비교',
+      ];
+      for (var i = 0; i < headers.length; i++) {
+        final cell = sheet.cell(
+            excel_pkg.CellIndex.indexByColumnRow(columnIndex: i, rowIndex: 0));
+        cell.value = excel_pkg.TextCellValue(headers[i]);
+        cell.cellStyle = excel_pkg.CellStyle(
+          bold: true,
+          backgroundColorHex: excel_pkg.ExcelColor.fromHexString('#D9E1F2'),
+        );
+      }
+
+      // 데이터 행
+      final items = _getFilteredItems();
+      for (var rowIdx = 0; rowIdx < items.length; rowIdx++) {
+        final item = items[rowIdx];
+        final resolve = r.resolveMap[item.zpwino];
+        final inputVal = resolve?['input'] ?? item.zpwino;
+
+        final values = [
+          inputVal, item.zpwino, item.zpwina, item.areaHdofcNm,
+          item.erpZpirty3, item.dsTowerType, item.towerMatch,
+          item.erpSerial, item.dsSerial, item.serialMatch,
+        ];
+        for (var colIdx = 0; colIdx < values.length; colIdx++) {
+          sheet
+              .cell(excel_pkg.CellIndex.indexByColumnRow(
+                  columnIndex: colIdx, rowIndex: rowIdx + 1))
+              .value = excel_pkg.TextCellValue(values[colIdx]);
+        }
+      }
+
+      // 컬럼 너비 설정
+      final widths = [15.0, 15.0, 15.0, 10.0, 15.0, 15.0, 10.0, 20.0, 20.0, 10.0];
+      for (var i = 0; i < widths.length; i++) {
+        sheet.setColumnWidth(i, widths[i]);
+      }
+
+      final bytes = excel.save();
+      if (bytes == null) return;
+
+      final now = DateTime.now();
+      final fileName =
+          '전산자료비교_${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}.xlsx';
+
+      await platform_export.saveExcelFile(Uint8List.fromList(bytes), fileName);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('$fileName 다운로드 완료'),
+            backgroundColor: _greenColor,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('엑셀 다운로드 실패: $e'),
+            backgroundColor: _primaryColor,
+          ),
+        );
+      }
+    }
   }
 
   // ── Helpers ──
