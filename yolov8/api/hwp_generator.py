@@ -760,22 +760,39 @@ def _section_xml(form_data, has_photos=False, has_blueprint=False,
   </hp:run>
 </hp:p>'''
 
-    # 현장사진 이미지 (4행 2열 테이블) - 별도 페이지
+    # 현장사진 이미지 (동적 행수 테이블) - 2페이지
     photo_section = ''
     if has_photos and photo_bin_ids:
-        photo_section += _empty_para()
-        photo_section += _para('[붙임] 현장사진', _CPR_SUBTITLE, _PPR_CENTER)
-        photo_section += _empty_para()
+        # pageBreak="1"로 2페이지 상단에 배치
+        _pb_pid = _uid()
+        photo_section += f'''<hp:p id="{_pb_pid}" paraPrIDRef="{_PPR_LEFT}" styleIDRef="0"
+    pageBreak="1" columnBreak="0" merged="0">
+  <hp:run charPrIDRef="{_CPR_SUBTITLE}">
+    <hp:t>[붙임] 현장사진</hp:t>
+  </hp:run>
+</hp:p>'''
 
-        # 4행 2열 사진 테이블 (PDF: 90mm x 62mm per cell)
+        # 사진 수에 따라 행수 동적 결정: 1~4장→2행, 5~6장→3행, 7~8장→4행
+        photo_count = len(photo_bin_ids)
+        if photo_count <= 4:
+            num_photo_rows = 2
+        elif photo_count <= 6:
+            num_photo_rows = 3
+        else:
+            num_photo_rows = 4
+
+        # 행 높이: 페이지 내 수용되도록 행수별 조정
+        # 페이지 콘텐츠 영역 ~69162 HWPU, [붙임] 텍스트 ~3000 HWPU
+        photo_row_heights = {2: 30000, 3: 21000, 4: 16000}
+        photo_row_h = photo_row_heights[num_photo_rows]
+
         photo_col_w = content_w // 2  # 90mm
-        photo_row_h = 17574           # 62mm
         photo_rows_xml = ''
-        for row_idx in range(4):
+        for row_idx in range(num_photo_rows):
             photo_rows_xml += '    <hp:tr>\n'
             for col_idx in range(2):
                 photo_idx = row_idx * 2 + col_idx
-                if photo_idx < len(photo_bin_ids):
+                if photo_idx < photo_count:
                     photo_rows_xml += _image_table_cell(
                         photo_bin_ids[photo_idx], col_idx, row_idx,
                         photo_col_w, photo_row_h)
@@ -787,16 +804,17 @@ def _section_xml(form_data, has_photos=False, has_blueprint=False,
 
         photo_tbl_id = _uid()
         photo_tbl_p_id = _uid()
+        total_photo_h = photo_row_h * num_photo_rows
         photo_section += f'''<hp:p id="{photo_tbl_p_id}" paraPrIDRef="{_PPR_JUSTIFY}" styleIDRef="0"
     pageBreak="0" columnBreak="0" merged="0">
   <hp:run charPrIDRef="{_CPR_BODY}">
     <hp:tbl id="{photo_tbl_id}" zOrder="0" numberingType="TABLE"
       textWrap="TOP_AND_BOTTOM" textFlow="BOTH_SIDES" lock="0"
       dropcapstyle="None" pageBreak="CELL" repeatHeader="0"
-      rowCnt="4" colCnt="2" cellSpacing="0" borderFillIDRef="{_BF_SOLID}"
+      rowCnt="{num_photo_rows}" colCnt="2" cellSpacing="0" borderFillIDRef="{_BF_SOLID}"
       noAdjust="0">
       <hp:sz width="{content_w}" widthRelTo="ABSOLUTE"
-        height="{photo_row_h * 4}" heightRelTo="ABSOLUTE" protect="0"/>
+        height="{total_photo_h}" heightRelTo="ABSOLUTE" protect="0"/>
       <hp:pos treatAsChar="1" affectLSpacing="0" flowWithText="1"
         allowOverlap="0" holdAnchorAndSO="0" vertRelTo="PARA"
         horzRelTo="COLUMN" vertAlign="TOP" horzAlign="LEFT"

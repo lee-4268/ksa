@@ -739,10 +739,24 @@ class _IndividualTabState extends State<_IndividualTab>
               ]),
               // 공용화 구분 | 안테나 수
               _tRow('공용화 구분', _sharingType, '안테나 수', _antennaCountDisplay),
-              // 설치장소
-              _tRowSpan('설치장소', _addressCtrl.text),
-              // 특이사항
-              _tRowSpan('특이사항', _remarkCtrl.text.isEmpty ? '-' : _remarkCtrl.text),
+            ],
+          ),
+          // 설치장소 / 특이사항 / 설계도면 (2열 — 헤더+통합값)
+          Table(
+            border: TableBorder.all(color: Colors.black, width: 0.5),
+            columnWidths: const {
+              0: FixedColumnWidth(80),
+              1: FlexColumnWidth(1),
+            },
+            children: [
+              TableRow(children: [
+                _tHeaderCell('설치장소'),
+                _tValueCell(_addressCtrl.text),
+              ]),
+              TableRow(children: [
+                _tHeaderCell('특이사항'),
+                _tValueCell(_remarkCtrl.text.isEmpty ? '-' : _remarkCtrl.text),
+              ]),
             ],
           ),
           // 설계도면 (큰 영역)
@@ -846,14 +860,6 @@ class _IndividualTabState extends State<_IndividualTab>
     ]);
   }
 
-  TableRow _tRowSpan(String header, String value) {
-    return TableRow(children: [
-      _tHeaderCell(header),
-      _tValueCell(value),
-      const SizedBox(),
-      const SizedBox(),
-    ]);
-  }
 
   Widget _tHeaderCell(String text) {
     return TableCell(
