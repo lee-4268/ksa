@@ -822,6 +822,9 @@ async def startup_event():
     asyncio.create_task(_recover_stuck_jobs())
     _ds_job_worker_task = asyncio.create_task(_job_worker_loop())
 
+    # 설치확인서 조회 캐시 미리 빌드 (백그라운드)
+    asyncio.create_task(asyncio.to_thread(_cert_cache_load))
+
     # Rate limiter + 호출명칭 세션 5분 주기 정리
     async def _rl_cleanup():
         while True:
@@ -5035,6 +5038,91 @@ def _cert_lookup_streaming(query: str) -> dict:
     return {}
 
 
+# ── 설치확인서 조회 캐시 (O(1) 딕셔너리 인덱스) ─────────────────
+_cert_cache_lock = threading.Lock()
+_cert_cache_data: list = []            # 전체 행 리스트
+_cert_cache_by_zpwino: dict = {}       # zpwino → row index
+_cert_cache_by_zpwina: dict = {}       # zpwina → row index
+_cert_cache_by_zpwiadr: dict = {}      # zpwiadr → row index
+_cert_cache_ts: float = 0.0            # 마지막 빌드 시각
+CERT_CACHE_TTL = 3600                  # 1시간 캐시
+
+
+def _cert_cache_load():
+    """S3 CSV를 메모리에 로드하여 인덱스 구축. 캐시 TTL 만료 시 재빌드."""
+    global _cert_cache_data, _cert_cache_by_zpwino, _cert_cache_by_zpwina
+    global _cert_cache_by_zpwiadr, _cert_cache_ts
+
+    now = _time_mod.time()
+    if _cert_cache_data and (now - _cert_cache_ts) < CERT_CACHE_TTL:
+        return  # 캐시 유효
+
+    with _cert_cache_lock:
+        # double-check 패턴
+        if _cert_cache_data and (_time_mod.time() - _cert_cache_ts) < CERT_CACHE_TTL:
+            return
+
+        logger.info("설치확인서 캐시 빌드 시작...")
+        t0 = _time_mod.time()
+        rows = []
+        idx_zpwino = {}
+        idx_zpwina = {}
+        idx_zpwiadr = {}
+
+        for row in _stream_s3_csvs():
+            i = len(rows)
+            rows.append(row)
+            zpwino = row.get("zpwino", "")
+            zpwina = row.get("zpwina", "")
+            zpwiadr = row.get("zpwiadr", "")
+            if zpwino and zpwino not in idx_zpwino:
+                idx_zpwino[zpwino] = i
+            if zpwina and zpwina not in idx_zpwina:
+                idx_zpwina[zpwina] = i
+            if zpwiadr and zpwiadr not in idx_zpwiadr:
+                idx_zpwiadr[zpwiadr] = i
+
+        _cert_cache_data = rows
+        _cert_cache_by_zpwino = idx_zpwino
+        _cert_cache_by_zpwina = idx_zpwina
+        _cert_cache_by_zpwiadr = idx_zpwiadr
+        _cert_cache_ts = _time_mod.time()
+        logger.info(f"설치확인서 캐시 빌드 완료: {len(rows)}행, {_cert_cache_ts - t0:.1f}초")
+
+
+def _cert_lookup_cached(query: str) -> dict:
+    """설치확인서 단건 조회 — 메모리 캐시 O(1) 조회."""
+    if not query or not query.strip():
+        return {}
+    _cert_cache_load()
+    q = query.strip()
+    idx = _cert_cache_by_zpwino.get(q)
+    if idx is None:
+        idx = _cert_cache_by_zpwina.get(q)
+    if idx is None:
+        idx = _cert_cache_by_zpwiadr.get(q)
+    if idx is not None:
+        return dict(_cert_cache_data[idx])
+    return {}
+
+
+def _cert_batch_lookup_cached(zpwino_list: list) -> dict:
+    """설치확인서 일괄 조회 — 메모리 캐시 O(1) 조회."""
+    if not zpwino_list:
+        return {}
+    _cert_cache_load()
+    results = {}
+    for q in zpwino_list:
+        if q in results:
+            continue
+        idx = _cert_cache_by_zpwino.get(q)
+        if idx is None:
+            idx = _cert_cache_by_zpwina.get(q)
+        if idx is not None:
+            results[q] = dict(_cert_cache_data[idx])
+    return results
+
+
 def _cleanup_callname_session_files(sess: dict):
     """세션의 캐시/임시 파일 정리 (디스크 + S3) + 대용량 데이터 해제."""
     # S3 임시 파일
@@ -6627,26 +6715,13 @@ def _cleanup_cert_sessions():
 
 
 def _cert_lookup_single(query: str) -> dict:
-    """설치확인서 단건 조회 — S3 CSV 스트리밍 (메모리 ~0)"""
-    return _cert_lookup_streaming(query)
+    """설치확인서 단건 조회 — 메모리 캐시 O(1)"""
+    return _cert_lookup_cached(query)
 
 
 def _cert_batch_lookup(zpwino_list: list) -> dict:
-    """설치확인서 일괄 조회 — S3 CSV 스트리밍"""
-    if not zpwino_list:
-        return {}
-    query_set = set(zpwino_list)
-    results = {}
-    for row in _stream_s3_csvs():
-        zpwino = row.get("zpwino", "")
-        zpwina = row.get("zpwina", "")
-        if zpwino in query_set and zpwino not in results:
-            results[zpwino] = dict(row)
-        elif zpwina in query_set and zpwina not in results:
-            results[zpwina] = dict(row)
-        if len(results) >= len(query_set):
-            break
-    return results
+    """설치확인서 일괄 조회 — 메모리 캐시 O(1)"""
+    return _cert_batch_lookup_cached(zpwino_list)
 
 
 def _parse_photo_zip_to_s3(zip_path: str, job_id: str) -> dict:

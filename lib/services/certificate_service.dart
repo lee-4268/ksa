@@ -11,7 +11,7 @@ class CertificateService {
     defaultValue: 'https://api-sko-kca.skons.net',
   );
 
-  static const _apiTimeout = Duration(seconds: 30);
+  static const _apiTimeout = Duration(seconds: 60);
   static const _generateTimeout = Duration(minutes: 3);
   static const _uploadTimeout = Duration(minutes: 5);
   static const _batchTimeout = Duration(minutes: 30);
