@@ -311,21 +311,31 @@ async function _mergeDsFilesFromDart(zipArrayBuffer, progressCallback, completio
       sptFmtZip = null;
     }
 
-    // (100) → 일반사항(검사전) preamble 추출
+    // (100) → 모든 시트에 '(검사전)' 접미사 붙여서 추출
+    var hundredSheetNames = [];
     if (classified.skipped.length > 0) {
-      sheetOrder.push('일반사항(검사전)');
       var hBytes = await zip.files[classified.skipped[0]].async('arraybuffer');
       var hWb = XLSX.read(hBytes, { type: 'array', cellStyles: true });
+      hundredSheetNames = hWb.SheetNames.slice();
+      for (var hi = 0; hi < hundredSheetNames.length; hi++) {
+        var hRenamedSheet = hundredSheetNames[hi] + '(검사전)';
+        if (sheetOrder.indexOf(hRenamedSheet) === -1) {
+          sheetOrder.push(hRenamedSheet);
+        }
+      }
       var hXlsxArr = XLSX.write(hWb, { bookType: 'xlsx', type: 'array', bookSST: false });
       hWb = null; hBytes = null;
       var hFmtZip = await JSZip.loadAsync(hXlsxArr);
       hXlsxArr = null;
-      var hSheetFile = 'xl/worksheets/sheet1.xml';
-      if (hFmtZip.files[hSheetFile]) {
-        var hXml = await hFmtZip.files[hSheetFile].async('string');
-        var hPreambleMatch = hXml.match(/<worksheet[^>]*>([\s\S]*?)<sheetData/);
-        sheetFormats['일반사항(검사전)'] = hPreambleMatch ? hPreambleMatch[1].trim() : '';
-        hXml = null;
+      for (var hi2 = 0; hi2 < hundredSheetNames.length; hi2++) {
+        var hSheetFile = 'xl/worksheets/sheet' + (hi2 + 1) + '.xml';
+        var hRenamedSheet2 = hundredSheetNames[hi2] + '(검사전)';
+        if (hFmtZip.files[hSheetFile] && !sheetFormats[hRenamedSheet2]) {
+          var hXml = await hFmtZip.files[hSheetFile].async('string');
+          var hPreambleMatch = hXml.match(/<worksheet[^>]*>([\s\S]*?)<sheetData/);
+          sheetFormats[hRenamedSheet2] = hPreambleMatch ? hPreambleMatch[1].trim() : '';
+          hXml = null;
+        }
       }
       hFmtZip = null;
     }
@@ -392,7 +402,7 @@ async function _mergeDsFilesFromDart(zipArrayBuffer, progressCallback, completio
       sptWbM = null;
     }
 
-    // (100) 파일 → 일반사항(검사전)
+    // (100) 파일 → 모든 시트에 '(검사전)' 접미사 붙여서 병합
     if (classified.skipped.length > 0) {
       progressCallback('(100) 파일 읽기...', 48);
       for (var ski = 0; ski < classified.skipped.length; ski++) {
@@ -400,14 +410,19 @@ async function _mergeDsFilesFromDart(zipArrayBuffer, progressCallback, completio
         var skWbM = XLSX.read(skFd, { type: 'array', cellDates: false });
         skFd = null;
 
-        if (skWbM.SheetNames.indexOf('일반사항') !== -1) {
-          var skRowsM = XLSX.utils.sheet_to_json(skWbM.Sheets['일반사항'], { header: 1, raw: true, defval: '' });
-          if (allMergedRows['일반사항(검사전)'].length === 0) {
-            for (var sr3 = 0; sr3 < skRowsM.length; sr3++) allMergedRows['일반사항(검사전)'].push(skRowsM[sr3]);
+        for (var sksi = 0; sksi < skWbM.SheetNames.length; sksi++) {
+          var skOrigName = skWbM.SheetNames[sksi];
+          var skRenamedName = skOrigName + '(검사전)';
+          if (allMergedRows[skRenamedName] === undefined) continue;
+
+          var skRowsM = XLSX.utils.sheet_to_json(skWbM.Sheets[skOrigName], { header: 1, raw: true, defval: '' });
+          if (allMergedRows[skRenamedName].length === 0) {
+            for (var sr3 = 0; sr3 < skRowsM.length; sr3++) allMergedRows[skRenamedName].push(skRowsM[sr3]);
           } else {
-            for (var sr4 = 1; sr4 < skRowsM.length; sr4++) allMergedRows['일반사항(검사전)'].push(skRowsM[sr4]);
+            for (var sr4 = 1; sr4 < skRowsM.length; sr4++) allMergedRows[skRenamedName].push(skRowsM[sr4]);
           }
           skRowsM = null;
+          skWbM.Sheets[skOrigName] = null;
         }
         skWbM = null;
       }

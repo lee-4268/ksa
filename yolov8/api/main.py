@@ -723,6 +723,13 @@ class DsEnqueueRequest(BaseModel):
     uploadedBy: str  # 업로드한 사용자 ID
 
 
+class DsEnqueueMultiRequest(BaseModel):
+    """복수 ZIP 병합 업로드 잡 요청"""
+    s3Keys: List[str]        # S3 임시 키 목록
+    fileNames: List[str]     # 원본 파일명 목록
+    uploadedBy: str          # 업로드한 사용자 ID
+
+
 # ============================================================
 # User Data Loading (JSON file)
 # ============================================================
@@ -2374,7 +2381,7 @@ async def _get_next_queued_job() -> Optional[dict]:
                     "FilterExpression": "#s = :s",
                     "ExpressionAttributeNames": {"#s": "status"},
                     "ExpressionAttributeValues": {":s": "queued"},
-                    "ProjectionExpression": "jobId, queuedAt, s3Key, fileName, uploadedBy, #s",
+                    "ProjectionExpression": "jobId, queuedAt, s3Key, s3Keys, fileName, fileNames, uploadedBy, #s",
                     "Limit": 100,
                 }
                 if last_key:
@@ -2538,6 +2545,63 @@ def _read_xlsx_paginated_sync(xlsx_path: str, sheet_name: str,
         return {"success": True, "items": [], "count": 0, "lastEvaluatedKey": None}
 
 
+def _merge_zips_sync(s3_keys: list, file_names: list, job_id: str,
+                     progress_cb=None) -> str:
+    """복수 소스 ZIP → 단일 결합 ZIP (디스크 효율: 소스 1개씩 처리 후 삭제)
+
+    각 소스 ZIP에서 XLS 파일만 추출하여 결합 ZIP에 기록.
+    파일명 충돌 방지: 소스 ZIP 이름을 디렉토리 접두사로 사용.
+
+    Returns: 결합 ZIP 경로
+    """
+    merged_path = f"/tmp/ds_merged_{job_id}.zip"
+    s3 = get_s3_client()
+    total = len(s3_keys)
+    xls_count = 0
+
+    with zipfile.ZipFile(merged_path, "w", zipfile.ZIP_STORED) as out_zip:
+        for idx, (s3_key, fname) in enumerate(zip(s3_keys, file_names)):
+            src_path = f"/tmp/ds_{job_id}_src_{idx}.zip"
+            try:
+                if progress_cb:
+                    progress_cb(
+                        f"ZIP 다운로드 중... ({idx + 1}/{total})",
+                        3 + (idx / total) * 25,
+                    )
+                s3.download_file(S3_BUCKET_NAME, s3_key, src_path)
+
+                # 소스 ZIP 이름 → 디렉토리 접두사 (파일명 충돌 방지)
+                prefix = os.path.splitext(os.path.basename(fname))[0]
+                with zipfile.ZipFile(src_path, "r") as src_zip:
+                    for entry in src_zip.namelist():
+                        base = os.path.basename(entry)
+                        if not base.lower().endswith(".xls"):
+                            continue
+                        if base.lower().endswith(".xlsx"):
+                            continue
+                        if base.startswith("~") or base.startswith("."):
+                            continue
+                        out_name = f"{prefix}/{base}"
+                        data = src_zip.read(entry)
+                        out_zip.writestr(out_name, data)
+                        xls_count += 1
+                        del data
+            finally:
+                if os.path.exists(src_path):
+                    os.remove(src_path)
+
+    if xls_count == 0:
+        if os.path.exists(merged_path):
+            os.remove(merged_path)
+        raise ValueError("ZIP 파일 안에 .xls 파일이 없습니다.")
+
+    logger.info(
+        f"ZIP 병합 완료: {total}개 ZIP → {xls_count}개 XLS "
+        f"({os.path.getsize(merged_path):,} bytes)"
+    )
+    return merged_path
+
+
 def _parse_zip_metadata_sync(zip_temp_path: str, progress_cb=None) -> tuple:
     """ZIP → 메타데이터만 초고속 파싱 (xlsx 빌드 완전 생략)
 
@@ -2618,12 +2682,9 @@ def _parse_zip_metadata_sync(zip_temp_path: str, progress_cb=None) -> tuple:
                 if sheet.nrows < 2:
                     continue
 
-                # (100) 파일: '일반사항' → '일반사항(검사전)' 변환, 다른 시트는 건너뜀
+                # (100) 파일: 모든 시트에 '(검사전)' 접미사 추가
                 if is_hundred:
-                    if orig_sheet_name == "일반사항":
-                        sheet_name = "일반사항(검사전)"
-                    else:
-                        continue  # (100) 파일에서 일반사항만 처리
+                    sheet_name = f"{orig_sheet_name}(검사전)"
                 else:
                     sheet_name = orig_sheet_name
 
@@ -2928,11 +2989,9 @@ def _process_zip_to_xlsx_sync(zip_temp_path: str, progress_cb=None) -> tuple:
                 if sheet.nrows < 2:
                     continue
 
+                # (100) 파일: 모든 시트에 '(검사전)' 접미사 추가
                 if is_hundred:
-                    if orig_sheet_name == "일반사항":
-                        sheet_name = "일반사항(검사전)"
-                    else:
-                        continue
+                    sheet_name = f"{orig_sheet_name}(검사전)"
                 else:
                     sheet_name = orig_sheet_name
 
@@ -3261,11 +3320,15 @@ def _upload_xlsx_to_s3_sync(xlsx_bytes: bytes, division_id: str,
 
 
 async def _process_ds_job(job_id: str, job_item: dict):
-    """DS 잡 메인 처리 — ZIP → xlsx 빌드 → S3 저장 (DynamoDB 행 쓰기 0회)"""
-    s3_key = job_item.get("s3Key", "")
+    """DS 잡 메인 처리 — ZIP → xlsx 빌드 → S3 저장 (DynamoDB 행 쓰기 0회)
+    복수 ZIP (s3Keys 배열) 인 경우 먼저 병합 후 동일 플로우 실행.
+    """
+    s3_keys = job_item.get("s3Keys", [])  # 복수 ZIP
+    s3_key = job_item.get("s3Key", "")    # 단일 ZIP
     file_name = job_item.get("fileName", "")
     uploaded_by = job_item.get("uploadedBy", "unknown")
-    zip_temp_path = f"/tmp/ds_{job_id}.zip"
+    is_multi = bool(s3_keys) and len(s3_keys) > 1
+    zip_temp_path = f"/tmp/ds_merged_{job_id}.zip" if is_multi else f"/tmp/ds_{job_id}.zip"
 
     # except 블록에서 접근 가능하도록 try 바깥에서 초기화
     division_id: Optional[str] = None
@@ -3274,16 +3337,28 @@ async def _process_ds_job(job_id: str, job_item: dict):
     uploads_record_created = False  # _init 이후 True → except에서 정리 대상
 
     try:
-        # 1. ZIP S3에서 다운로드
-        await _update_job_progress(job_id, "S3에서 ZIP 다운로드 중...", 3)
+        # 1. ZIP 준비 (복수: 병합 / 단수: 다운로드)
+        if is_multi:
+            file_names = job_item.get("fileNames", [])
+            if len(file_names) != len(s3_keys):
+                file_names = [f"file_{i}.zip" for i in range(len(s3_keys))]
+            zip_temp_path = await asyncio.to_thread(
+                _merge_zips_sync, s3_keys, file_names, job_id,
+                lambda s, p: _update_job_progress_sync(job_id, s, p),
+            )
+            logger.info(f"DS job {job_id}: {len(s3_keys)}개 ZIP 병합 완료 "
+                        f"({os.path.getsize(zip_temp_path):,} bytes)")
+        else:
+            await _update_job_progress(job_id, "S3에서 ZIP 다운로드 중...", 3)
+            actual_key = s3_keys[0] if s3_keys else s3_key
 
-        def _dl():
-            get_s3_client().download_file(S3_BUCKET_NAME, s3_key, zip_temp_path)
-        await asyncio.to_thread(_dl)
-        logger.info(f"DS job {job_id}: ZIP downloaded ({os.path.getsize(zip_temp_path):,} bytes)")
+            def _dl():
+                get_s3_client().download_file(S3_BUCKET_NAME, actual_key, zip_temp_path)
+            await asyncio.to_thread(_dl)
+            logger.info(f"DS job {job_id}: ZIP downloaded ({os.path.getsize(zip_temp_path):,} bytes)")
 
         # 2. ZIP 내 XLS 파일명에서 divisionCode/importDate 파싱
-        await _update_job_progress(job_id, "ZIP 메타 파싱 중...", 5)
+        await _update_job_progress(job_id, "ZIP 메타 파싱 중...", 30 if is_multi else 5)
 
         def _parse_meta():
             with zipfile.ZipFile(zip_temp_path, "r") as zf:
@@ -3321,16 +3396,8 @@ async def _process_ds_job(job_id: str, job_item: dict):
                 logger.warning(f"DS job {job_id}: 메모리 {mem.percent}% > 80%, 30초 대기")
                 await asyncio.sleep(30)
 
-        # 4. uploads 레코드 초기화 (기존 데이터 삭제)
-        await _update_job_progress(job_id, "기존 데이터 정리 중...", 8)
-        await asyncio.to_thread(
-            _init_upload_record_sync,
-            division_id, division_code, import_date, file_name, uploaded_by, job_id
-        )
-        uploads_record_created = True
-
-        # 5. 메타데이터만 초고속 파싱 (xlsx 빌드 완전 생략 → 30분→5초)
-        await _update_job_progress(job_id, "메타데이터 파싱 중...", 10)
+        # 4. 메타데이터 파싱 (기존 데이터 삭제 전에 실행 → 파싱 실패 시 데이터 보존)
+        await _update_job_progress(job_id, "메타데이터 파싱 중...", 35 if is_multi else 10)
 
         def _progress_cb(stage: str, pct: float):
             _update_job_progress_sync(job_id, stage, pct)
@@ -3339,6 +3406,17 @@ async def _process_ds_job(job_id: str, job_item: dict):
             _parse_zip_metadata_sync, zip_temp_path, _progress_cb
         )
         logger.info(f"DS job {job_id}: 메타 파싱 완료 — {total_rows}행, {len(sheet_stats)}시트")
+
+        if total_rows == 0:
+            raise ValueError("XLS 파일에서 데이터 행을 찾을 수 없습니다.")
+
+        # 5. 기존 데이터 삭제 (병합+파싱 성공 후에만 → 데이터 안전)
+        await _update_job_progress(job_id, "기존 데이터 정리 중...", 70 if is_multi else 75)
+        await asyncio.to_thread(
+            _init_upload_record_sync,
+            division_id, division_code, import_date, file_name, uploaded_by, job_id
+        )
+        uploads_record_created = True
 
         # 6. ZIP → S3 영구 경로로 복사 (xlsx 빌드 없이 원본 ZIP 보관)
         await _update_job_progress(job_id, "ZIP S3 저장 중...", 80)
@@ -3366,6 +3444,14 @@ async def _process_ds_job(job_id: str, job_item: dict):
         )
         uploads_record_created = False  # 정상 완료 → except 정리 불필요
         logger.info(f"DS job {job_id}: 완료! {division_name} {import_date} — {total_rows}행")
+
+        # 9. 복수 ZIP인 경우 S3 임시 파일 정리 (non-fatal)
+        if is_multi and s3_keys:
+            for temp_key in s3_keys:
+                try:
+                    get_s3_client().delete_object(Bucket=S3_BUCKET_NAME, Key=temp_key)
+                except Exception:
+                    pass
 
     except Exception as e:
         error_msg = str(e)[:500]
@@ -4372,6 +4458,66 @@ async def ds_enqueue(request: Request, req: DsEnqueueRequest):
         return {"success": True, "jobId": job_id, "queuePosition": queue_position}
     except ClientError as e:
         logger.error(f"DS enqueue error: {e}")
+        raise HTTPException(status_code=500, detail="서버 내부 오류")
+
+
+@app.post("/ds/enqueue-multi")
+async def ds_enqueue_multi(request: Request, req: DsEnqueueMultiRequest):
+    """복수 ZIP 병합 업로드 잡 생성 — 같은 지역코드 ZIP들을 하나로 병합 처리"""
+    await _require_role(request, {"admin", "manager"})
+    if not HAS_XLRD:
+        raise HTTPException(status_code=503, detail="서버에 xlrd가 설치되지 않았습니다.")
+    if len(req.s3Keys) != len(req.fileNames):
+        raise HTTPException(status_code=400, detail="s3Keys와 fileNames 길이가 일치하지 않습니다.")
+    if len(req.s3Keys) < 2:
+        raise HTTPException(status_code=400, detail="2개 이상의 파일이 필요합니다.")
+
+    try:
+        jobs_table = _dynamodb_resource.Table(DYNAMODB_TABLES["ds_jobs"])
+        job_id = str(uuid.uuid4())
+        now = datetime.now(timezone.utc).isoformat()
+
+        jobs_table.put_item(Item={
+            "jobId": job_id,
+            "status": "queued",
+            "stage": f"{len(req.s3Keys)}개 ZIP 병합 대기 중...",
+            "percent": Decimal("0"),
+            "processedRows": 0,
+            "totalRows": 0,
+            "s3Keys": req.s3Keys,
+            "fileNames": req.fileNames,
+            "s3Key": req.s3Keys[0],      # 하위 호환 (워커 ProjectionExpression)
+            "fileName": req.fileNames[0],
+            "uploadedBy": req.uploadedBy,
+            "queuedAt": now,
+        })
+
+        resp = jobs_table.scan(
+            FilterExpression="#s = :s",
+            ExpressionAttributeNames={"#s": "status"},
+            ExpressionAttributeValues={":s": "queued"},
+            Select="COUNT",
+        )
+        queue_position = resp.get("Count", 0)
+
+        logger.info(f"DS multi-job enqueued: {job_id} ({len(req.s3Keys)}개 ZIP, 큐 {queue_position}번째)")
+
+        try:
+            empno = await _verify_auth(request)
+        except HTTPException:
+            empno = req.uploadedBy
+        await asyncio.to_thread(
+            _record_audit_log_sync, "CREATE", "DSData", req.s3Keys[0], empno,
+            {"newData": json.dumps({
+                "fileCount": len(req.s3Keys),
+                "fileNames": req.fileNames[:5],  # 처음 5개만 로깅
+                "jobId": job_id,
+            })},
+        )
+
+        return {"success": True, "jobId": job_id, "queuePosition": queue_position}
+    except ClientError as e:
+        logger.error(f"DS enqueue-multi error: {e}")
         raise HTTPException(status_code=500, detail="서버 내부 오류")
 
 
