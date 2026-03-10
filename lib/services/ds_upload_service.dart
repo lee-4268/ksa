@@ -38,20 +38,26 @@ class DsUploadService {
     '30': '서부본부',
     '40': '강원본부',
     '50': '충청본부',
-    '55': '충청본부',
     '60': '경북본부',
-    '70': '서부본부',
   };
 
   /// 유효 지역코드
   static const _validRegionCodes = {'10', '20', '30', '40', '50', '55', '60', '70'};
 
-  /// ZIP 파일명에서 지역코드 추출: "SK0(10)20260302_1.zip" → "10"
+  /// 같은 본부로 병합되는 코드 (70→30 서부, 55→50 충청)
+  static const _mergedCodes = {'70': '30', '55': '50'};
+
+  /// 병합 코드 표시용: 대표코드 → "30+70" 형태
+  static const _mergedCodeDisplay = {'30': '30+70', '50': '50+55'};
+
+  /// ZIP 파일명에서 지역코드 추출 + 병합 코드 정규화
+  /// "SKT(70)20260303.zip" → "30" (서부본부로 병합)
   static String? _parseDivisionCode(String fileName) {
     final match = RegExp(r'\((\d+)\)').firstMatch(fileName);
     if (match == null) return null;
     final code = match.group(1)!;
-    return _validRegionCodes.contains(code) ? code : null;
+    if (!_validRegionCodes.contains(code)) return null;
+    return _mergedCodes[code] ?? code; // 70→30, 55→50
   }
 
   /// 파일 목록을 지역코드별로 그룹핑 (미사용 코드 필터링)
@@ -339,11 +345,12 @@ class DsUploadService {
           final totalRows = job['totalRows'] as int? ?? 0;
           final sheetStats = job['sheetStats'] as Map<String, dynamic>? ?? {};
           final divName = _divisionNames[divisionCode] ?? job['divisionId'] ?? '';
+          final codeDisplay = _mergedCodeDisplay[divisionCode] ?? divisionCode;
           final formattedDate = importDate.length == 8
               ? '${importDate.substring(0, 4)}-${importDate.substring(4, 6)}-${importDate.substring(6, 8)}'
               : importDate;
 
-          return '$divName $formattedDate\n'
+          return '$divName (코드: $codeDisplay) $formattedDate\n'
               '${sheetStats.length}개 시트, ${_formatNumber(totalRows)}행 업로드 완료';
         }
 

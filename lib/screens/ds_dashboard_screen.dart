@@ -22,6 +22,9 @@ class DsDashboardScreen extends StatefulWidget {
 
 class _DsDashboardScreenState extends State<DsDashboardScreen> {
   static const Color _accentColor = Color(0xFF5C6BC0);
+
+  /// 병합 코드 표시용: 대표코드 → "30+70" 형태
+  static const _mergedCodeDisplay = {'30': '30+70', '50': '50+55'};
   static const String _baseUrl = String.fromEnvironment(
     'API_BASE_URL',
     defaultValue: 'https://api-sko-kca.skons.net',
@@ -779,7 +782,7 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
                       Text(upload.divisionName,
                           style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
                       const SizedBox(height: 2),
-                      Text('${upload.formattedDate}  |  코드: ${upload.divisionCode}',
+                      Text('${upload.formattedDate}  |  코드: ${_mergedCodeDisplay[upload.divisionCode] ?? upload.divisionCode}',
                           style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
                     ],
                   ),
@@ -1001,7 +1004,7 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
                         children: [
                           Icon(Icons.calendar_today, size: 14, color: Colors.grey.shade500),
                           const SizedBox(width: 8),
-                          Text('${upload.formattedDate}  |  코드: ${upload.divisionCode}',
+                          Text('${upload.formattedDate}  |  코드: ${_mergedCodeDisplay[upload.divisionCode] ?? upload.divisionCode}',
                               style: TextStyle(fontSize: 13, color: Colors.grey.shade600)),
                         ],
                       ),

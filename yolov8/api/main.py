@@ -163,6 +163,11 @@ DS_REGION_CODE_MAP = {
     "70": {"divisionId": "seobu", "divisionName": "서부본부"},
 }
 
+# 같은 본부로 병합되는 코드 (전북70→서부30, 충북55→충청50)
+DS_MERGED_CODES = {"70": "30", "55": "50"}
+# 대표코드 → 함께 정리해야 할 파트너 코드
+DS_PARTNER_CODES = {"30": ["70"], "50": ["55"]}
+
 # ── 호출명칭 매칭 설정 ──────────────────────────────────────
 CALLNAME_CSV_PREFIX = "callname-db/"
 CALLNAME_CACHE_TTL = 86400  # 24시간
@@ -2917,7 +2922,11 @@ def _read_xls_from_zip_paginated_sync(
 
 
 def _process_zip_to_xlsx_sync(zip_temp_path: str, progress_cb=None) -> tuple:
-    """ZIP → XLS 파싱 → xlsx 직접 빌드 (xlsxwriter, DynamoDB 행 쓰기 0회)
+    """ZIP → XLS 파싱 → xlsx 직접 빌드 (2-pass 스트리밍, 메모리 최소화)
+
+    Pass 1: 헤더 수집 (행 0만 읽기, 메모리 ~수 KB)
+    Pass 2: xlsxwriter에 직접 행 쓰기 (현재 행 1개만 메모리)
+
     Returns: (xlsx_bytes, sheet_stats, total_rows, sheet_headers)
     progress_cb: Optional[Callable(stage, percent)] — 파일별 진행률 콜백
     """
@@ -2926,10 +2935,8 @@ def _process_zip_to_xlsx_sync(zip_temp_path: str, progress_cb=None) -> tuple:
     if not HAS_XLSXWRITER:
         raise RuntimeError("xlsxwriter not installed on server")
 
-    # 1단계: XLS 파싱 → 시트별 데이터 수집 (메모리에 dict 리스트만 보유)
     sheet_stats: Dict[str, int] = {}
     sheet_headers: Dict[str, list] = {}
-    sheet_rows: Dict[str, list] = {}  # sheet_name → [row_dict, ...]
     total_rows = 0
 
     with zipfile.ZipFile(zip_temp_path, "r") as zf:
@@ -2952,11 +2959,98 @@ def _process_zip_to_xlsx_sync(zip_temp_path: str, progress_cb=None) -> tuple:
         if not process_list:
             raise ValueError("처리할 XLS 파일 없음")
 
-        logger.info(f"DS xlsx build: {len(process_list)}개 XLS "
+        total_files = len(process_list)
+        logger.info(f"DS xlsx build: {total_files}개 XLS "
                     f"(base={len(classified['base'])}, numbered={len(classified['numbered'])}, "
                     f"spt={len(classified['spt'])}, hundred={len(classified['hundred'])})")
 
-        total_files = len(process_list)
+        # ── Pass 1: 헤더만 수집 (행 0) ──
+        if progress_cb:
+            progress_cb("헤더 분석 중...", 5)
+
+        for fname in process_list:
+            is_hundred = fname in hundred_files
+            try:
+                xls_bytes = zf.read(fname)
+                workbook = xlrd.open_workbook(file_contents=xls_bytes)
+            except Exception as e:
+                logger.warning(f"DS xlsx Pass1: {fname} 실패: {e}")
+                continue
+
+            for sheet_idx in range(workbook.nsheets):
+                sheet = workbook.sheet_by_index(sheet_idx)
+                orig_sheet_name = sheet.name.strip()
+                if sheet.nrows < 2:
+                    continue
+
+                if is_hundred:
+                    sheet_name = f"{orig_sheet_name}(검사전)"
+                else:
+                    sheet_name = orig_sheet_name
+
+                headers = []
+                for col in range(sheet.ncols):
+                    h = _xlrd_cell_to_str(sheet, 0, col)
+                    if h:
+                        headers.append(h)
+                if not headers:
+                    continue
+
+                if sheet_name not in sheet_headers:
+                    sheet_headers[sheet_name] = list(headers)
+                else:
+                    existing = set(sheet_headers[sheet_name])
+                    for h in headers:
+                        if h not in existing:
+                            sheet_headers[sheet_name].append(h)
+                            existing.add(h)
+
+            workbook.release_resources()
+            del xls_bytes
+
+        if not sheet_headers:
+            raise ValueError("처리할 시트가 없습니다.")
+
+        _release_memory()
+        logger.info(f"DS xlsx Pass1 완료: {len(sheet_headers)}개 시트 헤더 수집")
+
+        # ── Pass 2: xlsxwriter에 직접 행 쓰기 (sheet_rows 없이) ──
+        if progress_cb:
+            progress_cb(f"xlsx 생성 중... (0/{total_files})", 10)
+
+        buf = io.BytesIO()
+        xwb = xlsxwriter.Workbook(buf, {"in_memory": True, "constant_memory": True})
+
+        header_fmt = xwb.add_format({
+            "font_name": "Arial", "font_size": 10, "bold": True,
+            "align": "center", "valign": "vcenter",
+            "bg_color": "#BFBFBF",
+            "border": 1,
+        })
+        data_fmt = xwb.add_format({
+            "font_name": "Arial", "font_size": 10,
+            "align": "center", "valign": "vcenter",
+            "border": 1,
+        })
+
+        # 워크시트 생성 + 헤더 행 쓰기
+        MAX_ROWS_PER_SHEET = 1_000_000  # Excel 한도 1,048,576, 안전 여유
+        worksheets: Dict[str, object] = {}
+        sheet_row_idx: Dict[str, int] = {}
+        sheet_split_num: Dict[str, int] = {}  # 시트 분할 번호 추적
+        header_col_maps: Dict[str, Dict[str, int]] = {}
+
+        for sname, hdrs in sheet_headers.items():
+            xws = xwb.add_worksheet(sname[:31])
+            xws.set_row(0, 12.75)
+            for ci, h in enumerate(hdrs):
+                xws.set_column(ci, ci, 20)
+                xws.write(0, ci, h, header_fmt)
+            worksheets[sname] = xws
+            sheet_row_idx[sname] = 1
+            sheet_stats[sname] = 0
+            header_col_maps[sname] = {h: i for i, h in enumerate(hdrs)}
+
         last_cb_pct = 0.0
 
         for file_idx, fname in enumerate(process_list):
@@ -2964,21 +3058,21 @@ def _process_zip_to_xlsx_sync(zip_temp_path: str, progress_cb=None) -> tuple:
             is_hundred = fname in hundred_files
 
             if progress_cb:
-                pct = 10 + (file_idx / total_files) * 65
+                pct = 10 + (file_idx / total_files) * 80
                 if pct - last_cb_pct >= 5 or file_idx == 0 or file_idx == total_files - 1:
-                    progress_cb(f"XLS 파싱 중... ({file_idx+1}/{total_files})", pct)
+                    progress_cb(f"xlsx 생성 중... ({file_idx+1}/{total_files})", pct)
                     last_cb_pct = pct
 
             try:
                 xls_bytes = zf.read(fname)
             except Exception as e:
-                logger.warning(f"DS xlsx build: {fname} 읽기 실패: {e}")
+                logger.warning(f"DS xlsx Pass2: {fname} 읽기 실패: {e}")
                 continue
 
             try:
                 workbook = xlrd.open_workbook(file_contents=xls_bytes)
             except Exception as e:
-                logger.warning(f"DS xlsx build: XLS 파싱 실패 ({base_fname}): {e}")
+                logger.warning(f"DS xlsx Pass2: XLS 파싱 실패 ({base_fname}): {e}")
                 del xls_bytes
                 continue
 
@@ -2989,43 +3083,62 @@ def _process_zip_to_xlsx_sync(zip_temp_path: str, progress_cb=None) -> tuple:
                 if sheet.nrows < 2:
                     continue
 
-                # (100) 파일: 모든 시트에 '(검사전)' 접미사 추가
                 if is_hundred:
                     sheet_name = f"{orig_sheet_name}(검사전)"
                 else:
                     sheet_name = orig_sheet_name
 
-                header_map = []
-                for col in range(sheet.ncols):
-                    h = _xlrd_cell_to_str(sheet, 0, col)
-                    if h:
-                        header_map.append((col, h))
-                if not header_map:
+                if sheet_name not in worksheets:
                     continue
 
-                headers = [name for _, name in header_map]
+                xws = worksheets[sheet_name]
+                col_map = header_col_maps[sheet_name]
+                num_cols = len(sheet_headers[sheet_name])
 
-                if sheet_name not in sheet_headers:
-                    sheet_headers[sheet_name] = list(headers)
-                    sheet_stats[sheet_name] = 0
-                    sheet_rows[sheet_name] = []
-                else:
-                    existing = set(sheet_headers[sheet_name])
-                    for h in headers:
-                        if h not in existing:
-                            sheet_headers[sheet_name].append(h)
-                            existing.add(h)
+                # XLS 컬럼 → xlsx 컬럼 매핑
+                xls_col_map = []
+                for col in range(sheet.ncols):
+                    h = _xlrd_cell_to_str(sheet, 0, col)
+                    if h and h in col_map:
+                        xls_col_map.append((col, col_map[h]))
+                if not xls_col_map:
+                    continue
 
                 row_count = 0
                 for row_idx in range(1, sheet.nrows):
-                    data = {}
-                    for col_idx, hname in header_map:
-                        val = _xlrd_cell_to_str(sheet, row_idx, col_idx)
+                    # 현재 행 1개만 메모리에 보유
+                    row_vals = [""] * num_cols
+                    has_data = False
+                    for xls_col, xlsx_col in xls_col_map:
+                        val = _xlrd_cell_to_str(sheet, row_idx, xls_col)
                         if val:
-                            data[hname] = val
-                    if not data:
+                            row_vals[xlsx_col] = val
+                            has_data = True
+
+                    if not has_data:
                         continue
-                    sheet_rows[sheet_name].append(data)
+
+                    # 시트 행 수 100만 초과 시 자동 분할
+                    if sheet_row_idx[sheet_name] > MAX_ROWS_PER_SHEET:
+                        split_num = sheet_split_num.get(sheet_name, 1) + 1
+                        sheet_split_num[sheet_name] = split_num
+                        split_ws_name = f"{sheet_name}({split_num})"[:31]
+                        new_xws = xwb.add_worksheet(split_ws_name)
+                        new_xws.set_row(0, 12.75)
+                        hdrs = sheet_headers[sheet_name]
+                        for ci, h in enumerate(hdrs):
+                            new_xws.set_column(ci, ci, 20)
+                            new_xws.write(0, ci, h, header_fmt)
+                        worksheets[sheet_name] = new_xws
+                        xws = new_xws
+                        sheet_row_idx[sheet_name] = 1
+                        logger.info(f"DS xlsx build: 시트 분할 → {split_ws_name}")
+
+                    ri = sheet_row_idx[sheet_name]
+                    xws.set_row(ri, 12.75)
+                    for ci, val in enumerate(row_vals):
+                        xws.write(ri, ci, val, data_fmt)
+                    sheet_row_idx[sheet_name] += 1
                     row_count += 1
 
                 sheet_stats[sheet_name] += row_count
@@ -3036,45 +3149,10 @@ def _process_zip_to_xlsx_sync(zip_temp_path: str, progress_cb=None) -> tuple:
             total_rows += file_rows
             logger.info(f"DS xlsx build: {base_fname} → {file_rows}행")
 
+        xwb.close()
+        xlsx_bytes = buf.getvalue()
+
     _release_memory()
-    if progress_cb:
-        progress_cb(f"xlsx 파일 생성 중... ({total_rows:,}행)", 76)
-
-    # 2단계: xlsxwriter로 xlsx 생성
-    buf = io.BytesIO()
-    xwb = xlsxwriter.Workbook(buf, {"in_memory": True, "constant_memory": True})
-
-    header_fmt = xwb.add_format({
-        "font_name": "Arial", "font_size": 10, "bold": True,
-        "align": "center", "valign": "vcenter",
-        "bg_color": "#BFBFBF",
-        "border": 1,
-    })
-    data_fmt = xwb.add_format({
-        "font_name": "Arial", "font_size": 10,
-        "align": "center", "valign": "vcenter",
-        "border": 1,
-    })
-
-    for sname in sheet_stats.keys():
-        xws = xwb.add_worksheet(sname[:31])
-        headers = sheet_headers[sname]
-
-        # 열 너비 20, 행 높이 12.75
-        for ci, h in enumerate(headers):
-            xws.set_column(ci, ci, 20)
-            xws.write(0, ci, h, header_fmt)
-        xws.set_row(0, 12.75)
-
-        rows = sheet_rows.get(sname, [])
-        for ri, row_data in enumerate(rows, start=1):
-            xws.set_row(ri, 12.75)
-            for ci, h in enumerate(headers):
-                xws.write(ri, ci, row_data.get(h, ""), data_fmt)
-
-    xwb.close()
-    xlsx_bytes = buf.getvalue()
-    del sheet_rows
     logger.info(f"DS xlsx build 완료: {total_rows}행, {len(sheet_stats)}시트, {len(xlsx_bytes):,} bytes")
     return xlsx_bytes, sheet_stats, total_rows, sheet_headers
 
@@ -3117,6 +3195,37 @@ def _init_upload_record_sync(division_id: str, division_code: str, import_date: 
                 _delete_ds_records_targeted(records_table, uploads_table,
                                             division_id, old_date, old_dc, old_sheets)
             uploads_table.delete_item(Key={"divisionId": division_id, "importDate": old_sk})
+
+    # ── 파트너 코드 정리 (30→70, 50→55 등 같은 본부의 다른 코드 데이터 삭제) ──
+    partner_codes = DS_PARTNER_CODES.get(division_code, [])
+    for partner_code in partner_codes:
+        partner_resp = uploads_table.query(
+            KeyConditionExpression="divisionId = :did AND begins_with(importDate, :prefix)",
+            ExpressionAttributeValues={":did": division_id, ":prefix": f"{partner_code}#"},
+            ProjectionExpression="importDate, sheetStats, storageType, divisionCode",
+        )
+        for p_item in partner_resp.get("Items", []):
+            p_sk = p_item["importDate"]
+            p_date = p_sk.split("#", 1)[1] if "#" in p_sk else p_sk
+            p_dc = p_item.get("divisionCode", partner_code)
+            p_sheets = list(p_item.get("sheetStats", {}).keys())
+            p_storage = p_item.get("storageType", "")
+            logger.info(f"DS init: 파트너 코드 삭제 {division_id}/{p_sk}")
+            try:
+                s3 = get_s3_client()
+                for s3k in [f"ds-exports/{division_id}/{p_dc}_{p_date}.xlsx",
+                            f"ds-raw/{division_id}/{p_dc}_{p_date}.zip"]:
+                    try:
+                        s3.delete_object(Bucket=S3_BUCKET_NAME, Key=s3k)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+            _evict_cache(division_id, p_dc, p_date)
+            if p_storage not in ("s3", "s3-zip") and p_sheets:
+                _delete_ds_records_targeted(records_table, uploads_table,
+                                            division_id, p_date, p_dc, p_sheets)
+            uploads_table.delete_item(Key={"divisionId": division_id, "importDate": p_sk})
 
     # ── 동일 날짜 기존 데이터 처리 ──
     existing = uploads_table.get_item(
@@ -3384,6 +3493,12 @@ async def _process_ds_job(job_id: str, job_item: dict):
 
         if division_code not in DS_REGION_CODE_MAP:
             raise ValueError(f"알 수 없는 지역코드: {division_code}")
+
+        # 병합 코드 정규화: 70→30(서부), 55→50(충청)
+        if division_code in DS_MERGED_CODES:
+            original_code = division_code
+            division_code = DS_MERGED_CODES[division_code]
+            logger.info(f"DS job {job_id}: 코드 {original_code} → {division_code} 정규화")
 
         division_id = DS_REGION_CODE_MAP[division_code]["divisionId"]
         division_name = DS_REGION_CODE_MAP[division_code]["divisionName"]
