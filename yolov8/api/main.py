@@ -730,9 +730,10 @@ class DsEnqueueRequest(BaseModel):
 
 class DsEnqueueMultiRequest(BaseModel):
     """복수 ZIP 병합 업로드 잡 요청"""
-    s3Keys: List[str]        # S3 임시 키 목록
-    fileNames: List[str]     # 원본 파일명 목록
-    uploadedBy: str          # 업로드한 사용자 ID
+    s3Keys: List[str] = []       # S3 임시 키 목록 (기존 방식)
+    tempIds: List[str] = []      # EC2 로컬 임시 파일 ID 목록 (직접 전송)
+    fileNames: List[str]         # 원본 파일명 목록
+    uploadedBy: str              # 업로드한 사용자 ID
 
 
 # ============================================================
@@ -2211,10 +2212,10 @@ async def _background_delete_records(divisionId: str, importDate: str, divisionC
 # ============================================================
 
 async def _ensure_ds_jobs_table():
-    """kca-ds-jobs 테이블이 없으면 자동 생성"""
+    """kca-ds-jobs 테이블이 없으면 자동 생성 + TTL 활성화"""
     await asyncio.sleep(1)
+    dynamodb_client = get_dynamodb_client()
     try:
-        dynamodb_client = get_dynamodb_client()
         dynamodb_client.create_table(
             TableName=DYNAMODB_TABLES["ds_jobs"],
             KeySchema=[{"AttributeName": "jobId", "KeyType": "HASH"}],
@@ -2225,6 +2226,15 @@ async def _ensure_ds_jobs_table():
     except ClientError as e:
         if e.response["Error"]["Code"] != "ResourceInUseException":
             logger.warning(f"DS jobs table creation error (non-fatal): {e}")
+    # TTL 활성화 (이미 활성화돼 있으면 무시)
+    try:
+        dynamodb_client.update_time_to_live(
+            TableName=DYNAMODB_TABLES["ds_jobs"],
+            TimeToLiveSpecification={"Enabled": True, "AttributeName": "ttl"},
+        )
+        logger.info(f"DS jobs TTL enabled (ttl attribute, 7일)")
+    except ClientError:
+        pass  # 이미 활성화됨
 
 
 def _parse_ds_filename_in_zip(filename: str) -> Optional[dict]:
@@ -2303,17 +2313,18 @@ def _mark_job_processing_sync(job_id: str):
 
 def _mark_job_done_sync(job_id: str, division_id: str, division_code: str,
                          import_date: str, sheet_stats: dict, total_rows: int):
-    """동기: 잡 완료 처리"""
+    """동기: 잡 완료 처리 (7일 TTL)"""
     jobs_table = _dynamodb_resource.Table(DYNAMODB_TABLES["ds_jobs"])
     now = datetime.now(timezone.utc).isoformat()
+    ttl = int(_time_mod.time()) + 7 * 86400  # 7일 후 자동 삭제
     jobs_table.update_item(
         Key={"jobId": job_id},
         UpdateExpression=(
             "SET #s=:s, completedAt=:ca, stage=:g, #p=:p, "
             "divisionId=:did, divisionCode=:dc, importDate=:idate, "
-            "sheetStats=:ss, totalRows=:tr"
+            "sheetStats=:ss, totalRows=:tr, #ttl=:ttl"
         ),
-        ExpressionAttributeNames={"#s": "status", "#p": "percent"},
+        ExpressionAttributeNames={"#s": "status", "#p": "percent", "#ttl": "ttl"},
         ExpressionAttributeValues={
             ":s": "completed",
             ":ca": now,
@@ -2324,23 +2335,26 @@ def _mark_job_done_sync(job_id: str, division_id: str, division_code: str,
             ":idate": import_date,
             ":ss": {k: v for k, v in sheet_stats.items()},
             ":tr": total_rows,
+            ":ttl": ttl,
         },
     )
 
 
 def _mark_job_failed_sync(job_id: str, error: str):
-    """동기: 잡 실패 처리"""
+    """동기: 잡 실패 처리 (7일 TTL)"""
     jobs_table = _dynamodb_resource.Table(DYNAMODB_TABLES["ds_jobs"])
     now = datetime.now(timezone.utc).isoformat()
+    ttl = int(_time_mod.time()) + 7 * 86400  # 7일 후 자동 삭제
     jobs_table.update_item(
         Key={"jobId": job_id},
-        UpdateExpression="SET #s=:s, completedAt=:ca, stage=:g, #e=:e",
-        ExpressionAttributeNames={"#s": "status", "#e": "error"},
+        UpdateExpression="SET #s=:s, completedAt=:ca, stage=:g, #e=:e, #ttl=:ttl",
+        ExpressionAttributeNames={"#s": "status", "#e": "error", "#ttl": "ttl"},
         ExpressionAttributeValues={
             ":s": "failed",
             ":ca": now,
             ":g": "실패",
             ":e": error[:500],
+            ":ttl": ttl,
         },
     )
 
@@ -2386,7 +2400,7 @@ async def _get_next_queued_job() -> Optional[dict]:
                     "FilterExpression": "#s = :s",
                     "ExpressionAttributeNames": {"#s": "status"},
                     "ExpressionAttributeValues": {":s": "queued"},
-                    "ProjectionExpression": "jobId, queuedAt, s3Key, s3Keys, fileName, fileNames, uploadedBy, #s",
+                    "ProjectionExpression": "jobId, queuedAt, s3Key, s3Keys, tempIds, fileName, fileNames, uploadedBy, #s",
                     "Limit": 100,
                 }
                 if last_key:
@@ -2550,36 +2564,54 @@ def _read_xlsx_paginated_sync(xlsx_path: str, sheet_name: str,
         return {"success": True, "items": [], "count": 0, "lastEvaluatedKey": None}
 
 
+def _fix_zip_filename(name: str) -> str:
+    """ZIP 파일명 한글 복원: latin-1로 깨진 이름 → CP949 디코딩 시도"""
+    try:
+        raw = name.encode("latin-1")
+        return raw.decode("cp949")
+    except (UnicodeDecodeError, UnicodeEncodeError):
+        return name
+
+
 def _merge_zips_sync(s3_keys: list, file_names: list, job_id: str,
-                     progress_cb=None) -> str:
+                     progress_cb=None, temp_ids: list = None) -> str:
     """복수 소스 ZIP → 단일 결합 ZIP (디스크 효율: 소스 1개씩 처리 후 삭제)
 
     각 소스 ZIP에서 XLS 파일만 추출하여 결합 ZIP에 기록.
     파일명 충돌 방지: 소스 ZIP 이름을 디렉토리 접두사로 사용.
+    temp_ids 있으면 로컬 /tmp에서 직접 읽기, 없으면 S3 다운로드.
 
     Returns: 결합 ZIP 경로
     """
     merged_path = f"/tmp/ds_merged_{job_id}.zip"
-    s3 = get_s3_client()
-    total = len(s3_keys)
+    use_local = bool(temp_ids)
+    sources = temp_ids if use_local else s3_keys
+    total = len(sources)
     xls_count = 0
+    s3 = None if use_local else get_s3_client()
 
     with zipfile.ZipFile(merged_path, "w", zipfile.ZIP_STORED) as out_zip:
-        for idx, (s3_key, fname) in enumerate(zip(s3_keys, file_names)):
-            src_path = f"/tmp/ds_{job_id}_src_{idx}.zip"
+        for idx, (src_id, fname) in enumerate(zip(sources, file_names)):
+            if use_local:
+                src_path = f"/tmp/ds_temp_{src_id}.zip"
+            else:
+                src_path = f"/tmp/ds_{job_id}_src_{idx}.zip"
             try:
                 if progress_cb:
+                    label = "ZIP 읽는 중" if use_local else "ZIP 다운로드 중"
                     progress_cb(
-                        f"ZIP 다운로드 중... ({idx + 1}/{total})",
+                        f"{label}... ({idx + 1}/{total})",
                         3 + (idx / total) * 25,
                     )
-                s3.download_file(S3_BUCKET_NAME, s3_key, src_path)
+                if not use_local:
+                    s3.download_file(S3_BUCKET_NAME, src_id, src_path)
 
                 # 소스 ZIP 이름 → 디렉토리 접두사 (파일명 충돌 방지)
                 prefix = os.path.splitext(os.path.basename(fname))[0]
                 with zipfile.ZipFile(src_path, "r") as src_zip:
                     for entry in src_zip.namelist():
-                        base = os.path.basename(entry)
+                        fixed_entry = _fix_zip_filename(entry)
+                        base = os.path.basename(fixed_entry)
                         if not base.lower().endswith(".xls"):
                             continue
                         if base.lower().endswith(".xlsx"):
@@ -2587,11 +2619,12 @@ def _merge_zips_sync(s3_keys: list, file_names: list, job_id: str,
                         if base.startswith("~") or base.startswith("."):
                             continue
                         out_name = f"{prefix}/{base}"
-                        data = src_zip.read(entry)
+                        data = src_zip.read(entry)  # 원본 entry로 읽기
                         out_zip.writestr(out_name, data)
                         xls_count += 1
                         del data
             finally:
+                # 로컬 temp 파일도 처리 후 삭제 (디스크 절약)
                 if os.path.exists(src_path):
                     os.remove(src_path)
 
@@ -2636,12 +2669,15 @@ def _parse_zip_metadata_sync(zip_temp_path: str, progress_cb=None) -> tuple:
 
     with zipfile.ZipFile(zip_temp_path, "r") as zf:
         all_names = zf.namelist()
+        # ZIP 파일명 한글 복원 (원본 entry → 고친 이름 매핑)
+        name_map = {n: _fix_zip_filename(n) for n in all_names}
         xls_names = [n for n in all_names
-                     if n.lower().endswith(".xls") and not os.path.basename(n).startswith("~")]
+                     if name_map[n].lower().endswith(".xls")
+                     and not os.path.basename(name_map[n]).startswith("~")]
 
         classified: Dict[str, list] = {"base": [], "numbered": [], "spt": [], "hundred": []}
         for fname in xls_names:
-            base_fname = os.path.basename(fname)
+            base_fname = os.path.basename(name_map[fname])
             if not base_fname:
                 continue
             cls = _classify_ds_file(base_fname)
@@ -2660,7 +2696,7 @@ def _parse_zip_metadata_sync(zip_temp_path: str, progress_cb=None) -> tuple:
 
         total_files = len(process_list)
         for file_idx, fname in enumerate(process_list):
-            base_fname = os.path.basename(fname) or fname
+            base_fname = os.path.basename(name_map[fname]) or name_map[fname]
             is_hundred = fname in hundred_files
 
             if progress_cb and (file_idx % 5 == 0 or file_idx == total_files - 1):
@@ -2943,13 +2979,16 @@ def _process_zip_to_xlsx_sync(zip_temp_path: str, progress_cb=None,
 
     with zipfile.ZipFile(zip_temp_path, "r") as zf:
         all_names = zf.namelist()
+        # ZIP 파일명 한글 복원 (원본 entry → 고친 이름 매핑)
+        name_map = {n: _fix_zip_filename(n) for n in all_names}
         xls_names = [n for n in all_names
-                     if n.lower().endswith(".xls") and not os.path.basename(n).startswith("~")]
+                     if name_map[n].lower().endswith(".xls")
+                     and not os.path.basename(name_map[n]).startswith("~")]
 
         classified: Dict[str, list] = {"base": [], "numbered": [], "spt": [], "hundred": []}
         hundred_files: set = set()
         for fname in xls_names:
-            base_fname = os.path.basename(fname)
+            base_fname = os.path.basename(name_map[fname])
             if not base_fname:
                 continue
             cls = _classify_ds_file(base_fname)
@@ -3057,7 +3096,7 @@ def _process_zip_to_xlsx_sync(zip_temp_path: str, progress_cb=None,
         last_cb_pct = 0.0
 
         for file_idx, fname in enumerate(process_list):
-            base_fname = os.path.basename(fname) or fname
+            base_fname = os.path.basename(name_map[fname]) or name_map[fname]
             is_hundred = fname in hundred_files
 
             if progress_cb:
@@ -3442,11 +3481,12 @@ async def _process_ds_job(job_id: str, job_item: dict):
     """DS 잡 메인 처리 — ZIP → xlsx 빌드 → S3 저장 (DynamoDB 행 쓰기 0회)
     복수 ZIP (s3Keys 배열) 인 경우 먼저 병합 후 동일 플로우 실행.
     """
-    s3_keys = job_item.get("s3Keys", [])  # 복수 ZIP
-    s3_key = job_item.get("s3Key", "")    # 단일 ZIP
+    s3_keys = job_item.get("s3Keys", [])    # 복수 ZIP (S3 경유)
+    temp_ids = job_item.get("tempIds", [])  # 복수 ZIP (로컬 직접 전송)
+    s3_key = job_item.get("s3Key", "")      # 단일 ZIP
     file_name = job_item.get("fileName", "")
     uploaded_by = job_item.get("uploadedBy", "unknown")
-    is_multi = bool(s3_keys) and len(s3_keys) > 1
+    is_multi = (bool(s3_keys) and len(s3_keys) > 1) or (bool(temp_ids) and len(temp_ids) > 1)
     zip_temp_path = f"/tmp/ds_merged_{job_id}.zip" if is_multi else f"/tmp/ds_{job_id}.zip"
 
     # except 블록에서 접근 가능하도록 try 바깥에서 초기화
@@ -3477,13 +3517,16 @@ async def _process_ds_job(job_id: str, job_item: dict):
         # 1. ZIP 준비 (복수: 병합 / 단수: 다운로드)
         if is_multi:
             file_names = job_item.get("fileNames", [])
-            if len(file_names) != len(s3_keys):
-                file_names = [f"file_{i}.zip" for i in range(len(s3_keys))]
+            merge_keys = temp_ids if temp_ids else s3_keys
+            if len(file_names) != len(merge_keys):
+                file_names = [f"file_{i}.zip" for i in range(len(merge_keys))]
             zip_temp_path = await asyncio.to_thread(
                 _merge_zips_sync, s3_keys, file_names, job_id,
                 lambda s, p: _update_job_progress_sync(job_id, s, p),
+                temp_ids=temp_ids if temp_ids else None,
             )
-            logger.info(f"DS job {job_id}: {len(s3_keys)}개 ZIP 병합 완료 "
+            mode = "로컬" if temp_ids else "S3"
+            logger.info(f"DS job {job_id}: {len(merge_keys)}개 ZIP 병합 완료 [{mode}] "
                         f"({os.path.getsize(zip_temp_path):,} bytes)")
         else:
             await _update_job_progress(job_id, "S3에서 ZIP 다운로드 중...", 3)
@@ -3502,7 +3545,8 @@ async def _process_ds_job(job_id: str, job_item: dict):
         def _parse_meta():
             with zipfile.ZipFile(zip_temp_path, "r") as zf:
                 for name in zf.namelist():
-                    base = os.path.basename(name)
+                    fixed = _fix_zip_filename(name)
+                    base = os.path.basename(fixed)
                     if not base.lower().endswith(".xls"):
                         continue
                     if base.startswith("~"):
@@ -4604,6 +4648,40 @@ async def ds_upload_raw(request: Request, file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail="서버 내부 오류")
 
 
+@app.post("/ds/upload-temp")
+async def ds_upload_temp(request: Request, file: UploadFile = File(...)):
+    """DS ZIP → EC2 로컬 디스크 스트리밍 저장 (S3 경유 없음, 병합용)
+    메모리: ~8MB (청크 버퍼만), 디스크: 파일 크기만큼
+    """
+    await _require_role(request, {"admin", "manager"})
+    temp_id = str(uuid.uuid4())
+    temp_path = f"/tmp/ds_temp_{temp_id}.zip"
+    total_size = 0
+    CHUNK_SIZE = 8 * 1024 * 1024  # 8MB
+
+    try:
+        with open(temp_path, "wb") as f:
+            while True:
+                chunk = await file.read(CHUNK_SIZE)
+                if not chunk:
+                    break
+                f.write(chunk)
+                total_size += len(chunk)
+
+        if total_size == 0:
+            os.remove(temp_path)
+            raise ValueError("업로드된 데이터가 없습니다")
+
+        logger.info(f"DS upload-temp: {temp_id} ({total_size // 1024}KB) → {temp_path}")
+        return {"success": True, "tempId": temp_id}
+
+    except Exception as e:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        logger.error(f"DS upload-temp error: {e}")
+        raise HTTPException(status_code=500, detail="서버 내부 오류")
+
+
 @app.post("/ds/enqueue")
 async def ds_enqueue(request: Request, req: DsEnqueueRequest):
     """DS 처리 잡을 큐에 추가 — 즉시 jobId 반환, 실제 처리는 백그라운드 워커"""
@@ -4664,30 +4742,45 @@ async def ds_enqueue_multi(request: Request, req: DsEnqueueMultiRequest):
     await _require_role(request, {"admin", "manager"})
     if not HAS_XLRD:
         raise HTTPException(status_code=503, detail="서버에 xlrd가 설치되지 않았습니다.")
-    if len(req.s3Keys) != len(req.fileNames):
-        raise HTTPException(status_code=400, detail="s3Keys와 fileNames 길이가 일치하지 않습니다.")
-    if len(req.s3Keys) < 2:
+
+    # tempIds (로컬 직접 전송) 또는 s3Keys (S3 경유) 중 하나 필수
+    use_temp = bool(req.tempIds)
+    keys = req.tempIds if use_temp else req.s3Keys
+    if len(keys) != len(req.fileNames):
+        raise HTTPException(status_code=400, detail="파일 키와 fileNames 길이가 일치하지 않습니다.")
+    if len(keys) < 2:
         raise HTTPException(status_code=400, detail="2개 이상의 파일이 필요합니다.")
+
+    # tempIds 유효성 검증 (존재하는 파일인지)
+    if use_temp:
+        for tid in req.tempIds:
+            if not os.path.exists(f"/tmp/ds_temp_{tid}.zip"):
+                raise HTTPException(status_code=400, detail=f"임시 파일 없음: {tid}")
 
     try:
         jobs_table = _dynamodb_resource.Table(DYNAMODB_TABLES["ds_jobs"])
         job_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc).isoformat()
 
-        jobs_table.put_item(Item={
+        job_item = {
             "jobId": job_id,
             "status": "queued",
-            "stage": f"{len(req.s3Keys)}개 ZIP 병합 대기 중...",
+            "stage": f"{len(keys)}개 ZIP 병합 대기 중...",
             "percent": Decimal("0"),
             "processedRows": 0,
             "totalRows": 0,
-            "s3Keys": req.s3Keys,
             "fileNames": req.fileNames,
-            "s3Key": req.s3Keys[0],      # 하위 호환 (워커 ProjectionExpression)
             "fileName": req.fileNames[0],
             "uploadedBy": req.uploadedBy,
             "queuedAt": now,
-        })
+        }
+        if use_temp:
+            job_item["tempIds"] = req.tempIds
+        else:
+            job_item["s3Keys"] = req.s3Keys
+            job_item["s3Key"] = req.s3Keys[0]
+
+        jobs_table.put_item(Item=job_item)
 
         resp = jobs_table.scan(
             FilterExpression="#s = :s",
@@ -4697,18 +4790,20 @@ async def ds_enqueue_multi(request: Request, req: DsEnqueueMultiRequest):
         )
         queue_position = resp.get("Count", 0)
 
-        logger.info(f"DS multi-job enqueued: {job_id} ({len(req.s3Keys)}개 ZIP, 큐 {queue_position}번째)")
+        mode = "로컬" if use_temp else "S3"
+        logger.info(f"DS multi-job enqueued: {job_id} ({len(keys)}개 ZIP [{mode}], 큐 {queue_position}번째)")
 
         try:
             empno = await _verify_auth(request)
         except HTTPException:
             empno = req.uploadedBy
         await asyncio.to_thread(
-            _record_audit_log_sync, "CREATE", "DSData", req.s3Keys[0], empno,
+            _record_audit_log_sync, "CREATE", "DSData", req.fileNames[0], empno,
             {"newData": json.dumps({
-                "fileCount": len(req.s3Keys),
-                "fileNames": req.fileNames[:5],  # 처음 5개만 로깅
+                "fileCount": len(keys),
+                "fileNames": req.fileNames[:5],
                 "jobId": job_id,
+                "mode": mode,
             })},
         )
 
