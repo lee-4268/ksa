@@ -350,12 +350,23 @@ def _verify_token(token: str) -> str | None:
 
 
 async def _verify_auth(request: Request) -> str:
-    """Bearer 토큰 검증. 실패 시 401."""
+    """Bearer 토큰 검증. 실패 시 401.
+    토큰 잔여 수명이 절반 이하이면 request.state.refreshed_token에 새 토큰 저장.
+    """
     auth_header = request.headers.get("Authorization", "")
     if auth_header.startswith("Bearer "):
         token = auth_header[7:]
         empno = _verify_token(token)
         if empno:
+            # 토큰 잔여 수명 체크 → 절반 이하면 갱신
+            try:
+                decoded = base64.urlsafe_b64decode(token.encode()).decode()
+                expiry = int(decoded.split(":")[1])
+                remaining = expiry - int(_time_mod.time())
+                if remaining < AUTH_TOKEN_EXPIRY // 2:
+                    request.state.refreshed_token = _generate_token(empno)
+            except Exception:
+                pass
             return empno
         raise HTTPException(status_code=401, detail="토큰이 만료되었거나 유효하지 않습니다")
 
@@ -796,6 +807,18 @@ app.add_middleware(
 
 # GZip 압축 - JSON 응답 80%+ 압축, 네트워크 전송 대폭 감소
 app.add_middleware(GZipMiddleware, minimum_size=1000)
+
+
+@app.middleware("http")
+async def token_refresh_middleware(request: Request, call_next):
+    """인증된 요청의 토큰 잔여 수명이 절반 이하이면 응답 헤더에 새 토큰 포함"""
+    request.state.refreshed_token = None
+    response = await call_next(request)
+    refreshed = getattr(request.state, "refreshed_token", None)
+    if refreshed:
+        response.headers["X-Refreshed-Token"] = refreshed
+    return response
+
 
 # ============================================================
 # Model Loading
@@ -3689,12 +3712,13 @@ async def _process_ds_job(job_id: str, job_item: dict):
         _release_memory()
 
 
-# xlsx 캐시 빌드 큐 — 잡 완료 시 등록, 워커 유휴 시 순차 실행
+# xlsx 캐시 빌드 큐 — 잡 완료 시 등록, 워커 유휴 시 별도 태스크로 실행
 _xlsx_build_queue: list = []
+_xlsx_build_task: Optional[asyncio.Task] = None
 
 
 async def _build_xlsx_cache_background(division_id: str, division_code: str, import_date: str):
-    """S3 ZIP → xlsx 디스크 빌드 → S3 캐싱 (워커 유휴 시 실행)
+    """S3 ZIP → xlsx 디스크 빌드 → S3 캐싱 (별도 태스크로 실행)
     실패해도 export 시 on-demand 빌드 가능하므로 non-fatal.
     """
     zip_s3_key = f"ds-raw/{division_id}/{division_code}_{import_date}.zip"
@@ -3708,6 +3732,8 @@ async def _build_xlsx_cache_background(division_id: str, division_code: str, imp
             _upload_xlsx_file_to_s3_sync, xlsx_temp, division_id, division_code, import_date
         )
         logger.info(f"DS bg xlsx cache: {division_id}/{division_code}_{import_date} 완료")
+    except asyncio.CancelledError:
+        logger.info(f"DS bg xlsx cache 중단 (새 잡 도착): {division_id}/{division_code}_{import_date}")
     except Exception as e:
         logger.warning(f"DS bg xlsx cache 실패 (non-fatal, export 시 on-demand 빌드): {e}")
     finally:
@@ -3720,11 +3746,26 @@ async def _build_xlsx_cache_background(division_id: str, division_code: str, imp
         _release_memory()
 
 
+async def _xlsx_build_worker():
+    """xlsx 빌드 큐를 순차 처리하는 별도 태스크.
+    워커 루프와 독립 실행 → 새 잡이 들어와도 워커가 즉시 처리 가능.
+    """
+    global _xlsx_build_task
+    while _xlsx_build_queue:
+        args = _xlsx_build_queue.pop(0)
+        logger.info(f"DS xlsx build queue: {args[0]}/{args[1]}_{args[2]} "
+                    f"빌드 시작 (남은 {len(_xlsx_build_queue)}건)")
+        await _build_xlsx_cache_background(*args)
+    _xlsx_build_task = None
+    logger.info("DS xlsx build queue: 모든 빌드 완료")
+
+
 async def _job_worker_loop():
     """싱글턴 백그라운드 워커 — 한 번에 1개 DS 잡만 처리 (OOM 방지)
     10분마다 stuck "processing" 잡 자동 복구
     """
     logger.info("DS job worker loop started")
+    global _xlsx_build_task
     last_stuck_check = 0.0  # epoch seconds
     STUCK_CHECK_INTERVAL = 600  # 10분
 
@@ -3741,15 +3782,17 @@ async def _job_worker_loop():
 
             job = await _get_next_queued_job()
             if job is None:
-                # 잡 큐가 비었을 때 xlsx 캐시 빌드 큐 처리
-                if _xlsx_build_queue:
-                    build_args = _xlsx_build_queue.pop(0)
-                    logger.info(f"DS xlsx build queue: {build_args[0]}/{build_args[1]}_{build_args[2]} "
-                                f"빌드 시작 (남은 {len(_xlsx_build_queue)}건)")
-                    await _build_xlsx_cache_background(*build_args)
-                else:
-                    await asyncio.sleep(5)
+                # 잡 큐가 비었을 때 xlsx 빌드 태스크 시작 (이미 실행 중이면 무시)
+                if _xlsx_build_queue and (_xlsx_build_task is None or _xlsx_build_task.done()):
+                    _xlsx_build_task = asyncio.create_task(_xlsx_build_worker())
+                await asyncio.sleep(5)
                 continue
+
+            # 새 잡이 들어왔는데 xlsx 빌드 중이면 빌드 중단
+            if _xlsx_build_task and not _xlsx_build_task.done():
+                _xlsx_build_task.cancel()
+                logger.info("DS xlsx build: 새 잡 도착 → 빌드 중단")
+                await asyncio.sleep(1)  # cancel 처리 대기
 
             job_id = job["jobId"]
             logger.info(f"DS job worker: processing {job_id}")

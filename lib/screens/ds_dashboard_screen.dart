@@ -64,9 +64,15 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    final token = context.read<AuthService>().authToken;
+    final authService = context.read<AuthService>();
+    final token = authService.authToken;
     _dataService.setAuthToken(token);
     _uploadService.setAuthToken(token);
+    _uploadService.onTokenRefreshed = (newToken) {
+      authService.checkAndRefreshToken(
+        http.Response('', 200, headers: {'x-refreshed-token': newToken}),
+      );
+    };
     if (!_initialized) {
       _initialized = true;
       _loadStats();

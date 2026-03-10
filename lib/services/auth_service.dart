@@ -472,6 +472,30 @@ class AuthService extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// API 응답에서 갱신된 토큰 체크 및 적용
+  void checkAndRefreshToken(http.Response response) {
+    final newToken = response.headers['x-refreshed-token'];
+    if (newToken != null && newToken.isNotEmpty && _isSignedIn) {
+      _authToken = newToken;
+      _sessionExpiryTime = DateTime.now().add(sessionTimeout);
+      _saveLoginState();
+      _saveSessionExpiry(_sessionExpiryTime!);
+      debugPrint('토큰 자동 갱신 완료');
+    }
+  }
+
+  /// StreamedResponse에서 갱신된 토큰 체크 및 적용
+  void checkAndRefreshTokenFromHeaders(Map<String, String> headers) {
+    final newToken = headers['x-refreshed-token'];
+    if (newToken != null && newToken.isNotEmpty && _isSignedIn) {
+      _authToken = newToken;
+      _sessionExpiryTime = DateTime.now().add(sessionTimeout);
+      _saveLoginState();
+      _saveSessionExpiry(_sessionExpiryTime!);
+      debugPrint('토큰 자동 갱신 완료');
+    }
+  }
+
   /// 남은 세션 시간 (분)
   int get remainingSessionMinutes {
     if (_sessionExpiryTime == null) return 0;

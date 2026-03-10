@@ -1,9 +1,10 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/auth_service.dart';
 
-/// 사용자 프로필 버튼 - AppBar 오른쪽에 사용자 정보 표시 + 팝업
-class UserProfileButton extends StatelessWidget {
+/// 사용자 프로필 버튼 - AppBar 오른쪽에 사용자 정보 표시 + 팝업 + 세션 타이머
+class UserProfileButton extends StatefulWidget {
   final VoidCallback onLogout;
   final Color textColor;
   final double fontSize;
@@ -14,6 +15,27 @@ class UserProfileButton extends StatelessWidget {
     this.textColor = Colors.black87,
     this.fontSize = 13,
   });
+
+  @override
+  State<UserProfileButton> createState() => _UserProfileButtonState();
+}
+
+class _UserProfileButtonState extends State<UserProfileButton> {
+  late Timer _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer.periodic(const Duration(minutes: 1), (_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer.cancel();
+    super.dispose();
+  }
 
   static String _roleLabel(String role) {
     switch (role) {
@@ -131,6 +153,9 @@ class UserProfileButton extends StatelessWidget {
                       _buildInfoRow(Icons.badge_outlined, '사번', auth.userId),
                       _buildInfoRow(Icons.business_outlined, '본부', auth.userDepartment),
                       _buildInfoRow(Icons.groups_outlined, '팀', auth.userTeam),
+                      const SizedBox(height: 12),
+                      // 세션 만료 시간
+                      _buildSessionTimer(auth),
                       const SizedBox(height: 16),
                       // 로그아웃 버튼
                       SizedBox(
@@ -138,7 +163,7 @@ class UserProfileButton extends StatelessWidget {
                         child: OutlinedButton.icon(
                           onPressed: () {
                             Navigator.pop(dialogContext);
-                            onLogout();
+                            widget.onLogout();
                           },
                           icon: const Icon(Icons.logout, size: 16),
                           label: const Text('로그아웃'),
@@ -197,6 +222,64 @@ class UserProfileButton extends StatelessWidget {
     );
   }
 
+  Widget _buildSessionTimer(AuthService auth) {
+    final remaining = auth.remainingSessionMinutes;
+    final hours = remaining ~/ 60;
+    final minutes = remaining % 60;
+    final timeText = hours > 0 ? '$hours시간 $minutes분' : '$minutes분';
+    final isWarning = remaining < 30;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: isWarning ? Colors.orange.withValues(alpha: 0.08) : Colors.grey.shade50,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: isWarning ? Colors.orange.withValues(alpha: 0.3) : Colors.grey.shade200,
+        ),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.timer_outlined, size: 16,
+              color: isWarning ? Colors.orange : Colors.grey.shade500),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              '세션 만료: $timeText 남음',
+              style: TextStyle(
+                fontSize: 12,
+                color: isWarning ? Colors.orange.shade700 : Colors.grey.shade600,
+              ),
+            ),
+          ),
+          GestureDetector(
+            onTap: () {
+              auth.extendSession();
+              if (mounted) setState(() {});
+            },
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                color: Colors.blue.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: const Text(
+                '연장',
+                style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Colors.blue),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _formatSessionTime(int remainingMinutes) {
+    final hours = remainingMinutes ~/ 60;
+    final minutes = remainingMinutes % 60;
+    return hours > 0 ? '$hours:${minutes.toString().padLeft(2, '0')}' : '$minutes분';
+  }
+
   @override
   Widget build(BuildContext context) {
     return Consumer<AuthService>(
@@ -205,6 +288,8 @@ class UserProfileButton extends StatelessWidget {
         final dept = auth.userDepartment;
         final team = auth.userTeam;
         final role = auth.userRoleStr;
+        final remaining = auth.remainingSessionMinutes;
+        final isWarning = remaining < 30;
 
         // 본부/팀 요약 텍스트
         String subtitle = '';
@@ -228,6 +313,27 @@ class UserProfileButton extends StatelessWidget {
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
+                // 세션 타이머
+                Icon(
+                  Icons.timer_outlined,
+                  size: 14,
+                  color: isWarning ? Colors.orange : Colors.grey.shade400,
+                ),
+                const SizedBox(width: 3),
+                Text(
+                  _formatSessionTime(remaining),
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: isWarning ? Colors.orange : Colors.grey.shade500,
+                    fontWeight: isWarning ? FontWeight.w600 : FontWeight.normal,
+                  ),
+                ),
+                Container(
+                  width: 1,
+                  height: 24,
+                  margin: const EdgeInsets.symmetric(horizontal: 8),
+                  color: Colors.grey.shade300,
+                ),
                 // 프로필 아이콘
                 CircleAvatar(
                   radius: 14,

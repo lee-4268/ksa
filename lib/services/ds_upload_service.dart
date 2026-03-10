@@ -29,6 +29,7 @@ class DsUploadService {
   static const _maxPollDurationMulti = Duration(minutes: 10); // 복수 ZIP 병합
 
   String? _authToken;
+  void Function(String newToken)? onTokenRefreshed;
   void setAuthToken(String? token) => _authToken = token;
 
   /// 현재 폴링 중인 jobId (취소용)
@@ -372,6 +373,13 @@ class DsUploadService {
             if (_authToken != null) 'Authorization': 'Bearer $_authToken',
           },
         ).timeout(_apiTimeout);
+
+        // 토큰 자동 갱신 체크
+        final refreshedToken = jobResp.headers['x-refreshed-token'];
+        if (refreshedToken != null && refreshedToken.isNotEmpty) {
+          _authToken = refreshedToken;
+          onTokenRefreshed?.call(refreshedToken);
+        }
 
         if (jobResp.statusCode != 200) {
           debugPrint('폴링 HTTP 오류: ${jobResp.statusCode}, 재시도...');
