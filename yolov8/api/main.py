@@ -2921,14 +2921,16 @@ def _read_xls_from_zip_paginated_sync(
     }
 
 
-def _process_zip_to_xlsx_sync(zip_temp_path: str, progress_cb=None) -> tuple:
-    """ZIP → XLS 파싱 → xlsx 직접 빌드 (2-pass 스트리밍, 메모리 최소화)
+def _process_zip_to_xlsx_sync(zip_temp_path: str, progress_cb=None,
+                               xlsx_out_path: str = None) -> tuple:
+    """ZIP → XLS 파싱 → xlsx 직접 빌드 (2-pass 스트리밍, 디스크 기반)
 
     Pass 1: 헤더 수집 (행 0만 읽기, 메모리 ~수 KB)
-    Pass 2: xlsxwriter에 직접 행 쓰기 (현재 행 1개만 메모리)
+    Pass 2: xlsxwriter → 디스크 파일에 직접 쓰기 (메모리 ~수 MB)
 
-    Returns: (xlsx_bytes, sheet_stats, total_rows, sheet_headers)
+    Returns: (xlsx_path, sheet_stats, total_rows, sheet_headers)
     progress_cb: Optional[Callable(stage, percent)] — 파일별 진행률 콜백
+    xlsx_out_path: xlsx 출력 경로 (미지정 시 자동 생성)
     """
     if not HAS_XLRD:
         raise RuntimeError("xlrd not installed on server")
@@ -3018,8 +3020,9 @@ def _process_zip_to_xlsx_sync(zip_temp_path: str, progress_cb=None) -> tuple:
         if progress_cb:
             progress_cb(f"xlsx 생성 중... (0/{total_files})", 10)
 
-        buf = io.BytesIO()
-        xwb = xlsxwriter.Workbook(buf, {"in_memory": True, "constant_memory": True})
+        if not xlsx_out_path:
+            xlsx_out_path = f"/tmp/ds_xlsx_{os.path.basename(zip_temp_path)}_{id(zip_temp_path)}.xlsx"
+        xwb = xlsxwriter.Workbook(xlsx_out_path, {"constant_memory": True})
 
         header_fmt = xwb.add_format({
             "font_name": "Arial", "font_size": 10, "bold": True,
@@ -3108,15 +3111,10 @@ def _process_zip_to_xlsx_sync(zip_temp_path: str, progress_cb=None) -> tuple:
                 for row_idx in range(1, sheet.nrows):
                     # 현재 행 1개만 메모리에 보유
                     row_vals = [""] * num_cols
-                    has_data = False
                     for xls_col, xlsx_col in xls_col_map:
                         val = _xlrd_cell_to_str(sheet, row_idx, xls_col)
                         if val:
                             row_vals[xlsx_col] = val
-                            has_data = True
-
-                    if not has_data:
-                        continue
 
                     # 시트 행 수 100만 초과 시 자동 분할
                     if sheet_row_idx[sheet_name] > MAX_ROWS_PER_SHEET:
@@ -3150,11 +3148,11 @@ def _process_zip_to_xlsx_sync(zip_temp_path: str, progress_cb=None) -> tuple:
             logger.info(f"DS xlsx build: {base_fname} → {file_rows}행")
 
         xwb.close()
-        xlsx_bytes = buf.getvalue()
 
     _release_memory()
-    logger.info(f"DS xlsx build 완료: {total_rows}행, {len(sheet_stats)}시트, {len(xlsx_bytes):,} bytes")
-    return xlsx_bytes, sheet_stats, total_rows, sheet_headers
+    file_size = os.path.getsize(xlsx_out_path) if os.path.exists(xlsx_out_path) else 0
+    logger.info(f"DS xlsx build 완료: {total_rows}행, {len(sheet_stats)}시트, {file_size:,} bytes → {xlsx_out_path}")
+    return xlsx_out_path, sheet_stats, total_rows, sheet_headers
 
 
 def _init_upload_record_sync(division_id: str, division_code: str, import_date: str,
@@ -3428,6 +3426,18 @@ def _upload_xlsx_to_s3_sync(xlsx_bytes: bytes, division_id: str,
     return key
 
 
+def _upload_xlsx_file_to_s3_sync(xlsx_path: str, division_id: str,
+                                   division_code: str, import_date: str) -> str:
+    """동기: xlsx 파일을 S3 ds-exports 경로에 업로드 (디스크 기반, 메모리 절약)"""
+    s3 = get_s3_client()
+    key = f"ds-exports/{division_id}/{division_code}_{import_date}.xlsx"
+    s3.upload_file(
+        xlsx_path, S3_BUCKET_NAME, key,
+        ExtraArgs={"ContentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},
+    )
+    return key
+
+
 async def _process_ds_job(job_id: str, job_item: dict):
     """DS 잡 메인 처리 — ZIP → xlsx 빌드 → S3 저장 (DynamoDB 행 쓰기 0회)
     복수 ZIP (s3Keys 배열) 인 경우 먼저 병합 후 동일 플로우 실행.
@@ -3444,6 +3454,24 @@ async def _process_ds_job(job_id: str, job_item: dict):
     division_code: Optional[str] = None
     import_date: Optional[str] = None
     uploads_record_created = False  # _init 이후 True → except에서 정리 대상
+
+    async def _check_cancelled():
+        """취소 요청 확인 — cancelled 상태면 CancelledError 발생"""
+        try:
+            jobs_table = _dynamodb_resource.Table(DYNAMODB_TABLES["ds_jobs"])
+            resp = await asyncio.to_thread(
+                lambda: jobs_table.get_item(
+                    Key={"jobId": job_id},
+                    ProjectionExpression="#s",
+                    ExpressionAttributeNames={"#s": "status"},
+                )
+            )
+            if resp.get("Item", {}).get("status") == "cancelled":
+                raise asyncio.CancelledError(f"DS job {job_id} 취소됨")
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            pass  # 조회 실패는 무시
 
     try:
         # 1. ZIP 준비 (복수: 병합 / 단수: 다운로드)
@@ -3465,6 +3493,8 @@ async def _process_ds_job(job_id: str, job_item: dict):
                 get_s3_client().download_file(S3_BUCKET_NAME, actual_key, zip_temp_path)
             await asyncio.to_thread(_dl)
             logger.info(f"DS job {job_id}: ZIP downloaded ({os.path.getsize(zip_temp_path):,} bytes)")
+
+        await _check_cancelled()
 
         # 2. ZIP 내 XLS 파일명에서 divisionCode/importDate 파싱
         await _update_job_progress(job_id, "ZIP 메타 파싱 중...", 30 if is_multi else 5)
@@ -3511,6 +3541,8 @@ async def _process_ds_job(job_id: str, job_item: dict):
                 logger.warning(f"DS job {job_id}: 메모리 {mem.percent}% > 80%, 30초 대기")
                 await asyncio.sleep(30)
 
+        await _check_cancelled()
+
         # 4. 메타데이터 파싱 (기존 데이터 삭제 전에 실행 → 파싱 실패 시 데이터 보존)
         await _update_job_progress(job_id, "메타데이터 파싱 중...", 35 if is_multi else 10)
 
@@ -3525,6 +3557,8 @@ async def _process_ds_job(job_id: str, job_item: dict):
         if total_rows == 0:
             raise ValueError("XLS 파일에서 데이터 행을 찾을 수 없습니다.")
 
+        await _check_cancelled()
+
         # 5. 기존 데이터 삭제 (병합+파싱 성공 후에만 → 데이터 안전)
         await _update_job_progress(job_id, "기존 데이터 정리 중...", 70 if is_multi else 75)
         await asyncio.to_thread(
@@ -3532,6 +3566,8 @@ async def _process_ds_job(job_id: str, job_item: dict):
             division_id, division_code, import_date, file_name, uploaded_by, job_id
         )
         uploads_record_created = True
+
+        await _check_cancelled()
 
         # 6. ZIP → S3 영구 경로로 복사 (xlsx 빌드 없이 원본 ZIP 보관)
         await _update_job_progress(job_id, "ZIP S3 저장 중...", 80)
@@ -3560,13 +3596,22 @@ async def _process_ds_job(job_id: str, job_item: dict):
         uploads_record_created = False  # 정상 완료 → except 정리 불필요
         logger.info(f"DS job {job_id}: 완료! {division_name} {import_date} — {total_rows}행")
 
-        # 9. 복수 ZIP인 경우 S3 임시 파일 정리 (non-fatal)
+        # 9. xlsx 미리 빌드 (백그라운드 — 잡 워커 차단 없음, 실패해도 export 시 on-demand 빌드)
+        asyncio.create_task(
+            _build_xlsx_cache_background(division_id, division_code, import_date)
+        )
+
+        # 10. 복수 ZIP인 경우 S3 임시 파일 정리 (non-fatal)
         if is_multi and s3_keys:
             for temp_key in s3_keys:
                 try:
                     get_s3_client().delete_object(Bucket=S3_BUCKET_NAME, Key=temp_key)
                 except Exception:
                     pass
+
+    except asyncio.CancelledError:
+        logger.info(f"DS job {job_id}: 사용자 취소됨")
+        # cancelled 상태는 이미 엔드포인트에서 설정됨 → 추가 처리 불필요
 
     except Exception as e:
         error_msg = str(e)[:500]
@@ -3598,6 +3643,33 @@ async def _process_ds_job(job_id: str, job_item: dict):
                 os.remove(zip_temp_path)
         except Exception:
             pass
+        _release_memory()
+
+
+async def _build_xlsx_cache_background(division_id: str, division_code: str, import_date: str):
+    """백그라운드: S3 ZIP → xlsx 디스크 빌드 → S3 캐싱 (잡 완료 후 비동기 실행)
+    실패해도 export 시 on-demand 빌드 가능하므로 non-fatal.
+    """
+    zip_s3_key = f"ds-raw/{division_id}/{division_code}_{import_date}.zip"
+    zip_temp = f"/tmp/ds_bgxlsx_{division_id}_{division_code}_{import_date}.zip"
+    xlsx_temp = f"/tmp/ds_bgxlsx_{division_id}_{division_code}_{import_date}.xlsx"
+    try:
+        s3 = get_s3_client()
+        await asyncio.to_thread(s3.download_file, S3_BUCKET_NAME, zip_s3_key, zip_temp)
+        await asyncio.to_thread(_process_zip_to_xlsx_sync, zip_temp, None, xlsx_temp)
+        await asyncio.to_thread(
+            _upload_xlsx_file_to_s3_sync, xlsx_temp, division_id, division_code, import_date
+        )
+        logger.info(f"DS bg xlsx cache: {division_id}/{division_code}_{import_date} 완료")
+    except Exception as e:
+        logger.warning(f"DS bg xlsx cache 실패 (non-fatal, export 시 on-demand 빌드): {e}")
+    finally:
+        for tmp in [zip_temp, xlsx_temp]:
+            try:
+                if os.path.exists(tmp):
+                    os.remove(tmp)
+            except Exception:
+                pass
         _release_memory()
 
 
@@ -4705,23 +4777,32 @@ async def ds_export_xlsx(
         except Exception as e:
             logger.info(f"DS export: S3 xlsx 미존재 ({xlsx_s3_key}), 빌드 진행: {e}")
 
-    # ── s3-zip: ZIP에서 on-demand xlsx 빌드 → S3 캐싱 ──
+    # ── s3-zip: ZIP에서 on-demand xlsx 빌드 → 디스크 스트리밍 + S3 캐싱 ──
     if storage_type == "s3-zip":
         zip_s3_key = f"ds-raw/{divisionId}/{divisionCode}_{importDate}.zip"
         zip_temp = f"/tmp/ds_export_{divisionId}_{divisionCode}_{importDate}.zip"
+        xlsx_temp = f"/tmp/ds_export_{divisionId}_{divisionCode}_{importDate}.xlsx"
         try:
             s3_client = get_s3_client()
             await asyncio.to_thread(s3_client.download_file, S3_BUCKET_NAME, zip_s3_key, zip_temp)
 
-            xlsx_bytes, _, _, _ = await asyncio.to_thread(
-                _process_zip_to_xlsx_sync, zip_temp
+            xlsx_path, _, _, _ = await asyncio.to_thread(
+                _process_zip_to_xlsx_sync, zip_temp, None, xlsx_temp
             )
 
-            # S3에 캐싱 (다음 export는 fast path)
+            # ZIP 임시파일 즉시 삭제
+            try:
+                os.remove(zip_temp)
+            except Exception:
+                pass
+
+            content_length = os.path.getsize(xlsx_path)
+
+            # S3에 캐싱 (백그라운드 — 파일에서 직접 업로드)
             async def _cache_xlsx():
                 try:
                     await asyncio.to_thread(
-                        _upload_xlsx_to_s3_sync, xlsx_bytes, divisionId, divisionCode, importDate
+                        _upload_xlsx_file_to_s3_sync, xlsx_path, divisionId, divisionCode, importDate
                     )
                     logger.info(f"DS export: xlsx S3 캐싱 완료 {xlsx_s3_key}")
                 except Exception as ce:
@@ -4729,12 +4810,24 @@ async def ds_export_xlsx(
 
             asyncio.create_task(_cache_xlsx())
 
+            def _stream_xlsx():
+                try:
+                    with open(xlsx_path, "rb") as f:
+                        while True:
+                            chunk = f.read(1024 * 1024)  # 1MB chunks
+                            if not chunk:
+                                break
+                            yield chunk
+                finally:
+                    # S3 캐싱이 끝날 시간을 고려해 삭제는 별도 태스크로
+                    pass
+
             return StreamingResponse(
-                iter([xlsx_bytes]),
+                _stream_xlsx(),
                 media_type=xlsx_media,
                 headers={
                     "Content-Disposition": f"attachment; filename*=UTF-8''{filename.replace(' ', '%20')}",
-                    "Content-Length": str(len(xlsx_bytes)),
+                    "Content-Length": str(content_length),
                 },
             )
         except Exception as e:
@@ -4816,27 +4909,43 @@ async def ds_job_status(job_id: str, request: Request = None):
 
 @app.delete("/ds/job/{job_id}")
 async def ds_job_cancel(job_id: str, request: Request = None):
-    """DS 잡 취소 — queued 상태인 경우만 가능"""
+    """DS 잡 취소 — queued/processing 상태 모두 가능"""
     await _verify_auth(request)
     try:
         jobs_table = _dynamodb_resource.Table(DYNAMODB_TABLES["ds_jobs"])
         item = jobs_table.get_item(Key={"jobId": job_id}).get("Item")
         if not item:
             raise HTTPException(status_code=404, detail="Job not found")
-        if item.get("status") != "queued":
-            raise HTTPException(status_code=400, detail="처리 중인 잡은 취소할 수 없습니다.")
 
-        jobs_table.delete_item(Key={"jobId": job_id})
+        status = item.get("status", "")
+        if status not in ("queued", "processing"):
+            raise HTTPException(status_code=400, detail="완료/실패된 잡은 취소할 수 없습니다.")
+
+        if status == "queued":
+            # 대기 중: 바로 삭제
+            jobs_table.delete_item(Key={"jobId": job_id})
+        else:
+            # 처리 중: cancelled 상태로 변경 → 워커가 감지 후 중단
+            jobs_table.update_item(
+                Key={"jobId": job_id},
+                UpdateExpression="SET #s = :s, stage = :st",
+                ExpressionAttributeNames={"#s": "status"},
+                ExpressionAttributeValues={":s": "cancelled", ":st": "취소 요청됨"},
+            )
 
         # S3 임시 파일 삭제
         try:
             s3_key = item.get("s3Key", "")
             if s3_key and "/temp/" in s3_key:
                 get_s3_client().delete_object(Bucket=S3_BUCKET_NAME, Key=s3_key)
+            # 복수 ZIP 임시 파일도 삭제
+            for key in item.get("s3Keys", []):
+                if key and "/temp/" in key:
+                    get_s3_client().delete_object(Bucket=S3_BUCKET_NAME, Key=key)
         except Exception:
             pass
 
-        return {"success": True}
+        return {"success": True, "wasProcessing": status == "processing"}
     except HTTPException:
         raise
     except ClientError as e:

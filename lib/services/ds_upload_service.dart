@@ -31,6 +31,26 @@ class DsUploadService {
   String? _authToken;
   void setAuthToken(String? token) => _authToken = token;
 
+  /// 현재 폴링 중인 jobId (취소용)
+  String? _currentJobId;
+  String? get currentJobId => _currentJobId;
+
+  /// 업로드 잡 취소
+  Future<void> cancelCurrentJob() async {
+    final jobId = _currentJobId;
+    if (jobId == null) return;
+    try {
+      await http.delete(
+        Uri.parse('$_baseUrl/ds/job/$jobId'),
+        headers: {
+          if (_authToken != null) 'Authorization': 'Bearer $_authToken',
+        },
+      ).timeout(_apiTimeout);
+    } catch (e) {
+      debugPrint('잡 취소 실패: $e');
+    }
+  }
+
   // DS 지역코드 → 본부명 (서버 DS_REGION_CODE_MAP과 동일)
   static const _divisionNames = {
     '10': '수도권',
@@ -302,6 +322,8 @@ class DsUploadService {
     double basePercent,
     double percentRange,
   ) async {
+    _currentJobId = jobId;
+
     if (queuePos > 1) {
       onProgress('서버 대기 중... ($queuePos번째)', basePercent);
     } else {
@@ -339,7 +361,13 @@ class DsUploadService {
             : stage;
         onProgress(displayStage, displayPercent);
 
+        if (status == 'cancelled') {
+          _currentJobId = null;
+          throw Exception('업로드가 취소되었습니다.');
+        }
+
         if (status == 'completed') {
+          _currentJobId = null;
           final divisionCode = job['divisionCode'] as String? ?? '';
           final importDate = job['importDate'] as String? ?? '';
           final totalRows = job['totalRows'] as int? ?? 0;
@@ -355,6 +383,7 @@ class DsUploadService {
         }
 
         if (status == 'failed') {
+          _currentJobId = null;
           final error = job['error'] as String? ?? '알 수 없는 오류';
           throw Exception('서버 처리 실패: $error');
         }

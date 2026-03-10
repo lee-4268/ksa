@@ -411,6 +411,27 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
                 ),
                 Text('${(_uploadProgress * 100).toInt()}%',
                     style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.grey.shade700)),
+                const SizedBox(width: 12),
+                SizedBox(
+                  height: 28,
+                  child: TextButton(
+                    onPressed: () async {
+                      await _uploadService.cancelCurrentJob();
+                      if (mounted) {
+                        setState(() {
+                          _isUploading = false;
+                          _uploadResult = '업로드가 취소되었습니다.';
+                          _uploadSuccess = false;
+                        });
+                      }
+                    },
+                    style: TextButton.styleFrom(
+                      foregroundColor: Colors.red,
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                    ),
+                    child: const Text('취소', style: TextStyle(fontSize: 12)),
+                  ),
+                ),
               ],
             ),
           ],
