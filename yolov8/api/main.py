@@ -3596,10 +3596,9 @@ async def _process_ds_job(job_id: str, job_item: dict):
         uploads_record_created = False  # 정상 완료 → except 정리 불필요
         logger.info(f"DS job {job_id}: 완료! {division_name} {import_date} — {total_rows}행")
 
-        # 9. xlsx 미리 빌드 (백그라운드 — 잡 워커 차단 없음, 실패해도 export 시 on-demand 빌드)
-        asyncio.create_task(
-            _build_xlsx_cache_background(division_id, division_code, import_date)
-        )
+        # 9. xlsx 캐시 빌드 큐에 등록 (워커 유휴 시 순차 실행)
+        _xlsx_build_queue.append((division_id, division_code, import_date))
+        logger.info(f"DS job {job_id}: xlsx 빌드 큐 등록 ({len(_xlsx_build_queue)}건 대기)")
 
         # 10. 복수 ZIP인 경우 S3 임시 파일 정리 (non-fatal)
         if is_multi and s3_keys:
@@ -3646,8 +3645,12 @@ async def _process_ds_job(job_id: str, job_item: dict):
         _release_memory()
 
 
+# xlsx 캐시 빌드 큐 — 잡 완료 시 등록, 워커 유휴 시 순차 실행
+_xlsx_build_queue: list = []
+
+
 async def _build_xlsx_cache_background(division_id: str, division_code: str, import_date: str):
-    """백그라운드: S3 ZIP → xlsx 디스크 빌드 → S3 캐싱 (잡 완료 후 비동기 실행)
+    """S3 ZIP → xlsx 디스크 빌드 → S3 캐싱 (워커 유휴 시 실행)
     실패해도 export 시 on-demand 빌드 가능하므로 non-fatal.
     """
     zip_s3_key = f"ds-raw/{division_id}/{division_code}_{import_date}.zip"
@@ -3694,7 +3697,14 @@ async def _job_worker_loop():
 
             job = await _get_next_queued_job()
             if job is None:
-                await asyncio.sleep(5)
+                # 잡 큐가 비었을 때 xlsx 캐시 빌드 큐 처리
+                if _xlsx_build_queue:
+                    build_args = _xlsx_build_queue.pop(0)
+                    logger.info(f"DS xlsx build queue: {build_args[0]}/{build_args[1]}_{build_args[2]} "
+                                f"빌드 시작 (남은 {len(_xlsx_build_queue)}건)")
+                    await _build_xlsx_cache_background(*build_args)
+                else:
+                    await asyncio.sleep(5)
                 continue
 
             job_id = job["jobId"]

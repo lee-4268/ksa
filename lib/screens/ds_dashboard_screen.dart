@@ -413,6 +413,9 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
                     style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.grey.shade700)),
               ],
             ),
+            const SizedBox(height: 6),
+            Text('업로드가 완료될 때까지 이 화면을 유지해 주세요.',
+                style: TextStyle(fontSize: 11, color: Colors.orange.shade700)),
             const SizedBox(height: 8),
             Align(
               alignment: Alignment.centerRight,
