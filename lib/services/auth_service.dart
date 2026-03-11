@@ -463,12 +463,32 @@ class AuthService extends ChangeNotifier {
     debugPrint('세션 만료로 자동 로그아웃');
   }
 
-  /// 세션 연장
+  /// 세션 연장 (서버 토큰도 갱신)
   Future<void> extendSession() async {
-    if (!_isSignedIn) return;
+    if (!_isSignedIn || _authToken == null) return;
+    // 서버에 토큰 갱신 요청
+    try {
+      final response = await http.post(
+        Uri.parse('$_loginUrl/auth/refresh'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $_authToken',
+        },
+      );
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final newToken = data['token'] as String?;
+        if (newToken != null && newToken.isNotEmpty) {
+          _authToken = newToken;
+        }
+      }
+    } catch (e) {
+      debugPrint('토큰 갱신 실패 (로컬 세션만 연장): $e');
+    }
     _sessionExpiryTime = DateTime.now().add(sessionTimeout);
     await _saveSessionExpiry(_sessionExpiryTime!);
-    debugPrint('세션 연장: 2시간 추가');
+    _saveLoginState();
+    debugPrint('세션 연장: 2시간 추가 (토큰 갱신 포함)');
     notifyListeners();
   }
 
