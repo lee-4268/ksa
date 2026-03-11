@@ -23,6 +23,7 @@ import hashlib
 import base64
 import time as _time_mod
 import threading
+from urllib.parse import quote
 
 import httpx
 import boto3
@@ -83,6 +84,62 @@ def _release_memory():
         libc.malloc_trim(0)
     except Exception:
         pass  # Windows / non-glibc → skip
+
+def _cleanup_stale_temp_files(max_age_seconds: int = 3600):
+    """오래된 임시파일 자동 삭제 (서버 시작/주기적 실행)
+    대상:
+    - ds_temp_*, ds_merged_*, ds_export_*, ds_bgxlsx_*, ds_xlsx_*, ds_{uuid}.*
+    - tmp* (xlsxwriter constant_memory, NamedTemporaryFile(delete=False) 누수)
+    - cert_batch_*
+    제외: ds_cache/ 디렉토리 (자체 TTL 관리)
+    """
+    ds_prefixes = ("ds_temp_", "ds_merged_", "ds_export_", "ds_bgxlsx_", "ds_xlsx_")
+    now = _time_mod.time()
+    removed = 0
+    freed_bytes = 0
+    try:
+        for fname in os.listdir("/tmp"):
+            should_check = False
+            # DS 관련 임시파일
+            if any(fname.startswith(p) for p in ds_prefixes):
+                should_check = True
+            elif fname.startswith("ds_") and not fname.startswith("ds_cache"):
+                should_check = True
+            # xlsxwriter / Python tempfile 임시파일 (tmp로 시작, 소유자 확인)
+            elif fname.startswith("tmp") and not fname.endswith(".conf"):
+                should_check = True
+            # cert_batch 임시파일
+            elif fname.startswith("cert_batch_"):
+                should_check = True
+
+            if not should_check:
+                continue
+
+            fpath = f"/tmp/{fname}"
+            try:
+                if os.path.isdir(fpath):
+                    # cert_batch 디렉토리만 정리
+                    if fname.startswith("cert_batch_"):
+                        stat = os.stat(fpath)
+                        if now - stat.st_mtime > max_age_seconds:
+                            import shutil
+                            shutil.rmtree(fpath, ignore_errors=True)
+                            removed += 1
+                    continue
+                stat = os.stat(fpath)
+                age = now - stat.st_mtime
+                if age > max_age_seconds:
+                    size = stat.st_size
+                    os.remove(fpath)
+                    removed += 1
+                    freed_bytes += size
+            except Exception:
+                pass
+    except Exception as e:
+        logger.warning(f"temp cleanup scan 실패: {e}")
+    if removed > 0:
+        logger.info(f"temp cleanup: {removed}개 파일 삭제 ({freed_bytes // (1024*1024)}MB 확보)")
+    return removed
 
 def _check_memory(operation: str = "작업"):
     """메모리 사용률 체크. 임계치 초과 시 HTTPException 발생."""
@@ -869,6 +926,14 @@ async def startup_event():
             _rate_limiter.cleanup()
             _cleanup_callname_sessions()
     asyncio.create_task(_rl_cleanup())
+
+    # 서버 시작 시 고아 임시파일 즉시 정리 + 10분 주기 정리
+    await asyncio.to_thread(_cleanup_stale_temp_files, 0)  # 시작 시 전부 삭제
+    async def _temp_cleanup_loop():
+        while True:
+            await asyncio.sleep(600)  # 10분
+            await asyncio.to_thread(_cleanup_stale_temp_files, 3600)  # 1시간 이상만
+    asyncio.create_task(_temp_cleanup_loop())
 
     print("DS job worker started")
 
@@ -3001,8 +3066,10 @@ def _process_zip_to_xlsx_sync(zip_temp_path: str, progress_cb=None,
     sheet_stats: Dict[str, int] = {}
     sheet_headers: Dict[str, list] = {}
     total_rows = 0
+    _xwb_ref = None  # xlsxwriter Workbook 참조 (예외 시 close 보장용)
 
-    with zipfile.ZipFile(zip_temp_path, "r") as zf:
+    try:
+      with zipfile.ZipFile(zip_temp_path, "r") as zf:
         all_names = zf.namelist()
         # ZIP 파일명 한글 복원 (원본 entry → 고친 이름 매핑)
         name_map = {n: _fix_zip_filename(n) for n in all_names}
@@ -3046,6 +3113,14 @@ def _process_zip_to_xlsx_sync(zip_temp_path: str, progress_cb=None,
                 logger.warning(f"DS xlsx Pass1: {fname} 실패: {e}")
                 continue
 
+            if is_hundred:
+                hundred_sheet_names = []
+                for si in range(workbook.nsheets):
+                    s = workbook.sheet_by_index(si)
+                    hundred_sheet_names.append(f"{s.name.strip()}({s.nrows}행)")
+                logger.info(f"DS xlsx Pass1: (100) 파일 {os.path.basename(name_map[fname])} "
+                            f"시트: {hundred_sheet_names}")
+
             for sheet_idx in range(workbook.nsheets):
                 sheet = workbook.sheet_by_index(sheet_idx)
                 orig_sheet_name = sheet.name.strip()
@@ -3081,7 +3156,10 @@ def _process_zip_to_xlsx_sync(zip_temp_path: str, progress_cb=None,
             raise ValueError("처리할 시트가 없습니다.")
 
         _release_memory()
-        logger.info(f"DS xlsx Pass1 완료: {len(sheet_headers)}개 시트 헤더 수집")
+        all_sheets = list(sheet_headers.keys())
+        hundred_sheets = [s for s in all_sheets if "(검사전)" in s]
+        logger.info(f"DS xlsx Pass1 완료: {len(sheet_headers)}개 시트 헤더 수집 "
+                    f"(검사전 시트: {hundred_sheets})")
 
         # ── Pass 2: xlsxwriter에 직접 행 쓰기 (sheet_rows 없이) ──
         if progress_cb:
@@ -3090,6 +3168,7 @@ def _process_zip_to_xlsx_sync(zip_temp_path: str, progress_cb=None,
         if not xlsx_out_path:
             xlsx_out_path = f"/tmp/ds_xlsx_{os.path.basename(zip_temp_path)}_{id(zip_temp_path)}.xlsx"
         xwb = xlsxwriter.Workbook(xlsx_out_path, {"constant_memory": True})
+        _xwb_ref = xwb
 
         header_fmt = xwb.add_format({
             "font_name": "Arial", "font_size": 10, "bold": True,
@@ -3126,7 +3205,6 @@ def _process_zip_to_xlsx_sync(zip_temp_path: str, progress_cb=None,
         for file_idx, fname in enumerate(process_list):
             if cancel_event and cancel_event.is_set():
                 logger.info("DS xlsx Pass2: 취소 플래그 감지 → 중단")
-                xwb.close()
                 raise InterruptedError("xlsx build cancelled")
             base_fname = os.path.basename(name_map[fname]) or name_map[fname]
             is_hundred = fname in hundred_files
@@ -3216,9 +3294,33 @@ def _process_zip_to_xlsx_sync(zip_temp_path: str, progress_cb=None,
             workbook.release_resources()
             del xls_bytes
             total_rows += file_rows
-            logger.info(f"DS xlsx build: {base_fname} → {file_rows}행")
+
+            # 매 파일 후 GC 강제 실행 → xlrd 메모리 즉시 해제
+            gc.collect()
+            if HAS_PSUTIL:
+                mem = psutil.virtual_memory()
+                swap = psutil.swap_memory()
+                total_avail_mb = (mem.available + swap.free) // (1024 * 1024)
+                logger.info(f"DS xlsx build: {base_fname} → {file_rows}행 "
+                            f"(RAM {mem.percent}%, 가용 {mem.available // (1024*1024)}MB, "
+                            f"스왑 {swap.free // (1024*1024)}MB, 합산 {total_avail_mb}MB)")
+                if total_avail_mb < 300:
+                    logger.warning(f"DS xlsx build: RAM+스왑 합산 가용 {total_avail_mb}MB < 300MB → 10초 대기 + GC")
+                    _time_mod.sleep(10)
+                    gc.collect()
+            else:
+                logger.info(f"DS xlsx build: {base_fname} → {file_rows}행")
 
         xwb.close()
+        _xwb_ref = None  # 정상 close 완료
+    except Exception:
+        # xlsxwriter constant_memory 임시파일 누수 방지: 예외 시 반드시 close
+        if _xwb_ref is not None:
+            try:
+                _xwb_ref.close()
+            except Exception:
+                pass
+        raise
 
     _release_memory()
     file_size = os.path.getsize(xlsx_out_path) if os.path.exists(xlsx_out_path) else 0
@@ -3725,6 +3827,7 @@ async def _process_ds_job(job_id: str, job_item: dict):
 _xlsx_build_queue: list = []
 _xlsx_build_task: Optional[asyncio.Task] = None
 _xlsx_build_cancel_event: Optional[threading.Event] = None  # 스레드 실제 중단용
+_xlsx_build_current: Optional[tuple] = None  # 현재 빌드 중인 (division_id, division_code, import_date)
 
 
 async def _build_xlsx_cache_background(division_id: str, division_code: str, import_date: str):
@@ -3732,7 +3835,8 @@ async def _build_xlsx_cache_background(division_id: str, division_code: str, imp
     실패해도 export 시 on-demand 빌드 가능하므로 non-fatal.
     cancel_event를 통해 스레드 내부에서도 실제 중단 가능.
     """
-    global _xlsx_build_cancel_event
+    global _xlsx_build_cancel_event, _xlsx_build_current
+    _xlsx_build_current = (division_id, division_code, import_date)
     zip_s3_key = f"ds-raw/{division_id}/{division_code}_{import_date}.zip"
     zip_temp = f"/tmp/ds_bgxlsx_{division_id}_{division_code}_{import_date}.zip"
     xlsx_temp = f"/tmp/ds_bgxlsx_{division_id}_{division_code}_{import_date}.xlsx"
@@ -3759,6 +3863,7 @@ async def _build_xlsx_cache_background(division_id: str, division_code: str, imp
         logger.warning(f"DS bg xlsx cache 실패 (non-fatal, export 시 on-demand 빌드): {e}")
     finally:
         _xlsx_build_cancel_event = None
+        _xlsx_build_current = None
         for tmp in [zip_temp, xlsx_temp]:
             try:
                 if os.path.exists(tmp):
@@ -3810,15 +3915,23 @@ async def _job_worker_loop():
                 await asyncio.sleep(5)
                 continue
 
-            # 새 잡이 들어왔는데 xlsx 빌드 중이면 빌드 중단
+            # 새 잡이 들어왔는데 xlsx 빌드 중이면 빌드 중단 → 큐 끝에 재등록
             if _xlsx_build_task and not _xlsx_build_task.done():
+                # 취소된 빌드를 큐 끝에 다시 넣기
+                cancelled_target = _xlsx_build_current
                 # 1. 스레드 내부 취소 플래그 set → 실제 루프 중단
                 if _xlsx_build_cancel_event:
                     _xlsx_build_cancel_event.set()
                 # 2. asyncio task도 cancel
                 _xlsx_build_task.cancel()
-                logger.info("DS xlsx build: 새 잡 도착 → 빌드 중단 (스레드 취소 플래그 set)")
                 await asyncio.sleep(2)  # 스레드 종료 대기
+                # 3. 취소된 빌드 재등록 (큐에 없으면)
+                if cancelled_target and cancelled_target not in _xlsx_build_queue:
+                    _xlsx_build_queue.append(cancelled_target)
+                    logger.info(f"DS xlsx build: 새 잡 도착 → 빌드 중단 → "
+                                f"{cancelled_target[0]}/{cancelled_target[1]}_{cancelled_target[2]} 큐 재등록")
+                else:
+                    logger.info("DS xlsx build: 새 잡 도착 → 빌드 중단")
 
             job_id = job["jobId"]
             logger.info(f"DS job worker: processing {job_id}")
@@ -3921,12 +4034,20 @@ async def ds_export_presign(
         zip_key = f"ds-raw/{divisionId}/{divisionCode}_{importDate}.zip"
         try:
             s3.head_object(Bucket=S3_BUCKET_NAME, Key=zip_key)
+
+            # xlsx 빌드가 진행 중이면 클라이언트에 알림
+            _target = (divisionId, divisionCode, importDate)
+            building = (_xlsx_build_current == _target or _target in _xlsx_build_queue)
+
             url = s3.generate_presigned_url(
                 "get_object",
                 Params={"Bucket": S3_BUCKET_NAME, "Key": zip_key},
                 ExpiresIn=3600,
             )
-            return {"success": True, "url": url, "type": "zip"}
+            return {
+                "success": True, "url": url, "type": "zip",
+                "building": building,
+            }
         except ClientError:
             pass
 
@@ -4882,6 +5003,72 @@ async def ds_enqueue_multi(request: Request, req: DsEnqueueMultiRequest):
         raise HTTPException(status_code=500, detail="서버 내부 오류")
 
 
+@app.post("/ds/trigger-xlsx-build")
+async def ds_trigger_xlsx_build(request: Request):
+    """xlsx 캐시가 없는 업로드 데이터를 찾아 백그라운드 빌드 큐에 등록.
+    재업로드 없이 xlsx 캐시를 생성할 때 사용.
+    """
+    await _require_role(request, {"admin", "manager"})
+
+    uploads_table = _dynamodb_resource.Table(DYNAMODB_TABLES["ds_uploads"])
+    s3 = get_s3_client()
+
+    # 모든 uploads 레코드 스캔 (storageType=s3-zip인 것만)
+    scan_kwargs = {
+        "ProjectionExpression": "divisionId, importDate, storageType",
+        "FilterExpression": "storageType = :st",
+        "ExpressionAttributeValues": {":st": "s3-zip"},
+    }
+    items = []
+    while True:
+        resp = uploads_table.scan(**scan_kwargs)
+        items.extend(resp.get("Items", []))
+        if "LastEvaluatedKey" not in resp:
+            break
+        scan_kwargs["ExclusiveStartKey"] = resp["LastEvaluatedKey"]
+
+    queued = []
+    skipped = []
+    for item in items:
+        division_id = item.get("divisionId", "")
+        sk = item.get("importDate", "")  # divisionCode#importDate
+        parts = sk.split("#")
+        if len(parts) < 2:
+            continue
+        division_code = parts[0]
+        import_date = parts[1]
+
+        # S3에 xlsx 캐시 존재 여부 확인
+        xlsx_key = f"ds-exports/{division_id}/{division_code}_{import_date}.xlsx"
+        try:
+            s3.head_object(Bucket=S3_BUCKET_NAME, Key=xlsx_key)
+            skipped.append(f"{division_id}/{division_code}_{import_date}")
+            continue  # 이미 캐시 있음
+        except Exception:
+            pass  # 캐시 없음 → 빌드 필요
+
+        # ZIP 원본 존재 확인
+        zip_key = f"ds-raw/{division_id}/{division_code}_{import_date}.zip"
+        try:
+            s3.head_object(Bucket=S3_BUCKET_NAME, Key=zip_key)
+        except Exception:
+            continue  # ZIP도 없으면 빌드 불가
+
+        # 큐에 등록
+        entry = (division_id, division_code, import_date)
+        if entry not in _xlsx_build_queue:
+            _xlsx_build_queue.append(entry)
+            queued.append(f"{division_id}/{division_code}_{import_date}")
+
+    logger.info(f"DS trigger-xlsx-build: {len(queued)}건 큐 등록, {len(skipped)}건 캐시 존재")
+    return {
+        "success": True,
+        "queued": queued,
+        "skipped": skipped,
+        "message": f"{len(queued)}건 xlsx 빌드 큐에 등록됨 (백그라운드 순차 처리)",
+    }
+
+
 @app.get("/ds/export-xlsx")
 async def ds_export_xlsx(
     request: Request,
@@ -4944,7 +5131,7 @@ async def ds_export_xlsx(
                 _stream_s3(),
                 media_type=xlsx_media,
                 headers={
-                    "Content-Disposition": f"attachment; filename*=UTF-8''{filename.replace(' ', '%20')}",
+                    "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}",
                     "Content-Length": str(content_length),
                 },
             )
@@ -4953,6 +5140,27 @@ async def ds_export_xlsx(
 
     # ── s3-zip: ZIP에서 on-demand xlsx 빌드 → 디스크 스트리밍 + S3 캐싱 ──
     if storage_type == "s3-zip":
+        # 백그라운드 xlsx 빌드 진행 중이면 중복 빌드 방지
+        _build_target = (divisionId, divisionCode, importDate)
+        if _xlsx_build_current == _build_target or _build_target in _xlsx_build_queue:
+            raise HTTPException(
+                status_code=409,
+                detail="해당 데이터의 xlsx 빌드가 진행 중입니다. 잠시 후 다시 시도해 주세요."
+            )
+
+        # 메모리 사전 체크 — OOM 방지
+        if HAS_PSUTIL:
+            mem = psutil.virtual_memory()
+            if mem.available < 200 * 1024 * 1024:  # 가용 200MB 미만
+                gc.collect()
+                mem = psutil.virtual_memory()
+                if mem.available < 200 * 1024 * 1024:
+                    raise HTTPException(
+                        status_code=503,
+                        detail=f"서버 메모리 부족 (가용 {mem.available // (1024*1024)}MB). "
+                               f"잠시 후 다시 시도해 주세요."
+                    )
+
         zip_s3_key = f"ds-raw/{divisionId}/{divisionCode}_{importDate}.zip"
         zip_temp = f"/tmp/ds_export_{divisionId}_{divisionCode}_{importDate}.zip"
         xlsx_temp = f"/tmp/ds_export_{divisionId}_{divisionCode}_{importDate}.xlsx"
@@ -4972,8 +5180,8 @@ async def ds_export_xlsx(
 
             content_length = os.path.getsize(xlsx_path)
 
-            # S3에 캐싱 (백그라운드 — 파일에서 직접 업로드)
-            async def _cache_xlsx():
+            # S3에 캐싱 (백그라운드 — 완료 후 xlsx 파일 삭제)
+            async def _cache_and_cleanup_xlsx():
                 try:
                     await asyncio.to_thread(
                         _upload_xlsx_file_to_s3_sync, xlsx_path, divisionId, divisionCode, importDate
@@ -4981,38 +5189,44 @@ async def ds_export_xlsx(
                     logger.info(f"DS export: xlsx S3 캐싱 완료 {xlsx_s3_key}")
                 except Exception as ce:
                     logger.warning(f"DS export: xlsx S3 캐싱 실패 (non-fatal): {ce}")
+                finally:
+                    # 캐싱 완료/실패 후 xlsx 임시파일 삭제 (스트리밍 완료 대기)
+                    await asyncio.sleep(30)
+                    try:
+                        if os.path.exists(xlsx_path):
+                            os.remove(xlsx_path)
+                            logger.info(f"DS export: xlsx 임시파일 삭제 {xlsx_path}")
+                    except Exception:
+                        pass
 
-            asyncio.create_task(_cache_xlsx())
+            asyncio.create_task(_cache_and_cleanup_xlsx())
 
             def _stream_xlsx():
-                try:
-                    with open(xlsx_path, "rb") as f:
-                        while True:
-                            chunk = f.read(1024 * 1024)  # 1MB chunks
-                            if not chunk:
-                                break
-                            yield chunk
-                finally:
-                    # S3 캐싱이 끝날 시간을 고려해 삭제는 별도 태스크로
-                    pass
+                with open(xlsx_path, "rb") as f:
+                    while True:
+                        chunk = f.read(1024 * 1024)  # 1MB chunks
+                        if not chunk:
+                            break
+                        yield chunk
 
             return StreamingResponse(
                 _stream_xlsx(),
                 media_type=xlsx_media,
                 headers={
-                    "Content-Disposition": f"attachment; filename*=UTF-8''{filename.replace(' ', '%20')}",
+                    "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}",
                     "Content-Length": str(content_length),
                 },
             )
         except Exception as e:
             logger.error(f"DS export s3-zip build failed: {e}")
+            # 에러 시 zip + xlsx 모두 즉시 정리
+            for _tmp in [zip_temp, xlsx_temp]:
+                try:
+                    if os.path.exists(_tmp):
+                        os.remove(_tmp)
+                except Exception:
+                    pass
             raise HTTPException(status_code=500, detail="서버 내부 오류")
-        finally:
-            try:
-                if os.path.exists(zip_temp):
-                    os.remove(zip_temp)
-            except Exception:
-                pass
 
     # ── DynamoDB fallback: 기존 빌드 경로 ──
     xlsx_bytes = await asyncio.to_thread(
@@ -5036,7 +5250,7 @@ async def ds_export_xlsx(
         iter([xlsx_bytes]),
         media_type=xlsx_media,
         headers={
-            "Content-Disposition": f"attachment; filename*=UTF-8''{filename.replace(' ', '%20')}",
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}",
             "Content-Length": str(len(xlsx_bytes)),
         },
     )
