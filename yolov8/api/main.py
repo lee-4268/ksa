@@ -2981,7 +2981,8 @@ def _read_xls_from_zip_paginated_sync(
 
 
 def _process_zip_to_xlsx_sync(zip_temp_path: str, progress_cb=None,
-                               xlsx_out_path: str = None) -> tuple:
+                               xlsx_out_path: str = None,
+                               cancel_event: threading.Event = None) -> tuple:
     """ZIP → XLS 파싱 → xlsx 직접 빌드 (2-pass 스트리밍, 디스크 기반)
 
     Pass 1: 헤더 수집 (행 0만 읽기, 메모리 ~수 KB)
@@ -2990,6 +2991,7 @@ def _process_zip_to_xlsx_sync(zip_temp_path: str, progress_cb=None,
     Returns: (xlsx_path, sheet_stats, total_rows, sheet_headers)
     progress_cb: Optional[Callable(stage, percent)] — 파일별 진행률 콜백
     xlsx_out_path: xlsx 출력 경로 (미지정 시 자동 생성)
+    cancel_event: threading.Event — set되면 루프 즉시 중단
     """
     if not HAS_XLRD:
         raise RuntimeError("xlrd not installed on server")
@@ -3033,6 +3035,9 @@ def _process_zip_to_xlsx_sync(zip_temp_path: str, progress_cb=None,
             progress_cb("헤더 분석 중...", 5)
 
         for fname in process_list:
+            if cancel_event and cancel_event.is_set():
+                logger.info("DS xlsx Pass1: 취소 플래그 감지 → 중단")
+                raise InterruptedError("xlsx build cancelled")
             is_hundred = fname in hundred_files
             try:
                 xls_bytes = zf.read(fname)
@@ -3119,6 +3124,10 @@ def _process_zip_to_xlsx_sync(zip_temp_path: str, progress_cb=None,
         last_cb_pct = 0.0
 
         for file_idx, fname in enumerate(process_list):
+            if cancel_event and cancel_event.is_set():
+                logger.info("DS xlsx Pass2: 취소 플래그 감지 → 중단")
+                xwb.close()
+                raise InterruptedError("xlsx build cancelled")
             base_fname = os.path.basename(name_map[fname]) or name_map[fname]
             is_hundred = fname in hundred_files
 
@@ -3715,28 +3724,41 @@ async def _process_ds_job(job_id: str, job_item: dict):
 # xlsx 캐시 빌드 큐 — 잡 완료 시 등록, 워커 유휴 시 별도 태스크로 실행
 _xlsx_build_queue: list = []
 _xlsx_build_task: Optional[asyncio.Task] = None
+_xlsx_build_cancel_event: Optional[threading.Event] = None  # 스레드 실제 중단용
 
 
 async def _build_xlsx_cache_background(division_id: str, division_code: str, import_date: str):
     """S3 ZIP → xlsx 디스크 빌드 → S3 캐싱 (별도 태스크로 실행)
     실패해도 export 시 on-demand 빌드 가능하므로 non-fatal.
+    cancel_event를 통해 스레드 내부에서도 실제 중단 가능.
     """
+    global _xlsx_build_cancel_event
     zip_s3_key = f"ds-raw/{division_id}/{division_code}_{import_date}.zip"
     zip_temp = f"/tmp/ds_bgxlsx_{division_id}_{division_code}_{import_date}.zip"
     xlsx_temp = f"/tmp/ds_bgxlsx_{division_id}_{division_code}_{import_date}.xlsx"
+    cancel_ev = threading.Event()
+    _xlsx_build_cancel_event = cancel_ev
     try:
         s3 = get_s3_client()
         await asyncio.to_thread(s3.download_file, S3_BUCKET_NAME, zip_s3_key, zip_temp)
-        await asyncio.to_thread(_process_zip_to_xlsx_sync, zip_temp, None, xlsx_temp)
+        if cancel_ev.is_set():
+            raise InterruptedError("xlsx build cancelled before processing")
+        await asyncio.to_thread(
+            _process_zip_to_xlsx_sync, zip_temp, None, xlsx_temp,
+            cancel_event=cancel_ev,
+        )
+        if cancel_ev.is_set():
+            raise InterruptedError("xlsx build cancelled after processing")
         await asyncio.to_thread(
             _upload_xlsx_file_to_s3_sync, xlsx_temp, division_id, division_code, import_date
         )
         logger.info(f"DS bg xlsx cache: {division_id}/{division_code}_{import_date} 완료")
-    except asyncio.CancelledError:
-        logger.info(f"DS bg xlsx cache 중단 (새 잡 도착): {division_id}/{division_code}_{import_date}")
+    except (asyncio.CancelledError, InterruptedError) as e:
+        logger.info(f"DS bg xlsx cache 중단: {division_id}/{division_code}_{import_date} ({e})")
     except Exception as e:
         logger.warning(f"DS bg xlsx cache 실패 (non-fatal, export 시 on-demand 빌드): {e}")
     finally:
+        _xlsx_build_cancel_event = None
         for tmp in [zip_temp, xlsx_temp]:
             try:
                 if os.path.exists(tmp):
@@ -3765,7 +3787,7 @@ async def _job_worker_loop():
     10분마다 stuck "processing" 잡 자동 복구
     """
     logger.info("DS job worker loop started")
-    global _xlsx_build_task
+    global _xlsx_build_task, _xlsx_build_cancel_event
     last_stuck_check = 0.0  # epoch seconds
     STUCK_CHECK_INTERVAL = 600  # 10분
 
@@ -3790,9 +3812,13 @@ async def _job_worker_loop():
 
             # 새 잡이 들어왔는데 xlsx 빌드 중이면 빌드 중단
             if _xlsx_build_task and not _xlsx_build_task.done():
+                # 1. 스레드 내부 취소 플래그 set → 실제 루프 중단
+                if _xlsx_build_cancel_event:
+                    _xlsx_build_cancel_event.set()
+                # 2. asyncio task도 cancel
                 _xlsx_build_task.cancel()
-                logger.info("DS xlsx build: 새 잡 도착 → 빌드 중단")
-                await asyncio.sleep(1)  # cancel 처리 대기
+                logger.info("DS xlsx build: 새 잡 도착 → 빌드 중단 (스레드 취소 플래그 set)")
+                await asyncio.sleep(2)  # 스레드 종료 대기
 
             job_id = job["jobId"]
             logger.info(f"DS job worker: processing {job_id}")
