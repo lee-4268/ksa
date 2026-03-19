@@ -114,7 +114,7 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
       final auth = context.read<AuthService>();
       final jobId = await _inspSvc.enqueue(s3Key, year, auth.userName ?? '');
 
-      for (var i = 0; i < 120; i++) {
+      for (var i = 0; i < 240; i++) {
         await Future.delayed(const Duration(seconds: 5));
         if (!mounted) return;
         final status = await _inspSvc.jobStatus(jobId);

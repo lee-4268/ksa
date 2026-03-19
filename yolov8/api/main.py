@@ -8928,7 +8928,7 @@ DYNAMODB_INSP_RESULTS = os.environ.get("DYNAMODB_INSPECTION_RESULTS", "kca-inspe
 
 def _init_inspection_db():
     import sqlite3
-    conn = sqlite3.connect(_INSP_DB)
+    conn = sqlite3.connect(_INSP_DB, timeout=30)
     conn.execute('PRAGMA journal_mode=WAL')  # 읽기/쓰기 동시 허용
     conn.execute('''CREATE TABLE IF NOT EXISTS inspection_targets (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -9071,31 +9071,30 @@ def _process_inspection_sync(job_id: str, s3_key: str, year: int, uploaded_by: s
         sheet_names = wb.sheetnames
 
         _init_inspection_db()
-        conn = sqlite3.connect(_INSP_DB)
+        conn = sqlite3.connect(_INSP_DB, timeout=30)
+        conn.execute('PRAGMA synchronous=NORMAL')  # WAL+NORMAL: 안전하고 빠름
         # 해당 연도 기존 데이터 삭제
         conn.execute('DELETE FROM inspection_targets WHERE year=?', (year,))
         conn.execute('DELETE FROM inspection_meta WHERE year=?', (year,))
         conn.commit()
 
-        # 통시값 → access담당/품질개선팀 매칭을 위해 cert SQLite 준비
+        # cert 전체를 dict에 로드 → 행마다 DB 연결 불필요 (74만행 × DB연결 제거)
         _cert_cache_load()
+        cert_map: dict = {}
+        try:
+            c2 = sqlite3.connect(_cert_cache_db_path, timeout=30)
+            for r in c2.execute('SELECT zpwina, zpwino, area_hdofc_nm, ons_team_nm FROM cert'):
+                hdofc = str(r[2] or ''); team = str(r[3] or '')
+                if r[0]: cert_map[str(r[0])] = (hdofc, team)
+                if r[1]: cert_map[str(r[1])] = (hdofc, team)
+            c2.close()
+        except Exception: pass
 
         def _match_access(tongsi: str, gongtae: str):
-            """cert SQLite에서 통시코드로 access담당/품질개선팀 조회."""
-            if not tongsi and not gongtae: return '', ''
-            try:
-                c2 = sqlite3.connect(_cert_cache_db_path)
-                c2.row_factory = sqlite3.Row
-                for val in [tongsi, gongtae]:
-                    if not val: continue
-                    row = c2.execute(
-                        'SELECT area_hdofc_nm, ons_team_nm FROM cert WHERE zpwina=? OR zpwino=? LIMIT 1',
-                        (val, val)).fetchone()
-                    if row:
-                        c2.close()
-                        return str(row['area_hdofc_nm'] or ''), str(row['ons_team_nm'] or '')
-                c2.close()
-            except Exception: pass
+            """cert dict에서 통시코드로 access담당/품질개선팀 조회 (O(1))."""
+            for val in [tongsi, gongtae]:
+                if val and val in cert_map:
+                    return cert_map[val]
             return '', ''
 
         INSERT_SQL = '''INSERT INTO inspection_targets
@@ -9137,7 +9136,7 @@ def _process_inspection_sync(job_id: str, s3_key: str, year: int, uploaded_by: s
                     skt본부, access, 품질,
                 ))
                 row_count += 1
-                if len(batch) >= 500:
+                if len(batch) >= 5000:
                     conn.executemany(INSERT_SQL, batch); batch.clear()
                     pct = int(pct_start + (pct_end - pct_start) * row_count / max(ws.max_row, 1))
                     _upd(pct, f"{sheet_label} 처리 중... ({row_count:,}행)")
@@ -9306,7 +9305,7 @@ async def inspection_meta(request: Request):
     await _verify_auth(request)
     import sqlite3
     if not os.path.exists(_INSP_DB): return {"items": []}
-    conn = sqlite3.connect(_INSP_DB); conn.row_factory = sqlite3.Row
+    conn = sqlite3.connect(_INSP_DB, timeout=30); conn.row_factory = sqlite3.Row
     rows = conn.execute('SELECT * FROM inspection_meta ORDER BY year DESC').fetchall()
     conn.close()
     return {"items": [dict(r) for r in rows]}
@@ -9319,7 +9318,7 @@ async def inspection_column_values(request: Request, year: int, col: str, sheet:
     if col not in ALLOWED_COLS: raise HTTPException(400, "허용되지 않은 컬럼")
     import sqlite3
     if not os.path.exists(_INSP_DB): return {"values": []}
-    conn = sqlite3.connect(_INSP_DB)
+    conn = sqlite3.connect(_INSP_DB, timeout=30)
     where = "year=?"
     params: list = [year]
     if sheet != "all": where += " AND sheet=?"; params.append(sheet)
@@ -9335,7 +9334,7 @@ async def inspection_org_map(request: Request, year: int):
     import sqlite3
     if not os.path.exists(_INSP_DB):
         return {"org": {}, "quarters": [], "nation_groups": [], "kca_results": []}
-    conn = sqlite3.connect(_INSP_DB); conn.row_factory = sqlite3.Row
+    conn = sqlite3.connect(_INSP_DB, timeout=30); conn.row_factory = sqlite3.Row
     rows = conn.execute(
         'SELECT DISTINCT "access담당", "품질개선팀" FROM inspection_targets WHERE year=? AND "access담당" != "" ORDER BY "access담당", "품질개선팀"',
         (year,)).fetchall()
@@ -9383,7 +9382,7 @@ async def inspection_data(request: Request, req: InspectionDataReq):
         kw = f'%{req.search.strip()}%'
         params.extend([kw, kw])
     where_sql = " AND ".join(where)
-    conn = sqlite3.connect(_INSP_DB); conn.row_factory = sqlite3.Row
+    conn = sqlite3.connect(_INSP_DB, timeout=30); conn.row_factory = sqlite3.Row
     total = conn.execute(f'SELECT COUNT(*) FROM inspection_targets WHERE {where_sql}', params).fetchone()[0]
     offset = (req.page - 1) * req.page_size
     rows = conn.execute(f'SELECT * FROM inspection_targets WHERE {where_sql} ORDER BY id LIMIT ? OFFSET ?',
@@ -9412,7 +9411,7 @@ async def inspection_summary(request: Request, req: InspectionSummaryReq):
         where.append(f'"{col}" IN ({ph})')
         params.extend(vals)
     where_sql = " AND ".join(where)
-    conn = sqlite3.connect(_INSP_DB); conn.row_factory = sqlite3.Row
+    conn = sqlite3.connect(_INSP_DB, timeout=30); conn.row_factory = sqlite3.Row
     rows = conn.execute(
         f'SELECT access담당, 품질개선팀, 분기, COUNT(*) as cnt FROM inspection_targets WHERE {where_sql} GROUP BY access담당, 품질개선팀, 분기',
         params).fetchall()
@@ -9439,7 +9438,7 @@ async def inspection_detail(request: Request, year: int, 허가번호: str):
     # 1. inspection.db 기본 정보
     target = None
     if os.path.exists(_INSP_DB):
-        conn = sqlite3.connect(_INSP_DB); conn.row_factory = sqlite3.Row
+        conn = sqlite3.connect(_INSP_DB, timeout=30); conn.row_factory = sqlite3.Row
         row = conn.execute('SELECT * FROM inspection_targets WHERE year=? AND 허가번호=? LIMIT 1',
                            (year, 허가번호)).fetchone()
         conn.close()
@@ -9647,7 +9646,7 @@ async def inspection_progress(request: Request, year: int):
     if not os.path.exists(_INSP_DB):
         return {"items": []}
 
-    conn = sqlite3.connect(_INSP_DB)
+    conn = sqlite3.connect(_INSP_DB, timeout=30)
     conn.row_factory = sqlite3.Row
     rows = conn.execute(
         'SELECT access담당, COUNT(*) as total FROM inspection_targets WHERE year=? GROUP BY access담당',
