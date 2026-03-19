@@ -4,6 +4,7 @@ import '../services/auth_service.dart';
 import '../widgets/korea_map_widget.dart';
 import 'map_screen.dart';
 import 'schedule_screen.dart';
+import 'inspection_schedule_screen.dart';
 import 'division_management_screen.dart';
 import 'admin/admin_panel_screen.dart';
 import 'ds_dashboard_screen.dart';
@@ -247,6 +248,13 @@ class _DashboardScreenState extends State<DashboardScreen>
                   subtitle: '검사 일정 관리 및 진도율 확인',
                   color: _greenColor,
                   onTap: () => _navigateFromDrawer(const ScheduleScreen()),
+                ),
+                _buildDrawerItem(
+                  icon: Icons.fact_check_outlined,
+                  title: '수검 대상 일정',
+                  subtitle: 'KCA 수검대상 현황 및 일정 관리',
+                  color: const Color(0xFFE53935),
+                  onTap: () => _navigateFromDrawer(const InspectionScheduleScreen()),
                 ),
                 _buildDrawerItem(
                   icon: Icons.storage,

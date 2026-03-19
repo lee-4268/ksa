@@ -8914,6 +8914,696 @@ def _erp_ds_compare_sync(
 
 
 # ============================================================
+# Inspection Schedule Management (수검 일정 관리)
+# ============================================================
+
+INSPECTION_S3_PREFIX = "inspection/raw/"
+_INSP_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "inspection.db")
+_DS_DETAIL_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ds_detail.db")
+_inspection_jobs: Dict[str, dict] = {}
+DYNAMODB_INSP_SCHEDULES = os.environ.get("DYNAMODB_INSPECTION_SCHEDULES", "kca-inspection-schedules")
+DYNAMODB_INSP_RESULTS = os.environ.get("DYNAMODB_INSPECTION_RESULTS", "kca-inspection-results")
+
+# ── SQLite 초기화 ──────────────────────────────────────────
+
+def _init_inspection_db():
+    import sqlite3
+    conn = sqlite3.connect(_INSP_DB)
+    conn.execute('''CREATE TABLE IF NOT EXISTS inspection_targets (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        year INTEGER, sheet TEXT,
+        pnu_code TEXT, 허가번호 TEXT, 호출명칭 TEXT, 국종군 TEXT,
+        부서 TEXT, 분기 TEXT, 연도주기 TEXT, 검사주기 INTEGER,
+        허가상태 TEXT, 설치장소 TEXT, 도로명주소 TEXT, 장치수 INTEGER,
+        통시 TEXT, 공대 TEXT, kca검토결과 TEXT, 시기조정 TEXT,
+        기준연도 INTEGER, skt본부 TEXT, access담당 TEXT, 품질개선팀 TEXT
+    )''')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_it_year ON inspection_targets(year)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_it_허가번호 ON inspection_targets(허가번호)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_it_분기 ON inspection_targets(분기)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_it_access ON inspection_targets(access담당)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_it_품질팀 ON inspection_targets(품질개선팀)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_it_skt본부 ON inspection_targets(skt본부)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_it_국종군 ON inspection_targets(국종군)')
+    conn.execute('''CREATE TABLE IF NOT EXISTS inspection_meta (
+        year INTEGER PRIMARY KEY,
+        sheet TEXT, total_skt INTEGER, total_sheet1 INTEGER,
+        matched INTEGER, unmatched INTEGER,
+        s3_key TEXT, filename TEXT, imported_by TEXT, imported_at TEXT
+    )''')
+    conn.commit(); conn.close()
+
+def _init_ds_detail_db():
+    import sqlite3
+    conn = sqlite3.connect(_DS_DETAIL_DB)
+    conn.execute('''CREATE TABLE IF NOT EXISTS ds_일반사항 (
+        허가번호 TEXT PRIMARY KEY, 무선국명 TEXT, 호출명칭 TEXT
+    )''')
+    conn.execute('''CREATE TABLE IF NOT EXISTS ds_장치 (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        허가번호 TEXT, 장치번호 TEXT, 기기일련번호 TEXT
+    )''')
+    conn.execute('''CREATE TABLE IF NOT EXISTS ds_안테나 (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        허가번호 TEXT, 장치번호 TEXT,
+        기 TEXT, 이득 TEXT, 공중선주설치형태명 TEXT
+    )''')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_dsd_일반 ON ds_일반사항(허가번호)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_dsd_장치 ON ds_장치(허가번호)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_dsd_안테나 ON ds_안테나(허가번호)')
+    conn.commit(); conn.close()
+
+try:
+    _init_inspection_db()
+    _init_ds_detail_db()
+except Exception as _e:
+    logger.warning(f"inspection DB 초기화 실패 (무시): {_e}")
+
+# ── ds_detail.db 빌드 (XLS ZIP → 장치/안테나/일반사항) ────
+
+def _build_ds_detail_from_zip_sync(zip_path: str):
+    """DS ZIP에서 일반사항/장치/안테나 시트 파싱 → ds_detail.db 갱신."""
+    import sqlite3, zipfile
+    _init_ds_detail_db()
+    conn = sqlite3.connect(_DS_DETAIL_DB)
+    try:
+        with zipfile.ZipFile(zip_path, 'r') as zf:
+            xls_names = [n for n in zf.namelist() if n.lower().endswith('.xls') and not n.startswith('__')]
+            for xls_name in xls_names:
+                try:
+                    with zf.open(xls_name) as xf:
+                        raw = xf.read()
+                    wb = xlrd.open_workbook(file_contents=raw)
+                    sheet_names = wb.sheet_names()
+
+                    def _col_idx(ws, name):
+                        h = [str(ws.cell_value(0, c)) for c in range(ws.ncols)]
+                        return h.index(name) if name in h else -1
+
+                    # 일반사항
+                    if '일반사항' in sheet_names:
+                        ws = wb.sheet_by_name('일반사항')
+                        hi = _col_idx(ws, '허가번호'); mi = _col_idx(ws, '무선국명'); ci = _col_idx(ws, '호출명칭')
+                        if hi >= 0:
+                            batch = []
+                            for r in range(1, ws.nrows):
+                                h = str(ws.cell_value(r, hi) or '').strip()
+                                m = str(ws.cell_value(r, mi) or '').strip() if mi >= 0 else ''
+                                c = str(ws.cell_value(r, ci) or '').strip() if ci >= 0 else ''
+                                if h: batch.append((h, m, c))
+                            conn.executemany('INSERT OR REPLACE INTO ds_일반사항(허가번호,무선국명,호출명칭) VALUES(?,?,?)', batch)
+
+                    # 장치
+                    if '장치' in sheet_names:
+                        ws = wb.sheet_by_name('장치')
+                        hi = _col_idx(ws, '허가번호'); ji = _col_idx(ws, '장치번호'); si = _col_idx(ws, '기기일련번호')
+                        if hi >= 0 and si >= 0:
+                            batch = []
+                            for r in range(1, ws.nrows):
+                                h = str(ws.cell_value(r, hi) or '').strip()
+                                j = str(ws.cell_value(r, ji) or '').strip() if ji >= 0 else ''
+                                s = str(ws.cell_value(r, si) or '').strip()
+                                if h and s: batch.append((h, j, s))
+                            conn.executemany('INSERT INTO ds_장치(허가번호,장치번호,기기일련번호) VALUES(?,?,?)', batch)
+
+                    # 안테나
+                    if '안테나' in sheet_names:
+                        ws = wb.sheet_by_name('안테나')
+                        hi = _col_idx(ws, '허가번호'); ji = _col_idx(ws, '장치번호')
+                        ki = _col_idx(ws, '기'); ei = _col_idx(ws, '이득'); pi = _col_idx(ws, '공중선주 설치형태명')
+                        if hi >= 0:
+                            batch = []
+                            for r in range(1, ws.nrows):
+                                h = str(ws.cell_value(r, hi) or '').strip()
+                                j = str(ws.cell_value(r, ji) or '').strip() if ji >= 0 else ''
+                                k = str(ws.cell_value(r, ki) or '').strip() if ki >= 0 else ''
+                                e = str(ws.cell_value(r, ei) or '').strip() if ei >= 0 else ''
+                                p = str(ws.cell_value(r, pi) or '').strip() if pi >= 0 else ''
+                                if h: batch.append((h, j, k, e, p))
+                            conn.executemany('INSERT INTO ds_안테나(허가번호,장치번호,기,이득,공중선주설치형태명) VALUES(?,?,?,?,?)', batch)
+
+                    wb.release_resources()
+                except Exception as xe:
+                    logger.warning(f"ds_detail XLS 파싱 실패 {xls_name}: {xe}")
+        conn.commit()
+    finally:
+        conn.close()
+
+# ── KCA 파일 Import 백그라운드 잡 ──────────────────────────
+
+def _process_inspection_sync(job_id: str, s3_key: str, year: int, uploaded_by: str):
+    """KCA 수검대상 Excel → inspection.db 구축 (백그라운드)."""
+    import sqlite3, openpyxl, tempfile, gc
+
+    def _upd(pct, stage, **kw):
+        _inspection_jobs[job_id].update({"percent": pct, "stage": stage, **kw})
+
+    try:
+        _upd(5, "S3 파일 다운로드 중...")
+        tmp = tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False)
+        tmp_path = tmp.name; tmp.close()
+        s3 = get_s3_client()
+        s3.download_file(S3_BUCKET_NAME, s3_key, tmp_path)
+
+        _upd(15, "Excel 파싱 중 (SKT 시트)...")
+        wb = openpyxl.load_workbook(tmp_path, read_only=True, data_only=True)
+        sheet_names = wb.sheetnames
+
+        _init_inspection_db()
+        conn = sqlite3.connect(_INSP_DB)
+        # 해당 연도 기존 데이터 삭제
+        conn.execute('DELETE FROM inspection_targets WHERE year=?', (year,))
+        conn.execute('DELETE FROM inspection_meta WHERE year=?', (year,))
+        conn.commit()
+
+        # 통시값 → access담당/품질개선팀 매칭을 위해 cert SQLite 준비
+        _cert_cache_load()
+
+        def _match_access(tongsi: str, gongtae: str):
+            """cert SQLite에서 통시코드로 access담당/품질개선팀 조회."""
+            if not tongsi and not gongtae: return '', ''
+            try:
+                c2 = sqlite3.connect(_cert_cache_db_path)
+                c2.row_factory = sqlite3.Row
+                for val in [tongsi, gongtae]:
+                    if not val: continue
+                    row = c2.execute(
+                        'SELECT area_hdofc_nm, ons_team_nm FROM cert WHERE zpwina=? OR zpwino=? LIMIT 1',
+                        (val, val)).fetchone()
+                    if row:
+                        c2.close()
+                        return str(row['area_hdofc_nm'] or ''), str(row['ons_team_nm'] or '')
+                c2.close()
+            except Exception: pass
+            return '', ''
+
+        INSERT_SQL = '''INSERT INTO inspection_targets
+            (year,sheet,pnu_code,허가번호,호출명칭,국종군,부서,분기,연도주기,검사주기,
+             허가상태,설치장소,도로명주소,장치수,통시,공대,kca검토결과,시기조정,
+             기준연도,skt본부,access담당,품질개선팀)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)'''
+
+        total_skt = 0; total_s1 = 0; matched = 0; unmatched = 0
+
+        def _proc_sheet(ws, sheet_label, pct_start, pct_end, is_skt):
+            nonlocal matched, unmatched
+            batch = []; row_count = 0
+            for i, row in enumerate(ws.iter_rows(min_row=2, values_only=True)):
+                if row[2] is None: continue  # 허가번호 없는 행 스킵
+                access = str(row[31] or '').strip() if is_skt and len(row) > 31 else ''
+                품질 = str(row[32] or '').strip() if is_skt and len(row) > 32 else ''
+                tongsi = str(row[28] or '').strip() if is_skt and len(row) > 28 else ''
+                gongtae = str(row[29] or '').strip() if is_skt and len(row) > 29 else ''
+                skt본부 = str(row[30] or '').strip() if is_skt and len(row) > 30 else ''
+
+                if not access:
+                    access, 품질 = _match_access(tongsi, gongtae)
+                    if access: matched += 1
+                    else: unmatched += 1
+                else: matched += 1
+
+                batch.append((
+                    year, sheet_label,
+                    str(row[0] or ''), str(row[2] or ''), str(row[3] or ''), str(row[4] or ''),
+                    str(row[11] or ''), str(row[8] or ''), str(row[9] or ''),
+                    int(row[10]) if row[10] else 0,
+                    str(row[12] or ''), str(row[13] or ''), str(row[14] or ''),
+                    int(row[16]) if row[16] else 0,
+                    tongsi, gongtae,
+                    str(row[26] or '') if is_skt and len(row) > 26 else (str(row[26] or '') if len(row) > 26 else ''),
+                    str(row[25] or '') if is_skt and len(row) > 25 else (str(row[25] or '') if len(row) > 25 else ''),
+                    int(row[27]) if is_skt and len(row) > 27 and row[27] else (int(row[27]) if len(row) > 27 and row[27] else year),
+                    skt본부, access, 품질,
+                ))
+                row_count += 1
+                if len(batch) >= 500:
+                    conn.executemany(INSERT_SQL, batch); batch.clear()
+                    pct = int(pct_start + (pct_end - pct_start) * row_count / max(ws.max_row, 1))
+                    _upd(pct, f"{sheet_label} 처리 중... ({row_count:,}행)")
+            if batch: conn.executemany(INSERT_SQL, batch)
+            conn.commit()
+            return row_count
+
+        # SKT 시트
+        if 'SKT' in sheet_names:
+            _upd(20, "SKT 시트 처리 중...")
+            ws = wb['SKT']
+            total_skt = _proc_sheet(ws, 'SKT', 20, 70, True)
+
+        # Sheet1 (시기조정)
+        if 'Sheet1' in sheet_names:
+            _upd(72, "시기조정 시트 처리 중...")
+            ws = wb['Sheet1']
+            total_s1 = _proc_sheet(ws, 'sheet1', 72, 85, False)
+
+        wb.close(); gc.collect()
+        os.unlink(tmp_path)
+
+        # 메타 저장
+        now_str = datetime.now(timezone.utc).isoformat()
+        conn.execute('''INSERT OR REPLACE INTO inspection_meta
+            (year,sheet,total_skt,total_sheet1,matched,unmatched,s3_key,filename,imported_by,imported_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?)''',
+            (year, 'SKT+sheet1', total_skt, total_s1, matched, unmatched, s3_key, s3_key.split('/')[-1], uploaded_by, now_str))
+        conn.commit(); conn.close()
+
+        _upd(100, f"완료 — SKT {total_skt:,}건 / 시기조정 {total_s1:,}건 / 매칭 {matched:,}건",
+             status="complete", total_skt=total_skt, total_sheet1=total_s1, matched=matched, unmatched=unmatched)
+        logger.info(f"inspection import 완료: year={year} skt={total_skt} sheet1={total_s1}")
+
+    except Exception as ex:
+        logger.error(f"inspection import 실패: {ex}", exc_info=True)
+        _inspection_jobs[job_id].update({"status": "error", "stage": f"실패: {ex}", "percent": 0})
+
+# ── Endpoints ──────────────────────────────────────────────
+
+class InspectionEnqueueReq(BaseModel):
+    s3Key: str
+    year: int
+    uploadedBy: str
+
+class InspectionScheduleReq(BaseModel):
+    year: int
+    허가번호: str
+    호출명칭: str
+    분기: str
+    skt본부: str
+    access담당: str
+    품질개선팀: str
+    수검예정주차: str = ""
+    수검시작일: str = ""
+    수검종료일: str = ""
+    지역: str = ""
+
+class InspectionResultReq(BaseModel):
+    year: int
+    허가번호: str
+    status: str  # 검사대기 | 합격 | 불합격
+    검사일: str = ""
+    메모: str = ""
+    철탑형태: str = ""
+
+@app.post("/inspection/upload-raw")
+async def inspection_upload_raw(request: Request):
+    """KCA Excel → S3 스트리밍 업로드."""
+    empno = await _verify_auth(request)
+    role = await asyncio.to_thread(_get_user_role_sync, empno)
+    if role not in {"admin", "manager"}:
+        raise HTTPException(403, "관리자/매니저만 가능")
+
+    fname = request.headers.get("X-Filename", "inspection.xlsx")
+    s3_key = f"{INSPECTION_S3_PREFIX}{fname}"
+    s3 = get_s3_client()
+    mp = s3.create_multipart_upload(Bucket=S3_BUCKET_NAME, Key=s3_key)
+    upload_id = mp["UploadId"]
+    parts = []; part_num = 0; buf = b""
+    PART_SIZE = 8 * 1024 * 1024
+
+    try:
+        async for chunk in request.stream():
+            buf += chunk
+            while len(buf) >= PART_SIZE:
+                part_num += 1
+                resp = s3.upload_part(Bucket=S3_BUCKET_NAME, Key=s3_key,
+                                      UploadId=upload_id, PartNumber=part_num, Body=buf[:PART_SIZE])
+                parts.append({"PartNumber": part_num, "ETag": resp["ETag"]})
+                buf = buf[PART_SIZE:]
+        if buf:
+            part_num += 1
+            resp = s3.upload_part(Bucket=S3_BUCKET_NAME, Key=s3_key,
+                                  UploadId=upload_id, PartNumber=part_num, Body=buf)
+            parts.append({"PartNumber": part_num, "ETag": resp["ETag"]})
+        s3.complete_multipart_upload(Bucket=S3_BUCKET_NAME, Key=s3_key,
+                                     UploadId=upload_id, MultipartUpload={"Parts": parts})
+    except Exception as ex:
+        s3.abort_multipart_upload(Bucket=S3_BUCKET_NAME, Key=s3_key, UploadId=upload_id)
+        raise HTTPException(500, f"업로드 실패: {ex}")
+
+    return {"success": True, "s3Key": s3_key}
+
+@app.post("/inspection/enqueue")
+async def inspection_enqueue(request: Request, req: InspectionEnqueueReq):
+    """KCA Import 백그라운드 잡 생성."""
+    empno = await _verify_auth(request)
+    role = await asyncio.to_thread(_get_user_role_sync, empno)
+    if role not in {"admin", "manager"}:
+        raise HTTPException(403, "관리자/매니저만 가능")
+
+    job_id = str(uuid.uuid4())
+    _inspection_jobs[job_id] = {"status": "processing", "stage": "대기 중...", "percent": 0}
+    asyncio.get_event_loop().run_in_executor(
+        _bounded_executor, _process_inspection_sync, job_id, req.s3Key, req.year, req.uploadedBy)
+    return {"success": True, "jobId": job_id}
+
+@app.get("/inspection/job/{job_id}")
+async def inspection_job_status(job_id: str, request: Request):
+    await _verify_auth(request)
+    job = _inspection_jobs.get(job_id)
+    if not job: raise HTTPException(404, "잡 없음")
+    return job
+
+@app.post("/inspection/build-ds-detail")
+async def inspection_build_ds_detail(request: Request, division_id: str, import_date: str):
+    """DS ZIP → ds_detail.db 빌드 (관리자 수동 트리거)."""
+    empno = await _verify_auth(request)
+    role = await asyncio.to_thread(_get_user_role_sync, empno)
+    if role not in {"admin", "manager"}: raise HTTPException(403, "권한 없음")
+
+    # DynamoDB에서 s3Key 조회
+    dynamodb = get_dynamodb_resource()
+    table = dynamodb.Table(DYNAMODB_TABLES["ds_uploads"])
+    resp = await asyncio.to_thread(lambda: table.query(
+        KeyConditionExpression=Key("divisionId").eq(division_id) & Key("importDate").begins_with(import_date),
+        ProjectionExpression="s3Key", Limit=1))
+    items = resp.get("Items", [])
+    if not items: raise HTTPException(404, "DS 업로드 없음")
+    s3_key = items[0].get("s3Key", "")
+    if not s3_key: raise HTTPException(404, "S3 키 없음")
+
+    job_id = str(uuid.uuid4())
+    _inspection_jobs[job_id] = {"status": "processing", "stage": "ds_detail 빌드 중...", "percent": 0}
+
+    async def _run():
+        try:
+            import tempfile
+            s3 = get_s3_client()
+            tmp = tempfile.NamedTemporaryFile(suffix='.zip', delete=False)
+            tmp_path = tmp.name; tmp.close()
+            s3.download_file(S3_BUCKET_NAME, s3_key, tmp_path)
+            await asyncio.to_thread(_build_ds_detail_from_zip_sync, tmp_path)
+            os.unlink(tmp_path)
+            _inspection_jobs[job_id].update({"status": "complete", "percent": 100, "stage": "완료"})
+        except Exception as ex:
+            _inspection_jobs[job_id].update({"status": "error", "stage": str(ex), "percent": 0})
+
+    asyncio.create_task(_run())
+    return {"success": True, "jobId": job_id}
+
+@app.get("/inspection/meta")
+async def inspection_meta(request: Request):
+    """Import 이력 조회."""
+    await _verify_auth(request)
+    import sqlite3
+    if not os.path.exists(_INSP_DB): return {"items": []}
+    conn = sqlite3.connect(_INSP_DB); conn.row_factory = sqlite3.Row
+    rows = conn.execute('SELECT * FROM inspection_meta ORDER BY year DESC').fetchall()
+    conn.close()
+    return {"items": [dict(r) for r in rows]}
+
+@app.get("/inspection/column-values")
+async def inspection_column_values(request: Request, year: int, col: str, sheet: str = "all"):
+    """필터 UI용 컬럼 고유값 조회."""
+    await _verify_auth(request)
+    ALLOWED_COLS = {'분기','국종군','부서','kca검토결과','시기조정','skt본부','access담당','품질개선팀','허가상태'}
+    if col not in ALLOWED_COLS: raise HTTPException(400, "허용되지 않은 컬럼")
+    import sqlite3
+    if not os.path.exists(_INSP_DB): return {"values": []}
+    conn = sqlite3.connect(_INSP_DB)
+    where = "year=?"
+    params: list = [year]
+    if sheet != "all": where += " AND sheet=?"; params.append(sheet)
+    col_q = col.replace('담당','담당').replace('팀','팀')
+    rows = conn.execute(f'SELECT DISTINCT "{col_q}" FROM inspection_targets WHERE {where} AND "{col_q}" IS NOT NULL AND "{col_q}" != "" ORDER BY "{col_q}"', params).fetchall()
+    conn.close()
+    return {"values": [r[0] for r in rows]}
+
+class InspectionDataReq(BaseModel):
+    year: int
+    sheet: str = "all"
+    filters: dict = {}   # {col: [val, ...]}
+    page: int = 1
+    page_size: int = 100
+
+@app.post("/inspection/data")
+async def inspection_data(request: Request, req: InspectionDataReq):
+    """필터 적용 데이터 조회 (페이지네이션)."""
+    await _verify_auth(request)
+    import sqlite3
+    if not os.path.exists(_INSP_DB): return {"items": [], "total": 0}
+    ALLOWED_COLS = {'분기','국종군','부서','kca검토결과','시기조정','skt본부','access담당','품질개선팀','허가상태'}
+    where = ["year=?"]
+    params: list = [req.year]
+    if req.sheet != "all": where.append("sheet=?"); params.append(req.sheet)
+    for col, vals in req.filters.items():
+        if col not in ALLOWED_COLS or not vals: continue
+        ph = ",".join("?" * len(vals))
+        where.append(f'"{col}" IN ({ph})')
+        params.extend(vals)
+    where_sql = " AND ".join(where)
+    conn = sqlite3.connect(_INSP_DB); conn.row_factory = sqlite3.Row
+    total = conn.execute(f'SELECT COUNT(*) FROM inspection_targets WHERE {where_sql}', params).fetchone()[0]
+    offset = (req.page - 1) * req.page_size
+    rows = conn.execute(f'SELECT * FROM inspection_targets WHERE {where_sql} ORDER BY id LIMIT ? OFFSET ?',
+                        params + [req.page_size, offset]).fetchall()
+    conn.close()
+    return {"items": [dict(r) for r in rows], "total": total, "page": req.page, "page_size": req.page_size}
+
+class InspectionSummaryReq(BaseModel):
+    year: int
+    sheet: str = "all"
+    filters: dict = {}
+
+@app.post("/inspection/summary")
+async def inspection_summary(request: Request, req: InspectionSummaryReq):
+    """본부×분기 매트릭스 집계."""
+    await _verify_auth(request)
+    import sqlite3
+    if not os.path.exists(_INSP_DB): return {"matrix": {}}
+    ALLOWED_COLS = {'분기','국종군','부서','kca검토결과','시기조정','skt본부','access담당','품질개선팀','허가상태'}
+    where = ["year=?"]
+    params: list = [req.year]
+    if req.sheet != "all": where.append("sheet=?"); params.append(req.sheet)
+    for col, vals in req.filters.items():
+        if col not in ALLOWED_COLS or not vals: continue
+        ph = ",".join("?" * len(vals))
+        where.append(f'"{col}" IN ({ph})')
+        params.extend(vals)
+    where_sql = " AND ".join(where)
+    conn = sqlite3.connect(_INSP_DB); conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        f'SELECT access담당, 분기, COUNT(*) as cnt FROM inspection_targets WHERE {where_sql} GROUP BY access담당, 분기',
+        params).fetchall()
+    conn.close()
+    matrix: dict = {}
+    quarters = set()
+    for r in rows:
+        team = r['access담당'] or '미배정'
+        q = r['분기'] or '-'
+        quarters.add(q)
+        if team not in matrix: matrix[team] = {}
+        matrix[team][q] = r['cnt']
+    return {"matrix": matrix, "quarters": sorted(quarters)}
+
+@app.get("/inspection/detail")
+async def inspection_detail(request: Request, year: int, 허가번호: str):
+    """행 클릭 상세 정보 (KCA + DS + 일정 + 결과)."""
+    await _verify_auth(request)
+    import sqlite3
+
+    # 1. inspection.db 기본 정보
+    target = None
+    if os.path.exists(_INSP_DB):
+        conn = sqlite3.connect(_INSP_DB); conn.row_factory = sqlite3.Row
+        row = conn.execute('SELECT * FROM inspection_targets WHERE year=? AND 허가번호=? LIMIT 1',
+                           (year, 허가번호)).fetchone()
+        conn.close()
+        if row: target = dict(row)
+
+    # 2. ds_detail.db 기술 정보
+    ds_info: dict = {"일반사항": None, "장치": [], "안테나": []}
+    if os.path.exists(_DS_DETAIL_DB):
+        conn = sqlite3.connect(_DS_DETAIL_DB); conn.row_factory = sqlite3.Row
+        row = conn.execute('SELECT * FROM ds_일반사항 WHERE 허가번호=?', (허가번호,)).fetchone()
+        if row: ds_info["일반사항"] = dict(row)
+        장치rows = conn.execute('SELECT * FROM ds_장치 WHERE 허가번호=?', (허가번호,)).fetchall()
+        ds_info["장치"] = [dict(r) for r in 장치rows]
+        안테나rows = conn.execute('SELECT * FROM ds_안테나 WHERE 허가번호=?', (허가번호,)).fetchall()
+        ds_info["안테나"] = [dict(r) for r in 안테나rows]
+        conn.close()
+
+    # 3. DynamoDB 일정/결과
+    dynamodb = get_dynamodb_resource()
+    sched_table = dynamodb.Table(DYNAMODB_INSP_SCHEDULES)
+    result_table = dynamodb.Table(DYNAMODB_INSP_RESULTS)
+    pk = f"{year}#{허가번호}"
+
+    schedule = None
+    result = None
+    try:
+        s = await asyncio.to_thread(lambda: sched_table.get_item(Key={"pk": pk, "sk": "schedule"}))
+        schedule = s.get("Item")
+        r = await asyncio.to_thread(lambda: result_table.get_item(Key={"pk": pk, "sk": "result"}))
+        result = r.get("Item")
+    except Exception as ex:
+        logger.warning(f"inspection detail DynamoDB 조회 실패: {ex}")
+
+    return {"target": target, "ds": ds_info, "schedule": schedule, "result": result}
+
+@app.post("/inspection/schedule")
+async def inspection_schedule_upsert(request: Request, req: InspectionScheduleReq):
+    """수검 일정 등록/수정 (관리자/매니저)."""
+    empno = await _verify_auth(request)
+    role = await asyncio.to_thread(_get_user_role_sync, empno)
+    if role not in {"admin", "manager"}: raise HTTPException(403, "권한 없음")
+    dynamodb = get_dynamodb_resource()
+    table = dynamodb.Table(DYNAMODB_INSP_SCHEDULES)
+    pk = f"{req.year}#{req.허가번호}"
+    item = {
+        "pk": pk, "sk": "schedule",
+        "year": req.year, "허가번호": req.허가번호, "호출명칭": req.호출명칭,
+        "분기": req.분기, "skt본부": req.skt본부, "access담당": req.access담당,
+        "품질개선팀": req.품질개선팀, "수검예정주차": req.수검예정주차,
+        "수검시작일": req.수검시작일, "수검종료일": req.수검종료일, "지역": req.지역,
+        "등록자": empno, "등록일시": datetime.now(timezone.utc).isoformat(),
+    }
+    await asyncio.to_thread(lambda: table.put_item(Item=item))
+    await _log_audit(empno, "inspection_schedule_upsert", f"{req.year}#{req.허가번호}")
+    return {"success": True}
+
+@app.delete("/inspection/schedule/{year}/{허가번호}")
+async def inspection_schedule_delete(year: int, 허가번호: str, request: Request):
+    empno = await _verify_auth(request)
+    role = await asyncio.to_thread(_get_user_role_sync, empno)
+    if role not in {"admin", "manager"}: raise HTTPException(403, "권한 없음")
+    dynamodb = get_dynamodb_resource()
+    table = dynamodb.Table(DYNAMODB_INSP_SCHEDULES)
+    await asyncio.to_thread(lambda: table.delete_item(Key={"pk": f"{year}#{허가번호}", "sk": "schedule"}))
+    return {"success": True}
+
+@app.get("/inspection/schedules")
+async def inspection_schedules_list(request: Request, year: int, access담당: str = ""):
+    """일정 목록 조회 (팀별 필터 가능)."""
+    await _verify_auth(request)
+    dynamodb = get_dynamodb_resource()
+    table = dynamodb.Table(DYNAMODB_INSP_SCHEDULES)
+    fe = Key("pk").begins_with(str(year))
+    if access담당:
+        resp = await asyncio.to_thread(lambda: table.scan(
+            FilterExpression=Attr("year").eq(year) & Attr("access담당").eq(access담당)))
+    else:
+        resp = await asyncio.to_thread(lambda: table.scan(
+            FilterExpression=Attr("year").eq(year)))
+    return {"items": resp.get("Items", [])}
+
+@app.post("/inspection/result")
+async def inspection_result_upsert(request: Request, req: InspectionResultReq):
+    """수검 결과 입력 (팀원 가능)."""
+    empno = await _verify_auth(request)
+    dynamodb = get_dynamodb_resource()
+    table = dynamodb.Table(DYNAMODB_INSP_RESULTS)
+    pk = f"{req.year}#{req.허가번호}"
+    # 기존 사진 목록 보존
+    existing = await asyncio.to_thread(lambda: table.get_item(Key={"pk": pk, "sk": "result"}))
+    photos = existing.get("Item", {}).get("사진S3키", []) if existing.get("Item") else []
+    item = {
+        "pk": pk, "sk": "result",
+        "year": req.year, "허가번호": req.허가번호,
+        "status": req.status, "검사일": req.검사일,
+        "메모": req.메모, "철탑형태": req.철탑형태,
+        "사진S3키": photos,
+        "입력자": empno, "입력일시": datetime.now(timezone.utc).isoformat(),
+    }
+    await asyncio.to_thread(lambda: table.put_item(Item=item))
+    await _log_audit(empno, "inspection_result", f"{req.year}#{req.허가번호} status={req.status}")
+    return {"success": True}
+
+@app.post("/inspection/result/photo")
+async def inspection_result_photo_upload(request: Request, year: int, 허가번호: str,
+                                         file: UploadFile = File(...)):
+    """수검 결과 사진 업로드."""
+    empno = await _verify_auth(request)
+    ext = os.path.splitext(file.filename or "photo.jpg")[1].lower() or ".jpg"
+    s3_key = f"inspection/photos/{year}/{허가번호}/{uuid.uuid4()}{ext}"
+    content = await file.read()
+    s3 = get_s3_client()
+    s3.put_object(Bucket=S3_BUCKET_NAME, Key=s3_key, Body=content, ContentType=file.content_type or "image/jpeg")
+
+    # DynamoDB 사진 목록에 추가
+    dynamodb = get_dynamodb_resource()
+    table = dynamodb.Table(DYNAMODB_INSP_RESULTS)
+    pk = f"{year}#{허가번호}"
+    existing = await asyncio.to_thread(lambda: table.get_item(Key={"pk": pk, "sk": "result"}))
+    photos = existing.get("Item", {}).get("사진S3키", []) if existing.get("Item") else []
+    photos.append(s3_key)
+    await asyncio.to_thread(lambda: table.update_item(
+        Key={"pk": pk, "sk": "result"},
+        UpdateExpression="SET 사진S3키=:p, 입력자=:e, 입력일시=:t",
+        ExpressionAttributeValues={":p": photos, ":e": empno,
+                                   ":t": datetime.now(timezone.utc).isoformat()}))
+    presigned = s3.generate_presigned_url('get_object', Params={'Bucket': S3_BUCKET_NAME, 'Key': s3_key}, ExpiresIn=3600)
+    return {"success": True, "s3Key": s3_key, "url": presigned}
+
+@app.delete("/inspection/result/photo")
+async def inspection_result_photo_delete(request: Request, year: int, 허가번호: str, s3_key: str):
+    """수검 결과 사진 삭제."""
+    empno = await _verify_auth(request)
+    if not s3_key.startswith("inspection/photos/"): raise HTTPException(400, "허용되지 않은 경로")
+    s3 = get_s3_client()
+    s3.delete_object(Bucket=S3_BUCKET_NAME, Key=s3_key)
+    dynamodb = get_dynamodb_resource()
+    table = dynamodb.Table(DYNAMODB_INSP_RESULTS)
+    pk = f"{year}#{허가번호}"
+    existing = await asyncio.to_thread(lambda: table.get_item(Key={"pk": pk, "sk": "result"}))
+    photos = existing.get("Item", {}).get("사진S3키", []) if existing.get("Item") else []
+    photos = [p for p in photos if p != s3_key]
+    await asyncio.to_thread(lambda: table.update_item(
+        Key={"pk": pk, "sk": "result"},
+        UpdateExpression="SET 사진S3키=:p",
+        ExpressionAttributeValues={":p": photos}))
+    return {"success": True}
+
+@app.get("/inspection/result/photo-url")
+async def inspection_result_photo_url(request: Request, s3_key: str):
+    """사진 presigned URL 생성."""
+    await _verify_auth(request)
+    if not s3_key.startswith("inspection/photos/"): raise HTTPException(400, "허용되지 않은 경로")
+    s3 = get_s3_client()
+    url = s3.generate_presigned_url('get_object', Params={'Bucket': S3_BUCKET_NAME, 'Key': s3_key}, ExpiresIn=3600)
+    return {"url": url}
+
+@app.get("/inspection/my-list")
+async def inspection_my_list(request: Request, year: int):
+    """내 팀 배정 수검 목록 (팀원용)."""
+    empno = await _verify_auth(request)
+    # empno로 access담당 조회 (user_roles에서)
+    dynamodb = get_dynamodb_resource()
+    roles_table = dynamodb.Table(DYNAMODB_TABLES["user_roles"])
+    role_item = await asyncio.to_thread(lambda: roles_table.get_item(Key={"user_id": empno}))
+    user_data = role_item.get("Item", {})
+    access_team = user_data.get("access담당", "")
+    품질팀 = user_data.get("품질개선팀", "")
+
+    if not access_team and not 품질팀:
+        return {"items": [], "message": "팀 배정 없음"}
+
+    # DynamoDB schedules에서 내 팀 배정 건 조회
+    sched_table = dynamodb.Table(DYNAMODB_INSP_SCHEDULES)
+    result_table = dynamodb.Table(DYNAMODB_INSP_RESULTS)
+
+    fe = Attr("year").eq(year)
+    if access_team and 품질팀:
+        fe = fe & (Attr("access담당").eq(access_team) | Attr("품질개선팀").eq(품질팀))
+    elif access_team:
+        fe = fe & Attr("access담당").eq(access_team)
+    else:
+        fe = fe & Attr("품질개선팀").eq(품질팀)
+
+    resp = await asyncio.to_thread(lambda: sched_table.scan(FilterExpression=fe))
+    items = resp.get("Items", [])
+
+    # 결과 조회 (배치)
+    for item in items:
+        pk = f"{year}#{item.get('허가번호','')}"
+        try:
+            r = await asyncio.to_thread(lambda: result_table.get_item(Key={"pk": pk, "sk": "result"}))
+            item["result"] = r.get("Item")
+        except Exception:
+            item["result"] = None
+
+    return {"items": items}
+
+
+# ============================================================
 # Run Server
 # ============================================================
 
