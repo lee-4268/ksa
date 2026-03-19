@@ -412,10 +412,13 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
                 child: Row(children: [
                   Icon(Icons.check_circle_outline, size: 14, color: Colors.green.shade600),
                   const SizedBox(width: 6),
-                  Text('${m['year']}년 — ${m['total_rows'] ?? 0}행',
-                      style: TextStyle(fontSize: 12, color: Colors.grey.shade700)),
+                  Text(
+                    '${m['year']}년 — ${((m['total_skt'] as int? ?? 0) + (m['total_sheet1'] as int? ?? 0)).toString().replaceAllMapped(RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'), (x) => '${x[1]},')}행'
+                    ' (정기 ${m['total_skt'] ?? 0} / 시기조정 ${m['total_sheet1'] ?? 0})',
+                    style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
+                  ),
                   const SizedBox(width: 8),
-                  Text(m['uploaded_by'] ?? '', style: TextStyle(fontSize: 11, color: Colors.grey.shade500)),
+                  Text(m['imported_by'] ?? '', style: TextStyle(fontSize: 11, color: Colors.grey.shade500)),
                 ]),
               )),
             ],

@@ -33,10 +33,12 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
   List<String> _allKcaResults = [];
 
   // pending 필터 (UI 선택 중)
-  String _pHdqt = '', _pTeam = '', _pQuarter = '', _pNationGroup = '', _pKcaResult = '', _pSearch = '';
+  String _pHdqt = '', _pTeam = '', _pSearch = '';
+  List<String> _pQuarters = [], _pNationGroups = [], _pKcaResults = [];
 
   // applied 필터 (실제 쿼리)
-  String _aHdqt = '', _aTeam = '', _aQuarter = '', _aNationGroup = '', _aKcaResult = '', _aSearch = '';
+  String _aHdqt = '', _aTeam = '', _aSearch = '';
+  List<String> _aQuarters = [], _aNationGroups = [], _aKcaResults = [];
 
   // 다중 선택 (일괄 일정 등록)
   final _selectedLicenseNos = <String>{};
@@ -63,15 +65,15 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     final f = <String, List<String>>{};
     if (_aHdqt.isNotEmpty) f['access담당'] = [_aHdqt];
     if (_aTeam.isNotEmpty) f['품질개선팀'] = [_aTeam];
-    if (_aQuarter.isNotEmpty) f['분기'] = [_aQuarter];
-    if (_aNationGroup.isNotEmpty) f['국종군'] = [_aNationGroup];
-    if (_aKcaResult.isNotEmpty) f['kca검토결과'] = [_aKcaResult];
+    if (_aQuarters.isNotEmpty) f['분기'] = _aQuarters;
+    if (_aNationGroups.isNotEmpty) f['국종군'] = _aNationGroups;
+    if (_aKcaResults.isNotEmpty) f['kca검토결과'] = _aKcaResults;
     return f;
   }
 
   bool get _hasActiveFilters =>
-      _aHdqt.isNotEmpty || _aTeam.isNotEmpty || _aQuarter.isNotEmpty ||
-      _aNationGroup.isNotEmpty || _aKcaResult.isNotEmpty || _aSearch.isNotEmpty;
+      _aHdqt.isNotEmpty || _aTeam.isNotEmpty || _aQuarters.isNotEmpty ||
+      _aNationGroups.isNotEmpty || _aKcaResults.isNotEmpty || _aSearch.isNotEmpty;
 
   @override
   void initState() {
@@ -154,8 +156,10 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
 
   void _applyFilters() {
     setState(() {
-      _aHdqt = _pHdqt; _aTeam = _pTeam; _aQuarter = _pQuarter;
-      _aNationGroup = _pNationGroup; _aKcaResult = _pKcaResult; _aSearch = _pSearch;
+      _aHdqt = _pHdqt; _aTeam = _pTeam; _aSearch = _pSearch;
+      _aQuarters = List.from(_pQuarters);
+      _aNationGroups = List.from(_pNationGroups);
+      _aKcaResults = List.from(_pKcaResults);
       _page = 1;
     });
     _loadAll();
@@ -163,8 +167,10 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
 
   void _resetFilters() {
     setState(() {
-      _pHdqt = _pTeam = _pQuarter = _pNationGroup = _pKcaResult = _pSearch = '';
-      _aHdqt = _aTeam = _aQuarter = _aNationGroup = _aKcaResult = _aSearch = '';
+      _pHdqt = _pTeam = _pSearch = '';
+      _aHdqt = _aTeam = _aSearch = '';
+      _pQuarters = []; _pNationGroups = []; _pKcaResults = [];
+      _aQuarters = []; _aNationGroups = []; _aKcaResults = [];
       _searchCtrl.clear();
       _page = 1;
       _selectedLicenseNos.clear();
@@ -469,14 +475,14 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
             _filterDropdown('팀', _pTeam, ['', ...teams],
                 (v) => setState(() => _pTeam = v!)),
             const SizedBox(width: 8),
-            _filterDropdown('분기', _pQuarter, ['', ..._allQuarters],
-                (v) => setState(() => _pQuarter = v!)),
+            _buildMultiDropdown('분기', _pQuarters, _allQuarters,
+                (v) => setState(() => _pQuarters = v)),
             const SizedBox(width: 8),
-            _filterDropdown('국종군', _pNationGroup, ['', ..._allNationGroups],
-                (v) => setState(() => _pNationGroup = v!)),
+            _buildMultiDropdown('밴드선택', _pNationGroups, _allNationGroups,
+                (v) => setState(() => _pNationGroups = v)),
             const SizedBox(width: 8),
-            _filterDropdown('KCA결과', _pKcaResult, ['', ..._allKcaResults],
-                (v) => setState(() => _pKcaResult = v!)),
+            _buildMultiDropdown('검토여부', _pKcaResults, _allKcaResults,
+                (v) => setState(() => _pKcaResults = v)),
             const SizedBox(width: 12),
             ElevatedButton(
               style: ElevatedButton.styleFrom(
@@ -530,8 +536,10 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
             if (v == null) return;
             setState(() {
               _year = v;
-              _pHdqt = _pTeam = _pQuarter = _pNationGroup = _pKcaResult = _pSearch = '';
-              _aHdqt = _aTeam = _aQuarter = _aNationGroup = _aKcaResult = _aSearch = '';
+              _pHdqt = _pTeam = _pSearch = '';
+              _aHdqt = _aTeam = _aSearch = '';
+              _pQuarters = []; _pNationGroups = []; _pKcaResults = [];
+              _aQuarters = []; _aNationGroups = []; _aKcaResults = [];
               _searchCtrl.clear();
               _selectedLicenseNos.clear();
             });
@@ -606,6 +614,39 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     );
   }
 
+  Widget _buildMultiDropdown(String label, List<String> selected, List<String> options,
+      void Function(List<String>) onChanged) {
+    final hasVal = selected.isNotEmpty;
+    final displayText = hasVal ? '$label (${selected.length})' : label;
+    return GestureDetector(
+      onTap: () async {
+        final result = await showDialog<List<String>>(
+          context: context,
+          builder: (ctx) => _MultiSelectDialog(
+            title: label, options: options, selected: selected,
+          ),
+        );
+        if (result != null) onChanged(result);
+      },
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          border: Border.all(color: hasVal ? _primary : Colors.grey.shade300),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Text(displayText,
+              style: TextStyle(fontSize: 13,
+                  color: hasVal ? _primary : Colors.grey.shade600)),
+          const SizedBox(width: 4),
+          Icon(Icons.arrow_drop_down,
+              color: hasVal ? _primary : Colors.grey, size: 20),
+        ]),
+      ),
+    );
+  }
+
   Widget _buildActiveFilterChips() {
     final chips = <Widget>[];
     void addChip(String label, String val, VoidCallback onDel) {
@@ -632,21 +673,21 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
         _loadAll();
       });
     }
-    if (_aQuarter.isNotEmpty) {
-      addChip('분기', _aQuarter, () {
-        setState(() { _pQuarter = ''; _aQuarter = ''; _page = 1; });
+    if (_aQuarters.isNotEmpty) {
+      addChip('분기', _aQuarters.join(', '), () {
+        setState(() { _pQuarters = []; _aQuarters = []; _page = 1; });
         _loadAll();
       });
     }
-    if (_aNationGroup.isNotEmpty) {
-      addChip('국종군', _aNationGroup, () {
-        setState(() { _pNationGroup = ''; _aNationGroup = ''; _page = 1; });
+    if (_aNationGroups.isNotEmpty) {
+      addChip('밴드', _aNationGroups.join(', '), () {
+        setState(() { _pNationGroups = []; _aNationGroups = []; _page = 1; });
         _loadAll();
       });
     }
-    if (_aKcaResult.isNotEmpty) {
-      addChip('KCA결과', _aKcaResult, () {
-        setState(() { _pKcaResult = ''; _aKcaResult = ''; _page = 1; });
+    if (_aKcaResults.isNotEmpty) {
+      addChip('검토여부', _aKcaResults.join(', '), () {
+        setState(() { _pKcaResults = []; _aKcaResults = []; _page = 1; });
         _loadAll();
       });
     }
@@ -1054,5 +1095,90 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
       _infoRow('철탑형태', result['철탑형태'] ?? ''),
       if ((result['메모'] ?? '').isNotEmpty) _infoRow('특이사항', result['메모'] ?? ''),
     ]);
+  }
+}
+
+class _MultiSelectDialog extends StatefulWidget {
+  final String title;
+  final List<String> options;
+  final List<String> selected;
+  const _MultiSelectDialog({required this.title, required this.options, required this.selected});
+
+  @override
+  State<_MultiSelectDialog> createState() => _MultiSelectDialogState();
+}
+
+class _MultiSelectDialogState extends State<_MultiSelectDialog> {
+  late final List<String> _selected;
+
+  @override
+  void initState() {
+    super.initState();
+    _selected = List.from(widget.selected);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: Colors.white,
+      surfaceTintColor: Colors.white,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      title: Text(widget.title,
+          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+      contentPadding: const EdgeInsets.fromLTRB(8, 12, 8, 0),
+      content: SizedBox(
+        width: 260,
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          // 전체 선택/해제
+          CheckboxListTile(
+            dense: true,
+            title: const Text('전체', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+            value: _selected.length == widget.options.length && widget.options.isNotEmpty
+                ? true
+                : _selected.isEmpty ? false : null,
+            tristate: true,
+            activeColor: const Color(0xFFE53935),
+            onChanged: (v) => setState(() {
+              if (v == true) { _selected
+                ..clear()
+                ..addAll(widget.options); }
+              else { _selected.clear(); }
+            }),
+          ),
+          const Divider(height: 1),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 300),
+            child: ListView(
+              shrinkWrap: true,
+              children: widget.options.map((opt) => CheckboxListTile(
+                dense: true,
+                title: Text(opt, style: const TextStyle(fontSize: 13)),
+                value: _selected.contains(opt),
+                activeColor: const Color(0xFFE53935),
+                onChanged: (v) => setState(() {
+                  if (v == true) { _selected.add(opt); }
+                  else { _selected.remove(opt); }
+                }),
+              )).toList(),
+            ),
+          ),
+        ]),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('취소'),
+        ),
+        ElevatedButton(
+          style: ElevatedButton.styleFrom(
+            backgroundColor: const Color(0xFFE53935),
+            foregroundColor: Colors.white,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          ),
+          onPressed: () => Navigator.pop(context, _selected),
+          child: const Text('적용'),
+        ),
+      ],
+    );
   }
 }

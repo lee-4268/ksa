@@ -8919,6 +8919,83 @@ def _erp_ds_compare_sync(
 
 INSPECTION_S3_PREFIX = "inspection/raw/"
 _INSP_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "inspection.db")
+
+# 본부-팀 매핑 (하드코딩 — DB 데이터 없어도 드롭다운 동작 보장)
+INSP_ORG_MAP: dict = {
+    "강남": ["강남품질개선팀", "관악품질개선팀", "강동품질개선팀", "양천품질개선팀"],
+    "강북": ["용산품질개선팀", "종로품질개선팀", "성수품질개선팀", "수유품질개선팀", "지하철품질개선팀"],
+    "인천": ["북인천품질개선팀", "남인천품질개선팀", "부천품질개선팀", "일산품질개선팀", "남양주품질개선팀", "의정부품질개선팀"],
+    "경기": ["하남품질개선팀", "평택품질개선팀", "수원품질개선팀", "분당품질개선팀", "용인품질개선팀"],
+    "경남": ["동부산품질개선팀", "서부산품질개선팀", "김해품질개선팀", "울산품질개선팀", "진주품질개선팀", "창원품질개선팀"],
+    "경북": ["동대구품질개선팀", "서대구품질개선팀", "경산품질개선팀", "포항품질개선팀", "안동품질개선팀", "구미품질개선팀"],
+    "서부": ["서광주품질개선팀", "동광주품질개선팀", "목포품질개선팀", "순천품질개선팀", "제주품질개선팀", "전주품질개선팀", "군산품질개선팀"],
+    "충청": ["대전품질개선팀", "천안품질개선팀", "세종품질개선팀", "서산품질개선팀", "서청주품질개선팀", "동청주품질개선팀", "충주품질개선팀"],
+    "강원": ["원주품질개선팀", "춘천품질개선팀", "강릉품질개선팀"],
+}
+# 팀 → 본부 역방향 맵 (import 시 매칭용)
+INSP_TEAM_TO_HDQT: dict = {team: hdqt for hdqt, teams in INSP_ORG_MAP.items() for team in teams}
+
+# 주소 키워드 → (본부, 현재팀) 매핑 (폐지 팀 폴백용)
+# 서울 강남권 구 목록
+_GANGNAM_GU = {'강남구','서초구','관악구','동작구','강동구','송파구','강서구','양천구','영등포구','구로구','금천구'}
+# 서울 강북권 구 목록
+_GANGBUK_GU = {'용산구','마포구','종로구','중구','서대문구','은평구','성동구','광진구','중랑구','동대문구','성북구','강북구','도봉구','노원구'}
+
+# (keyword, 본부, 현재팀_힌트_or_None) — 긴 문자열/특수 지역 우선
+_ADDR_HDQT_HINTS: list = [
+    # 인천·경기 북부
+    ('의정부', '인천', '의정부품질개선팀'), ('남양주', '인천', '남양주품질개선팀'),
+    ('일산', '인천', '일산품질개선팀'), ('고양', '인천', '일산품질개선팀'),
+    ('부천', '인천', '부천품질개선팀'),
+    ('인천', '인천', None),
+    # 경기 남·중부
+    ('하남', '경기', '하남품질개선팀'), ('평택', '경기', '평택품질개선팀'),
+    ('수원', '경기', '수원품질개선팀'), ('분당', '경기', '분당품질개선팀'),
+    ('성남', '경기', '분당품질개선팀'), ('용인', '경기', '용인품질개선팀'),
+    ('경기', '경기', None),
+    # 경남
+    ('부산', '경남', None), ('김해', '경남', '김해품질개선팀'),
+    ('울산', '경남', '울산품질개선팀'), ('진주', '경남', '진주품질개선팀'),
+    ('창원', '경남', '창원품질개선팀'), ('마산', '경남', '창원품질개선팀'),
+    ('양산', '경남', None), ('거제', '경남', None),
+    # 경북
+    ('대구', '경북', None), ('경산', '경북', '경산품질개선팀'),
+    ('포항', '경북', '포항품질개선팀'), ('안동', '경북', '안동품질개선팀'),
+    ('구미', '경북', '구미품질개선팀'),
+    # 서부 (광주는 광주광역시 먼저 체크)
+    ('광주광역시', '서부', None), ('목포', '서부', '목포품질개선팀'),
+    ('순천', '서부', '순천품질개선팀'), ('여수', '서부', None),
+    ('제주', '서부', '제주품질개선팀'), ('전주', '서부', '전주품질개선팀'),
+    ('군산', '서부', '군산품질개선팀'), ('전라', '서부', None),
+    # 충청
+    ('대전', '충청', '대전품질개선팀'), ('천안', '충청', '천안품질개선팀'),
+    ('세종', '충청', '세종품질개선팀'), ('서산', '충청', '서산품질개선팀'),
+    ('청주', '충청', None), ('충주', '충청', '충주품질개선팀'),
+    ('충청', '충청', None), ('충남', '충청', None), ('충북', '충청', None),
+    # 강원
+    ('원주', '강원', '원주품질개선팀'), ('춘천', '강원', '춘천품질개선팀'),
+    ('강릉', '강원', '강릉품질개선팀'), ('강원', '강원', None),
+]
+
+def _hdqt_from_addr(addr: str) -> tuple:
+    """도로명주소/설치장소 키워드로 (본부, 팀_또는_빈문자열) 추론."""
+    if not addr:
+        return '', ''
+    # 서울 구 단위 먼저 확인 (강남/강북 구분)
+    for gu in _GANGNAM_GU:
+        if gu in addr:
+            return '강남', ''
+    for gu in _GANGBUK_GU:
+        if gu in addr:
+            return '강북', ''
+    # 일반 키워드 순서대로
+    for kw, hdqt, team_hint in _ADDR_HDQT_HINTS:
+        if kw in addr:
+            # team_hint가 현재 맵에 있는 팀이면 팀도 반환
+            if team_hint and team_hint in INSP_TEAM_TO_HDQT:
+                return hdqt, team_hint
+            return hdqt, ''
+    return '', ''
 _DS_DETAIL_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ds_detail.db")
 _inspection_jobs: Dict[str, dict] = {}
 DYNAMODB_INSP_SCHEDULES = os.environ.get("DYNAMODB_INSPECTION_SCHEDULES", "kca-inspection-schedules")
@@ -8952,7 +9029,50 @@ def _init_inspection_db():
         matched INTEGER, unmatched INTEGER,
         s3_key TEXT, filename TEXT, imported_by TEXT, imported_at TEXT
     )''')
+    conn.execute('''CREATE TABLE IF NOT EXISTS inspection_jobs (
+        job_id TEXT PRIMARY KEY,
+        status TEXT, stage TEXT, percent REAL,
+        total_skt INTEGER DEFAULT 0, total_sheet1 INTEGER DEFAULT 0,
+        matched INTEGER DEFAULT 0, unmatched INTEGER DEFAULT 0,
+        created_at TEXT, updated_at TEXT
+    )''')
+    # 24시간 지난 완료/에러 잡 정리
+    conn.execute(
+        "DELETE FROM inspection_jobs WHERE status IN ('complete','error') "
+        "AND updated_at < datetime('now','-1 day')")
     conn.commit(); conn.close()
+
+
+def _insp_job_write_sync(job_id: str, **kw):
+    """inspection_jobs 테이블에 job 상태 upsert (동기, to_thread 사용)."""
+    import sqlite3, json as _json
+    now = datetime.now(timezone.utc).isoformat()
+    conn = sqlite3.connect(_INSP_DB, timeout=30)
+    existing = conn.execute(
+        'SELECT job_id FROM inspection_jobs WHERE job_id=?', (job_id,)).fetchone()
+    if existing:
+        sets = ', '.join(f'{k}=?' for k in kw)
+        vals = list(kw.values()) + [now, job_id]
+        conn.execute(f'UPDATE inspection_jobs SET {sets}, updated_at=? WHERE job_id=?', vals)
+    else:
+        kw.setdefault('status', 'processing')
+        kw.setdefault('stage', '대기 중...')
+        kw.setdefault('percent', 0)
+        cols = ', '.join(['job_id', 'created_at', 'updated_at'] + list(kw.keys()))
+        placeholders = ', '.join(['?'] * (3 + len(kw)))
+        vals = [job_id, now, now] + list(kw.values())
+        conn.execute(f'INSERT OR REPLACE INTO inspection_jobs ({cols}) VALUES ({placeholders})', vals)
+    conn.commit(); conn.close()
+
+
+def _insp_job_read_sync(job_id: str):
+    import sqlite3
+    conn = sqlite3.connect(_INSP_DB, timeout=30)
+    conn.row_factory = sqlite3.Row
+    row = conn.execute(
+        'SELECT * FROM inspection_jobs WHERE job_id=?', (job_id,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
 
 def _init_ds_detail_db():
     import sqlite3
@@ -9057,7 +9177,7 @@ def _process_inspection_sync(job_id: str, s3_key: str, year: int, uploaded_by: s
     import sqlite3, openpyxl, tempfile, gc
 
     def _upd(pct, stage, **kw):
-        _inspection_jobs[job_id].update({"percent": pct, "stage": stage, **kw})
+        _insp_job_write_sync(job_id, percent=pct, stage=stage, **kw)
 
     try:
         _upd(5, "S3 파일 다운로드 중...")
@@ -9097,6 +9217,12 @@ def _process_inspection_sync(job_id: str, s3_key: str, year: int, uploaded_by: s
                     return cert_map[val]
             return '', ''
 
+        def _correct_hdqt(access: str, team: str) -> str:
+            """팀명으로 본부 보정 — 하드코딩 INSP_TEAM_TO_HDQT 기준."""
+            if team in INSP_TEAM_TO_HDQT:
+                return INSP_TEAM_TO_HDQT[team]
+            return access  # 매핑 없으면 원본 유지
+
         INSERT_SQL = '''INSERT INTO inspection_targets
             (year,sheet,pnu_code,허가번호,호출명칭,국종군,부서,분기,연도주기,검사주기,
              허가상태,설치장소,도로명주소,장치수,통시,공대,kca검토결과,시기조정,
@@ -9105,22 +9231,51 @@ def _process_inspection_sync(job_id: str, s3_key: str, year: int, uploaded_by: s
 
         total_skt = 0; total_s1 = 0; matched = 0; unmatched = 0
 
+        _INVALID_TEAM = {'#N/A', '#n/a', 'N/A', 'n/a', '미배정', '-', '없음', ''}
+
         def _proc_sheet(ws, sheet_label, pct_start, pct_end, is_skt):
             nonlocal matched, unmatched
             batch = []; row_count = 0
             for i, row in enumerate(ws.iter_rows(min_row=2, values_only=True)):
                 if row[2] is None: continue  # 허가번호 없는 행 스킵
+                # #N/A, 미배정 등 무효값 → 빈 문자열로 정규화
                 access = str(row[31] or '').strip() if is_skt and len(row) > 31 else ''
+                if access in _INVALID_TEAM: access = ''
                 품질 = str(row[32] or '').strip() if is_skt and len(row) > 32 else ''
+                if 품질 in _INVALID_TEAM: 품질 = ''
                 tongsi = str(row[28] or '').strip() if is_skt and len(row) > 28 else ''
                 gongtae = str(row[29] or '').strip() if is_skt and len(row) > 29 else ''
                 skt본부 = str(row[30] or '').strip() if is_skt and len(row) > 30 else ''
 
+                # 초기 매핑: access/팀 없으면 cert DB로 조회
                 if not access:
                     access, 품질 = _match_access(tongsi, gongtae)
                     if access: matched += 1
                     else: unmatched += 1
-                else: matched += 1
+                else:
+                    matched += 1
+
+                # ── 3단계 본부/팀 보정 ──
+                if 품질 in INSP_TEAM_TO_HDQT:
+                    # 1) 현재 팀명 → 본부 직접 보정
+                    access = INSP_TEAM_TO_HDQT[품질]
+                else:
+                    # 2) 폐지/미배정 팀: tongsi/gongtae로 현재 팀 재조회
+                    fb_access, fb_team = _match_access(tongsi, gongtae)
+                    if fb_team and fb_team in INSP_TEAM_TO_HDQT:
+                        access = INSP_TEAM_TO_HDQT[fb_team]
+                        품질 = fb_team  # 현재 팀명으로 교체
+                    elif fb_access:
+                        access = fb_access  # 본부라도 cert 기준으로 보정
+                    else:
+                        # 3) 주소 키워드로 본부+팀 추론 (최후 수단)
+                        addr = str(row[14] or '') + ' ' + str(row[13] or '')
+                        inferred_hdqt, inferred_team = _hdqt_from_addr(addr)
+                        if inferred_team:
+                            access = inferred_hdqt
+                            품질 = inferred_team
+                        elif inferred_hdqt:
+                            access = inferred_hdqt
 
                 batch.append((
                     year, sheet_label,
@@ -9173,7 +9328,7 @@ def _process_inspection_sync(job_id: str, s3_key: str, year: int, uploaded_by: s
 
     except Exception as ex:
         logger.error(f"inspection import 실패: {ex}", exc_info=True)
-        _inspection_jobs[job_id].update({"status": "error", "stage": f"실패: {ex}", "percent": 0})
+        _insp_job_write_sync(job_id, status='error', stage=f'실패: {ex}', percent=0)
 
 # ── Endpoints ──────────────────────────────────────────────
 
@@ -9250,7 +9405,8 @@ async def inspection_enqueue(request: Request, req: InspectionEnqueueReq):
         raise HTTPException(403, "관리자/매니저만 가능")
 
     job_id = str(uuid.uuid4())
-    _inspection_jobs[job_id] = {"status": "processing", "stage": "대기 중...", "percent": 0}
+    _init_inspection_db()
+    await asyncio.to_thread(_insp_job_write_sync, job_id, status='processing', stage='대기 중...', percent=0)
     asyncio.get_event_loop().run_in_executor(
         _bounded_executor, _process_inspection_sync, job_id, req.s3Key, req.year, req.uploadedBy)
     return {"success": True, "jobId": job_id}
@@ -9258,7 +9414,7 @@ async def inspection_enqueue(request: Request, req: InspectionEnqueueReq):
 @app.get("/inspection/job/{job_id}")
 async def inspection_job_status(job_id: str, request: Request):
     await _verify_auth(request)
-    job = _inspection_jobs.get(job_id)
+    job = await asyncio.to_thread(_insp_job_read_sync, job_id)
     if not job: raise HTTPException(404, "잡 없음")
     return job
 
@@ -9345,14 +9501,8 @@ async def inspection_org_map(request: Request, year: int):
     kca_results = [r[0] for r in conn.execute(
         'SELECT DISTINCT "kca검토결과" FROM inspection_targets WHERE year=? AND "kca검토결과" != "" ORDER BY "kca검토결과"', (year,)).fetchall()]
     conn.close()
-    org: dict = {}
-    for r in rows:
-        hdqt = r['access담당'] or ''
-        team = r['품질개선팀'] or ''
-        if not hdqt: continue
-        if hdqt not in org: org[hdqt] = []
-        if team and team not in org[hdqt]: org[hdqt].append(team)
-    return {"org": org, "quarters": quarters, "nation_groups": nation_groups, "kca_results": kca_results}
+    # 하드코딩 맵을 primary로 사용 (DB 데이터 오염 방지)
+    return {"org": INSP_ORG_MAP, "quarters": quarters, "nation_groups": nation_groups, "kca_results": kca_results}
 
 class InspectionDataReq(BaseModel):
     year: int
