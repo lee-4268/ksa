@@ -3,7 +3,6 @@ import 'package:provider/provider.dart';
 import '../services/auth_service.dart';
 import '../widgets/korea_map_widget.dart';
 import 'map_screen.dart';
-import 'schedule_screen.dart';
 import 'inspection_schedule_screen.dart';
 import 'division_management_screen.dart';
 import 'admin/admin_panel_screen.dart';
@@ -13,6 +12,7 @@ import 'callname_screen.dart';
 import 'certificate_screen.dart';
 import 'erp_ds_compare_screen.dart';
 import '../widgets/user_profile_button.dart';
+import '../services/inspection_service.dart';
 
 /// 전국 현황 대시보드 화면
 class DashboardScreen extends StatefulWidget {
@@ -34,63 +34,27 @@ class _DashboardScreenState extends State<DashboardScreen>
   late AnimationController _animationController;
   late Animation<double> _fadeAnimation;
 
-  // 샘플 데이터 (실제로는 API에서 가져와야 함)
-  // 9개 본부: 강남, 강북, 인천, 경기, 경남, 경북, 서부, 충청, 강원
-  final Map<String, RegionData> _regionData = {
-    'gangnam': RegionData(
-      name: '강남본부',
-      shortName: '강남',
-      total: 480,  // 강남, 관악, 강동, 양천
-      completed: 442,
-    ),
-    'gangbuk': RegionData(
-      name: '강북본부',
-      shortName: '강북',
-      total: 520,  // 용산, 종로, 성수, 수유
-      completed: 478,
-    ),
-    'incheon': RegionData(
-      name: '인천본부',
-      shortName: '인천',
-      total: 680,  // 북인천, 남인천, 부천, 일산, 남양주, 의정부
-      completed: 578,
-    ),
-    'gyeonggi': RegionData(
-      name: '경기본부',
-      shortName: '경기',
-      total: 620,  // 수원, 평택, 하남, 분당, 용인
-      completed: 521,
-    ),
-    'gangwon': RegionData(
-      name: '강원본부',
-      shortName: '강원',
-      total: 320,  // 원주, 춘천, 강릉
-      completed: 250,
-    ),
-    'chungcheong': RegionData(
-      name: '충청본부',
-      shortName: '충청',
-      total: 580,  // 대전, 천안, 세종, 서산, 서청주, 동청주, 충주
-      completed: 493,
-    ),
-    'gyeongbuk': RegionData(
-      name: '경북본부',
-      shortName: '경북',
-      total: 540,  // 동대구, 서대구, 경산, 포항, 안동, 구미
-      completed: 351,
-    ),
-    'gyeongnam': RegionData(
-      name: '경남본부',
-      shortName: '경남',
-      total: 650,  // 동부산, 서부산, 김해, 울산, 진주, 창원
-      completed: 462,
-    ),
-    'seobu': RegionData(
-      name: '서부본부',
-      shortName: '서부',
-      total: 590,  // 서광주, 동광주, 목포, 순천, 제주, 전주, 군산
-      completed: 519,
-    ),
+  final _inspSvc = InspectionService();
+  final int _progressYear = DateTime.now().year;
+  bool _progressLoaded = false; // didChangeDependencies 중복 호출 방지
+
+  // access담당 컬럼 값 → map key 매핑
+  static const Map<String, String> _hdqtKeyMap = {
+    '강남': 'gangnam', '강북': 'gangbuk', '인천': 'incheon',
+    '경기': 'gyeonggi', '강원': 'gangwon', '충청': 'chungcheong',
+    '경북': 'gyeongbuk', '경남': 'gyeongnam', '서부': 'seobu',
+  };
+
+  Map<String, RegionData> _regionData = {
+    'gangnam':     RegionData(name: '강남본부',  shortName: '강남',  total: 0, completed: 0),
+    'gangbuk':     RegionData(name: '강북본부',  shortName: '강북',  total: 0, completed: 0),
+    'incheon':     RegionData(name: '인천본부',  shortName: '인천',  total: 0, completed: 0),
+    'gyeonggi':    RegionData(name: '경기본부',  shortName: '경기',  total: 0, completed: 0),
+    'gangwon':     RegionData(name: '강원본부',  shortName: '강원',  total: 0, completed: 0),
+    'chungcheong': RegionData(name: '충청본부',  shortName: '충청',  total: 0, completed: 0),
+    'gyeongbuk':   RegionData(name: '경북본부',  shortName: '경북',  total: 0, completed: 0),
+    'gyeongnam':   RegionData(name: '경남본부',  shortName: '경남',  total: 0, completed: 0),
+    'seobu':       RegionData(name: '서부본부',  shortName: '서부',  total: 0, completed: 0),
   };
 
   @override
@@ -104,6 +68,40 @@ class _DashboardScreenState extends State<DashboardScreen>
       CurvedAnimation(parent: _animationController, curve: Curves.easeOut),
     );
     _animationController.forward();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final token = context.read<AuthService>().authToken;
+    _inspSvc.setAuthToken(token);
+    if (!_progressLoaded) {
+      _progressLoaded = true;
+      _loadProgress();
+    }
+  }
+
+  Future<void> _loadProgress() async {
+    try {
+      final items = await _inspSvc.getProgress(_progressYear);
+      if (!mounted) return;
+      final updated = Map<String, RegionData>.from(_regionData);
+      for (final item in items) {
+        final hdqt = item['본부'] as String? ?? '';
+        final key = _hdqtKeyMap[hdqt];
+        if (key == null) continue;
+        final existing = updated[key]!;
+        updated[key] = RegionData(
+          name: existing.name,
+          shortName: existing.shortName,
+          total: (item['total'] as num).toInt(),
+          completed: (item['completed'] as num).toInt(),
+        );
+      }
+      setState(() => _regionData = updated);
+    } catch (_) {
+      // 실패 시 기존 데이터 유지 (silent fail)
+    }
   }
 
   @override
@@ -245,15 +243,8 @@ class _DashboardScreenState extends State<DashboardScreen>
                 _buildDrawerItem(
                   icon: Icons.calendar_month,
                   title: '일정 및 통계',
-                  subtitle: '검사 일정 관리 및 진도율 확인',
-                  color: _greenColor,
-                  onTap: () => _navigateFromDrawer(const ScheduleScreen()),
-                ),
-                _buildDrawerItem(
-                  icon: Icons.fact_check_outlined,
-                  title: '수검 대상 일정',
                   subtitle: 'KCA 수검대상 현황 및 일정 관리',
-                  color: const Color(0xFFE53935),
+                  color: _greenColor,
                   onTap: () => _navigateFromDrawer(const InspectionScheduleScreen()),
                 ),
                 _buildDrawerItem(

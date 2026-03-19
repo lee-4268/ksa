@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:file_picker/file_picker.dart';
 import 'package:provider/provider.dart';
 import '../services/auth_service.dart';
 import '../services/inspection_service.dart';
@@ -141,80 +140,6 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     _loadAll();
   }
 
-  // ── Import ─────────────────────────────────────────────
-
-  Future<void> _showImportDialog() async {
-    // 파일 선택은 별도 구현 필요 (file_picker 패키지 사용 권장)
-    // 여기서는 import 연도 입력 다이얼로그만 표시
-    final yearCtrl = TextEditingController(text: '$_year');
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: Colors.white,
-        surfaceTintColor: Colors.white,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('KCA 수검대상 파일 Import', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
-        content: Column(mainAxisSize: MainAxisSize.min, children: [
-          const Text('KCA에서 받은 수검대상 Excel 파일을 업로드합니다.\n(복사본 2026년 정기검사...최종.xlsx 형식)', style: TextStyle(fontSize: 13, color: Colors.black54)),
-          const SizedBox(height: 16),
-          TextField(
-            controller: yearCtrl,
-            keyboardType: TextInputType.number,
-            decoration: InputDecoration(
-              labelText: '검사 연도',
-              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-            ),
-          ),
-        ]),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('취소')),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: _primary, foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('파일 선택 후 업로드'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true) return;
-    final year = int.tryParse(yearCtrl.text) ?? _year;
-
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: ['xlsx'],
-      withData: true,
-    );
-    if (result == null || result.files.isEmpty) return;
-    final file = result.files.first;
-    if (file.bytes == null) { _showSnack('파일 데이터를 읽을 수 없습니다.', isError: true); return; }
-
-    _showSnack('업로드 중... (${file.name})');
-    try {
-      final s3Key = await _svc.uploadRaw(file.bytes!, file.name);
-      final auth = context.read<AuthService>();
-      final jobId = await _svc.enqueue(s3Key, year, auth.userName ?? '');
-      _showSnack('처리 중... 잠시 후 새로고침하세요. (jobId: $jobId)');
-      // 폴링
-      for (var i = 0; i < 60; i++) {
-        await Future.delayed(const Duration(seconds: 5));
-        final status = await _svc.jobStatus(jobId);
-        if (status['status'] == 'done') {
-          _showSnack('Import 완료!');
-          setState(() { _year = year; _columnValues.clear(); });
-          _loadAll();
-          return;
-        } else if (status['status'] == 'error') {
-          _showSnack('Import 실패: ${status['error'] ?? ''}', isError: true);
-          return;
-        }
-      }
-      _showSnack('시간 초과 — 잠시 후 새로고침하세요.', isError: true);
-    } catch (e) {
-      _showSnack('오류: $e', isError: true);
-    }
-  }
-
   void _showSnack(String msg, {bool isError = false}) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -336,14 +261,6 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
         tabs: const [Tab(text: '수검 대상 현황'), Tab(text: '매트릭스')],
       ),
       actions: [
-        if (_isAdmin)
-          TextButton.icon(
-            icon: const Icon(Icons.upload_file, size: 18),
-            label: const Text('Import', style: TextStyle(fontSize: 13)),
-            style: TextButton.styleFrom(foregroundColor: _primary),
-            onPressed: _showImportDialog,
-          ),
-        const SizedBox(width: 8),
         UserProfileButton(
           onLogout: () => context.read<AuthService>().signOut(),
         ),
@@ -675,49 +592,88 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
 
   Widget _buildMatrixTab() {
     if (_matrix.isEmpty) return const Center(child: Text('데이터 없음', style: TextStyle(color: Colors.black38)));
-    final teams = _matrix.keys.toList()..sort();
+    // matrix: { 본부: { 팀: { 분기: count } } }
+    final hdqts = _matrix.keys.toList()..sort();
+    final rows = <TableRow>[];
+
+    // 헤더
+    rows.add(TableRow(
+      decoration: BoxDecoration(color: Colors.grey.shade100),
+      children: [
+        _matrixCell('본부', isHeader: true),
+        _matrixCell('팀', isHeader: true),
+        ..._quarters.map((q) => _matrixCell(q, isHeader: true)),
+        _matrixCell('합계', isHeader: true),
+      ],
+    ));
+
+    for (final hdqt in hdqts) {
+      final teamMap = _matrix[hdqt] as Map<String, dynamic>? ?? {};
+      final teams = teamMap.keys.toList()..sort();
+
+      // 본부 소계 행
+      final hdqtTotal = _quarters.fold<int>(0, (s, q) =>
+          s + teams.fold<int>(0, (s2, t) => s2 + (((teamMap[t] as Map?)?.containsKey(q) == true ? (teamMap[t] as Map)[q] : 0) as num).toInt()));
+
+      // 첫 번째 팀과 같은 행에 본부 표시
+      for (var i = 0; i < teams.length; i++) {
+        final team = teams[i];
+        final teamData = teamMap[team] as Map<String, dynamic>? ?? {};
+        final teamTotal = _quarters.fold<int>(0, (s, q) => s + ((teamData[q] as num?)?.toInt() ?? 0));
+        rows.add(TableRow(
+          decoration: i == 0
+              ? BoxDecoration(color: _primary.withValues(alpha: 0.04))
+              : null,
+          children: [
+            i == 0
+                ? _matrixCell(hdqt, isHdqt: true)
+                : _matrixCell(''),
+            _matrixCell(team, isTeam: true),
+            ..._quarters.map((q) => _matrixCell('${(teamData[q] as num?)?.toInt() ?? 0}')),
+            _matrixCell('$teamTotal', isBold: true),
+          ],
+        ));
+      }
+
+      // 본부 합계 행
+      rows.add(TableRow(
+        decoration: BoxDecoration(color: Colors.grey.shade50),
+        children: [
+          _matrixCell('소계', isBold: true),
+          _matrixCell(''),
+          ..._quarters.map((q) {
+            final cnt = teams.fold<int>(0, (s, t) =>
+                s + (((teamMap[t] as Map?)?.containsKey(q) == true
+                    ? (teamMap[t] as Map)[q] : 0) as num).toInt());
+            return _matrixCell('$cnt', isBold: true);
+          }),
+          _matrixCell('$hdqtTotal', isBold: true),
+        ],
+      ));
+    }
 
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
       child: Table(
-        border: TableBorder.all(color: Colors.grey.shade200, borderRadius: BorderRadius.circular(8)),
+        border: TableBorder.all(color: Colors.grey.shade200),
         defaultColumnWidth: const IntrinsicColumnWidth(),
-        children: [
-          // 헤더
-          TableRow(
-            decoration: BoxDecoration(color: Colors.grey.shade100),
-            children: [
-              _matrixCell('팀', isHeader: true),
-              ..._quarters.map((q) => _matrixCell(q, isHeader: true)),
-              _matrixCell('합계', isHeader: true),
-            ],
-          ),
-          // 데이터
-          ...teams.map((team) {
-            final row = _matrix[team] as Map<String, dynamic>? ?? {};
-            final total = _quarters.fold<int>(0, (s, q) => s + ((row[q] as num?)?.toInt() ?? 0));
-            return TableRow(children: [
-              _matrixCell(team, isTeam: true),
-              ..._quarters.map((q) => _matrixCell('${(row[q] as num?)?.toInt() ?? 0}')),
-              _matrixCell('$total', isBold: true),
-            ]);
-          }),
-        ],
+        children: rows,
       ),
     );
   }
 
-  Widget _matrixCell(String text, {bool isHeader = false, bool isTeam = false, bool isBold = false}) {
+  Widget _matrixCell(String text,
+      {bool isHeader = false, bool isHdqt = false, bool isTeam = false, bool isBold = false}) {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
       child: Text(
         text,
         style: TextStyle(
           fontSize: 13,
-          fontWeight: (isHeader || isBold) ? FontWeight.w600 : FontWeight.normal,
-          color: isHeader ? Colors.black54 : isTeam ? _primary : Colors.black87,
+          fontWeight: (isHeader || isBold || isHdqt) ? FontWeight.w600 : FontWeight.normal,
+          color: isHeader ? Colors.black54 : isHdqt ? _primary : isTeam ? Colors.black87 : Colors.black87,
         ),
-        textAlign: isTeam ? TextAlign.left : TextAlign.center,
+        textAlign: (isHdqt || isTeam) ? TextAlign.left : TextAlign.center,
       ),
     );
   }

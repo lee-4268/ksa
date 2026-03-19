@@ -9381,17 +9381,20 @@ async def inspection_summary(request: Request, req: InspectionSummaryReq):
     where_sql = " AND ".join(where)
     conn = sqlite3.connect(_INSP_DB); conn.row_factory = sqlite3.Row
     rows = conn.execute(
-        f'SELECT access담당, 분기, COUNT(*) as cnt FROM inspection_targets WHERE {where_sql} GROUP BY access담당, 분기',
+        f'SELECT access담당, 품질개선팀, 분기, COUNT(*) as cnt FROM inspection_targets WHERE {where_sql} GROUP BY access담당, 품질개선팀, 분기',
         params).fetchall()
     conn.close()
+    # matrix: { 본부: { 팀: { 분기: count } } }
     matrix: dict = {}
     quarters = set()
     for r in rows:
-        team = r['access담당'] or '미배정'
+        hdqt = r['access담당'] or '미배정'
+        team = r['품질개선팀'] or '미배정'
         q = r['분기'] or '-'
         quarters.add(q)
-        if team not in matrix: matrix[team] = {}
-        matrix[team][q] = r['cnt']
+        if hdqt not in matrix: matrix[hdqt] = {}
+        if team not in matrix[hdqt]: matrix[hdqt][team] = {}
+        matrix[hdqt][team][q] = r['cnt']
     return {"matrix": matrix, "quarters": sorted(quarters)}
 
 @app.get("/inspection/detail")
@@ -9600,6 +9603,71 @@ async def inspection_my_list(request: Request, year: int):
         except Exception:
             item["result"] = None
 
+    return {"items": items}
+
+
+@app.get("/inspection/progress")
+async def inspection_progress(request: Request, year: int):
+    """본부별 수검 진행률 (전국 현황 대시보드용)."""
+    await _verify_auth(request)
+    import sqlite3
+    if not os.path.exists(_INSP_DB):
+        return {"items": []}
+
+    conn = sqlite3.connect(_INSP_DB)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        'SELECT access담당, COUNT(*) as total FROM inspection_targets WHERE year=? GROUP BY access담당',
+        (year,)
+    ).fetchall()
+    # 허가번호 → 본부 매핑
+    license_rows = conn.execute(
+        'SELECT 허가번호, access담당 FROM inspection_targets WHERE year=?',
+        (year,)
+    ).fetchall()
+    conn.close()
+
+    license_to_hdqt: dict = {r['허가번호']: (r['access담당'] or '미배정') for r in license_rows}
+    total_map: dict = {}
+    for r in rows:
+        hdqt = r['access담당'] or '미배정'
+        total_map[hdqt] = r['total']
+
+    # DynamoDB results에서 완료(합격+불합격) 건수 조회
+    completed_map: dict = {}
+    try:
+        dynamodb = get_dynamodb_resource()
+        result_table = dynamodb.Table(DYNAMODB_INSP_RESULTS)
+        prefix = f"{year}#"
+        scan_kwargs = {
+            "FilterExpression": Attr("pk").begins_with(prefix) & Attr("sk").eq("result") & (
+                Attr("status").eq("합격") | Attr("status").eq("불합격")
+            ),
+            "ProjectionExpression": "pk",
+        }
+        while True:
+            resp = await asyncio.to_thread(lambda: result_table.scan(**scan_kwargs))
+            for item in resp.get("Items", []):
+                # pk = "{year}#{허가번호}"
+                license_no = item["pk"][len(prefix):]
+                hdqt = license_to_hdqt.get(license_no, '미배정')
+                completed_map[hdqt] = completed_map.get(hdqt, 0) + 1
+            last = resp.get("LastEvaluatedKey")
+            if not last:
+                break
+            scan_kwargs["ExclusiveStartKey"] = last
+    except Exception as e:
+        logger.warning(f"inspection_progress DynamoDB scan error: {e}")
+
+    items = []
+    for hdqt, total in sorted(total_map.items()):
+        completed = completed_map.get(hdqt, 0)
+        items.append({
+            "본부": hdqt,
+            "total": total,
+            "completed": completed,
+            "percent": round(completed / total * 100, 1) if total > 0 else 0.0,
+        })
     return {"items": items}
 
 

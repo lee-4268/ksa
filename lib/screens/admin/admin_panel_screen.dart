@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../services/auth_service.dart';
 import '../../services/callname_service.dart';
+import '../../services/inspection_service.dart';
 import 'user_management_screen.dart';
 import 'audit_log_screen.dart';
 
@@ -19,12 +20,19 @@ class AdminPanelScreen extends StatefulWidget {
 
 class _AdminPanelScreenState extends State<AdminPanelScreen> {
   final _callnameService = CallnameService();
+  final _inspSvc = InspectionService();
   bool _dbUploading = false;
   double _uploadProgress = 0;
   String _uploadStage = '';
   String? _dbStatusText;
   List<dynamic> _dbFiles = [];
   bool _initialized = false;
+
+  // KCA Import
+  bool _kcaImporting = false;
+  double _kcaProgress = 0;
+  String _kcaStage = '';
+  List<Map<String, dynamic>> _kcaMeta = [];
 
   @override
   void didChangeDependencies() {
@@ -33,7 +41,103 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
       _initialized = true;
       final token = context.read<AuthService>().authToken;
       _callnameService.setAuthToken(token);
+      _inspSvc.setAuthToken(token);
       _loadDbStatus();
+      _loadKcaMeta();
+    }
+  }
+
+  Future<void> _loadKcaMeta() async {
+    try {
+      final items = await _inspSvc.getMeta();
+      if (mounted) setState(() => _kcaMeta = items);
+    } catch (_) {}
+  }
+
+  Future<void> _importKcaFile() async {
+    final yearCtrl = TextEditingController(text: '${DateTime.now().year}');
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Colors.white,
+        surfaceTintColor: Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('KCA 수검대상 파일 Import',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          const Text('KCA에서 받은 수검대상 Excel 파일을 업로드합니다.\n(복사본 20XX년 정기검사...최종.xlsx)',
+              style: TextStyle(fontSize: 13, color: Colors.black54)),
+          const SizedBox(height: 16),
+          TextField(
+            controller: yearCtrl,
+            keyboardType: TextInputType.number,
+            decoration: InputDecoration(
+              labelText: '검사 연도',
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+              isDense: true,
+            ),
+          ),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('취소')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFFE53935), foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('파일 선택'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    final year = int.tryParse(yearCtrl.text) ?? DateTime.now().year;
+
+    final picked = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: ['xlsx'],
+      withData: true,
+    );
+    if (picked == null || picked.files.isEmpty) return;
+    final file = picked.files.first;
+    if (file.bytes == null) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('파일을 읽을 수 없습니다.'), backgroundColor: Colors.red));
+      return;
+    }
+
+    setState(() { _kcaImporting = true; _kcaProgress = 0; _kcaStage = '업로드 중...'; });
+    try {
+      final s3Key = await _inspSvc.uploadRaw(file.bytes!, file.name);
+      setState(() => _kcaStage = '처리 대기 중...');
+      final auth = context.read<AuthService>();
+      final jobId = await _inspSvc.enqueue(s3Key, year, auth.userName ?? '');
+
+      for (var i = 0; i < 120; i++) {
+        await Future.delayed(const Duration(seconds: 5));
+        if (!mounted) return;
+        final status = await _inspSvc.jobStatus(jobId);
+        final pct = (status['percent'] as num?)?.toDouble() ?? 0;
+        final stage = status['stage'] as String? ?? '';
+        setState(() { _kcaProgress = pct / 100; _kcaStage = stage; });
+        if (status['status'] == 'done') {
+          if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Import 완료!'), backgroundColor: Colors.green));
+          _loadKcaMeta();
+          return;
+        } else if (status['status'] == 'error') {
+          if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Import 실패: ${status['error'] ?? ''}'), backgroundColor: Colors.red));
+          return;
+        }
+      }
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('시간 초과 — 나중에 확인하세요.'), backgroundColor: Colors.orange));
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('오류: $e'), backgroundColor: Colors.red));
+    } finally {
+      if (mounted) setState(() { _kcaImporting = false; _kcaProgress = 0; _kcaStage = ''; });
     }
   }
 
@@ -232,10 +336,91 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
               },
             ),
 
+          // KCA 수검대상 Import (관리자 이상)
+          if (authService.isAdmin)
+            _buildKcaImportCard(),
+
           // 호출명칭 DB 관리 (최고 관리자만)
           if (authService.userRole == AppUserRole.superAdmin)
             _buildCallnameDbCard(),
         ],
+      ),
+    );
+  }
+
+  Widget _buildKcaImportCard() {
+    return Card(
+      margin: const EdgeInsets.only(bottom: 12),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(children: [
+              Container(
+                width: 48, height: 48,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFE53935).withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Icon(Icons.upload_file, color: Color(0xFFE53935)),
+              ),
+              const SizedBox(width: 12),
+              const Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text('KCA 수검대상 Import',
+                      style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
+                  SizedBox(height: 2),
+                  Text('정기검사 대상 Excel 파일 업로드',
+                      style: TextStyle(color: Colors.grey, fontSize: 13)),
+                ]),
+              ),
+            ]),
+            if (_kcaMeta.isNotEmpty) ...[
+              const SizedBox(height: 10),
+              ..._kcaMeta.map((m) => Padding(
+                padding: const EdgeInsets.symmetric(vertical: 2),
+                child: Row(children: [
+                  Icon(Icons.check_circle_outline, size: 14, color: Colors.green.shade600),
+                  const SizedBox(width: 6),
+                  Text('${m['year']}년 — ${m['total_rows'] ?? 0}행',
+                      style: TextStyle(fontSize: 12, color: Colors.grey.shade700)),
+                  const SizedBox(width: 8),
+                  Text(m['uploaded_by'] ?? '', style: TextStyle(fontSize: 11, color: Colors.grey.shade500)),
+                ]),
+              )),
+            ],
+            const SizedBox(height: 12),
+            if (_kcaImporting)
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(4),
+                  child: LinearProgressIndicator(
+                    value: _kcaProgress > 0 ? _kcaProgress : null,
+                    minHeight: 6,
+                    backgroundColor: Colors.red.shade100,
+                    valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFFE53935)),
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(_kcaStage, style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+              ])
+            else
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: _importKcaFile,
+                  icon: const Icon(Icons.upload_file, size: 18),
+                  label: Text(_kcaMeta.isEmpty ? 'Excel 파일 Import' : '재 Import'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFFE53935),
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  ),
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }

@@ -195,6 +195,14 @@ class InspectionService {
     return List<Map<String, dynamic>>.from(body['items'] ?? []);
   }
 
+  Future<List<Map<String, dynamic>>> getProgress(int year) async {
+    final uri = Uri.parse('$_baseUrl/inspection/progress').replace(
+        queryParameters: {'year': '$year'});
+    final resp = await http.get(uri, headers: _headers).timeout(_apiTimeout);
+    final body = json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+    return List<Map<String, dynamic>>.from(body['items'] ?? []);
+  }
+
   Future<String> buildDsDetail(String divisionId, String importDate) async {
     final uri = Uri.parse('$_baseUrl/inspection/build-ds-detail').replace(
         queryParameters: {'division_id': divisionId, 'import_date': importDate});
