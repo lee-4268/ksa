@@ -33,6 +33,7 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
   double _kcaProgress = 0;
   String _kcaStage = '';
   List<Map<String, dynamic>> _kcaMeta = [];
+  bool _kcaPreviewLoading = false;
 
   @override
   void didChangeDependencies() {
@@ -120,14 +121,18 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
         final pct = (status['percent'] as num?)?.toDouble() ?? 0;
         final stage = status['stage'] as String? ?? '';
         setState(() { _kcaProgress = pct / 100; _kcaStage = stage; });
-        if (status['status'] == 'done') {
-          if (mounted) ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Import 완료!'), backgroundColor: Colors.green));
+        if (status['status'] == 'complete') {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text(stage), backgroundColor: Colors.green));
+          }
           _loadKcaMeta();
           return;
         } else if (status['status'] == 'error') {
-          if (mounted) ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('Import 실패: ${status['error'] ?? ''}'), backgroundColor: Colors.red));
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text('Import 실패: ${status['stage'] ?? ''}'), backgroundColor: Colors.red));
+          }
           return;
         }
       }
@@ -138,6 +143,30 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
           SnackBar(content: Text('오류: $e'), backgroundColor: Colors.red));
     } finally {
       if (mounted) setState(() { _kcaImporting = false; _kcaProgress = 0; _kcaStage = ''; });
+    }
+  }
+
+  Future<void> _showKcaPreview() async {
+    if (_kcaMeta.isEmpty) return;
+    final year = _kcaMeta.first['year'] as int? ?? DateTime.now().year;
+    setState(() => _kcaPreviewLoading = true);
+    try {
+      final res = await _inspSvc.getData(year: year, pageSize: 50);
+      if (!mounted) return;
+      final items = List<Map<String, dynamic>>.from(res['items'] ?? []);
+      final total = (res['total'] as num?)?.toInt() ?? 0;
+      showDialog(
+        context: context,
+        builder: (ctx) => _KcaPreviewDialog(year: year, items: items, total: total),
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('미리보기 실패: $e'), backgroundColor: Colors.red),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _kcaPreviewLoading = false);
     }
   }
 
@@ -406,19 +435,36 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
                 Text(_kcaStage, style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
               ])
             else
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton.icon(
-                  onPressed: _importKcaFile,
-                  icon: const Icon(Icons.upload_file, size: 18),
-                  label: Text(_kcaMeta.isEmpty ? 'Excel 파일 Import' : '재 Import'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFFE53935),
-                    foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              Row(children: [
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: _importKcaFile,
+                    icon: const Icon(Icons.upload_file, size: 18),
+                    label: Text(_kcaMeta.isEmpty ? 'Excel 파일 Import' : '재 Import'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFFE53935),
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    ),
                   ),
                 ),
-              ),
+                if (_kcaMeta.isNotEmpty) ...[
+                  const SizedBox(width: 8),
+                  OutlinedButton.icon(
+                    onPressed: _kcaPreviewLoading ? null : _showKcaPreview,
+                    icon: _kcaPreviewLoading
+                        ? const SizedBox(width: 14, height: 14,
+                            child: CircularProgressIndicator(strokeWidth: 2))
+                        : const Icon(Icons.table_view, size: 18),
+                    label: const Text('미리보기'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: const Color(0xFFE53935),
+                      side: const BorderSide(color: Color(0xFFE53935)),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    ),
+                  ),
+                ],
+              ]),
           ],
         ),
       ),
@@ -848,4 +894,112 @@ class _DataPreviewDialog extends StatelessWidget {
       ),
     );
   }
+}
+
+// ── KCA 수검대상 미리보기 다이얼로그 ────────────────────────────
+
+class _KcaPreviewDialog extends StatelessWidget {
+  final int year;
+  final List<Map<String, dynamic>> items;
+  final int total;
+
+  const _KcaPreviewDialog({
+    required this.year,
+    required this.items,
+    required this.total,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    // key → 헤더명
+    const colDefs = [
+      ('허가번호',    '허가번호'),
+      ('호출명칭',    '호출명칭'),
+      ('분기',       '분기'),
+      ('국종군',      '국종군'),
+      ('access담당', '본부'),
+      ('품질개선팀',  '팀'),
+      ('kca검토결과', 'KCA결과'),
+      ('시기조정',    '시기조정'),
+      ('설치장소',    '설치장소'),
+      ('도로명주소',  '도로명주소'),
+      ('통시',       '통시'),
+      ('skt본부',    'SKT본부'),
+      ('허가상태',    '허가상태'),
+    ];
+    const wideKeys = {'호출명칭', '설치장소', '도로명주소'};
+    return Dialog(
+      backgroundColor: Colors.white,
+      surfaceTintColor: Colors.white,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      insetPadding: const EdgeInsets.all(24),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 1200, maxHeight: 640),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          // 헤더
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 16, 12, 0),
+            child: Row(children: [
+              const Icon(Icons.table_view, color: Color(0xFFE53935), size: 20),
+              const SizedBox(width: 8),
+              Text('$year년 수검대상 미리보기',
+                  style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+              const SizedBox(width: 8),
+              Text('(상위 ${items.length}건 / 총 ${_fmt(total)}건)',
+                  style: TextStyle(fontSize: 12, color: Colors.grey.shade500)),
+              const Spacer(),
+              IconButton(
+                icon: const Icon(Icons.close, size: 20),
+                onPressed: () => Navigator.pop(context),
+              ),
+            ]),
+          ),
+          const Divider(height: 16),
+          // 테이블
+          Expanded(
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                child: DataTable(
+                  headingRowColor: WidgetStateProperty.all(Colors.grey.shade50),
+                  dataRowMinHeight: 36,
+                  dataRowMaxHeight: 40,
+                  columnSpacing: 14,
+                  headingTextStyle: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Colors.black54),
+                  dataTextStyle: const TextStyle(fontSize: 11),
+                  columns: colDefs.map((c) => DataColumn(label: Text(c.$2))).toList(),
+                  rows: items.map((item) => DataRow(
+                    cells: colDefs.map((c) {
+                      final val = item[c.$1]?.toString() ?? '';
+                      if (c.$1 == 'kca검토결과') return DataCell(_chip(val));
+                      return DataCell(SizedBox(
+                        width: wideKeys.contains(c.$1) ? 160 : null,
+                        child: Text(val, overflow: TextOverflow.ellipsis),
+                      ));
+                    }).toList(),
+                  )).toList(),
+                ),
+              ),
+            ),
+          ),
+        ]),
+      ),
+    );
+  }
+
+  Widget _chip(String val) {
+    Color color = Colors.grey;
+    if (val.contains('대상')) { color = const Color(0xFF43A047); }
+    else if (val.contains('진행')) { color = const Color(0xFF4A90D9); }
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(8)),
+      child: Text(val, style: TextStyle(fontSize: 11, color: color, fontWeight: FontWeight.w600)),
+    );
+  }
+
+  static String _fmt(int n) => n.toString()
+      .replaceAllMapped(RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'), (m) => '${m[1]},');
 }

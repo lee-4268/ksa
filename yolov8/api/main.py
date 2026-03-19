@@ -858,7 +858,7 @@ app.add_middleware(
     allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "Accept", "X-Admin-Key"],
+    allow_headers=["Authorization", "Content-Type", "Accept", "X-Admin-Key", "X-Filename", "X-Refreshed-Token"],
     expose_headers=["Content-Length", "Content-Disposition"],
     max_age=3600,
 )
@@ -8929,6 +8929,7 @@ DYNAMODB_INSP_RESULTS = os.environ.get("DYNAMODB_INSPECTION_RESULTS", "kca-inspe
 def _init_inspection_db():
     import sqlite3
     conn = sqlite3.connect(_INSP_DB)
+    conn.execute('PRAGMA journal_mode=WAL')  # 읽기/쓰기 동시 허용
     conn.execute('''CREATE TABLE IF NOT EXISTS inspection_targets (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         year INTEGER, sheet TEXT,
@@ -9327,10 +9328,38 @@ async def inspection_column_values(request: Request, year: int, col: str, sheet:
     conn.close()
     return {"values": [r[0] for r in rows]}
 
+@app.get("/inspection/org-map")
+async def inspection_org_map(request: Request, year: int):
+    """본부→팀 매핑 + 분기/국종군/KCA결과 고유값 반환."""
+    await _verify_auth(request)
+    import sqlite3
+    if not os.path.exists(_INSP_DB):
+        return {"org": {}, "quarters": [], "nation_groups": [], "kca_results": []}
+    conn = sqlite3.connect(_INSP_DB); conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        'SELECT DISTINCT "access담당", "품질개선팀" FROM inspection_targets WHERE year=? AND "access담당" != "" ORDER BY "access담당", "품질개선팀"',
+        (year,)).fetchall()
+    quarters = [r[0] for r in conn.execute(
+        'SELECT DISTINCT 분기 FROM inspection_targets WHERE year=? AND 분기 != "" ORDER BY 분기', (year,)).fetchall()]
+    nation_groups = [r[0] for r in conn.execute(
+        'SELECT DISTINCT 국종군 FROM inspection_targets WHERE year=? AND 국종군 != "" ORDER BY 국종군', (year,)).fetchall()]
+    kca_results = [r[0] for r in conn.execute(
+        'SELECT DISTINCT "kca검토결과" FROM inspection_targets WHERE year=? AND "kca검토결과" != "" ORDER BY "kca검토결과"', (year,)).fetchall()]
+    conn.close()
+    org: dict = {}
+    for r in rows:
+        hdqt = r['access담당'] or ''
+        team = r['품질개선팀'] or ''
+        if not hdqt: continue
+        if hdqt not in org: org[hdqt] = []
+        if team and team not in org[hdqt]: org[hdqt].append(team)
+    return {"org": org, "quarters": quarters, "nation_groups": nation_groups, "kca_results": kca_results}
+
 class InspectionDataReq(BaseModel):
     year: int
     sheet: str = "all"
     filters: dict = {}   # {col: [val, ...]}
+    search: str = ""     # 호출명칭/허가번호 검색
     page: int = 1
     page_size: int = 100
 
@@ -9349,6 +9378,10 @@ async def inspection_data(request: Request, req: InspectionDataReq):
         ph = ",".join("?" * len(vals))
         where.append(f'"{col}" IN ({ph})')
         params.extend(vals)
+    if req.search.strip():
+        where.append('(호출명칭 LIKE ? OR 허가번호 LIKE ?)')
+        kw = f'%{req.search.strip()}%'
+        params.extend([kw, kw])
     where_sql = " AND ".join(where)
     conn = sqlite3.connect(_INSP_DB); conn.row_factory = sqlite3.Row
     total = conn.execute(f'SELECT COUNT(*) FROM inspection_targets WHERE {where_sql}', params).fetchone()[0]
@@ -9460,7 +9493,7 @@ async def inspection_schedule_upsert(request: Request, req: InspectionScheduleRe
         "등록자": empno, "등록일시": datetime.now(timezone.utc).isoformat(),
     }
     await asyncio.to_thread(lambda: table.put_item(Item=item))
-    await _log_audit(empno, "inspection_schedule_upsert", f"{req.year}#{req.허가번호}")
+    await asyncio.to_thread(_record_audit_log_sync, "inspection_schedule_upsert", "inspection_schedule", f"{req.year}#{req.허가번호}", empno)
     return {"success": True}
 
 @app.delete("/inspection/schedule/{year}/{허가번호}")
@@ -9507,7 +9540,7 @@ async def inspection_result_upsert(request: Request, req: InspectionResultReq):
         "입력자": empno, "입력일시": datetime.now(timezone.utc).isoformat(),
     }
     await asyncio.to_thread(lambda: table.put_item(Item=item))
-    await _log_audit(empno, "inspection_result", f"{req.year}#{req.허가번호} status={req.status}")
+    await asyncio.to_thread(_record_audit_log_sync, "inspection_result_upsert", "inspection_result", f"{req.year}#{req.허가번호}", empno)
     return {"success": True}
 
 @app.post("/inspection/result/photo")

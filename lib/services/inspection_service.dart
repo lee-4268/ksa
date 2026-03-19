@@ -67,6 +67,13 @@ class InspectionService {
 
   // ── Query ────────────────────────────────────────────────
 
+  Future<Map<String, dynamic>> getOrgMap(int year) async {
+    final uri = Uri.parse('$_baseUrl/inspection/org-map').replace(
+        queryParameters: {'year': '$year'});
+    final resp = await http.get(uri, headers: _headers).timeout(_apiTimeout);
+    return json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+  }
+
   Future<List<String>> getColumnValues(int year, String col, {String sheet = 'all'}) async {
     final uri = Uri.parse('$_baseUrl/inspection/column-values').replace(
         queryParameters: {'year': '$year', 'col': col, 'sheet': sheet});
@@ -79,6 +86,7 @@ class InspectionService {
     required int year,
     String sheet = 'all',
     Map<String, List<String>> filters = const {},
+    String search = '',
     int page = 1,
     int pageSize = 100,
   }) async {
@@ -87,7 +95,8 @@ class InspectionService {
       headers: _headers,
       body: json.encode({
         'year': year, 'sheet': sheet,
-        'filters': filters, 'page': page, 'page_size': pageSize,
+        'filters': filters, 'search': search,
+        'page': page, 'page_size': pageSize,
       }),
     ).timeout(_apiTimeout);
     return json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
