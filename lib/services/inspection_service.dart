@@ -87,6 +87,7 @@ class InspectionService {
     String sheet = 'all',
     Map<String, List<String>> filters = const {},
     String search = '',
+    String addr = '',
     int page = 1,
     int pageSize = 100,
   }) async {
@@ -95,7 +96,7 @@ class InspectionService {
       headers: _headers,
       body: json.encode({
         'year': year, 'sheet': sheet,
-        'filters': filters, 'search': search,
+        'filters': filters, 'search': search, 'addr': addr,
         'page': page, 'page_size': pageSize,
       }),
     ).timeout(_apiTimeout);
@@ -106,13 +107,37 @@ class InspectionService {
     required int year,
     String sheet = 'all',
     Map<String, List<String>> filters = const {},
+    String search = '',
+    String addr = '',
   }) async {
     final resp = await http.post(
       Uri.parse('$_baseUrl/inspection/summary'),
       headers: _headers,
-      body: json.encode({'year': year, 'sheet': sheet, 'filters': filters}),
+      body: json.encode({
+        'year': year, 'sheet': sheet,
+        'filters': filters, 'search': search, 'addr': addr,
+      }),
     ).timeout(_apiTimeout);
     return json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+  }
+
+  Future<Uint8List> exportXlsx({
+    required int year,
+    String sheet = 'all',
+    Map<String, List<String>> filters = const {},
+    String search = '',
+    String addr = '',
+  }) async {
+    final resp = await http.post(
+      Uri.parse('$_baseUrl/inspection/export-xlsx'),
+      headers: _headers,
+      body: json.encode({
+        'year': year, 'sheet': sheet,
+        'filters': filters, 'search': search, 'addr': addr,
+      }),
+    ).timeout(const Duration(minutes: 3));
+    if (resp.statusCode != 200) throw Exception('Export 실패: ${resp.statusCode}');
+    return resp.bodyBytes;
   }
 
   Future<Map<String, dynamic>> getDetail(int year, String licenseNo) async {

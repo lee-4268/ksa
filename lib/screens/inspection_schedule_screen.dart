@@ -1,10 +1,13 @@
 import 'dart:async';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/auth_service.dart';
 import '../services/inspection_service.dart';
 import '../widgets/user_profile_button.dart';
 import 'inspection_result_screen.dart';
+// ignore: avoid_web_libraries_in_flutter
+import 'dart:html' as html;
 
 class InspectionScheduleScreen extends StatefulWidget {
   const InspectionScheduleScreen({super.key});
