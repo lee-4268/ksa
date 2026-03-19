@@ -28,6 +28,7 @@ from urllib.parse import quote
 
 import httpx
 import boto3
+from boto3.dynamodb.conditions import Attr, Key
 from botocore.exceptions import ClientError
 import numpy as np
 from fastapi import FastAPI, File, UploadFile, HTTPException, Query, Form, BackgroundTasks, Request
@@ -9036,6 +9037,27 @@ def _init_inspection_db():
         matched INTEGER DEFAULT 0, unmatched INTEGER DEFAULT 0,
         created_at TEXT, updated_at TEXT
     )''')
+    conn.execute('''CREATE TABLE IF NOT EXISTS inspection_schedules (
+        pk TEXT PRIMARY KEY,
+        year INTEGER NOT NULL,
+        허가번호 TEXT NOT NULL,
+        호출명칭 TEXT, 분기 TEXT, skt본부 TEXT,
+        access담당 TEXT, 품질개선팀 TEXT,
+        수검예정주차 TEXT, 수검시작일 TEXT, 수검종료일 TEXT, 지역 TEXT,
+        등록자 TEXT, 등록일시 TEXT
+    )''')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_is_year ON inspection_schedules(year)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_is_access ON inspection_schedules(year, access담당)')
+    conn.execute('''CREATE TABLE IF NOT EXISTS inspection_results (
+        pk TEXT PRIMARY KEY,
+        year INTEGER NOT NULL,
+        허가번호 TEXT NOT NULL,
+        status TEXT, 검사일 TEXT, 메모 TEXT, 철탑형태 TEXT,
+        사진S3키 TEXT DEFAULT '[]',
+        입력자 TEXT, 입력일시 TEXT
+    )''')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_ir_year ON inspection_results(year)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_ir_status ON inspection_results(year, status)')
     # 24시간 지난 완료/에러 잡 정리
     conn.execute(
         "DELETE FROM inspection_jobs WHERE status IN ('complete','error') "
@@ -9606,21 +9628,22 @@ async def inspection_detail(request: Request, year: int, 허가번호: str):
         ds_info["안테나"] = [dict(r) for r in 안테나rows]
         conn.close()
 
-    # 3. DynamoDB 일정/결과
-    dynamodb = get_dynamodb_resource()
-    sched_table = dynamodb.Table(DYNAMODB_INSP_SCHEDULES)
-    result_table = dynamodb.Table(DYNAMODB_INSP_RESULTS)
+    # 3. SQLite 일정/결과
     pk = f"{year}#{허가번호}"
-
     schedule = None
     result = None
-    try:
-        s = await asyncio.to_thread(lambda: sched_table.get_item(Key={"pk": pk, "sk": "schedule"}))
-        schedule = s.get("Item")
-        r = await asyncio.to_thread(lambda: result_table.get_item(Key={"pk": pk, "sk": "result"}))
-        result = r.get("Item")
-    except Exception as ex:
-        logger.warning(f"inspection detail DynamoDB 조회 실패: {ex}")
+    if os.path.exists(_INSP_DB):
+        def _read_sched_result():
+            c = sqlite3.connect(_INSP_DB, timeout=30); c.row_factory = sqlite3.Row
+            s = c.execute('SELECT * FROM inspection_schedules WHERE pk=?', (pk,)).fetchone()
+            r = c.execute('SELECT * FROM inspection_results WHERE pk=?', (pk,)).fetchone()
+            c.close()
+            return (dict(s) if s else None, dict(r) if r else None)
+        schedule, result = await asyncio.to_thread(_read_sched_result)
+        if result and result.get('사진S3키'):
+            import json as _j
+            try: result['사진S3키'] = _j.loads(result['사진S3키'])
+            except Exception: result['사진S3키'] = []
 
     return {"target": target, "ds": ds_info, "schedule": schedule, "result": result}
 
@@ -9630,19 +9653,20 @@ async def inspection_schedule_upsert(request: Request, req: InspectionScheduleRe
     empno = await _verify_auth(request)
     role = await asyncio.to_thread(_get_user_role_sync, empno)
     if role not in {"admin", "manager"}: raise HTTPException(403, "권한 없음")
-    dynamodb = get_dynamodb_resource()
-    table = dynamodb.Table(DYNAMODB_INSP_SCHEDULES)
     pk = f"{req.year}#{req.허가번호}"
-    item = {
-        "pk": pk, "sk": "schedule",
-        "year": req.year, "허가번호": req.허가번호, "호출명칭": req.호출명칭,
-        "분기": req.분기, "skt본부": req.skt본부, "access담당": req.access담당,
-        "품질개선팀": req.품질개선팀, "수검예정주차": req.수검예정주차,
-        "수검시작일": req.수검시작일, "수검종료일": req.수검종료일, "지역": req.지역,
-        "등록자": empno, "등록일시": datetime.now(timezone.utc).isoformat(),
-    }
-    await asyncio.to_thread(lambda: table.put_item(Item=item))
-    await asyncio.to_thread(_record_audit_log_sync, "inspection_schedule_upsert", "inspection_schedule", f"{req.year}#{req.허가번호}", empno)
+    now = datetime.now(timezone.utc).isoformat()
+    def _write():
+        c = sqlite3.connect(_INSP_DB, timeout=30)
+        c.execute('''INSERT OR REPLACE INTO inspection_schedules
+            (pk, year, 허가번호, 호출명칭, 분기, skt본부, access담당, 품질개선팀,
+             수검예정주차, 수검시작일, 수검종료일, 지역, 등록자, 등록일시)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+            (pk, req.year, req.허가번호, req.호출명칭, req.분기, req.skt본부,
+             req.access담당, req.품질개선팀, req.수검예정주차,
+             req.수검시작일, req.수검종료일, req.지역, empno, now))
+        c.commit(); c.close()
+    await asyncio.to_thread(_write)
+    await asyncio.to_thread(_record_audit_log_sync, "inspection_schedule_upsert", "inspection_schedule", pk, empno)
     return {"success": True}
 
 @app.delete("/inspection/schedule/{year}/{허가번호}")
@@ -9650,52 +9674,59 @@ async def inspection_schedule_delete(year: int, 허가번호: str, request: Requ
     empno = await _verify_auth(request)
     role = await asyncio.to_thread(_get_user_role_sync, empno)
     if role not in {"admin", "manager"}: raise HTTPException(403, "권한 없음")
-    dynamodb = get_dynamodb_resource()
-    table = dynamodb.Table(DYNAMODB_INSP_SCHEDULES)
-    await asyncio.to_thread(lambda: table.delete_item(Key={"pk": f"{year}#{허가번호}", "sk": "schedule"}))
+    pk = f"{year}#{허가번호}"
+    def _del():
+        c = sqlite3.connect(_INSP_DB, timeout=30)
+        c.execute('DELETE FROM inspection_schedules WHERE pk=?', (pk,))
+        c.commit(); c.close()
+    await asyncio.to_thread(_del)
     return {"success": True}
 
 @app.get("/inspection/schedules")
 async def inspection_schedules_list(request: Request, year: int, access담당: str = ""):
     """일정 목록 조회 (팀별 필터 가능)."""
     await _verify_auth(request)
-    dynamodb = get_dynamodb_resource()
-    table = dynamodb.Table(DYNAMODB_INSP_SCHEDULES)
-    fe = Key("pk").begins_with(str(year))
-    if access담당:
-        resp = await asyncio.to_thread(lambda: table.scan(
-            FilterExpression=Attr("year").eq(year) & Attr("access담당").eq(access담당)))
-    else:
-        resp = await asyncio.to_thread(lambda: table.scan(
-            FilterExpression=Attr("year").eq(year)))
-    return {"items": resp.get("Items", [])}
+    def _read():
+        c = sqlite3.connect(_INSP_DB, timeout=30); c.row_factory = sqlite3.Row
+        if access담당:
+            rows = c.execute(
+                'SELECT * FROM inspection_schedules WHERE year=? AND access담당=?',
+                (year, access담당)).fetchall()
+        else:
+            rows = c.execute(
+                'SELECT * FROM inspection_schedules WHERE year=?', (year,)).fetchall()
+        c.close()
+        return [dict(r) for r in rows]
+    items = await asyncio.to_thread(_read)
+    return {"items": items}
 
 @app.post("/inspection/result")
 async def inspection_result_upsert(request: Request, req: InspectionResultReq):
     """수검 결과 입력 (팀원 가능)."""
+    import json as _j
     empno = await _verify_auth(request)
-    dynamodb = get_dynamodb_resource()
-    table = dynamodb.Table(DYNAMODB_INSP_RESULTS)
     pk = f"{req.year}#{req.허가번호}"
-    # 기존 사진 목록 보존
-    existing = await asyncio.to_thread(lambda: table.get_item(Key={"pk": pk, "sk": "result"}))
-    photos = existing.get("Item", {}).get("사진S3키", []) if existing.get("Item") else []
-    item = {
-        "pk": pk, "sk": "result",
-        "year": req.year, "허가번호": req.허가번호,
-        "status": req.status, "검사일": req.검사일,
-        "메모": req.메모, "철탑형태": req.철탑형태,
-        "사진S3키": photos,
-        "입력자": empno, "입력일시": datetime.now(timezone.utc).isoformat(),
-    }
-    await asyncio.to_thread(lambda: table.put_item(Item=item))
-    await asyncio.to_thread(_record_audit_log_sync, "inspection_result_upsert", "inspection_result", f"{req.year}#{req.허가번호}", empno)
+    now = datetime.now(timezone.utc).isoformat()
+    def _write():
+        c = sqlite3.connect(_INSP_DB, timeout=30); c.row_factory = sqlite3.Row
+        # 기존 사진 목록 보존
+        existing = c.execute('SELECT 사진S3키 FROM inspection_results WHERE pk=?', (pk,)).fetchone()
+        photos_json = existing['사진S3키'] if existing else '[]'
+        c.execute('''INSERT OR REPLACE INTO inspection_results
+            (pk, year, 허가번호, status, 검사일, 메모, 철탑형태, 사진S3키, 입력자, 입력일시)
+            VALUES (?,?,?,?,?,?,?,?,?,?)''',
+            (pk, req.year, req.허가번호, req.status, req.검사일,
+             req.메모, req.철탑형태, photos_json, empno, now))
+        c.commit(); c.close()
+    await asyncio.to_thread(_write)
+    await asyncio.to_thread(_record_audit_log_sync, "inspection_result_upsert", "inspection_result", pk, empno)
     return {"success": True}
 
 @app.post("/inspection/result/photo")
 async def inspection_result_photo_upload(request: Request, year: int, 허가번호: str,
                                          file: UploadFile = File(...)):
     """수검 결과 사진 업로드."""
+    import json as _j
     empno = await _verify_auth(request)
     ext = os.path.splitext(file.filename or "photo.jpg")[1].lower() or ".jpg"
     s3_key = f"inspection/photos/{year}/{허가번호}/{uuid.uuid4()}{ext}"
@@ -9703,38 +9734,40 @@ async def inspection_result_photo_upload(request: Request, year: int, 허가번�
     s3 = get_s3_client()
     s3.put_object(Bucket=S3_BUCKET_NAME, Key=s3_key, Body=content, ContentType=file.content_type or "image/jpeg")
 
-    # DynamoDB 사진 목록에 추가
-    dynamodb = get_dynamodb_resource()
-    table = dynamodb.Table(DYNAMODB_INSP_RESULTS)
     pk = f"{year}#{허가번호}"
-    existing = await asyncio.to_thread(lambda: table.get_item(Key={"pk": pk, "sk": "result"}))
-    photos = existing.get("Item", {}).get("사진S3키", []) if existing.get("Item") else []
-    photos.append(s3_key)
-    await asyncio.to_thread(lambda: table.update_item(
-        Key={"pk": pk, "sk": "result"},
-        UpdateExpression="SET 사진S3키=:p, 입력자=:e, 입력일시=:t",
-        ExpressionAttributeValues={":p": photos, ":e": empno,
-                                   ":t": datetime.now(timezone.utc).isoformat()}))
+    now = datetime.now(timezone.utc).isoformat()
+    def _add_photo():
+        c = sqlite3.connect(_INSP_DB, timeout=30); c.row_factory = sqlite3.Row
+        existing = c.execute('SELECT 사진S3키 FROM inspection_results WHERE pk=?', (pk,)).fetchone()
+        photos = _j.loads(existing['사진S3키']) if existing and existing['사진S3키'] else []
+        photos.append(s3_key)
+        c.execute('''INSERT INTO inspection_results (pk, year, 허가번호, 사진S3키, 입력자, 입력일시)
+            VALUES (?,?,?,?,?,?)
+            ON CONFLICT(pk) DO UPDATE SET 사진S3키=excluded.사진S3키,
+            입력자=excluded.입력자, 입력일시=excluded.입력일시''',
+            (pk, year, 허가번호, _j.dumps(photos), empno, now))
+        c.commit(); c.close()
+    await asyncio.to_thread(_add_photo)
     presigned = s3.generate_presigned_url('get_object', Params={'Bucket': S3_BUCKET_NAME, 'Key': s3_key}, ExpiresIn=3600)
     return {"success": True, "s3Key": s3_key, "url": presigned}
 
 @app.delete("/inspection/result/photo")
 async def inspection_result_photo_delete(request: Request, year: int, 허가번호: str, s3_key: str):
     """수검 결과 사진 삭제."""
-    empno = await _verify_auth(request)
+    import json as _j
+    await _verify_auth(request)
     if not s3_key.startswith("inspection/photos/"): raise HTTPException(400, "허용되지 않은 경로")
     s3 = get_s3_client()
     s3.delete_object(Bucket=S3_BUCKET_NAME, Key=s3_key)
-    dynamodb = get_dynamodb_resource()
-    table = dynamodb.Table(DYNAMODB_INSP_RESULTS)
     pk = f"{year}#{허가번호}"
-    existing = await asyncio.to_thread(lambda: table.get_item(Key={"pk": pk, "sk": "result"}))
-    photos = existing.get("Item", {}).get("사진S3키", []) if existing.get("Item") else []
-    photos = [p for p in photos if p != s3_key]
-    await asyncio.to_thread(lambda: table.update_item(
-        Key={"pk": pk, "sk": "result"},
-        UpdateExpression="SET 사진S3키=:p",
-        ExpressionAttributeValues={":p": photos}))
+    def _del_photo():
+        c = sqlite3.connect(_INSP_DB, timeout=30); c.row_factory = sqlite3.Row
+        existing = c.execute('SELECT 사진S3키 FROM inspection_results WHERE pk=?', (pk,)).fetchone()
+        photos = _j.loads(existing['사진S3키']) if existing and existing['사진S3키'] else []
+        photos = [p for p in photos if p != s3_key]
+        c.execute('UPDATE inspection_results SET 사진S3키=? WHERE pk=?', (_j.dumps(photos), pk))
+        c.commit(); c.close()
+    await asyncio.to_thread(_del_photo)
     return {"success": True}
 
 @app.get("/inspection/result/photo-url")
@@ -9761,30 +9794,41 @@ async def inspection_my_list(request: Request, year: int):
     if not access_team and not 품질팀:
         return {"items": [], "message": "팀 배정 없음"}
 
-    # DynamoDB schedules에서 내 팀 배정 건 조회
-    sched_table = dynamodb.Table(DYNAMODB_INSP_SCHEDULES)
-    result_table = dynamodb.Table(DYNAMODB_INSP_RESULTS)
-
-    fe = Attr("year").eq(year)
-    if access_team and 품질팀:
-        fe = fe & (Attr("access담당").eq(access_team) | Attr("품질개선팀").eq(품질팀))
-    elif access_team:
-        fe = fe & Attr("access담당").eq(access_team)
-    else:
-        fe = fe & Attr("품질개선팀").eq(품질팀)
-
-    resp = await asyncio.to_thread(lambda: sched_table.scan(FilterExpression=fe))
-    items = resp.get("Items", [])
-
-    # 결과 조회 (배치)
-    for item in items:
-        pk = f"{year}#{item.get('허가번호','')}"
-        try:
-            r = await asyncio.to_thread(lambda: result_table.get_item(Key={"pk": pk, "sk": "result"}))
-            item["result"] = r.get("Item")
-        except Exception:
-            item["result"] = None
-
+    # SQLite schedules + results 조인
+    import json as _j
+    def _read_my_list():
+        c = sqlite3.connect(_INSP_DB, timeout=30); c.row_factory = sqlite3.Row
+        if access_team and 품질팀:
+            rows = c.execute(
+                'SELECT s.*, r.status, r.검사일, r.메모, r.철탑형태, r.사진S3키 '
+                'FROM inspection_schedules s '
+                'LEFT JOIN inspection_results r ON s.pk=r.pk '
+                'WHERE s.year=? AND (s.access담당=? OR s.품질개선팀=?)',
+                (year, access_team, 품질팀)).fetchall()
+        elif access_team:
+            rows = c.execute(
+                'SELECT s.*, r.status, r.검사일, r.메모, r.철탑형태, r.사진S3키 '
+                'FROM inspection_schedules s '
+                'LEFT JOIN inspection_results r ON s.pk=r.pk '
+                'WHERE s.year=? AND s.access담당=?',
+                (year, access_team)).fetchall()
+        else:
+            rows = c.execute(
+                'SELECT s.*, r.status, r.검사일, r.메모, r.철탑형태, r.사진S3키 '
+                'FROM inspection_schedules s '
+                'LEFT JOIN inspection_results r ON s.pk=r.pk '
+                'WHERE s.year=? AND s.품질개선팀=?',
+                (year, 품질팀)).fetchall()
+        c.close()
+        items = []
+        for row in rows:
+            d = dict(row)
+            if d.get('사진S3키'):
+                try: d['사진S3키'] = _j.loads(d['사진S3키'])
+                except Exception: d['사진S3키'] = []
+            items.append(d)
+        return items
+    items = await asyncio.to_thread(_read_my_list)
     return {"items": items}
 
 
@@ -9792,58 +9836,33 @@ async def inspection_my_list(request: Request, year: int):
 async def inspection_progress(request: Request, year: int):
     """본부별 수검 진행률 (전국 현황 대시보드용)."""
     await _verify_auth(request)
-    import sqlite3
     if not os.path.exists(_INSP_DB):
         return {"items": []}
 
-    conn = sqlite3.connect(_INSP_DB, timeout=30)
-    conn.row_factory = sqlite3.Row
-    rows = conn.execute(
-        'SELECT access담당, COUNT(*) as total FROM inspection_targets WHERE year=? GROUP BY access담당',
-        (year,)
-    ).fetchall()
-    # 허가번호 → 본부 매핑
-    license_rows = conn.execute(
-        'SELECT 허가번호, access담당 FROM inspection_targets WHERE year=?',
-        (year,)
-    ).fetchall()
-    conn.close()
+    def _query():
+        c = sqlite3.connect(_INSP_DB, timeout=30); c.row_factory = sqlite3.Row
+        # 본부별 전체 수검대상 수
+        total_rows = c.execute(
+            'SELECT access담당, COUNT(*) as cnt FROM inspection_targets WHERE year=? GROUP BY access담당',
+            (year,)).fetchall()
+        # 본부별 완료(합격+불합격) 건수 — inspection_targets JOIN inspection_results
+        done_rows = c.execute(
+            '''SELECT t.access담당, COUNT(*) as cnt
+               FROM inspection_results r
+               JOIN inspection_targets t ON t.허가번호=r.허가번호 AND t.year=r.year
+               WHERE r.year=? AND r.status IN ('합격','불합격')
+               GROUP BY t.access담당''',
+            (year,)).fetchall()
+        c.close()
+        return total_rows, done_rows
 
-    license_to_hdqt: dict = {r['허가번호']: (r['access담당'] or '미배정') for r in license_rows}
-    total_map: dict = {}
-    for r in rows:
-        hdqt = r['access담당'] or '미배정'
-        total_map[hdqt] = r['total']
-
-    # DynamoDB results에서 완료(합격+불합격) 건수 조회
-    completed_map: dict = {}
-    try:
-        dynamodb = get_dynamodb_resource()
-        result_table = dynamodb.Table(DYNAMODB_INSP_RESULTS)
-        prefix = f"{year}#"
-        scan_kwargs = {
-            "FilterExpression": Attr("pk").begins_with(prefix) & Attr("sk").eq("result") & (
-                Attr("status").eq("합격") | Attr("status").eq("불합격")
-            ),
-            "ProjectionExpression": "pk",
-        }
-        while True:
-            resp = await asyncio.to_thread(lambda: result_table.scan(**scan_kwargs))
-            for item in resp.get("Items", []):
-                # pk = "{year}#{허가번호}"
-                license_no = item["pk"][len(prefix):]
-                hdqt = license_to_hdqt.get(license_no, '미배정')
-                completed_map[hdqt] = completed_map.get(hdqt, 0) + 1
-            last = resp.get("LastEvaluatedKey")
-            if not last:
-                break
-            scan_kwargs["ExclusiveStartKey"] = last
-    except Exception as e:
-        logger.warning(f"inspection_progress DynamoDB scan error: {e}")
+    total_rows, done_rows = await asyncio.to_thread(_query)
+    total_map = {(r['access담당'] or '미배정'): r['cnt'] for r in total_rows}
+    done_map  = {(r['access담당'] or '미배정'): r['cnt'] for r in done_rows}
 
     items = []
     for hdqt, total in sorted(total_map.items()):
-        completed = completed_map.get(hdqt, 0)
+        completed = done_map.get(hdqt, 0)
         items.append({
             "본부": hdqt,
             "total": total,
