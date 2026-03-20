@@ -170,8 +170,7 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF5F7FA),
-      appBar: _buildAppBar(),
+      backgroundColor: const Color(0xFFFAFAFB),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(20),
         child: Center(
@@ -296,8 +295,7 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
                   dropdownColor: Colors.white,
                   style: const TextStyle(
                     color: Colors.black87,
-                    fontSize: 14,
-                    fontWeight: FontWeight.w500,
+                    fontSize: 13,
                   ),
                   items: _divisionOptions.map((d) {
                     return DropdownMenuItem(
@@ -395,8 +393,7 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
                     dropdownColor: Colors.white,
                     style: const TextStyle(
                       color: Colors.black87,
-                      fontSize: 14,
-                      fontWeight: FontWeight.w500,
+                      fontSize: 13,
                     ),
                     items: _dsUploads.map((u) {
                       final label =

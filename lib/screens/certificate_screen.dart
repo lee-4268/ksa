@@ -46,30 +46,26 @@ class _CertificateScreenState extends State<CertificateScreen>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.grey.shade50,
-      appBar: AppBar(
-        backgroundColor: Colors.white,
-        elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: Colors.black87),
-          onPressed: () => Navigator.pop(context),
-        ),
-        title: const Text('설치확인서',
-            style: TextStyle(
-                color: Colors.black87, fontSize: 18, fontWeight: FontWeight.w600)),
-        bottom: TabBar(
-          controller: _tabController,
-          labelColor: _themeColor,
-          unselectedLabelColor: Colors.grey,
-          indicatorColor: _themeColor,
-          tabs: const [Tab(text: '개별 생성'), Tab(text: '일괄 생성')],
-        ),
-      ),
-      body: TabBarView(
-        controller: _tabController,
+      backgroundColor: const Color(0xFFFAFAFB),
+      body: Column(
         children: [
-          _IndividualTab(service: _service),
-          _BatchTab(service: _service),
+          Container(
+            color: Colors.white,
+            child: TabBar(
+              controller: _tabController,
+              labelColor: _themeColor,
+              unselectedLabelColor: Colors.grey,
+              indicatorColor: _themeColor,
+              tabs: const [Tab(text: '개별 생성'), Tab(text: '일괄 생성')],
+            ),
+          ),
+          Expanded(child: TabBarView(
+            controller: _tabController,
+            children: [
+              _IndividualTab(service: _service),
+              _BatchTab(service: _service),
+            ],
+          )),
         ],
       ),
     );
@@ -402,19 +398,20 @@ class _IndividualTabState extends State<_IndividualTab>
           _formLabel('안테나설치대 형태'),
           const SizedBox(height: 6),
           Container(
-            height: 48,
-            padding: const EdgeInsets.symmetric(horizontal: 12),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
             decoration: BoxDecoration(
               color: Colors.white,
-              borderRadius: BorderRadius.circular(8),
+              borderRadius: BorderRadius.circular(10),
               border: Border.all(color: Colors.grey.shade300),
             ),
             child: DropdownButtonHideUnderline(
               child: DropdownButton<String>(
                 value: _antennaFrameType,
                 isExpanded: true,
-                style: const TextStyle(color: Colors.black87, fontSize: 14),
-                icon: Icon(Icons.keyboard_arrow_down, color: Colors.grey.shade600),
+                isDense: true,
+                icon: const Icon(Icons.arrow_drop_down, color: Color(0xFFE53935), size: 20),
+                dropdownColor: Colors.white,
+                style: const TextStyle(color: Colors.black87, fontSize: 13),
                 items: _antennaFrameOptions.map((e) => DropdownMenuItem(value: e, child: Text(e))).toList(),
                 onChanged: (v) => setState(() => _antennaFrameType = v ?? '-'),
               ),
@@ -452,19 +449,20 @@ class _IndividualTabState extends State<_IndividualTab>
           _formLabel('공용화 구분'),
           const SizedBox(height: 6),
           Container(
-            height: 48,
-            padding: const EdgeInsets.symmetric(horizontal: 12),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
             decoration: BoxDecoration(
               color: Colors.white,
-              borderRadius: BorderRadius.circular(8),
+              borderRadius: BorderRadius.circular(10),
               border: Border.all(color: Colors.grey.shade300),
             ),
             child: DropdownButtonHideUnderline(
               child: DropdownButton<String>(
                 value: _sharingType,
                 isExpanded: true,
-                style: const TextStyle(color: Colors.black87, fontSize: 14),
-                icon: Icon(Icons.keyboard_arrow_down, color: Colors.grey.shade600),
+                isDense: true,
+                icon: const Icon(Icons.arrow_drop_down, color: Color(0xFFE53935), size: 20),
+                dropdownColor: Colors.white,
+                style: const TextStyle(color: Colors.black87, fontSize: 13),
                 items: _sharingOptions.map((e) => DropdownMenuItem(value: e, child: Text(e))).toList(),
                 onChanged: (v) => setState(() => _sharingType = v ?? '-'),
               ),

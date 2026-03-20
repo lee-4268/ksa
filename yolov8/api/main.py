@@ -9130,17 +9130,34 @@ def _learn_addr_map_from_cert_db() -> dict:
         return {}
 
     learned: dict = {}
+    skipped_low_samples: dict = {}   # 샘플 부족으로 제외된 키워드
+    skipped_low_ratio: dict = {}     # 비율 미달로 제외된 키워드
     for kw, counter in kw_teams.items():
         total = sum(counter.values())
-        if total < 10:          # 샘플 부족 → 경계 지역 오판 방지
+        if total < 10:
+            skipped_low_samples[kw] = {'total': total, 'teams': dict(counter.most_common())}
             continue
         top_team, top_cnt = counter.most_common(1)[0]
         ratio = top_cnt / total
-        if ratio >= 0.60:       # 60% 이상 다수결
+        if ratio >= 0.60:
             learned[kw] = top_team
+        else:
+            skipped_low_ratio[kw] = {
+                'total': total,
+                'top_team': top_team, 'top_ratio': f"{ratio:.1%}",
+                'teams': dict(counter.most_common(5)),
+            }
 
     logger.info(f"주소→팀 학습 완료(cert DB): {len(learned)}개 키워드 확정 "
                 f"(전체 후보: {len(kw_teams)}개)")
+    if learned:
+        logger.info(f"  [확정 키워드] {dict(sorted(learned.items()))}")
+    if skipped_low_samples:
+        logger.info(f"  [샘플 부족(<10)] {len(skipped_low_samples)}개: "
+                     f"{dict(sorted(skipped_low_samples.items(), key=lambda x: -x[1]['total']))}")
+    if skipped_low_ratio:
+        logger.info(f"  [비율 미달(<60%)] {len(skipped_low_ratio)}개: "
+                     f"{dict(sorted(skipped_low_ratio.items(), key=lambda x: -x[1]['total']))}")
     return learned
 _DS_DETAIL_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ds_detail.db")
 _inspection_jobs: Dict[str, dict] = {}
@@ -9514,6 +9531,24 @@ def _process_inspection_sync(job_id: str, s3_key: str, year: int, uploaded_by: s
 
         wb.close(); gc.collect()
         os.unlink(tmp_path)
+
+        # ── 미배정 항목 상세 로그 ──
+        try:
+            unassigned = conn.execute(
+                'SELECT 허가번호, 호출명칭, 도로명주소, 설치장소, 통시, 공대 '
+                'FROM inspection_targets_staging '
+                'WHERE year=? AND (access담당 IS NULL OR access담당="" OR 품질개선팀 IS NULL OR 품질개선팀="")',
+                (year,)
+            ).fetchall()
+            if unassigned:
+                logger.warning(f"  [미배정 항목] {len(unassigned)}건 — 본부/팀 매핑 실패:")
+                for row in unassigned[:30]:
+                    logger.warning(f"    허가={row[0]} 호출={row[1]} "
+                                   f"도로명=[{row[2]}] 설치=[{row[3]}] 통시={row[4]} 공대={row[5]}")
+                if len(unassigned) > 30:
+                    logger.warning(f"    ... 외 {len(unassigned) - 30}건")
+        except Exception as e:
+            logger.warning(f"미배정 로그 조회 실패: {e}")
 
         # 메타 저장
         now_str = datetime.now(timezone.utc).isoformat()

@@ -322,11 +322,7 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
     final authService = context.watch<AuthService>();
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('관리자 패널'),
-        backgroundColor: const Color(0xFFE53935),
-        foregroundColor: Colors.white,
-      ),
+      backgroundColor: const Color(0xFFFAFAFB),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [

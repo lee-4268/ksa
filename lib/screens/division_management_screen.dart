@@ -52,8 +52,7 @@ class _DivisionManagementScreenState extends State<DivisionManagementScreen>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.grey.shade50,
-      appBar: _buildAppBar(),
+      backgroundColor: const Color(0xFFFAFAFB),
       body: Consumer<DivisionDataService>(
         builder: (context, service, _) {
           if (service.isLoading) {
@@ -375,7 +374,7 @@ class _DivisionManagementScreenState extends State<DivisionManagementScreen>
           Expanded(
             flex: 2,
             child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
               decoration: BoxDecoration(
                 color: Colors.white,
                 borderRadius: BorderRadius.circular(10),
@@ -384,8 +383,12 @@ class _DivisionManagementScreenState extends State<DivisionManagementScreen>
               child: DropdownButtonHideUnderline(
                 child: DropdownButton<String?>(
                   value: _selectedTeamFilter,
-                  hint: const Text('팀 필터'),
+                  hint: Text('팀 필터', style: TextStyle(fontSize: 13, color: Colors.grey.shade500)),
                   isExpanded: true,
+                  isDense: true,
+                  icon: Icon(Icons.arrow_drop_down, color: _primaryColor, size: 20),
+                  dropdownColor: Colors.white,
+                  style: const TextStyle(color: Colors.black87, fontSize: 13),
                   items: [
                     const DropdownMenuItem(value: null, child: Text('전체')),
                     ...teams.map((team) => DropdownMenuItem(

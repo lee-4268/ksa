@@ -65,22 +65,7 @@ class _DsMergeScreenState extends State<DsMergeScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.grey.shade50,
-      appBar: AppBar(
-        title: const Text('DS 파일 병합'),
-        backgroundColor: Colors.white,
-        foregroundColor: Colors.black87,
-        elevation: 0,
-        actions: [
-          UserProfileButton(
-            onLogout: () {
-              context.read<AuthService>().signOut();
-              Navigator.of(context).popUntil((route) => route.isFirst);
-            },
-          ),
-          const SizedBox(width: 8),
-        ],
-      ),
+      backgroundColor: const Color(0xFFFAFAFB),
       body: Center(
         child: SingleChildScrollView(
           child: Container(

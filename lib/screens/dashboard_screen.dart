@@ -119,15 +119,9 @@ class _DashboardScreenState extends State<DashboardScreen>
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      key: _scaffoldKey,
-      backgroundColor: const Color(0xFFF5F7FA),
-      appBar: _buildAppBar(),
-      drawer: _buildDrawer(),
-      body: FadeTransition(
-        opacity: _fadeAnimation,
-        child: _buildBody(),
-      ),
+    return FadeTransition(
+      opacity: _fadeAnimation,
+      child: _buildBody(),
     );
   }
 

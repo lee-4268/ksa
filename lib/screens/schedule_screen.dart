@@ -431,10 +431,10 @@ class _ScheduleScreenState extends State<ScheduleScreen>
                 value: _selectedDivisionId,
                 icon: const Icon(Icons.arrow_drop_down, color: _primaryColor, size: 20),
                 isDense: true,
+                dropdownColor: Colors.white,
                 style: const TextStyle(
                   color: Colors.black87,
-                  fontSize: 15,
-                  fontWeight: FontWeight.w600,
+                  fontSize: 13,
                 ),
                 items: _divisions.map((division) {
                   return DropdownMenuItem<String>(

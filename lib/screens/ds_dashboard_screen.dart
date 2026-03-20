@@ -310,38 +310,7 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.grey.shade50,
-      appBar: AppBar(
-        title: const Text('DS 데이터 관리'),
-        backgroundColor: Colors.white,
-        foregroundColor: Colors.black87,
-        elevation: 0,
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: _isLoading
-                ? null
-                : () {
-                    if (_isUploading) {
-                      setState(() {
-                        _isUploading = false;
-                        _uploadStage = '';
-                        _uploadProgress = 0;
-                      });
-                    }
-                    _loadStats();
-                  },
-            tooltip: '새로고침',
-          ),
-          UserProfileButton(
-            onLogout: () {
-              context.read<AuthService>().signOut();
-              Navigator.of(context).popUntil((route) => route.isFirst);
-            },
-          ),
-          const SizedBox(width: 8),
-        ],
-      ),
+      backgroundColor: const Color(0xFFFAFAFB),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
           : _error != null
@@ -701,10 +670,10 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
         const Text('본부 필터:', style: TextStyle(fontWeight: FontWeight.w500)),
         const SizedBox(width: 8),
         Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
           decoration: BoxDecoration(
             color: Colors.white,
-            borderRadius: BorderRadius.circular(8),
+            borderRadius: BorderRadius.circular(10),
             border: Border.all(color: Colors.grey.shade300),
           ),
           child: DropdownButtonHideUnderline(
@@ -713,8 +682,8 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
               isDense: true,
               dropdownColor: Colors.white,
               borderRadius: BorderRadius.circular(12),
-              icon: Icon(Icons.keyboard_arrow_down, size: 20, color: Colors.grey.shade600),
-              style: const TextStyle(fontSize: 14, color: Colors.black87),
+              icon: Icon(Icons.arrow_drop_down, size: 20, color: _accentColor),
+              style: const TextStyle(fontSize: 13, color: Colors.black87),
               items: [
                 DropdownMenuItem(
                   value: 'all',

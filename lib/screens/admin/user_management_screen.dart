@@ -293,10 +293,10 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
               const SizedBox(width: 8),
               // 본부 드롭다운
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12),
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
                 decoration: BoxDecoration(
                   color: Colors.white,
-                  borderRadius: BorderRadius.circular(8),
+                  borderRadius: BorderRadius.circular(10),
                   border: Border.all(color: Colors.grey.shade300),
                 ),
                 child: DropdownButtonHideUnderline(
@@ -305,8 +305,8 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                     isDense: true,
                     dropdownColor: Colors.white,
                     borderRadius: BorderRadius.circular(12),
-                    icon: Icon(Icons.keyboard_arrow_down, size: 20, color: Colors.grey.shade600),
-                    style: const TextStyle(fontSize: 14, color: Colors.black87),
+                    icon: Icon(Icons.arrow_drop_down, size: 20, color: Colors.teal.shade400),
+                    style: const TextStyle(fontSize: 13, color: Colors.black87),
                     items: [
                       DropdownMenuItem(
                         value: '',
@@ -340,10 +340,10 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
               const SizedBox(width: 8),
               // 팀 드롭다운
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12),
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
                 decoration: BoxDecoration(
                   color: Colors.white,
-                  borderRadius: BorderRadius.circular(8),
+                  borderRadius: BorderRadius.circular(10),
                   border: Border.all(color: Colors.grey.shade300),
                 ),
                 child: DropdownButtonHideUnderline(
@@ -352,8 +352,8 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                     isDense: true,
                     dropdownColor: Colors.white,
                     borderRadius: BorderRadius.circular(12),
-                    icon: Icon(Icons.keyboard_arrow_down, size: 20, color: Colors.grey.shade600),
-                    style: const TextStyle(fontSize: 14, color: Colors.black87),
+                    icon: Icon(Icons.arrow_drop_down, size: 20, color: Colors.teal.shade400),
+                    style: const TextStyle(fontSize: 13, color: Colors.black87),
                     items: [
                       DropdownMenuItem(
                         value: '',

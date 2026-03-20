@@ -126,9 +126,19 @@ class _AuditLogScreenState extends State<AuditLogScreen> {
             // 엔티티 타입 필터
             DropdownButtonFormField<String>(
               value: _filterEntityType,
-              decoration: const InputDecoration(
+              dropdownColor: Colors.white,
+              style: const TextStyle(color: Colors.black87, fontSize: 13),
+              icon: Icon(Icons.arrow_drop_down, color: Colors.grey.shade600, size: 20),
+              decoration: InputDecoration(
                 labelText: '엔티티 타입',
-                border: OutlineInputBorder(),
+                labelStyle: const TextStyle(fontSize: 13),
+                isDense: true,
+                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                  borderSide: BorderSide(color: Colors.grey.shade300),
+                ),
               ),
               items: const [
                 DropdownMenuItem(value: null, child: Text('전체')),
@@ -144,9 +154,19 @@ class _AuditLogScreenState extends State<AuditLogScreen> {
             // 액션 필터
             DropdownButtonFormField<AuditAction?>(
               value: _filterAction,
-              decoration: const InputDecoration(
+              dropdownColor: Colors.white,
+              style: const TextStyle(color: Colors.black87, fontSize: 13),
+              icon: Icon(Icons.arrow_drop_down, color: Colors.grey.shade600, size: 20),
+              decoration: InputDecoration(
                 labelText: '작업 유형',
-                border: OutlineInputBorder(),
+                labelStyle: const TextStyle(fontSize: 13),
+                isDense: true,
+                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                  borderSide: BorderSide(color: Colors.grey.shade300),
+                ),
               ),
               items: [
                 const DropdownMenuItem(value: null, child: Text('전체')),

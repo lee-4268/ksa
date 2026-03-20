@@ -3,7 +3,7 @@ import 'package:provider/provider.dart';
 import 'package:intl/date_symbol_data_local.dart';
 
 import 'providers/station_provider.dart';
-import 'screens/dashboard_screen.dart';
+import 'screens/home_screen.dart';
 import 'screens/login_screen.dart';
 import 'services/storage_service.dart';
 import 'services/auth_service.dart';
@@ -200,7 +200,7 @@ class _AuthWrapperState extends State<AuthWrapper> {
 
     // 로그인 상태에 따라 화면 분기
     if (authService.isSignedIn) {
-      return const DashboardScreen();
+      return const HomeScreen();
     } else {
       return const LoginScreen();
     }

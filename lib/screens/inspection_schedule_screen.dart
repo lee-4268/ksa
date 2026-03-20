@@ -399,38 +399,29 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.grey.shade50,
-      appBar: _buildAppBar(),
-      body: Row(
+      backgroundColor: const Color(0xFFFAFAFB),
+      body: Column(
         children: [
-          Expanded(child: _buildMain()),
-          if (_detailLicenseNo != null) _buildDetailPanel(),
+          Container(
+            color: Colors.white,
+            child: TabBar(
+              controller: _tabCtrl,
+              labelColor: _primary,
+              unselectedLabelColor: Colors.grey,
+              indicatorColor: _primary,
+              tabs: const [Tab(text: '수검 대상 현황'), Tab(text: '매트릭스')],
+            ),
+          ),
+          Expanded(
+            child: Row(
+              children: [
+                Expanded(child: _buildMain()),
+                if (_detailLicenseNo != null) _buildDetailPanel(),
+              ],
+            ),
+          ),
         ],
       ),
-    );
-  }
-
-  PreferredSizeWidget _buildAppBar() {
-    return AppBar(
-      backgroundColor: Colors.white,
-      elevation: 0,
-      leading: IconButton(
-        icon: const Icon(Icons.arrow_back_ios_new, color: Colors.black54, size: 20),
-        onPressed: () => Navigator.pop(context),
-      ),
-      title: const Text('일정 및 통계',
-          style: TextStyle(color: Colors.black87, fontSize: 18, fontWeight: FontWeight.w600)),
-      bottom: TabBar(
-        controller: _tabCtrl,
-        labelColor: _primary,
-        unselectedLabelColor: Colors.grey,
-        indicatorColor: _primary,
-        tabs: const [Tab(text: '수검 대상 현황'), Tab(text: '매트릭스')],
-      ),
-      actions: [
-        UserProfileButton(onLogout: () => context.read<AuthService>().signOut()),
-        const SizedBox(width: 8),
-      ],
     );
   }
 
@@ -453,8 +444,16 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     final teams = _pHdqt.isNotEmpty ? (_orgMap[_pHdqt] ?? <String>[]) : <String>[];
 
     return Container(
-      color: Colors.white,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFE5E7EB)),
+        boxShadow: [
+          BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 8, offset: const Offset(0, 2)),
+        ],
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -467,23 +466,46 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
               _yearDropdown(),
               _sheetDropdown(),
               SizedBox(
-                width: 260,
+                width: 280,
                 child: TextField(
                   controller: _searchCtrl,
                   onChanged: (v) => setState(() => _pSearch = v),
                   decoration: InputDecoration(
                     hintText: '호출명칭, 허가번호 또는 주소',
+                    hintStyle: TextStyle(fontSize: 13, color: Colors.grey.shade400),
                     isDense: true,
-                    prefixIcon: const Icon(Icons.search, size: 18),
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    prefixIcon: Icon(Icons.search, size: 18, color: Colors.grey.shade400),
+                    filled: true,
+                    fillColor: const Color(0xFFF9FAFB),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: BorderSide(color: Colors.grey.shade300),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: BorderSide(color: Colors.grey.shade300),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: BorderSide(color: _primary, width: 1.5),
+                    ),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                   ),
+                  style: const TextStyle(fontSize: 13),
                   onSubmitted: (_) => _applyFilters(),
                 ),
               ),
               if (_total > 0)
-                Text('총 ${_formatNumber(_total)}건',
-                    style: const TextStyle(fontSize: 13, color: Colors.black54)),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF0F9FF),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: const Color(0xFFBAE6FD)),
+                  ),
+                  child: Text('${_formatNumber(_total)}건',
+                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF0369A1))),
+                ),
               if (_selectedLicenseNos.isNotEmpty)
                 ElevatedButton.icon(
                   icon: const Icon(Icons.event_available, size: 16),
@@ -497,7 +519,9 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                 ),
             ],
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 12),
+          Divider(height: 1, color: Colors.grey.shade200),
+          const SizedBox(height: 12),
           // Row 2: 필터 드롭다운 + 적용/초기화
           Wrap(
             spacing: 8,
@@ -514,11 +538,13 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                   (v) => setState(() => _pNationGroups = v)),
               _buildMultiDropdown('검토여부', _pKcaResults, _allKcaResults,
                   (v) => setState(() => _pKcaResults = v)),
+              const SizedBox(width: 4),
               ElevatedButton(
                 style: ElevatedButton.styleFrom(
                   backgroundColor: _primary, foregroundColor: Colors.white,
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                   padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  elevation: 0,
                 ),
                 onPressed: _applyFilters,
                 child: const Text('적용', style: TextStyle(fontSize: 13)),
@@ -547,7 +573,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
             ],
           ),
           if (_hasActiveFilters) ...[
-            const SizedBox(height: 8),
+            const SizedBox(height: 10),
             _buildActiveFilterChips(),
           ],
         ],
@@ -569,7 +595,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
           isDense: true,
           icon: Icon(Icons.arrow_drop_down, color: _primary, size: 20),
           dropdownColor: Colors.white,
-          style: const TextStyle(color: Colors.black87, fontSize: 14),
+          style: const TextStyle(color: Colors.black87, fontSize: 13),
           items: List.generate(5, (i) => DateTime.now().year - 1 + i)
               .map((y) => DropdownMenuItem(value: y, child: Text('$y년')))
               .toList(),
@@ -606,7 +632,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
           isDense: true,
           icon: Icon(Icons.arrow_drop_down, color: _primary, size: 20),
           dropdownColor: Colors.white,
-          style: const TextStyle(color: Colors.black87, fontSize: 14),
+          style: const TextStyle(color: Colors.black87, fontSize: 13),
           items: const [
             DropdownMenuItem(value: 'all', child: Text('전체')),
             DropdownMenuItem(value: 'SKT', child: Text('정기검사')),
@@ -692,9 +718,11 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     final chips = <Widget>[];
     void addChip(String label, String val, VoidCallback onDel) {
       chips.add(Chip(
-        label: Text('$label: $val', style: const TextStyle(fontSize: 12)),
-        backgroundColor: _primary.withValues(alpha: 0.08),
-        deleteIcon: const Icon(Icons.close, size: 14),
+        label: Text('$label: $val', style: const TextStyle(fontSize: 11, color: Color(0xFF374151))),
+        backgroundColor: const Color(0xFFF3F4F6),
+        side: BorderSide(color: Colors.grey.shade300),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        deleteIcon: Icon(Icons.close, size: 14, color: Colors.grey.shade500),
         onDeleted: onDel,
         materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
         visualDensity: VisualDensity.compact,
@@ -755,95 +783,137 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     final someChecked = !allChecked &&
         _items.any((item) => _selectedLicenseNos.contains('${item['허가번호'] ?? ''}'));
 
+    const headerStyle = TextStyle(
+      fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF374151),
+    );
+    const cellStyle = TextStyle(fontSize: 12, color: Color(0xFF374151));
+
     return Column(children: [
       Expanded(
-        child: Scrollbar(
-          controller: _horizontalScrollCtrl,
-          thumbVisibility: true,
-          child: SingleChildScrollView(
-            controller: _horizontalScrollCtrl,
-            scrollDirection: Axis.horizontal,
-            child: SingleChildScrollView(
-              child: DataTable(
-              headingRowColor: WidgetStateProperty.all(Colors.grey.shade50),
-              dataRowMinHeight: 40,
-              dataRowMaxHeight: 44,
-              columnSpacing: 16,
-              showCheckboxColumn: false,
-              columns: [
-                DataColumn(label: Checkbox(
-                  value: someChecked ? null : allChecked,
-                  tristate: true,
-                  activeColor: _primary,
-                  onChanged: (v) {
-                    setState(() {
-                      if (v == true) {
-                        for (final item in _items) {
-                          final no = '${item['허가번호'] ?? ''}';
-                          if (no.isNotEmpty) _selectedLicenseNos.add(no);
-                        }
-                      } else {
-                        for (final item in _items) {
-                          _selectedLicenseNos.remove('${item['허가번호'] ?? ''}');
-                        }
-                      }
-                    });
-                  },
-                )),
-                const DataColumn(label: Text('허가번호', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600))),
-                const DataColumn(label: Text('호출명칭', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600))),
-                const DataColumn(label: Text('국종군', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600))),
-                const DataColumn(label: Text('분기', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600))),
-                const DataColumn(label: Text('허가상태', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600))),
-                const DataColumn(label: Text('도로명주소', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600))),
-                const DataColumn(label: Text('장치수', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600))),
-                const DataColumn(label: Text('통시', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600))),
-                const DataColumn(label: Text('KCA검토결과', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600))),
-                const DataColumn(label: Text('Access담당', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600))),
-                const DataColumn(label: Text('품질개선팀', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600))),
-              ],
-              rows: _items.map((item) {
-                final licenseNo = '${item['허가번호'] ?? ''}';
-                final isSelected = _detailLicenseNo == licenseNo;
-                final isChecked = _selectedLicenseNos.contains(licenseNo);
-                return DataRow(
-                  selected: isSelected,
-                  color: WidgetStateProperty.resolveWith((states) {
-                    if (states.contains(WidgetState.selected)) return _primary.withValues(alpha: 0.06);
-                    return null;
-                  }),
-                  onSelectChanged: (_) => _loadDetail(licenseNo),
-                  cells: [
-                    DataCell(Checkbox(
-                      value: isChecked,
-                      activeColor: _primary,
-                      onChanged: (v) {
-                        setState(() {
-                          if (v == true) { _selectedLicenseNos.add(licenseNo); }
-                          else { _selectedLicenseNos.remove(licenseNo); }
-                        });
-                      },
-                    )),
-                    DataCell(Text(licenseNo, style: const TextStyle(fontSize: 12))),
-                    DataCell(SizedBox(width: 200, child: Text('${item['호출명칭'] ?? ''}', style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis))),
-                    DataCell(Text('${item['국종군'] ?? ''}', style: const TextStyle(fontSize: 12))),
-                    DataCell(Text('${item['분기'] ?? ''}', style: const TextStyle(fontSize: 12))),
-                    DataCell(Text('${item['허가상태'] ?? ''}', style: const TextStyle(fontSize: 12))),
-                    DataCell(SizedBox(width: 200, child: Text('${item['도로명주소'] ?? ''}', style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis))),
-                    DataCell(Text('${item['장치수'] ?? ''}', style: const TextStyle(fontSize: 12))),
-                    DataCell(Text('${item['통시'] ?? ''}', style: const TextStyle(fontSize: 12))),
-                    DataCell(_buildKcaChip('${item['kca검토결과'] ?? ''}')),
-                    DataCell(Text('${item['access담당'] ?? ''}', style: const TextStyle(fontSize: 12))),
-                    DataCell(Text('${item['품질개선팀'] ?? ''}', style: const TextStyle(fontSize: 12))),
-                  ],
-                );
-              }).toList(),
+        child: Container(
+          margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: const Color(0xFFE5E7EB)),
+            boxShadow: [
+              BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 8, offset: const Offset(0, 2)),
+            ],
+          ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: Scrollbar(
+              controller: _horizontalScrollCtrl,
+              thumbVisibility: true,
+              child: SingleChildScrollView(
+                controller: _horizontalScrollCtrl,
+                scrollDirection: Axis.horizontal,
+                child: SingleChildScrollView(
+                  child: DataTable(
+                    headingRowColor: WidgetStateProperty.all(const Color(0xFFF9FAFB)),
+                    headingRowHeight: 44,
+                    dataRowMinHeight: 42,
+                    dataRowMaxHeight: 46,
+                    columnSpacing: 20,
+                    horizontalMargin: 16,
+                    showCheckboxColumn: false,
+                    dividerThickness: 1,
+                    decoration: const BoxDecoration(
+                      border: Border(bottom: BorderSide(color: Color(0xFFE5E7EB))),
+                    ),
+                    columns: [
+                      DataColumn(label: Checkbox(
+                        value: someChecked ? null : allChecked,
+                        tristate: true,
+                        activeColor: _primary,
+                        onChanged: (v) {
+                          setState(() {
+                            if (v == true) {
+                              for (final item in _items) {
+                                final no = '${item['허가번호'] ?? ''}';
+                                if (no.isNotEmpty) _selectedLicenseNos.add(no);
+                              }
+                            } else {
+                              for (final item in _items) {
+                                _selectedLicenseNos.remove('${item['허가번호'] ?? ''}');
+                              }
+                            }
+                          });
+                        },
+                      )),
+                      const DataColumn(label: Text('허가번호', style: headerStyle)),
+                      const DataColumn(label: Text('호출명칭', style: headerStyle)),
+                      const DataColumn(label: Text('국종군', style: headerStyle)),
+                      const DataColumn(label: Text('분기', style: headerStyle)),
+                      const DataColumn(label: Text('허가상태', style: headerStyle)),
+                      const DataColumn(label: Text('도로명주소', style: headerStyle)),
+                      const DataColumn(label: Text('장치수', style: headerStyle)),
+                      const DataColumn(label: Text('통시', style: headerStyle)),
+                      const DataColumn(label: Text('KCA검토결과', style: headerStyle)),
+                      const DataColumn(label: Text('Access담당', style: headerStyle)),
+                      const DataColumn(label: Text('품질개선팀', style: headerStyle)),
+                    ],
+                    rows: _items.asMap().entries.map((entry) {
+                      final idx = entry.key;
+                      final item = entry.value;
+                      final licenseNo = '${item['허가번호'] ?? ''}';
+                      final isSelected = _detailLicenseNo == licenseNo;
+                      final isChecked = _selectedLicenseNos.contains(licenseNo);
+                      return DataRow(
+                        selected: isSelected,
+                        color: WidgetStateProperty.resolveWith((states) {
+                          if (states.contains(WidgetState.selected)) return _primary.withValues(alpha: 0.06);
+                          if (idx.isEven) return const Color(0xFFFAFAFB);
+                          return Colors.white;
+                        }),
+                        onSelectChanged: (_) => _loadDetail(licenseNo),
+                        cells: [
+                          DataCell(Checkbox(
+                            value: isChecked,
+                            activeColor: _primary,
+                            onChanged: (v) {
+                              setState(() {
+                                if (v == true) { _selectedLicenseNos.add(licenseNo); }
+                                else { _selectedLicenseNos.remove(licenseNo); }
+                              });
+                            },
+                          )),
+                          DataCell(Text(licenseNo, style: cellStyle)),
+                          DataCell(SizedBox(width: 200, child: Text('${item['호출명칭'] ?? ''}', style: cellStyle, overflow: TextOverflow.ellipsis))),
+                          DataCell(Text('${item['국종군'] ?? ''}', style: cellStyle)),
+                          DataCell(Text('${item['분기'] ?? ''}', style: cellStyle)),
+                          DataCell(_buildStatusChip('${item['허가상태'] ?? ''}')),
+                          DataCell(SizedBox(width: 200, child: Text('${item['도로명주소'] ?? ''}', style: cellStyle, overflow: TextOverflow.ellipsis))),
+                          DataCell(Text('${item['장치수'] ?? ''}', style: cellStyle)),
+                          DataCell(Text('${item['통시'] ?? ''}', style: cellStyle)),
+                          DataCell(_buildKcaChip('${item['kca검토결과'] ?? ''}')),
+                          DataCell(Text('${item['access담당'] ?? ''}', style: cellStyle)),
+                          DataCell(Text('${item['품질개선팀'] ?? ''}', style: cellStyle)),
+                        ],
+                      );
+                    }).toList(),
+                  ),
+                ),
+              ),
             ),
           ),
         ),
-        ),
       ),
       _buildPagination(),
+    ]);
+  }
+
+  Widget _buildStatusChip(String val) {
+    if (val.isEmpty) return const SizedBox.shrink();
+    Color color = Colors.grey;
+    IconData icon = Icons.circle;
+    if (val.contains('허가')) { color = _green; icon = Icons.check_circle_outline; }
+    else if (val.contains('취소') || val.contains('폐지')) { color = _primary; icon = Icons.cancel_outlined; }
+    else if (val.contains('정지')) { color = _orange; icon = Icons.warning_amber; }
+    return Row(mainAxisSize: MainAxisSize.min, children: [
+      Icon(icon, size: 14, color: color),
+      const SizedBox(width: 4),
+      Text(val, style: TextStyle(fontSize: 12, color: color, fontWeight: FontWeight.w500)),
     ]);
   }
 
@@ -860,14 +930,54 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
 
   Widget _buildPagination() {
     final totalPages = (_total / 100).ceil();
-    if (totalPages <= 1) return const SizedBox.shrink();
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-        IconButton(icon: const Icon(Icons.chevron_left), onPressed: _page > 1 ? () { setState(() => _page--); _loadData(); } : null),
-        Text('$_page / $totalPages', style: const TextStyle(fontSize: 13)),
-        IconButton(icon: const Icon(Icons.chevron_right), onPressed: _page < totalPages ? () { setState(() => _page++); _loadData(); } : null),
-      ]),
+    if (totalPages <= 1) return const SizedBox(height: 12);
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: const Color(0xFFE5E7EB)),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(
+            '${_formatNumber((_page - 1) * 100 + 1)}-${_formatNumber((_page * 100).clamp(0, _total))} / ${_formatNumber(_total)}',
+            style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
+          ),
+          Row(children: [
+            _paginationButton(Icons.chevron_left, _page > 1, () { setState(() => _page--); _loadData(); }),
+            const SizedBox(width: 4),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF3F4F6),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Text('$_page / $totalPages', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF374151))),
+            ),
+            const SizedBox(width: 4),
+            _paginationButton(Icons.chevron_right, _page < totalPages, () { setState(() => _page++); _loadData(); }),
+          ]),
+        ],
+      ),
+    );
+  }
+
+  Widget _paginationButton(IconData icon, bool enabled, VoidCallback onTap) {
+    return InkWell(
+      onTap: enabled ? onTap : null,
+      borderRadius: BorderRadius.circular(6),
+      child: Container(
+        padding: const EdgeInsets.all(4),
+        decoration: BoxDecoration(
+          color: enabled ? Colors.white : const Color(0xFFF3F4F6),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: enabled ? const Color(0xFFD1D5DB) : const Color(0xFFE5E7EB)),
+        ),
+        child: Icon(icon, size: 18, color: enabled ? const Color(0xFF374151) : const Color(0xFFD1D5DB)),
+      ),
     );
   }
 
@@ -926,10 +1036,23 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
 
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
-      child: Table(
-        border: TableBorder.all(color: Colors.grey.shade200),
-        defaultColumnWidth: const IntrinsicColumnWidth(),
-        children: rows,
+      child: Container(
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: const Color(0xFFE5E7EB)),
+          boxShadow: [
+            BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 8, offset: const Offset(0, 2)),
+          ],
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(12),
+          child: Table(
+            border: TableBorder.all(color: const Color(0xFFE5E7EB)),
+            defaultColumnWidth: const IntrinsicColumnWidth(),
+            children: rows,
+          ),
+        ),
       ),
     );
   }
@@ -957,8 +1080,8 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
       width: 380,
       decoration: BoxDecoration(
         color: Colors.white,
-        border: Border(left: BorderSide(color: Colors.grey.shade200)),
-        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 10)],
+        border: Border(left: BorderSide(color: const Color(0xFFE5E7EB))),
+        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.08), blurRadius: 16, offset: const Offset(-4, 0))],
       ),
       child: _detailLoading
           ? const Center(child: CircularProgressIndicator())

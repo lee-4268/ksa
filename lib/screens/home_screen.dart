@@ -5,7 +5,6 @@ import '../services/auth_service.dart';
 import '../services/cloud_data_service.dart';
 import '../services/weather_service.dart';
 import 'map_screen.dart';
-import 'schedule_screen.dart';
 import 'division_management_screen.dart';
 import 'dashboard_screen.dart';
 import 'admin/admin_panel_screen.dart';
@@ -14,9 +13,9 @@ import 'ds_merge_screen.dart';
 import 'callname_screen.dart';
 import 'certificate_screen.dart';
 import 'erp_ds_compare_screen.dart';
-import '../widgets/user_profile_button.dart';
+import 'inspection_schedule_screen.dart';
 
-/// 메인 홈 화면 - 메뉴 선택 인터페이스
+/// 앱 셸 — 사이드바 상시 표시 + 오른쪽 콘텐츠 전환
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
 
@@ -27,647 +26,444 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
 
-  // 테마 색상
-  static const Color _primaryColor = Color(0xFFE53935);
-  static const Color _blueAccent = Color(0xFF4A90D9);
-  static const Color _greenColor = Color(0xFF43A047);
-  static const Color _indigoColor = Color(0xFF5C6BC0);
+  // 디자인 토큰
+  static const _bg = Color(0xFFFAFAFB);
+  static const _surface = Colors.white;
+  static const _border = Color(0xFFE5E7EB);
+  static const _textPrimary = Color(0xFF111827);
+  static const _textSecondary = Color(0xFF6B7280);
+  static const _accent = Color(0xFFE53935);
+  static const _sidebarWidth = 240.0;
 
-  // 날씨 정보
-  WeatherInfo? _weatherInfo;
-  bool _isLoadingWeather = true;
+  int _selectedIndex = 0;
+  bool _sidebarCollapsed = false;
 
   @override
   void initState() {
     super.initState();
-    _loadWeather();
     _loadCloudData();
   }
 
-  /// 로그인 직후 클라우드 데이터 로드 (일정 및 통계에서 바로 사용 가능)
   Future<void> _loadCloudData() async {
     final provider = context.read<StationProvider>();
     final cloudService = context.read<CloudDataService>();
     final authService = context.read<AuthService>();
-
-    // 사용자가 로그인되어 있을 때만 CloudDataService 연결 및 데이터 로드
     if (authService.isSignedIn) {
       provider.setCloudDataService(cloudService, userId: authService.userId);
       await provider.loadStations();
     }
   }
 
-  Future<void> _loadWeather() async {
-    try {
-      final weather = await WeatherService.getCurrentWeather();
-      if (mounted) {
-        setState(() {
-          _weatherInfo = weather;
-          _isLoadingWeather = false;
-        });
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _isLoadingWeather = false;
-        });
-      }
+  // ── 메뉴 정의 ──
+
+  List<_MenuItem> _buildMenuItems(AuthService auth) {
+    return [
+      _MenuItem('홈', Icons.home_outlined, const Color(0xFF374151), description: '메인 화면'),
+      _MenuItem('전국 현황', Icons.insights_outlined, const Color(0xFF14B8A6), description: '전국 무선국 현황 대시보드'),
+      _MenuItem('수검 관리', Icons.map_outlined, const Color(0xFF3B82F6), description: '수검 대상 지도 및 관리'),
+      _MenuItem('일정 및 통계', Icons.event_note_outlined, const Color(0xFF10B981), description: '수검 일정 조회 및 통계'),
+      _MenuItem('DS 데이터', Icons.storage_outlined, const Color(0xFF8B5CF6), description: 'DS 데이터 조회 및 분석'),
+      _MenuItem('DS 병합', Icons.merge_outlined, const Color(0xFFF59E0B), description: 'DS 데이터 병합 처리'),
+      _MenuItem('호출명칭', Icons.sync_alt_outlined, const Color(0xFFEF4444), description: '호출명칭 검색 및 비교'),
+      _MenuItem('설치확인서', Icons.description_outlined, const Color(0xFF06B6D4), description: '설치확인서 조회 및 관리'),
+      _MenuItem('전산비교', Icons.compare_outlined, const Color(0xFF2563EB), description: 'ERP·DS 전산 데이터 비교'),
+      if (auth.isDivisionAdmin)
+        _MenuItem('대상 관리', Icons.business_outlined, const Color(0xFF7C3AED), description: '본부별 수검 대상 관리'),
+      if (auth.isAdmin)
+        _MenuItem('관리자', Icons.settings_outlined, const Color(0xFF6366F1), description: '시스템 설정 및 사용자 관리'),
+    ];
+  }
+
+  Widget _buildPage(int index, AuthService auth) {
+    // 관리자/본부관리자에 따라 인덱스 매핑이 달라짐
+    final items = _buildMenuItems(auth);
+    if (index >= items.length) index = 0;
+    final title = items[index].title;
+
+    switch (title) {
+      case '홈': return _HomeContent(onNavigate: (i) => setState(() => _selectedIndex = i), menuItems: items);
+      case '전국 현황': return const DashboardScreen();
+      case '수검 관리': return const MapScreen();
+      case '일정 및 통계': return const InspectionScheduleScreen();
+      case 'DS 데이터': return const DsDashboardScreen();
+      case 'DS 병합': return const DsMergeScreen();
+      case '호출명칭': return const CallnameScreen();
+      case '설치확인서': return const CertificateScreen();
+      case '전산비교': return const ErpDsCompareScreen();
+      case '대상 관리': return const DivisionManagementScreen();
+      case '관리자': return const AdminPanelScreen();
+      default: return _HomeContent(onNavigate: (i) => setState(() => _selectedIndex = i), menuItems: items);
     }
   }
 
+  // ── Build ──
+
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      key: _scaffoldKey,
-      backgroundColor: Colors.white,
-      appBar: _buildAppBar(),
-      drawer: _buildDrawer(),
-      body: _buildBody(),
+    final isWide = MediaQuery.of(context).size.width >= 800;
+
+    return Consumer<AuthService>(
+      builder: (context, auth, _) {
+        final items = _buildMenuItems(auth);
+        if (_selectedIndex >= items.length) _selectedIndex = 0;
+
+        return Scaffold(
+          key: _scaffoldKey,
+          backgroundColor: _bg,
+          drawer: isWide ? null : _buildDrawer(auth, items),
+          body: isWide
+              ? Row(children: [
+                  _buildSidebar(auth, items),
+                  const VerticalDivider(width: 1, color: _border),
+                  Expanded(child: _buildContentArea(auth, items)),
+                ])
+              : Column(children: [
+                  _buildMobileAppBar(items),
+                  Expanded(child: _buildPage(_selectedIndex, auth)),
+                ]),
+        );
+      },
     );
   }
 
-  PreferredSizeWidget _buildAppBar() {
-    return AppBar(
-      backgroundColor: Colors.white,
-      elevation: 0,
-      leading: IconButton(
-        icon: const Icon(Icons.menu, color: Colors.black54),
-        onPressed: () {
-          _scaffoldKey.currentState?.openDrawer();
-        },
+  // ── 모바일 AppBar ──
+
+  Widget _buildMobileAppBar(List<_MenuItem> items) {
+    final item = items[_selectedIndex];
+    return Container(
+      padding: EdgeInsets.only(top: MediaQuery.of(context).padding.top),
+      decoration: const BoxDecoration(
+        color: _surface,
+        border: Border(bottom: BorderSide(color: _border)),
       ),
-      title: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            padding: const EdgeInsets.all(6),
-            decoration: BoxDecoration(
-              color: _primaryColor,
-              borderRadius: BorderRadius.circular(8),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+        child: Row(
+          children: [
+            IconButton(
+              icon: const Icon(Icons.menu, color: _textSecondary, size: 22),
+              onPressed: () => _scaffoldKey.currentState?.openDrawer(),
             ),
-            child: const Icon(
-              Icons.cell_tower,
-              color: Colors.white,
-              size: 20,
+            const SizedBox(width: 4),
+            Icon(item.icon, size: 18, color: item.color),
+            const SizedBox(width: 8),
+            Text(item.title, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: _textPrimary)),
+            const Spacer(),
+            _buildUserAvatar(),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ── Drawer (모바일) ──
+
+  Widget _buildDrawer(AuthService auth, List<_MenuItem> items) {
+    return Drawer(
+      backgroundColor: _surface,
+      shape: const RoundedRectangleBorder(),
+      child: _buildSidebarContent(auth, items, inDrawer: true),
+    );
+  }
+
+  // ── 사이드바 (데스크탑) ──
+
+  Widget _buildSidebar(AuthService auth, List<_MenuItem> items) {
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 200),
+      width: _sidebarCollapsed ? 64 : _sidebarWidth,
+      decoration: const BoxDecoration(color: _surface),
+      child: _buildSidebarContent(auth, items),
+    );
+  }
+
+  Widget _buildSidebarContent(AuthService auth, List<_MenuItem> items, {bool inDrawer = false}) {
+    final collapsed = _sidebarCollapsed && !inDrawer;
+
+    return Column(
+      children: [
+        // 로고
+        Container(
+          padding: EdgeInsets.only(
+            top: MediaQuery.of(context).padding.top + 16,
+            left: collapsed ? 12 : 16, right: collapsed ? 12 : 16, bottom: 16,
+          ),
+          child: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(7),
+                decoration: BoxDecoration(
+                  color: _accent,
+                  borderRadius: BorderRadius.circular(9),
+                ),
+                child: const Icon(Icons.cell_tower, color: Colors.white, size: 18),
+              ),
+              if (!collapsed) ...[
+                const SizedBox(width: 10),
+                const Expanded(
+                  child: Text('KCA', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: _textPrimary, letterSpacing: 0.5)),
+                ),
+                InkWell(
+                  onTap: () => setState(() => _sidebarCollapsed = !_sidebarCollapsed),
+                  borderRadius: BorderRadius.circular(6),
+                  child: Padding(
+                    padding: const EdgeInsets.all(4),
+                    child: Icon(Icons.chevron_left, size: 18, color: Colors.grey.shade400),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+        if (collapsed)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: InkWell(
+              onTap: () => setState(() => _sidebarCollapsed = false),
+              child: Padding(
+                padding: const EdgeInsets.all(4),
+                child: Icon(Icons.chevron_right, size: 18, color: Colors.grey.shade400),
+              ),
             ),
           ),
-          const SizedBox(width: 10),
-          const Text(
-            '무선국 관리 시스템',
-            style: TextStyle(
-              color: Colors.black87,
-              fontSize: 18,
-              fontWeight: FontWeight.w600,
-            ),
+        // 사용자 정보 (로고 바로 아래)
+        Padding(
+          padding: EdgeInsets.symmetric(horizontal: collapsed ? 8 : 10, vertical: 8),
+          child: collapsed
+              ? _buildUserAvatar()
+              : _buildSidebarUser(auth),
+        ),
+        const Divider(height: 1, color: _border),
+
+        // 메뉴
+        Expanded(
+          child: ListView.builder(
+            padding: EdgeInsets.symmetric(vertical: 8, horizontal: collapsed ? 8 : 8),
+            itemCount: items.length,
+            itemBuilder: (_, i) {
+              final item = items[i];
+              final isSelected = _selectedIndex == i;
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 2),
+                child: Material(
+                  color: isSelected ? item.color.withValues(alpha: 0.08) : Colors.transparent,
+                  borderRadius: BorderRadius.circular(8),
+                  child: InkWell(
+                    onTap: () {
+                      setState(() => _selectedIndex = i);
+                      if (inDrawer) Navigator.pop(context);
+                    },
+                    borderRadius: BorderRadius.circular(8),
+                    hoverColor: const Color(0xFFF3F4F6),
+                    child: Padding(
+                      padding: EdgeInsets.symmetric(
+                        horizontal: collapsed ? 0 : 10,
+                        vertical: collapsed ? 10 : 9,
+                      ),
+                      child: collapsed
+                          ? Tooltip(
+                              message: item.title,
+                              child: Center(
+                                child: Icon(item.icon, size: 20,
+                                    color: isSelected ? item.color : _textSecondary),
+                              ),
+                            )
+                          : Row(
+                              children: [
+                                Icon(item.icon, size: 18,
+                                    color: isSelected ? item.color : _textSecondary),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: Text(item.title,
+                                    style: TextStyle(
+                                      fontSize: 13,
+                                      fontWeight: isSelected ? FontWeight.w600 : FontWeight.w500,
+                                      color: isSelected ? item.color : const Color(0xFF374151),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                    ),
+                  ),
+                ),
+              );
+            },
           ),
-        ],
-      ),
-      centerTitle: true,
-      actions: [
-        UserProfileButton(onLogout: _handleLogout),
-        const SizedBox(width: 4),
+        ),
+        SizedBox(height: MediaQuery.of(context).padding.bottom),
       ],
     );
   }
 
-  /// 사이드 메뉴 Drawer
-  Widget _buildDrawer() {
-    return Drawer(
-      backgroundColor: Colors.white,
+  Widget _buildSidebarUser(AuthService auth) {
+    final name = auth.userName ?? auth.userId ?? '';
+    final dept = [auth.userDepartment, auth.userTeam].where((s) => s != null && s.isNotEmpty).join(' / ');
+    final remaining = auth.remainingSessionMinutes;
+    final hours = remaining ~/ 60;
+    final minutes = remaining % 60;
+    final timeText = hours > 0 ? '$hours:${minutes.toString().padLeft(2, '0')}' : '$minutes분';
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF9FAFB),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: _border),
+      ),
       child: Column(
         children: [
-          // 헤더
-          Container(
-            width: double.infinity,
-            padding: EdgeInsets.only(
-              top: MediaQuery.of(context).padding.top + 24,
-              bottom: 24,
-              left: 20,
-              right: 20,
-            ),
-            decoration: const BoxDecoration(
-              color: _primaryColor,
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.2),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: const Icon(
-                    Icons.cell_tower,
-                    color: Colors.white,
-                    size: 32,
-                  ),
-                ),
-                const SizedBox(height: 16),
-                const Text(
-                  '무선국 관리 시스템',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 20,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Consumer<AuthService>(
-                  builder: (context, auth, _) {
-                    return Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          auth.userName ?? auth.userId ?? '',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 15,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                        if (auth.userDepartment != null ||
-                            auth.userTeam != null) ...[
-                          const SizedBox(height: 4),
-                          Text(
-                            [auth.userDepartment, auth.userTeam]
-                                .where((s) => s != null)
-                                .join(' / '),
-                            style: TextStyle(
-                              color: Colors.white.withValues(alpha: 0.85),
-                              fontSize: 12,
-                            ),
-                          ),
-                        ],
-                        const SizedBox(height: 2),
-                        Text(
-                          auth.userId ?? '',
-                          style: TextStyle(
-                            color: Colors.white.withValues(alpha: 0.7),
-                            fontSize: 12,
-                          ),
-                        ),
-                      ],
-                    );
-                  },
-                ),
-              ],
-            ),
-          ),
-          // 메뉴 리스트
-          Expanded(
-            child: ListView(
-              padding: EdgeInsets.zero,
-              children: [
-                const SizedBox(height: 8),
-                _buildDrawerItem(
-                  icon: Icons.description_outlined,
-                  title: '수검 관리',
-                  subtitle: '무선국 검사 및 현장 수검 관리',
-                  color: _blueAccent,
-                  onTap: () => _navigateFromDrawer(const MapScreen()),
-                ),
-                _buildDrawerItem(
-                  icon: Icons.calendar_month,
-                  title: '일정 및 통계',
-                  subtitle: '검사 일정 관리 및 진도율 확인',
-                  color: _greenColor,
-                  onTap: () => _navigateFromDrawer(const ScheduleScreen()),
-                ),
-                _buildDrawerItem(
-                  icon: Icons.dashboard_rounded,
-                  title: '전국 현황',
-                  subtitle: '본부별 수검 진행률 및 로드맵',
-                  color: const Color(0xFF00897B),
-                  onTap: () => _navigateFromDrawer(const DashboardScreen()),
-                ),
-                _buildDrawerItem(
-                  icon: Icons.storage,
-                  title: 'DS 데이터 관리',
-                  subtitle: '업로드, 조회, Excel Export 통합 관리',
-                  color: const Color(0xFF5C6BC0),
-                  onTap: () => _navigateFromDrawer(const DsDashboardScreen()),
-                ),
-                _buildDrawerItem(
-                  icon: Icons.merge_type,
-                  title: 'DS 파일 병합',
-                  subtitle: 'ZIP 파일을 병합하여 Excel 다운로드',
-                  color: const Color(0xFFF57C00),
-                  onTap: () => _navigateFromDrawer(const DsMergeScreen()),
-                ),
-                _buildDrawerItem(
-                  icon: Icons.compare_arrows,
-                  title: '호출명칭 매칭',
-                  subtitle: '통시/Access담당/품질개선팀 자동 매칭',
-                  color: const Color(0xFFE53935),
-                  onTap: () => _navigateFromDrawer(const CallnameScreen()),
-                ),
-                _buildDrawerItem(
-                  icon: Icons.article_outlined,
-                  title: '설치확인서',
-                  subtitle: '개별/일괄 설치확인서 생성 (PDF/HWPX)',
-                  color: const Color(0xFF00838F),
-                  onTap: () => _navigateFromDrawer(const CertificateScreen()),
-                ),
-                _buildDrawerItem(
-                  icon: Icons.compare_arrows,
-                  title: '전산자료 비교',
-                  subtitle: 'ERP vs DS 설치대/일련번호 비교',
-                  color: const Color(0xFF1565C0),
-                  onTap: () => _navigateFromDrawer(const ErpDsCompareScreen()),
-                ),
-                // 전체 대상 관리 (본부 담당자만 표시)
-                Consumer<AuthService>(
-                  builder: (context, auth, _) {
-                    if (auth.isDivisionAdmin) {
-                      return _buildDrawerItem(
-                        icon: Icons.business,
-                        title: '전체 대상 관리',
-                        subtitle: '본부 수검 대상 등록 및 관리',
-                        color: const Color(0xFF7B1FA2),
-                        onTap: () => _navigateFromDrawer(const DivisionManagementScreen()),
-                      );
-                    }
-                    return const SizedBox.shrink();
-                  },
-                ),
-                // 관리자 메뉴 (관리자만 표시)
-                Consumer<AuthService>(
-                  builder: (context, auth, _) {
-                    if (auth.isAdmin) {
-                      return _buildDrawerItem(
-                        icon: Icons.admin_panel_settings,
-                        title: '관리자 패널',
-                        subtitle: '사용자 승인 및 팀 관리',
-                        color: _indigoColor,
-                        onTap: () => _navigateFromDrawer(const AdminPanelScreen()),
-                      );
-                    }
-                    return const SizedBox.shrink();
-                  },
-                ),
-                const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 16),
-                  child: Divider(height: 32),
-                ),
-              ],
-            ),
-          ),
-          // 하단 로그아웃
-          Container(
-            decoration: BoxDecoration(
-              border: Border(top: BorderSide(color: Colors.grey.shade200)),
-            ),
-            child: ListTile(
-              leading: Icon(Icons.logout, color: Colors.grey.shade600),
-              title: Text(
-                '로그아웃',
-                style: TextStyle(color: Colors.grey.shade700),
-              ),
-              onTap: _handleLogout,
-            ),
-          ),
-          SizedBox(height: MediaQuery.of(context).padding.bottom + 8),
-        ],
-      ),
-    );
-  }
-
-  /// Drawer 메뉴 아이템
-  Widget _buildDrawerItem({
-    required IconData icon,
-    required String title,
-    required String subtitle,
-    required Color color,
-    required VoidCallback onTap,
-  }) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-      child: ListTile(
-        leading: Container(
-          padding: const EdgeInsets.all(8),
-          decoration: BoxDecoration(
-            color: color.withValues(alpha: 0.1),
-            borderRadius: BorderRadius.circular(10),
-          ),
-          child: Icon(icon, color: color, size: 22),
-        ),
-        title: Text(
-          title,
-          style: const TextStyle(
-            fontWeight: FontWeight.w600,
-            fontSize: 15,
-          ),
-        ),
-        subtitle: Text(
-          subtitle,
-          style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-        ),
-        onTap: onTap,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12),
-        ),
-      ),
-    );
-  }
-
-  /// 메인 바디
-  Widget _buildBody() {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(20),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // 환영 메시지 + 날씨
-          _buildWelcomeSection(),
-          const SizedBox(height: 28),
-          // 메뉴 카드들
-          _buildMenuCards(),
-        ],
-      ),
-    );
-  }
-
-  /// 요일 한글 변환
-  String _getWeekdayName(int weekday) {
-    const weekdays = ['월', '화', '수', '목', '금', '토', '일'];
-    return weekdays[weekday - 1];
-  }
-
-  /// 환영 메시지 섹션
-  Widget _buildWelcomeSection() {
-    final now = DateTime.now();
-    final weekday = _getWeekdayName(now.weekday);
-    final dateString = '${now.year}년 ${now.month}월 ${now.day}일($weekday)';
-
-    return Consumer<AuthService>(
-      builder: (context, auth, _) {
-        // AuthService의 userName 사용 (실명)
-        final displayName = auth.userName ?? auth.userId ?? '사용자';
-
-        // 날씨 및 지역 정보 텍스트 구성
-        String weatherText = '';
-        if (_isLoadingWeather) {
-          weatherText = '날씨 정보를 불러오는 중...';
-        } else if (_weatherInfo != null) {
-          // 기온 문자열 생성 (한글 '도' 사용)
-          String tempStr = '';
-          if (_weatherInfo!.temperature != null) {
-            final temp = _weatherInfo!.temperature!;
-            tempStr = '${temp.toStringAsFixed(0)}도';
-          }
-
-          // 지역명 포함 여부에 따라 문구 생성
-          if (_weatherInfo!.locationName != null && tempStr.isNotEmpty) {
-            weatherText = '현재 ${_weatherInfo!.locationName}의 기온은 $tempStr, 날씨는 ${_weatherInfo!.condition}입니다. ${_weatherInfo!.icon}';
-          } else if (_weatherInfo!.locationName != null) {
-            weatherText = '현재 ${_weatherInfo!.locationName}의 날씨는 ${_weatherInfo!.condition}입니다. ${_weatherInfo!.icon}';
-          } else if (tempStr.isNotEmpty) {
-            weatherText = '현재 기온은 $tempStr, 날씨는 ${_weatherInfo!.condition}입니다. ${_weatherInfo!.icon}';
-          } else {
-            weatherText = '현재 날씨는 ${_weatherInfo!.condition}입니다. ${_weatherInfo!.icon}';
-          }
-        }
-
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Flexible(
-                  child: Text(
-                    '안녕하세요!',
-                    style: TextStyle(
-                      fontSize: 28,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.grey.shade800,
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                const Text(
-                  '👋',
-                  style: TextStyle(fontSize: 28),
-                ),
-              ],
-            ),
-            const SizedBox(height: 10),
-            Text(
-              '$displayName님, 오늘은 $dateString이고',
-              style: TextStyle(
-                fontSize: 16,
-                color: Colors.grey.shade700,
-                height: 1.6,
-              ),
-            ),
-            if (weatherText.isNotEmpty)
-              Text(
-                weatherText,
-                style: TextStyle(
-                  fontSize: 16,
-                  color: Colors.grey.shade700,
-                  height: 1.6,
+          Row(
+            children: [
+              CircleAvatar(
+                radius: 14,
+                backgroundColor: _accent.withValues(alpha: 0.1),
+                child: Text(
+                  name.isNotEmpty ? name[0] : '?',
+                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: _accent),
                 ),
               ),
-            const SizedBox(height: 6),
-            Text(
-              '원하는 기능을 선택해주세요.',
-              style: TextStyle(
-                fontSize: 16,
-                color: Colors.grey.shade600,
-              ),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  /// 메뉴 카드들
-  Widget _buildMenuCards() {
-    return Consumer<AuthService>(
-      builder: (context, auth, _) {
-        return Column(
-          children: [
-            _buildMenuCard(
-              icon: Icons.description_outlined,
-              title: '수검 관리',
-              description: '무선국 현장 검사 및 실시간 수검 데이터를 체계적으로 관리합니다.',
-              buttonText: '관리하기',
-              buttonIcon: Icons.arrow_forward,
-              iconBackgroundColor: _blueAccent.withValues(alpha: 0.1),
-              iconColor: _blueAccent,
-              onTap: () => _navigateToScreen(const MapScreen()),
-            ),
-            const SizedBox(height: 16),
-            _buildMenuCard(
-              icon: Icons.calendar_month,
-              title: '일정 및 통계',
-              description: '검사 일정을 달력으로 확인하고, 카테고리별 진도율을 한눈에 파악합니다.',
-              buttonText: '확인하기',
-              buttonIcon: Icons.arrow_forward,
-              iconBackgroundColor: _greenColor.withValues(alpha: 0.1),
-              iconColor: _greenColor,
-              onTap: () => _navigateToScreen(const ScheduleScreen()),
-            ),
-            const SizedBox(height: 16),
-            _buildMenuCard(
-              icon: Icons.dashboard_rounded,
-              title: '전국 현황',
-              description: '전국 본부별 수검 진행률을 지도로 확인하고, 개발 로드맵을 살펴봅니다.',
-              buttonText: '현황보기',
-              buttonIcon: Icons.arrow_forward,
-              iconBackgroundColor: const Color(0xFF00897B).withValues(alpha: 0.1),
-              iconColor: const Color(0xFF00897B),
-              onTap: () => _navigateToScreen(const DashboardScreen()),
-            ),
-            // 관리자 패널 카드 (관리자만 표시)
-            if (auth.isAdmin) ...[
-              const SizedBox(height: 16),
-              _buildMenuCard(
-                icon: Icons.admin_panel_settings,
-                title: '관리자 패널',
-                description: '사용자 가입 승인, 팀 관리, 감사 로그를 확인합니다.',
-                buttonText: '관리하기',
-                buttonIcon: Icons.arrow_forward,
-                iconBackgroundColor: _indigoColor.withValues(alpha: 0.1),
-                iconColor: _indigoColor,
-                onTap: () => _navigateToScreen(const AdminPanelScreen()),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(name, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _textPrimary),
+                        overflow: TextOverflow.ellipsis),
+                    if (dept.isNotEmpty)
+                      Text(dept, style: const TextStyle(fontSize: 10, color: _textSecondary),
+                          overflow: TextOverflow.ellipsis),
+                  ],
+                ),
               ),
             ],
-          ],
+          ),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              Icon(Icons.timer_outlined, size: 12, color: remaining < 30 ? Colors.orange : Colors.grey.shade400),
+              const SizedBox(width: 4),
+              Text(timeText, style: TextStyle(fontSize: 10, color: remaining < 30 ? Colors.orange : _textSecondary)),
+              const Spacer(),
+              InkWell(
+                onTap: () { auth.extendSession(); setState(() {}); },
+                borderRadius: BorderRadius.circular(4),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFEFF6FF),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: const Text('연장', style: TextStyle(fontSize: 9, fontWeight: FontWeight.w600, color: Color(0xFF3B82F6))),
+                ),
+              ),
+              const SizedBox(width: 6),
+              InkWell(
+                onTap: _handleLogout,
+                borderRadius: BorderRadius.circular(4),
+                child: Padding(
+                  padding: const EdgeInsets.all(2),
+                  child: Icon(Icons.logout, size: 14, color: Colors.grey.shade400),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildUserAvatar() {
+    return Consumer<AuthService>(
+      builder: (context, auth, _) {
+        final name = auth.userName ?? auth.userId ?? '';
+        return InkWell(
+          onTap: _handleLogout,
+          borderRadius: BorderRadius.circular(20),
+          child: CircleAvatar(
+            radius: 16,
+            backgroundColor: _accent.withValues(alpha: 0.1),
+            child: Text(name.isNotEmpty ? name[0] : '?',
+                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: _accent)),
+          ),
         );
       },
     );
   }
 
-  /// 메뉴 카드 위젯
-  Widget _buildMenuCard({
-    required IconData icon,
-    required String title,
-    required String description,
-    required String buttonText,
-    required IconData buttonIcon,
-    required Color iconBackgroundColor,
-    required Color iconColor,
-    required VoidCallback onTap,
-  }) {
-    return Container(
-      width: double.infinity,
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: Colors.grey.shade200),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.03),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
+  // ── 콘텐츠 영역 ──
+
+  Widget _buildContentArea(AuthService auth, List<_MenuItem> items) {
+    return Column(
+      children: [
+        // 상단 바
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+          decoration: const BoxDecoration(
+            color: _surface,
+            border: Border(bottom: BorderSide(color: _border)),
           ),
-        ],
-      ),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: onTap,
-          borderRadius: BorderRadius.circular(20),
-          child: Padding(
-            padding: const EdgeInsets.all(20),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    // 아이콘
-                    Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: iconBackgroundColor,
-                        borderRadius: BorderRadius.circular(14),
-                      ),
-                      child: Icon(icon, color: iconColor, size: 26),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 16),
-                // 타이틀
-                Text(
-                  title,
-                  style: const TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.black87,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                // 설명
-                Text(
-                  description,
-                  style: TextStyle(
-                    fontSize: 13,
-                    color: Colors.grey.shade600,
-                    height: 1.5,
-                  ),
-                ),
-                const SizedBox(height: 16),
-                // 버튼
-                Row(
-                  children: [
-                    Text(
-                      buttonText,
-                      style: TextStyle(
-                        color: iconColor,
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    const SizedBox(width: 4),
-                    Icon(buttonIcon, color: iconColor, size: 18),
-                  ],
-                ),
-              ],
-            ),
+          child: Row(
+            children: [
+              Text(items[_selectedIndex].title,
+                  style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w600, color: _textPrimary)),
+              const Spacer(),
+              _buildUserChip(auth),
+            ],
           ),
         ),
-      ),
+        // 콘텐츠
+        Expanded(child: _buildPage(_selectedIndex, auth)),
+      ],
     );
   }
 
-  /// 화면 이동 (Drawer에서 호출)
-  void _navigateFromDrawer(Widget screen) {
-    Navigator.pop(context); // Drawer 닫기
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => screen),
+  Widget _buildUserChip(AuthService auth) {
+    final name = auth.userName ?? auth.userId ?? '';
+    final remaining = auth.remainingSessionMinutes;
+    final isWarning = remaining < 30;
+    final hours = remaining ~/ 60;
+    final minutes = remaining % 60;
+    final timeText = hours > 0 ? '$hours:${minutes.toString().padLeft(2, '0')}' : '$minutes분';
+
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(Icons.timer_outlined, size: 14, color: isWarning ? Colors.orange : Colors.grey.shade400),
+        const SizedBox(width: 4),
+        Text(timeText, style: TextStyle(fontSize: 12, color: isWarning ? Colors.orange : _textSecondary)),
+        const SizedBox(width: 12),
+        CircleAvatar(
+          radius: 14,
+          backgroundColor: _accent.withValues(alpha: 0.1),
+          child: Text(name.isNotEmpty ? name[0] : '?',
+              style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: _accent)),
+        ),
+        const SizedBox(width: 8),
+        Text(name, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: _textPrimary)),
+      ],
     );
   }
 
-  /// 화면 이동 (카드에서 호출)
-  void _navigateToScreen(Widget screen) {
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => screen),
-    );
-  }
+  // ── 로그아웃 ──
 
-  /// 로그아웃 처리
   Future<void> _handleLogout() async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         backgroundColor: Colors.white,
-        surfaceTintColor: Colors.white,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('로그아웃'),
-        content: const Text('로그아웃 하시겠습니까?'),
+        surfaceTintColor: Colors.transparent,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        title: const Text('로그아웃', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+        content: const Text('로그아웃 하시겠습니까?', style: TextStyle(fontSize: 14, color: _textSecondary)),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: Text('취소', style: TextStyle(color: Colors.grey.shade600)),
+            child: const Text('취소', style: TextStyle(color: _textSecondary)),
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
-            style: TextButton.styleFrom(foregroundColor: _primaryColor),
+            style: TextButton.styleFrom(foregroundColor: _accent),
             child: const Text('로그아웃'),
           ),
         ],
@@ -676,10 +472,196 @@ class _HomeScreenState extends State<HomeScreen> {
 
     if (confirmed == true && mounted) {
       await context.read<AuthService>().signOut();
-      if (mounted) {
-        // AuthWrapper(초기 라우트)로 복귀 → Consumer가 LoginScreen 표시
-        Navigator.of(context).popUntil((route) => route.isFirst);
-      }
+      if (mounted) Navigator.of(context).popUntil((route) => route.isFirst);
     }
+  }
+}
+
+// ── 메뉴 아이템 모델 ──
+
+class _MenuItem {
+  final String title;
+  final IconData icon;
+  final Color color;
+  final String description;
+  const _MenuItem(this.title, this.icon, this.color, {this.description = ''});
+}
+
+// ── 홈 콘텐츠 (카드 메뉴 + 인사말) ──
+
+class _HomeContent extends StatefulWidget {
+  final void Function(int index) onNavigate;
+  final List<_MenuItem> menuItems;
+  const _HomeContent({required this.onNavigate, required this.menuItems});
+
+  @override
+  State<_HomeContent> createState() => _HomeContentState();
+}
+
+class _HomeContentState extends State<_HomeContent> {
+  WeatherInfo? _weather;
+  bool _loadingWeather = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadWeather();
+  }
+
+  Future<void> _loadWeather() async {
+    try {
+      final w = await WeatherService.getCurrentWeather();
+      if (mounted) setState(() { _weather = w; _loadingWeather = false; });
+    } catch (_) {
+      if (mounted) setState(() => _loadingWeather = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Consumer<AuthService>(
+      builder: (context, auth, _) {
+        final now = DateTime.now();
+        final weekday = ['월', '화', '수', '목', '금', '토', '일'][now.weekday - 1];
+        final name = auth.userName ?? auth.userId ?? '사용자';
+        // 홈(0번)을 제외한 나머지 메뉴만 카드로 표시
+        final cards = widget.menuItems.where((m) => m.title != '홈').toList();
+
+        return SingleChildScrollView(
+          padding: const EdgeInsets.all(28),
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 960),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // 인사 배너
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(28),
+                    decoration: BoxDecoration(
+                      gradient: const LinearGradient(
+                        colors: [Color(0xFF1E293B), Color(0xFF334155)],
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                      ),
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('안녕하세요, $name님',
+                            style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w700, color: Colors.white)),
+                        const SizedBox(height: 8),
+                        Text(
+                          '${now.year}년 ${now.month}월 ${now.day}일 ($weekday)${_weatherText()}',
+                          style: TextStyle(fontSize: 14, color: Colors.white.withValues(alpha: 0.7), height: 1.5),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 28),
+
+                  const Text('바로가기',
+                      style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+                  const SizedBox(height: 4),
+                  const Text('자주 사용하는 기능에 빠르게 접근하세요.',
+                      style: TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
+                  const SizedBox(height: 16),
+
+                  // 카드 그리드
+                  LayoutBuilder(
+                    builder: (context, constraints) {
+                      final w = constraints.maxWidth;
+                      final crossCount = w > 640 ? 3 : w > 400 ? 2 : 1;
+                      final ratio = w > 640 ? 2.0 : w > 400 ? 1.8 : 3.2;
+                      return GridView.builder(
+                        shrinkWrap: true,
+                        physics: const NeverScrollableScrollPhysics(),
+                        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                          crossAxisCount: crossCount,
+                          crossAxisSpacing: 12,
+                          mainAxisSpacing: 12,
+                          childAspectRatio: ratio,
+                        ),
+                        itemCount: cards.length,
+                        itemBuilder: (_, i) {
+                          final card = cards[i];
+                          // 전체 menuItems에서 해당 카드의 인덱스를 찾아서 onNavigate에 전달
+                          final menuIndex = widget.menuItems.indexOf(card);
+                          return _buildCard(card, () => widget.onNavigate(menuIndex));
+                        },
+                      );
+                    },
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  String _weatherText() {
+    if (_loadingWeather || _weather == null) return '';
+    final w = _weather!;
+    final temp = w.temperature != null ? '${w.temperature!.toStringAsFixed(0)}°' : '';
+    final loc = w.locationName ?? '';
+    if (loc.isNotEmpty && temp.isNotEmpty) return '  ·  $loc $temp ${w.condition} ${w.icon}';
+    if (temp.isNotEmpty) return '  ·  $temp ${w.condition} ${w.icon}';
+    return '  ·  ${w.condition} ${w.icon}';
+  }
+
+  Widget _buildCard(_MenuItem item, VoidCallback onTap) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFE5E7EB)),
+      ),
+      child: Material(
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(12),
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(12),
+          hoverColor: const Color(0xFFF9FAFB),
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: item.color.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Icon(item.icon, size: 18, color: item.color),
+                    ),
+                    const Spacer(),
+                    Icon(Icons.arrow_forward_ios, size: 12, color: Colors.grey.shade300),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Text(item.title,
+                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF111827))),
+                if (item.description.isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Text(item.description,
+                      style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF)),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }

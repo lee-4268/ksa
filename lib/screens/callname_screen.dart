@@ -354,13 +354,7 @@ class _CallnameScreenState extends State<CallnameScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF5F5F5),
-      appBar: AppBar(
-        title: const Text('호출명칭 매칭'),
-        backgroundColor: _primary,
-        foregroundColor: Colors.white,
-        elevation: 0,
-      ),
+      backgroundColor: const Color(0xFFFAFAFB),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(20),
         child: Center(
