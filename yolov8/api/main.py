@@ -35,7 +35,7 @@ import numpy as np
 from fastapi import FastAPI, File, UploadFile, HTTPException, Query, Form, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.gzip import GZipMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel
 from ultralytics import YOLO
 
@@ -9067,7 +9067,14 @@ def _hdqt_from_addr(addr: str, known_hdqt: str = '',
     if learned_map:
         import re as _re
         geo_re = _re.compile(r'[가-힣]{2,}(?:시|군|구)')
-        for kw in sorted(geo_re.findall(addr), key=len, reverse=True):
+        matches = geo_re.findall(addr)
+        # 2a) 복합 키워드 우선 ("부산광역시 강서구" → "부산광역시 강서구")
+        cities = [m for m in matches if m.endswith('시')]
+        gus = [m for m in matches if m.endswith('구')]
+        compound_keys = [f"{city} {gu}" for city in cities for gu in gus]
+        # 복합 → 단일(긴 것 우선) 순서
+        candidates = compound_keys + sorted(matches, key=len, reverse=True)
+        for kw in candidates:
             team = learned_map.get(kw)
             if not team or team not in INSP_TEAM_TO_HDQT:
                 continue
@@ -9085,7 +9092,7 @@ def _learn_addr_map_from_cert_db() -> dict:
     원칙:
     - cert DB의 ons_team_nm이 현재 유효 팀(INSP_TEAM_TO_HDQT)인 행만 사용
     - zpwiadr(도로명주소)에서 시·군·구 키워드 추출
-    - 키워드당 ≥10 샘플 & 1위 팀 비율 ≥75% 이상일 때만 확정
+    - 키워드당 ≥10 샘플 & 1위 팀 비율 ≥60% 이상일 때만 확정
       → 경계 지역(화성시가 수원팀 20% + 평택팀 80% → 평택팀으로 확정)도 올바르게 처리
     - 업로드 파일과 무관하게 항상 최신 ERP 데이터 기반으로 학습
     """
@@ -9107,8 +9114,16 @@ def _learn_addr_map_from_cert_db() -> dict:
             team = str(ons_team or '').strip()
             if team not in INSP_TEAM_TO_HDQT:
                 continue
-            for kw in geo_re.findall(str(zpwiadr)):
+            matches = geo_re.findall(str(zpwiadr))
+            # 단일 키워드 (시, 군, 구)
+            for kw in matches:
                 kw_teams[kw][team] += 1
+            # 복합 키워드: "시+구" 조합 (부산 강서구 vs 서울 강서구 구분)
+            cities = [m for m in matches if m.endswith('시')]
+            gus = [m for m in matches if m.endswith('구')]
+            for city in cities:
+                for gu in gus:
+                    kw_teams[f"{city} {gu}"][team] += 1
         c.close()
     except Exception as e:
         logger.warning(f"cert DB 주소 학습 실패: {e}")
@@ -9121,7 +9136,7 @@ def _learn_addr_map_from_cert_db() -> dict:
             continue
         top_team, top_cnt = counter.most_common(1)[0]
         ratio = top_cnt / total
-        if ratio >= 0.75:       # 75% 이상 다수결
+        if ratio >= 0.60:       # 60% 이상 다수결
             learned[kw] = top_team
 
     logger.info(f"주소→팀 학습 완료(cert DB): {len(learned)}개 키워드 확정 "
@@ -9154,6 +9169,15 @@ def _init_inspection_db():
     conn.execute('CREATE INDEX IF NOT EXISTS idx_it_품질팀 ON inspection_targets(품질개선팀)')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_it_skt본부 ON inspection_targets(skt본부)')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_it_국종군 ON inspection_targets(국종군)')
+    conn.execute('''CREATE TABLE IF NOT EXISTS inspection_targets_staging (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        year INTEGER, sheet TEXT,
+        pnu_code TEXT, 허가번호 TEXT, 호출명칭 TEXT, 국종군 TEXT,
+        부서 TEXT, 분기 TEXT, 연도주기 TEXT, 검사주기 INTEGER,
+        허가상태 TEXT, 설치장소 TEXT, 도로명주소 TEXT, 장치수 INTEGER,
+        통시 TEXT, 공대 TEXT, kca검토결과 TEXT, 시기조정 TEXT,
+        기준연도 INTEGER, skt본부 TEXT, access담당 TEXT, 품질개선팀 TEXT
+    )''')
     conn.execute('''CREATE TABLE IF NOT EXISTS inspection_meta (
         year INTEGER PRIMARY KEY,
         sheet TEXT, total_skt INTEGER, total_sheet1 INTEGER,
@@ -9359,7 +9383,7 @@ def _process_inspection_sync(job_id: str, s3_key: str, year: int, uploaded_by: s
         sheet_names = wb.sheetnames
 
         # 해당 연도 기존 데이터 삭제
-        conn.execute('DELETE FROM inspection_targets WHERE year=?', (year,))
+        conn.execute('DELETE FROM inspection_targets_staging WHERE year=?', (year,))
         conn.execute('DELETE FROM inspection_meta WHERE year=?', (year,))
         conn.commit()
 
@@ -9393,7 +9417,7 @@ def _process_inspection_sync(job_id: str, s3_key: str, year: int, uploaded_by: s
                 return INSP_TEAM_TO_HDQT[team]
             return access  # 매핑 없으면 원본 유지
 
-        INSERT_SQL = '''INSERT INTO inspection_targets
+        INSERT_SQL = '''INSERT INTO inspection_targets_staging
             (year,sheet,pnu_code,허가번호,호출명칭,국종군,부서,분기,연도주기,검사주기,
              허가상태,설치장소,도로명주소,장치수,통시,공대,kca검토결과,시기조정,
              기준연도,skt본부,access담당,품질개선팀)
@@ -9667,6 +9691,21 @@ async def inspection_column_values(request: Request, year: int, col: str, sheet:
     conn.close()
     return {"values": [r[0] for r in rows]}
 
+@app.get("/inspection/staging/column-values")
+async def inspection_staging_column_values(request: Request, year: int, col: str):
+    """스테이징 데이터의 컬럼별 고유값+건수 조회 (필터 UI용)."""
+    await _verify_auth(request)
+    ALLOWED_COLS = {'분기','국종군','부서','kca검토결과','시기조정','skt본부','access담당','품질개선팀','허가상태','허가번호','호출명칭','연도주기','검사주기','설치장소','도로명주소','장치수','통시','공대','기준연도','pnu_code'}
+    if col not in ALLOWED_COLS: raise HTTPException(400, "허용되지 않은 컬럼")
+    import sqlite3
+    if not os.path.exists(_INSP_DB): return {"values": []}
+    conn = sqlite3.connect(_INSP_DB, timeout=30)
+    rows = conn.execute(
+        f'SELECT "{col}", COUNT(*) as cnt FROM inspection_targets_staging WHERE year=? GROUP BY "{col}" ORDER BY cnt DESC',
+        (year,)).fetchall()
+    conn.close()
+    return {"values": [{"value": r[0] or "", "count": r[1]} for r in rows]}
+
 @app.get("/inspection/org-map")
 async def inspection_org_map(request: Request, year: int):
     """본부→팀 매핑 + 분기/국종군/KCA결과 고유값 반환."""
@@ -9688,6 +9727,76 @@ async def inspection_org_map(request: Request, year: int):
     # 하드코딩 맵을 primary로 사용 (DB 데이터 오염 방지)
     return {"org": INSP_ORG_MAP, "quarters": quarters, "nation_groups": nation_groups, "kca_results": kca_results}
 
+class InspStagingPreviewReq(BaseModel):
+    year: int
+    filters: dict = {}  # {col: [val, ...]}
+
+class InspStagingConfirmReq(BaseModel):
+    year: int
+    filters: dict = {}  # {col: [val, ...]}
+
+@app.post("/inspection/staging/preview")
+async def inspection_staging_preview(request: Request, req: InspStagingPreviewReq):
+    """스테이징 데이터 필터 미리보기 (행 수 반환)."""
+    await _verify_auth(request)
+    import sqlite3
+    if not os.path.exists(_INSP_DB): return {"total": 0, "filtered": 0}
+    ALLOWED_COLS = {'분기','국종군','부서','kca검토결과','시기조정','skt본부','access담당','품질개선팀','허가상태','허가번호','호출명칭','연도주기','검사주기','설치장소','도로명주소','장치수','통시','공대','기준연도','pnu_code'}
+    conn = sqlite3.connect(_INSP_DB, timeout=30)
+    total = conn.execute('SELECT COUNT(*) FROM inspection_targets_staging WHERE year=?', (req.year,)).fetchone()[0]
+
+    where = ["year=?"]
+    params = [req.year]
+    for col, vals in req.filters.items():
+        if col not in ALLOWED_COLS or not vals: continue
+        ph = ",".join("?" * len(vals))
+        where.append(f'"{col}" IN ({ph})')
+        params.extend(vals)
+
+    filtered = conn.execute(f'SELECT COUNT(*) FROM inspection_targets_staging WHERE {" AND ".join(where)}', params).fetchone()[0]
+    conn.close()
+    return {"total": total, "filtered": filtered}
+
+@app.post("/inspection/staging/confirm")
+async def inspection_staging_confirm(request: Request, req: InspStagingConfirmReq):
+    """스테이징 데이터 중 필터된 항목만 본 테이블로 이동."""
+    empno = await _verify_auth(request)
+    role = await asyncio.to_thread(_get_user_role_sync, empno)
+    if role not in {"admin", "manager"}:
+        raise HTTPException(403, "관리자/매니저만 가능")
+
+    import sqlite3
+    if not os.path.exists(_INSP_DB): raise HTTPException(400, "DB 없음")
+
+    ALLOWED_COLS = {'분기','국종군','부서','kca검토결과','시기조정','skt본부','access담당','품질개선팀','허가상태','허가번호','호출명칭','연도주기','검사주기','설치장소','도로명주소','장치수','통시','공대','기준연도','pnu_code'}
+
+    where = ["year=?"]
+    params = [req.year]
+    for col, vals in req.filters.items():
+        if col not in ALLOWED_COLS or not vals: continue
+        ph = ",".join("?" * len(vals))
+        where.append(f'"{col}" IN ({ph})')
+        params.extend(vals)
+    where_sql = " AND ".join(where)
+
+    conn = sqlite3.connect(_INSP_DB, timeout=30)
+    conn.execute('PRAGMA synchronous=NORMAL')
+
+    # 기존 본 테이블 데이터 삭제 (같은 연도)
+    conn.execute('DELETE FROM inspection_targets WHERE year=?', (req.year,))
+
+    # 스테이징에서 필터된 데이터를 본 테이블로 복사
+    cols = 'year,sheet,pnu_code,허가번호,호출명칭,국종군,부서,분기,연도주기,검사주기,허가상태,설치장소,도로명주소,장치수,통시,공대,kca검토결과,시기조정,기준연도,skt본부,access담당,품질개선팀'
+    count = conn.execute(f'SELECT COUNT(*) FROM inspection_targets_staging WHERE {where_sql}', params).fetchone()[0]
+    conn.execute(f'INSERT INTO inspection_targets ({cols}) SELECT {cols} FROM inspection_targets_staging WHERE {where_sql}', params)
+
+    # 스테이징 클리어
+    conn.execute('DELETE FROM inspection_targets_staging WHERE year=?', (req.year,))
+    conn.commit()
+    conn.close()
+
+    return {"success": True, "count": count}
+
 class InspectionDataReq(BaseModel):
     year: int
     sheet: str = "all"
@@ -9708,14 +9817,22 @@ def _build_insp_where(year, sheet, filters, search, addr):
         ph = ",".join("?" * len(vals))
         where.append(f'"{col}" IN ({ph})')
         params.extend(vals)
-    if search.strip():
-        where.append('(호출명칭 LIKE ? OR 허가번호 LIKE ?)')
-        kw = f'%{search.strip()}%'
-        params.extend([kw, kw])
-    if addr.strip():
-        where.append('(도로명주소 LIKE ? OR 설치장소 LIKE ?)')
-        akw = f'%{addr.strip()}%'
-        params.extend([akw, akw])
+    s = search.strip()
+    a = addr.strip()
+    if s and a and s == a:
+        # 동일 키워드: 호출명칭/허가번호/주소 통합 OR
+        where.append('(호출명칭 LIKE ? OR 허가번호 LIKE ? OR 도로명주소 LIKE ? OR 설치장소 LIKE ?)')
+        kw = f'%{s}%'
+        params.extend([kw, kw, kw, kw])
+    else:
+        if s:
+            where.append('(호출명칭 LIKE ? OR 허가번호 LIKE ?)')
+            kw = f'%{s}%'
+            params.extend([kw, kw])
+        if a:
+            where.append('(도로명주소 LIKE ? OR 설치장소 LIKE ?)')
+            akw = f'%{a}%'
+            params.extend([akw, akw])
     return " AND ".join(where), params
 
 @app.post("/inspection/data")

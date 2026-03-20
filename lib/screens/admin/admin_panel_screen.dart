@@ -122,11 +122,23 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
         final stage = status['stage'] as String? ?? '';
         setState(() { _kcaProgress = pct / 100; _kcaStage = stage; });
         if (status['status'] == 'complete') {
+          // 스테이징 완료 → 필터링 다이얼로그 열기
           if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text(stage), backgroundColor: Colors.green));
+            setState(() { _kcaImporting = false; _kcaProgress = 0; _kcaStage = ''; });
+            final confirmed = await showDialog<bool>(
+              context: context,
+              barrierDismissible: false,
+              builder: (ctx) => _KcaStagingFilterDialog(
+                inspSvc: _inspSvc,
+                year: year,
+              ),
+            );
+            if (confirmed == true) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('수검대상 Import 완료'), backgroundColor: Colors.green));
+              _loadKcaMeta();
+            }
           }
-          _loadKcaMeta();
           return;
         } else if (status['status'] == 'error') {
           if (mounted) {
@@ -1004,5 +1016,443 @@ class _KcaPreviewDialog extends StatelessWidget {
   }
 
   static String _fmt(int n) => n.toString()
+      .replaceAllMapped(RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'), (m) => '${m[1]},');
+}
+
+// ── 스테이징 필터 다이얼로그 ───────────────────────────────
+
+class _KcaStagingFilterDialog extends StatefulWidget {
+  final InspectionService inspSvc;
+  final int year;
+  const _KcaStagingFilterDialog({required this.inspSvc, required this.year});
+
+  @override
+  State<_KcaStagingFilterDialog> createState() => _KcaStagingFilterDialogState();
+}
+
+class _KcaStagingFilterDialogState extends State<_KcaStagingFilterDialog> {
+  static const _primary = Color(0xFFE53935);
+  static const _filterableCols = [
+    '분기', '국종군', '허가상태', 'kca검토결과', '시기조정',
+    'skt본부', 'access담당', '품질개선팀',
+    '부서', '연도주기', '검사주기', '기준연도',
+    '설치장소', '도로명주소', '장치수', '통시', '공대',
+  ];
+
+  final Map<String, List<String>> _filters = {};
+  final Map<String, List<Map<String, dynamic>>> _columnValues = {};
+  final Set<String> _expandedFilters = {};
+  final Map<String, String> _filterSearchQueries = {};
+  final Map<String, bool> _loadingColumnValues = {};
+  String? _selectedFilterCol;
+
+  int? _totalRows;
+  int? _filteredRows;
+  bool _loadingPreview = false;
+  bool _confirming = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadPreview();
+  }
+
+  Future<void> _loadPreview() async {
+    setState(() => _loadingPreview = true);
+    try {
+      final res = await widget.inspSvc.getStagingPreview(widget.year, _filters);
+      if (mounted) {
+        setState(() {
+          _totalRows = res['total'] as int? ?? 0;
+          _filteredRows = res['filtered'] as int? ?? 0;
+          _loadingPreview = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) setState(() => _loadingPreview = false);
+    }
+  }
+
+  void _addFilter(String column) {
+    setState(() {
+      _filters[column] = [];
+      _expandedFilters.add(column);
+      _selectedFilterCol = null;
+    });
+    _loadColumnValuesAsync(column);
+  }
+
+  Future<void> _loadColumnValuesAsync(String column) async {
+    if (_columnValues.containsKey(column)) return;
+    setState(() => _loadingColumnValues[column] = true);
+    try {
+      final values = await widget.inspSvc.getStagingColumnValues(widget.year, column);
+      if (!mounted) return;
+      setState(() {
+        _columnValues[column] = values;
+        _filters[column] = values.map((v) => v['value'] as String? ?? '').toList();
+        _loadingColumnValues.remove(column);
+      });
+      _loadPreview();
+    } catch (_) {
+      if (mounted) setState(() => _loadingColumnValues.remove(column));
+    }
+  }
+
+  void _updatePreview() {
+    _loadPreview();
+  }
+
+  Future<void> _confirm() async {
+    setState(() => _confirming = true);
+    try {
+      await widget.inspSvc.confirmStaging(widget.year, _filters);
+      if (mounted) Navigator.pop(context, true);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('확정 실패: $e'), backgroundColor: Colors.red),
+        );
+        setState(() => _confirming = false);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final availableCols = _filterableCols.where((c) => !_filters.containsKey(c)).toList();
+
+    return Dialog(
+      backgroundColor: Colors.white,
+      surfaceTintColor: Colors.transparent,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 600, maxHeight: 700),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // 헤더
+            Container(
+              padding: const EdgeInsets.fromLTRB(20, 16, 12, 12),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF5F7FA),
+                borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: _primary.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Icon(Icons.filter_list, color: _primary, size: 20),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('수검대상 필터 설정 (${widget.year}년)',
+                            style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+                        const SizedBox(height: 2),
+                        Text('Import된 데이터를 필터링하여 수검대상을 확정합니다.',
+                            style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: _confirming ? null : () => Navigator.pop(context, false),
+                    icon: const Icon(Icons.close, size: 20),
+                  ),
+                ],
+              ),
+            ),
+
+            // 필터 미리보기
+            Container(
+              margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF0F4FF),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: const Color(0xFFBBDEFB)),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.info_outline, size: 18, color: Colors.blue.shade700),
+                  const SizedBox(width: 10),
+                  _loadingPreview
+                      ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                      : Expanded(
+                          child: Text(
+                            '전체 ${_fmtN(_totalRows ?? 0)}건 중 ${_fmtN(_filteredRows ?? 0)}건 선택됨',
+                            style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Colors.blue.shade800),
+                          ),
+                        ),
+                ],
+              ),
+            ),
+
+            // 필터 추가 드롭다운
+            if (availableCols.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          border: Border.all(color: Colors.grey.shade300),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: DropdownButtonHideUnderline(
+                          child: DropdownButton<String>(
+                            isExpanded: true,
+                            isDense: true,
+                            icon: Icon(Icons.arrow_drop_down, color: _primary, size: 20),
+                            dropdownColor: Colors.white,
+                            style: const TextStyle(color: Colors.black87, fontSize: 13),
+                            hint: const Text('필터 추가할 컬럼 선택...', style: TextStyle(fontSize: 13)),
+                            value: _selectedFilterCol,
+                            items: availableCols.map((c) =>
+                                DropdownMenuItem(value: c, child: Text(c))).toList(),
+                            onChanged: (col) {
+                              if (col != null) _addFilter(col);
+                            },
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+            // 필터 목록 (스크롤)
+            Expanded(
+              child: _filters.isEmpty
+                  ? Center(
+                      child: Text('필터를 추가하지 않으면 전체 데이터가 Import됩니다.',
+                          style: TextStyle(fontSize: 13, color: Colors.grey.shade500)),
+                    )
+                  : ListView(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      children: _filters.keys.map((col) => _buildFilterGroup(col)).toList(),
+                    ),
+            ),
+
+            // 하단 버튼
+            Container(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: _confirming ? null : () => Navigator.pop(context, false),
+                      style: OutlinedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
+                      child: const Text('취소'),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    flex: 2,
+                    child: ElevatedButton.icon(
+                      onPressed: _confirming || _filteredRows == null || _filteredRows == 0
+                          ? null
+                          : _confirm,
+                      icon: _confirming
+                          ? const SizedBox(width: 16, height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                          : const Icon(Icons.check, size: 18),
+                      label: Text(_confirming
+                          ? '확정 중...'
+                          : '${_fmtN(_filteredRows ?? 0)}건 확정'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: _primary,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildFilterGroup(String column) {
+    final values = _columnValues[column] ?? [];
+    final selected = _filters[column] ?? [];
+    final isExpanded = _expandedFilters.contains(column);
+    final searchQuery = _filterSearchQueries[column] ?? '';
+    final isLoading = _loadingColumnValues[column] == true;
+
+    final filteredValues = searchQuery.isEmpty
+        ? values
+        : values.where((v) => (v['value'] as String? ?? '')
+            .toLowerCase().contains(searchQuery.toLowerCase())).toList();
+
+    final selectedCount = selected.length;
+    final totalCount = values.length;
+
+    final visibleValues = filteredValues.map((v) => v['value'] as String? ?? '').toList();
+    final visibleCheckedCount = visibleValues.where((v) => selected.contains(v)).length;
+    final allVisibleSelected = visibleValues.isNotEmpty && visibleCheckedCount == visibleValues.length;
+    final someVisibleSelected = visibleCheckedCount > 0 && visibleCheckedCount < visibleValues.length;
+
+    return Container(
+      margin: const EdgeInsets.only(top: 12),
+      decoration: BoxDecoration(
+        border: Border.all(color: Colors.grey.shade300),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        children: [
+          InkWell(
+            onTap: () => setState(() {
+              if (isExpanded) { _expandedFilters.remove(column); }
+              else { _expandedFilters.add(column); }
+            }),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              child: Row(
+                children: [
+                  Icon(isExpanded ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down,
+                      size: 20, color: Colors.grey.shade600),
+                  const SizedBox(width: 4),
+                  Expanded(child: Text(column,
+                      style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13))),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: _primary.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Text('$selectedCount / $totalCount개 선택',
+                        style: TextStyle(fontSize: 11, color: _primary)),
+                  ),
+                  const SizedBox(width: 8),
+                  InkWell(
+                    onTap: () {
+                      setState(() {
+                        _filters.remove(column);
+                        _expandedFilters.remove(column);
+                        _filterSearchQueries.remove(column);
+                      });
+                      _updatePreview();
+                    },
+                    child: Icon(Icons.close, size: 18, color: Colors.grey.shade500),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          if (isExpanded) ...[
+            const Divider(height: 1),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+              child: TextField(
+                decoration: InputDecoration(
+                  hintText: '검색...',
+                  hintStyle: const TextStyle(fontSize: 13),
+                  prefixIcon: const Icon(Icons.search, size: 18),
+                  isDense: true,
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(6),
+                    borderSide: BorderSide(color: Colors.grey.shade300),
+                  ),
+                ),
+                style: const TextStyle(fontSize: 13),
+                onChanged: (q) => setState(() => _filterSearchQueries[column] = q),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              child: CheckboxListTile(
+                dense: true,
+                controlAffinity: ListTileControlAffinity.leading,
+                tristate: true,
+                title: const Text('(모두 선택)',
+                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500)),
+                value: allVisibleSelected ? true : someVisibleSelected ? null : false,
+                onChanged: (_) {
+                  setState(() {
+                    final newSelected = Set<String>.from(selected);
+                    if (allVisibleSelected) {
+                      newSelected.removeAll(visibleValues);
+                    } else {
+                      newSelected.addAll(visibleValues);
+                    }
+                    _filters[column] = newSelected.toList();
+                  });
+                  _updatePreview();
+                },
+              ),
+            ),
+            const Divider(height: 1),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 200),
+              child: isLoading || values.isEmpty
+                  ? Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Center(child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const SizedBox(width: 20, height: 20,
+                              child: CircularProgressIndicator(strokeWidth: 2)),
+                          const SizedBox(height: 8),
+                          Text('값 로딩 중...', style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+                        ],
+                      )),
+                    )
+                  : ListView.builder(
+                      shrinkWrap: true,
+                      itemCount: filteredValues.length,
+                      itemBuilder: (_, i) {
+                        final v = filteredValues[i];
+                        final val = v['value'] as String? ?? '';
+                        final count = v['count'] as int? ?? 0;
+                        final checked = selected.contains(val);
+                        return CheckboxListTile(
+                          dense: true,
+                          controlAffinity: ListTileControlAffinity.leading,
+                          title: Text(val.isEmpty ? '(빈 값)' : val,
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontStyle: val.isEmpty ? FontStyle.italic : FontStyle.normal,
+                              )),
+                          secondary: Text(_fmtN(count),
+                              style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+                          value: checked,
+                          onChanged: (v) {
+                            setState(() {
+                              if (v == true) { selected.add(val); }
+                              else { selected.remove(val); }
+                              _filters[column] = List.from(selected);
+                            });
+                            _updatePreview();
+                          },
+                        );
+                      },
+                    ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  static String _fmtN(int n) => n.toString()
       .replaceAllMapped(RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'), (m) => '${m[1]},');
 }

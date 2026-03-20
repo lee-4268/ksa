@@ -300,11 +300,13 @@ class _UserProfileButtonState extends State<UserProfileButton> {
           }
         }
 
+        final isNarrow = MediaQuery.of(context).size.width < 500;
+
         return InkWell(
           onTap: () => _showProfilePopup(context, auth),
           borderRadius: BorderRadius.circular(8),
           child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            padding: EdgeInsets.symmetric(horizontal: isNarrow ? 8 : 12, vertical: 6),
             decoration: BoxDecoration(
               color: Colors.grey.shade50,
               borderRadius: BorderRadius.circular(8),
@@ -344,63 +346,65 @@ class _UserProfileButtonState extends State<UserProfileButton> {
                     color: _roleColor(role),
                   ),
                 ),
-                const SizedBox(width: 10),
-                // 이름 + 본부/팀
-                Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          displayName,
-                          style: const TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                            color: Colors.black87,
-                          ),
-                        ),
-                        const SizedBox(width: 6),
-                        // 권한 뱃지
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 6,
-                            vertical: 1,
-                          ),
-                          decoration: BoxDecoration(
-                            color: _roleColor(role).withValues(alpha: 0.1),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: Text(
-                            _roleLabel(role),
-                            style: TextStyle(
-                              fontSize: 10,
+                if (!isNarrow) ...[
+                  const SizedBox(width: 10),
+                  // 이름 + 본부/팀
+                  Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            displayName,
+                            style: const TextStyle(
+                              fontSize: 13,
                               fontWeight: FontWeight.w600,
-                              color: _roleColor(role),
+                              color: Colors.black87,
                             ),
+                          ),
+                          const SizedBox(width: 6),
+                          // 권한 뱃지
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 6,
+                              vertical: 1,
+                            ),
+                            decoration: BoxDecoration(
+                              color: _roleColor(role).withValues(alpha: 0.1),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Text(
+                              _roleLabel(role),
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w600,
+                                color: _roleColor(role),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      if (subtitle.isNotEmpty) ...[
+                        const SizedBox(height: 2),
+                        Text(
+                          subtitle,
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: Colors.grey.shade600,
                           ),
                         ),
                       ],
-                    ),
-                    if (subtitle.isNotEmpty) ...[
-                      const SizedBox(height: 2),
-                      Text(
-                        subtitle,
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: Colors.grey.shade600,
-                        ),
-                      ),
                     ],
-                  ],
-                ),
-                const SizedBox(width: 4),
-                Icon(
-                  Icons.expand_more,
-                  size: 18,
-                  color: Colors.grey.shade500,
-                ),
+                  ),
+                  const SizedBox(width: 4),
+                  Icon(
+                    Icons.expand_more,
+                    size: 18,
+                    color: Colors.grey.shade500,
+                  ),
+                ],
               ],
             ),
           ),

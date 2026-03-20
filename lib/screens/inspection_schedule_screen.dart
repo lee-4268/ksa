@@ -25,6 +25,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
   late final InspectionService _svc;
   late final TabController _tabCtrl;
   final _searchCtrl = TextEditingController();
+  final _horizontalScrollCtrl = ScrollController();
 
   int _year = DateTime.now().year;
   String _sheet = 'all';
@@ -93,6 +94,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
   void dispose() {
     _tabCtrl.dispose();
     _searchCtrl.dispose();
+    _horizontalScrollCtrl.dispose();
     super.dispose();
   }
 
@@ -107,6 +109,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
         year: _year, sheet: _sheet,
         filters: _activeFilters,
         search: _aSearch,
+        addr: _aSearch,
         page: _page, pageSize: 100,
       );
       setState(() {
@@ -137,11 +140,11 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
         _orgMap = {};
         final org = res['org'] as Map<String, dynamic>? ?? {};
         org.forEach((hdqt, teams) {
-          _orgMap[hdqt] = List<String>.from(teams as List? ?? []);
+          _orgMap[hdqt] = (teams as List? ?? []).map((e) => '$e').toList();
         });
-        _allQuarters = List<String>.from(res['quarters'] ?? []);
-        _allNationGroups = List<String>.from(res['nation_groups'] ?? []);
-        _allKcaResults = List<String>.from(res['kca_results'] ?? []);
+        _allQuarters = (res['quarters'] as List? ?? []).map((e) => '$e').toList();
+        _allNationGroups = (res['nation_groups'] as List? ?? []).map((e) => '$e').toList();
+        _allKcaResults = (res['kca_results'] as List? ?? []).map((e) => '$e').toList();
       });
     } catch (_) {}
   }
@@ -354,6 +357,31 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     }
   }
 
+  Future<void> _exportExcel() async {
+    if (_aHdqt.isEmpty) {
+      _showSnack('Excel 다운로드를 하려면 본부 필터를 선택하세요.', isError: true);
+      return;
+    }
+    try {
+      _showSnack('Excel 다운로드 중...');
+      final bytes = await _svc.exportXlsx(
+        year: _year, sheet: _sheet,
+        filters: _activeFilters,
+        search: _aSearch,
+        addr: _aSearch,
+      );
+      final blob = html.Blob([bytes],
+          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      final url = html.Url.createObjectUrlFromBlob(blob);
+      html.AnchorElement(href: url)
+        ..setAttribute('download', '수검대상_${_year}년.xlsx')
+        ..click();
+      html.Url.revokeObjectUrl(url);
+    } catch (e) {
+      _showSnack('Excel 다운로드 실패: $e', isError: true);
+    }
+  }
+
   Widget _dialogField(TextEditingController ctrl, String label, String hint) {
     return TextField(
       controller: ctrl,
@@ -431,83 +459,93 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           // Row 1: 연도, 시트, 검색창, 총건수, 일괄등록 버튼
-          Row(children: [
-            _yearDropdown(),
-            const SizedBox(width: 10),
-            _sheetDropdown(),
-            const SizedBox(width: 12),
-            SizedBox(
-              width: 260,
-              child: TextField(
-                controller: _searchCtrl,
-                onChanged: (v) => setState(() => _pSearch = v),
-                decoration: InputDecoration(
-                  hintText: '호출명칭 또는 허가번호',
-                  isDense: true,
-                  prefixIcon: const Icon(Icons.search, size: 18),
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          Wrap(
+            spacing: 10,
+            runSpacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              _yearDropdown(),
+              _sheetDropdown(),
+              SizedBox(
+                width: 260,
+                child: TextField(
+                  controller: _searchCtrl,
+                  onChanged: (v) => setState(() => _pSearch = v),
+                  decoration: InputDecoration(
+                    hintText: '호출명칭, 허가번호 또는 주소',
+                    isDense: true,
+                    prefixIcon: const Icon(Icons.search, size: 18),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  ),
+                  onSubmitted: (_) => _applyFilters(),
                 ),
-                onSubmitted: (_) => _applyFilters(),
               ),
-            ),
-            const Spacer(),
-            if (_total > 0)
-              Text('총 ${_formatNumber(_total)}건',
-                  style: const TextStyle(fontSize: 13, color: Colors.black54)),
-            if (_selectedLicenseNos.isNotEmpty) ...[
-              const SizedBox(width: 12),
-              ElevatedButton.icon(
-                icon: const Icon(Icons.event_available, size: 16),
-                label: Text('${_selectedLicenseNos.length}건 일정 등록'),
+              if (_total > 0)
+                Text('총 ${_formatNumber(_total)}건',
+                    style: const TextStyle(fontSize: 13, color: Colors.black54)),
+              if (_selectedLicenseNos.isNotEmpty)
+                ElevatedButton.icon(
+                  icon: const Icon(Icons.event_available, size: 16),
+                  label: Text('${_selectedLicenseNos.length}건 일정 등록'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: _blue, foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                  ),
+                  onPressed: _showBulkScheduleDialog,
+                ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          // Row 2: 필터 드롭다운 + 적용/초기화
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              _filterDropdown('본부', _pHdqt, ['', ...hdqts],
+                  (v) => setState(() { _pHdqt = v!; _pTeam = ''; })),
+              _filterDropdown('팀', _pTeam, ['', ...teams],
+                  (v) => setState(() => _pTeam = v!)),
+              _buildMultiDropdown('분기', _pQuarters, _allQuarters,
+                  (v) => setState(() => _pQuarters = v)),
+              _buildMultiDropdown('밴드선택', _pNationGroups, _allNationGroups,
+                  (v) => setState(() => _pNationGroups = v)),
+              _buildMultiDropdown('검토여부', _pKcaResults, _allKcaResults,
+                  (v) => setState(() => _pKcaResults = v)),
+              ElevatedButton(
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: _blue, foregroundColor: Colors.white,
+                  backgroundColor: _primary, foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                ),
+                onPressed: _applyFilters,
+                child: const Text('적용', style: TextStyle(fontSize: 13)),
+              ),
+              OutlinedButton(
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Colors.grey.shade600,
+                  side: BorderSide(color: Colors.grey.shade300),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                ),
+                onPressed: _resetFilters,
+                child: const Text('초기화', style: TextStyle(fontSize: 13)),
+              ),
+              OutlinedButton.icon(
+                icon: const Icon(Icons.file_download, size: 16),
+                label: const Text('Excel', style: TextStyle(fontSize: 13)),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: const Color(0xFF43A047),
+                  side: const BorderSide(color: Color(0xFF43A047)),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                   padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                 ),
-                onPressed: _showBulkScheduleDialog,
+                onPressed: _exportExcel,
               ),
             ],
-          ]),
-          const SizedBox(height: 10),
-          // Row 2: 필터 드롭다운 + 적용/초기화
-          Row(children: [
-            _filterDropdown('본부', _pHdqt, ['', ...hdqts],
-                (v) => setState(() { _pHdqt = v!; _pTeam = ''; })),
-            const SizedBox(width: 8),
-            _filterDropdown('팀', _pTeam, ['', ...teams],
-                (v) => setState(() => _pTeam = v!)),
-            const SizedBox(width: 8),
-            _buildMultiDropdown('분기', _pQuarters, _allQuarters,
-                (v) => setState(() => _pQuarters = v)),
-            const SizedBox(width: 8),
-            _buildMultiDropdown('밴드선택', _pNationGroups, _allNationGroups,
-                (v) => setState(() => _pNationGroups = v)),
-            const SizedBox(width: 8),
-            _buildMultiDropdown('검토여부', _pKcaResults, _allKcaResults,
-                (v) => setState(() => _pKcaResults = v)),
-            const SizedBox(width: 12),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: _primary, foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              ),
-              onPressed: _applyFilters,
-              child: const Text('적용', style: TextStyle(fontSize: 13)),
-            ),
-            const SizedBox(width: 8),
-            OutlinedButton(
-              style: OutlinedButton.styleFrom(
-                foregroundColor: Colors.grey.shade600,
-                side: BorderSide(color: Colors.grey.shade300),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              ),
-              onPressed: _resetFilters,
-              child: const Text('초기화', style: TextStyle(fontSize: 13)),
-            ),
-          ]),
+          ),
           if (_hasActiveFilters) ...[
             const SizedBox(height: 8),
             _buildActiveFilterChips(),
@@ -713,16 +751,20 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
             textAlign: TextAlign.center, style: TextStyle(color: Colors.black38)));
 
     final allChecked = _items.isNotEmpty &&
-        _items.every((item) => _selectedLicenseNos.contains(item['허가번호'] as String? ?? ''));
+        _items.every((item) => _selectedLicenseNos.contains('${item['허가번호'] ?? ''}'));
     final someChecked = !allChecked &&
-        _items.any((item) => _selectedLicenseNos.contains(item['허가번호'] as String? ?? ''));
+        _items.any((item) => _selectedLicenseNos.contains('${item['허가번호'] ?? ''}'));
 
     return Column(children: [
       Expanded(
-        child: SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
+        child: Scrollbar(
+          controller: _horizontalScrollCtrl,
+          thumbVisibility: true,
           child: SingleChildScrollView(
-            child: DataTable(
+            controller: _horizontalScrollCtrl,
+            scrollDirection: Axis.horizontal,
+            child: SingleChildScrollView(
+              child: DataTable(
               headingRowColor: WidgetStateProperty.all(Colors.grey.shade50),
               dataRowMinHeight: 40,
               dataRowMaxHeight: 44,
@@ -737,27 +779,31 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                     setState(() {
                       if (v == true) {
                         for (final item in _items) {
-                          final no = item['허가번호'] as String? ?? '';
+                          final no = '${item['허가번호'] ?? ''}';
                           if (no.isNotEmpty) _selectedLicenseNos.add(no);
                         }
                       } else {
                         for (final item in _items) {
-                          _selectedLicenseNos.remove(item['허가번호'] as String? ?? '');
+                          _selectedLicenseNos.remove('${item['허가번호'] ?? ''}');
                         }
                       }
                     });
                   },
                 )),
+                const DataColumn(label: Text('허가번호', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600))),
                 const DataColumn(label: Text('호출명칭', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600))),
-                const DataColumn(label: Text('분기', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600))),
                 const DataColumn(label: Text('국종군', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600))),
+                const DataColumn(label: Text('분기', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600))),
+                const DataColumn(label: Text('허가상태', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600))),
+                const DataColumn(label: Text('도로명주소', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600))),
+                const DataColumn(label: Text('장치수', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600))),
+                const DataColumn(label: Text('통시', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600))),
+                const DataColumn(label: Text('KCA검토결과', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600))),
                 const DataColumn(label: Text('Access담당', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600))),
                 const DataColumn(label: Text('품질개선팀', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600))),
-                const DataColumn(label: Text('KCA검토결과', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600))),
-                const DataColumn(label: Text('시기조정', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600))),
               ],
               rows: _items.map((item) {
-                final licenseNo = item['허가번호'] as String? ?? '';
+                final licenseNo = '${item['허가번호'] ?? ''}';
                 final isSelected = _detailLicenseNo == licenseNo;
                 final isChecked = _selectedLicenseNos.contains(licenseNo);
                 return DataRow(
@@ -778,18 +824,23 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                         });
                       },
                     )),
-                    DataCell(SizedBox(width: 200, child: Text(item['호출명칭'] ?? '', style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis))),
-                    DataCell(Text(item['분기'] ?? '', style: const TextStyle(fontSize: 12))),
-                    DataCell(Text(item['국종군'] ?? '', style: const TextStyle(fontSize: 12))),
-                    DataCell(Text(item['access담당'] ?? '', style: const TextStyle(fontSize: 12))),
-                    DataCell(Text(item['품질개선팀'] ?? '', style: const TextStyle(fontSize: 12))),
-                    DataCell(_buildKcaChip(item['kca검토결과'] ?? '')),
-                    DataCell(Text(item['시기조정'] ?? '', style: const TextStyle(fontSize: 12))),
+                    DataCell(Text(licenseNo, style: const TextStyle(fontSize: 12))),
+                    DataCell(SizedBox(width: 200, child: Text('${item['호출명칭'] ?? ''}', style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis))),
+                    DataCell(Text('${item['국종군'] ?? ''}', style: const TextStyle(fontSize: 12))),
+                    DataCell(Text('${item['분기'] ?? ''}', style: const TextStyle(fontSize: 12))),
+                    DataCell(Text('${item['허가상태'] ?? ''}', style: const TextStyle(fontSize: 12))),
+                    DataCell(SizedBox(width: 200, child: Text('${item['도로명주소'] ?? ''}', style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis))),
+                    DataCell(Text('${item['장치수'] ?? ''}', style: const TextStyle(fontSize: 12))),
+                    DataCell(Text('${item['통시'] ?? ''}', style: const TextStyle(fontSize: 12))),
+                    DataCell(_buildKcaChip('${item['kca검토결과'] ?? ''}')),
+                    DataCell(Text('${item['access담당'] ?? ''}', style: const TextStyle(fontSize: 12))),
+                    DataCell(Text('${item['품질개선팀'] ?? ''}', style: const TextStyle(fontSize: 12))),
                   ],
                 );
               }).toList(),
             ),
           ),
+        ),
         ),
       ),
       _buildPagination(),

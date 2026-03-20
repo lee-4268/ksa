@@ -65,6 +65,36 @@ class InspectionService {
     return List<Map<String, dynamic>>.from(body['items'] ?? []);
   }
 
+  // ── Staging (필터링 후 확정) ─────────────────────────────
+
+  Future<List<Map<String, dynamic>>> getStagingColumnValues(int year, String col) async {
+    final uri = Uri.parse('$_baseUrl/inspection/staging/column-values').replace(
+        queryParameters: {'year': '$year', 'col': col});
+    final resp = await http.get(uri, headers: _headers).timeout(_apiTimeout);
+    final body = json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+    return List<Map<String, dynamic>>.from(body['values'] ?? []);
+  }
+
+  Future<Map<String, dynamic>> getStagingPreview(int year, Map<String, List<String>> filters) async {
+    final resp = await http.post(
+      Uri.parse('$_baseUrl/inspection/staging/preview'),
+      headers: _headers,
+      body: json.encode({'year': year, 'filters': filters}),
+    ).timeout(_apiTimeout);
+    return json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+  }
+
+  Future<int> confirmStaging(int year, Map<String, List<String>> filters) async {
+    final resp = await http.post(
+      Uri.parse('$_baseUrl/inspection/staging/confirm'),
+      headers: _headers,
+      body: json.encode({'year': year, 'filters': filters}),
+    ).timeout(const Duration(minutes: 5));
+    final body = json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+    if (resp.statusCode != 200) throw Exception(body['detail'] ?? '확정 실패');
+    return body['count'] as int? ?? 0;
+  }
+
   // ── Query ────────────────────────────────────────────────
 
   Future<Map<String, dynamic>> getOrgMap(int year) async {
