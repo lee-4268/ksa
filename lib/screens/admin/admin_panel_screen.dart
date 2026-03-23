@@ -117,6 +117,8 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
       return;
     }
     debugPrint('[KCA Import] 업로드 시작');
+    // 최신 인증 토큰 갱신 (세션 연장 시 토큰이 바뀔 수 있음)
+    _inspSvc.setAuthToken(context.read<AuthService>().authToken);
     setState(() { _kcaImporting = true; _kcaProgress = 0; _kcaStage = '업로드 중...'; });
     try {
       final s3Key = await _inspSvc.uploadRaw(file.bytes!, file.name);
