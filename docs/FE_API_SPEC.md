@@ -2,8 +2,8 @@
 
 ## Frontend Services Specification
 
-**버전:** 1.4.0
-**최종 수정일:** 2026-03-04
+**버전:** 2.0.0
+**최종 수정일:** 2026-03-23
 
 ---
 
@@ -410,7 +410,171 @@ class WeatherInfo {
 
 ---
 
-## 13. 화면 (Screens)
+## 13. CallnameService (v2.0.0)
+
+**파일:** `lib/services/callname_service.dart`
+
+호출명칭 매칭 시스템 클라이언트를 담당합니다. Bearer 토큰 인증 사용.
+
+### Methods
+
+| 메서드 | 시그니처 | 설명 |
+|--------|---------|------|
+| `setAuthToken` | `void setAuthToken(String? token)` | 인증 토큰 설정 |
+| `getDbStatus` | `Future<Map<String, dynamic>>` | `GET /callname/db-status` — DB 상태 조회 |
+| `getDbPreview` | `Future<List<Map>>` | `GET /callname/db-preview` — DB 샘플 조회 |
+| `uploadCsv` | `Future<String> uploadCsv(Uint8List bytes, String filename, {String mode})` | `POST /callname/upload-csv` — DB 업로드 (admin) |
+| `uploadRaw` | `Future<String> uploadRaw(Uint8List bytes, String filename)` | `POST /callname/upload-raw` — 매칭용 Excel 업로드 |
+| `uploadComplete` | `Future<Map> uploadComplete(String s3Key)` | `POST /callname/upload-complete` — 업로드 완료 처리 |
+| `getAnalysis` | `Future<Map> getAnalysis(String uploadId)` | `GET /callname/upload/{id}/analysis` — 컬럼 자동 감지 |
+| `getColumnValues` | `Future<List<String>> getColumnValues(String uploadId, String column)` | `POST /callname/upload/{id}/column-values` |
+| `startProcess` | `Future<String> startProcess(String uploadId, Map filters, List targets)` | `POST /callname/process` — 매칭 실행 |
+| `streamProgress` | `Stream<Map> streamProgress(String processId)` | `GET /callname/process/{id}/stream` — SSE 진행률 |
+| `downloadResult` | `Future<void> downloadResult(String processId)` | `GET /callname/process/{id}/download` — 결과 다운로드 |
+
+---
+
+## 14. CertificateService (v2.0.0)
+
+**파일:** `lib/services/certificate_service.dart`
+
+설치확인서 생성을 담당합니다. Bearer 토큰 인증 사용.
+
+### Methods
+
+| 메서드 | 시그니처 | 설명 |
+|--------|---------|------|
+| `setAuthToken` | `void setAuthToken(String? token)` | 인증 토큰 설정 |
+| `lookup` | `Future<Map> lookup(String zpwino)` | `POST /cert/lookup` — 국소 정보 조회 |
+| `generate` | `Future<Uint8List> generate(Map data, {String format})` | `POST /cert/generate` — 단일 생성 |
+| `batchLookup` | `Future<List<Map>> batchLookup(List<String> zpwinos)` | `POST /cert/batch/lookup` — 일괄 조회 |
+| `batchUploadPhotos` | `Future<String> batchUploadPhotos(Uint8List zipBytes)` | `POST /cert/batch/upload-photos` — 사진 ZIP 업로드 |
+| `batchGenerate` | `Future<String> batchGenerate(List items, {String? photoS3Key})` | `POST /cert/batch/generate` — 일괄 생성 |
+| `batchDownload` | `Future<void> batchDownload(String jobId)` | `GET /cert/batch/download/{id}` — ZIP 다운로드 |
+
+---
+
+## 15. InspectionService (v2.0.0)
+
+**파일:** `lib/services/inspection_service.dart`
+
+수검 관리 시스템 클라이언트를 담당합니다. Bearer 토큰 인증 사용.
+
+### Import Methods
+
+| 메서드 | 시그니처 | 설명 |
+|--------|---------|------|
+| `setAuthToken` | `void setAuthToken(String? token)` | 인증 토큰 설정 |
+| `uploadRaw` | `Future<String> uploadRaw(Uint8List bytes, String filename)` | `POST /inspection/upload-raw` — KCA Excel 업로드 |
+| `enqueue` | `Future<String> enqueue(String s3Key, String year, String uploadedBy)` | `POST /inspection/enqueue` — Import 잡 등록 |
+| `getJobStatus` | `Future<Map> getJobStatus(String jobId)` | `GET /inspection/job/{id}` — 잡 상태 조회 |
+
+### Metadata Methods
+
+| 메서드 | 시그니처 | 설명 |
+|--------|---------|------|
+| `getMeta` | `Future<Map> getMeta()` | `GET /inspection/meta` — 메타데이터 조회 |
+| `getUnassigned` | `Future<List> getUnassigned(String year)` | `GET /inspection/unassigned` — 미배정 조회 |
+| `getColumnValues` | `Future<List> getColumnValues(String year, String column)` | `GET /inspection/column-values` |
+| `getOrgMap` | `Future<Map> getOrgMap()` | `GET /inspection/org-map` — 조직 맵 |
+
+### Staging Methods
+
+| 메서드 | 시그니처 | 설명 |
+|--------|---------|------|
+| `stagingPreview` | `Future<Map> stagingPreview(Map request)` | `POST /inspection/staging/preview` |
+| `stagingConfirm` | `Future<Map> stagingConfirm(Map request)` | `POST /inspection/staging/confirm` |
+
+### Data Methods
+
+| 메서드 | 시그니처 | 설명 |
+|--------|---------|------|
+| `queryData` | `Future<Map> queryData(Map request)` | `POST /inspection/data` — 데이터 조회 |
+| `exportXlsx` | `Future<void> exportXlsx(Map request)` | `POST /inspection/export-xlsx` — XLSX Export |
+| `getSummary` | `Future<Map> getSummary(String year)` | `POST /inspection/summary` — 통계 |
+
+### Schedule Methods
+
+| 메서드 | 시그니처 | 설명 |
+|--------|---------|------|
+| `createSchedule` | `Future<bool> createSchedule(Map schedule)` | `POST /inspection/schedule` |
+| `deleteSchedule` | `Future<bool> deleteSchedule(String year, String licenseNo)` | `DELETE /inspection/schedule/{year}/{허가번호}` |
+| `getSchedules` | `Future<List> getSchedules({String year, String? accessManager})` | `GET /inspection/schedules` |
+
+### Result Methods
+
+| 메서드 | 시그니처 | 설명 |
+|--------|---------|------|
+| `saveResult` | `Future<bool> saveResult(Map result)` | `POST /inspection/result` |
+| `uploadResultPhoto` | `Future<String> uploadResultPhoto(Uint8List bytes, String filename)` | `POST /inspection/result/photo` |
+| `deleteResultPhoto` | `Future<bool> deleteResultPhoto(Map params)` | `DELETE /inspection/result/photo` |
+
+### User Methods
+
+| 메서드 | 시그니처 | 설명 |
+|--------|---------|------|
+| `getMyList` | `Future<List> getMyList(String year)` | `GET /inspection/my-list` |
+| `getProgress` | `Future<Map> getProgress(String year)` | `GET /inspection/progress` |
+
+---
+
+## 16. ErpDsCompareService (v2.0.0)
+
+**파일:** `lib/services/erp_ds_compare_service.dart`
+
+ERP vs DS 데이터 비교를 담당합니다. Bearer 토큰 인증 사용.
+
+### Methods
+
+| 메서드 | 시그니처 | 설명 |
+|--------|---------|------|
+| `setAuthToken` | `void setAuthToken(String? token)` | 인증 토큰 설정 |
+| `compare` | `Future<Map> compare(String divisionId, String importDate)` | `POST /erp-ds/compare` — 데이터 비교 실행 |
+
+---
+
+## 17. DivisionDataService (v2.0.0)
+
+**파일:** `lib/services/division_data_service.dart`
+
+본부별 수검 대상 데이터 관리를 담당합니다.
+
+### Methods
+
+| 메서드 | 시그니처 | 설명 |
+|--------|---------|------|
+| `setAuthToken` | `void setAuthToken(String? token)` | 인증 토큰 설정 |
+| `getDivisionStats` | `Future<Map>` | 본부 현황 통계 조회 |
+| `getTargetList` | `Future<List> getTargetList({filters, search, page, limit})` | 대상 목록 조회 |
+| `batchUpdateStatus` | `Future<bool> batchUpdateStatus(List ids, String status)` | 일괄 상태 변경 |
+| `exportExcel` | `Future<void> exportExcel({filters})` | 원본 서식 유지 Excel Export |
+| `importExcel` | `Future<Map> importExcel(Uint8List bytes, String filename)` | 수정본 Excel Import |
+
+---
+
+## 18. TeamContextService (v2.0.0)
+
+**파일:** `lib/services/team_context_service.dart`
+
+팀/본부 컨텍스트 관리를 담당합니다.
+
+### Properties
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `currentDivision` | `String?` | 현재 선택된 본부 |
+| `currentTeam` | `String?` | 현재 선택된 팀 |
+
+### Methods
+
+| 메서드 | 시그니처 | 설명 |
+|--------|---------|------|
+| `setContext` | `void setContext({String? division, String? team})` | 컨텍스트 설정 |
+| `clearContext` | `void clearContext()` | 컨텍스트 초기화 |
+
+---
+
+## 19. 화면 (Screens)
 
 ### 주요 화면 목록
 
@@ -425,14 +589,26 @@ class WeatherInfo {
 | DS 파일 병합 | `ds_merge_screen.dart` | (Drawer 미노출, 직접 접근) |
 | 사용자 관리 (관리자) | `admin/user_management_screen.dart` | 관리자 패널 > 사용자 관리 |
 | 감사 로그 (관리자) | `admin/audit_log_screen.dart` | 관리자 패널 > 감사 로그 |
+| 호출명칭 매칭 | `callname_screen.dart` | 호출명칭 매칭 |
+| 설치확인서 | `certificate_screen.dart` | 설치확인서 생성 |
+| 수검 일정 관리 | `inspection_schedule_screen.dart` | 수검 관리 |
+| 수검 결과 기록 | `inspection_result_screen.dart` | 수검 관리 |
+| ERP-DS 비교 | `erp_ds_compare_screen.dart` | ERP-DS 비교 |
+| 본부 대상 관리 | `division_management_screen.dart` | 본부 대상 관리 |
+| DS 업로드 | `ds_upload_screen.dart` | DS 데이터 관리 |
 
 ### Drawer 메뉴 구성
 
 ```
+├── 수검 관리           → InspectionScheduleScreen
 ├── 일정 및 통계       → DashboardScreen
 ├── DS 데이터 관리     → DsDashboardScreen (업로드 + Export + 현황 통합)
-│   └── icon: Icons.storage, color: #5C6BC0
-└── AI 철탑형태 분류   → TowerClassificationScreen
+├── 호출명칭 매칭      → CallnameScreen
+├── 설치확인서 생성    → CertificateScreen
+├── 본부 대상 관리     → DivisionManagementScreen
+├── ERP-DS 비교       → ErpDsCompareScreen
+├── AI 철탑형태 분류   → TowerClassificationScreen
+└── 관리자 패널       → AdminPanelScreen (admin/manager only)
 ```
 
 ### DsDashboardScreen 구조
@@ -456,9 +632,52 @@ AppBar: "DS 데이터 관리" [새로고침]
 - 업로드 완료/실패 시 자동 중단 (uploading 레코드 소멸)
 - `dispose()`에서 타이머 취소
 
+### CallnameScreen 구조
+
+```
+AppBar: "호출명칭 매칭"
+├── Step 1: Excel 업로드
+│   ├── 파일 선택 버튼 → 업로드 진행률
+│   └── 컬럼 자동 감지 결과 표시
+├── Step 2: 필터 설정
+│   ├── 컬럼별 다중 선택 필터
+│   └── 필터된 행 수 미리보기
+└── Step 3: 매칭 실행
+    ├── SSE 실시간 진행률 바
+    └── 결과 Excel 다운로드 버튼
+```
+
+### CertificateScreen 구조
+
+```
+AppBar: "설치확인서 생성"
+TabBar: [개별 생성] [일괄 생성]
+├── 개별 탭
+│   ├── 국소명/허가번호 검색 → 자동 채움
+│   ├── 설치 상세 입력 폼 (안테나, 설치대, 공동설치)
+│   ├── 첨부 파일 (도면, 사진)
+│   └── [PDF 생성] [HWPX 생성] 버튼
+└── 일괄 탭
+    ├── Excel 업로드 → 컬럼 매핑
+    ├── 사진 ZIP 업로드
+    └── [일괄 생성] → ZIP 다운로드
+```
+
+### InspectionScheduleScreen 구조
+
+```
+AppBar: "수검 관리" [연도 선택] [필터]
+├── 필터 패널 (본부, 분기, Access담당, 상태)
+├── 미배정 현황 바
+├── 데이터 그리드
+│   ├── 허가번호, 호출명칭, 본부, 담당, 상태, 검사일
+│   └── 행 클릭 → InspectionResultScreen
+└── [Export] [Import] 버튼
+```
+
 ---
 
-## 14. JS 파일 (web/)
+## 20. JS 파일 (web/)
 
 | 파일 | 역할 |
 |------|------|
@@ -482,7 +701,7 @@ AppBar: "DS 데이터 관리" [새로고침]
 
 ---
 
-## 17. 환경 변수 / 빌드 설정
+## 21. 환경 변수 / 빌드 설정
 
 ### 빌드 시 `--dart-define` 변수
 
@@ -525,3 +744,4 @@ flutter build web --release \
 | 1.3.0 | 2026-02-26 | DsDataService, DsUploadService, DsExportService 추가, Drawer 구성 변경, DsDashboardScreen 구조 명세, JS 파일 목록, 빌드 설정 추가 |
 | 1.3.1 | 2026-03-03 | Upload-Zero-Build 반영: _maxPollDuration 35분→3분, DsDashboardScreen 자동 갱신 타이머 추가, DsUploadService 설명 업데이트 |
 | 1.4.0 | 2026-03-04 | 보안 강화: AuthService SSO+토큰 전환, AdminService·AuditService 추가, 전 서비스 Bearer 토큰 인증, API 키 dart-define 분리, X-User-Id 완전 제거, 관리자 화면(사용자 관리/감사 로그) 추가 |
+| 2.0.0 | 2026-03-23 | CallnameService, CertificateService, InspectionService, ErpDsCompareService, DivisionDataService, TeamContextService 추가. 화면 7개 추가 (호출명칭 매칭, 설치확인서, 수검 일정, 수검 결과, ERP-DS 비교, 본부 대상 관리, DS 업로드). Drawer 메뉴 전면 재구성 |

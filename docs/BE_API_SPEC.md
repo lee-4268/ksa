@@ -1,7 +1,7 @@
 # KSA Backend API 명세서
 
-**버전:** 1.4.0
-**최종 수정일:** 2026-03-04
+**버전:** 2.0.0
+**최종 수정일:** 2026-03-23
 **API 타입:** AWS AppSync GraphQL + FastAPI REST (2개 서버)
 
 ---
@@ -16,14 +16,16 @@ https://mtokcw2pmffyjdhl3uhfihwj7m.appsync-api.ap-northeast-2.amazonaws.com/grap
 - Auth: AMAZON_COGNITO_USER_POOLS (Primary), API_KEY (Secondary)
 - Authorization: Owner-based (사용자는 자신의 데이터만 접근)
 
-### 1.2 DS API 서버 (FastAPI on EC2)
+### 1.2 통합 API 서버 (FastAPI on EC2)
 ```
 https://api-sko-kca.skons.net
 ```
 - Framework: FastAPI + Uvicorn
 - Service: systemd (kca-api)
+- 호출명칭 매칭, 설치확인서 생성, 수검 관리, ERP-DS 비교 등 전체 기능 통합
 - S3 Bucket: sko-kca-s3
 - DynamoDB Tables: kca-ds-records, kca-ds-uploads, kca-ds-jobs, kca-user-roles
+- SQLite: inspection.db, ds_detail.db
 - 인증: HMAC-SHA256 Bearer 토큰 (2시간 만료)
 - CORS: 환경변수 `CORS_ALLOWED_ORIGINS` 또는 기본 허용 목록
 
@@ -54,8 +56,8 @@ https://c3jictzagh.execute-api.ap-northeast-2.amazonaws.com
 | 분류 | 엔드포인트 |
 |------|-----------|
 | **공개** (인증 불필요) | `GET /`, `/health`, `/classes`, `POST /auth/login`, `GET /ds/region-codes` |
-| **인증 필요** (Bearer 토큰) | categories·stations CRUD, upload/photo·excel, download/*, predict, feedback, ds/stats·data·export*, ds/presign-*, ds/upload-raw·enqueue, ds/job/*, users/{empno}, `DELETE /storage/*` |
-| **관리자 전용** (admin/manager 역할) | `GET /admin/users`, `GET /admin/audit-logs`, `PUT /admin/set-role`, `DELETE /ds/data`, `POST /ds/upload-raw`, `POST /ds/enqueue` |
+| **인증 필요** (Bearer 토큰) | categories·stations CRUD, upload/photo·excel, download/*, predict, feedback, ds/stats·data·export*, ds/presign-*, ds/upload-raw·enqueue, ds/job/*, users/{empno}, `DELETE /storage/*`, callname/*, cert/*, inspection/*, erp-ds/* |
+| **관리자 전용** (admin/manager 역할) | `GET /admin/users`, `GET /admin/audit-logs`, `PUT /admin/set-role`, `DELETE /ds/data`, `POST /ds/upload-raw`, `POST /ds/enqueue`, `POST /callname/upload-csv`, `POST /inspection/upload-raw`, `POST /inspection/enqueue` |
 
 ### 2.3 Rate Limiting
 
@@ -694,24 +696,476 @@ Base URL: `https://c3jictzagh.execute-api.ap-northeast-2.amazonaws.com`
 
 ---
 
-## 5. S3 Storage
+## 6. 호출명칭 매칭 API (v2.0.0)
 
-### 5.1 무선국 관리 (ksa-photos-bucket)
+Base URL: `https://api-sko-kca.skons.net`
+
+### 6.1 호출명칭 DB 관리
+
+#### `GET /callname/db-status`
+현재 호출명칭 DB 상태 조회
+
+**Response:**
+```json
+{ "success": true, "rowCount": 150000, "fileCount": 3 }
+```
+
+#### `GET /callname/db-preview`
+호출명칭 DB 샘플 10건 조회
+
+**Response:**
+```json
+{ "success": true, "rows": [...] }
+```
+
+#### `POST /callname/upload-csv`
+호출명칭 DB CSV/Excel 업로드 (관리자 전용)
+- Content-Type: `multipart/form-data`
+- Fields: `file` (CSV/Excel), `mode` (`"replace"` | `"merge"`)
+
+**Response:**
+```json
+{ "success": true, "jobId": "uuid" }
+```
+
+#### `GET /callname/upload-job/{job_id}`
+업로드 잡 상태 조회
+
+**Response:**
+```json
+{ "success": true, "status": "completed", "rowCount": 150000 }
+```
+
+### 6.2 Excel 매칭 워크플로우
+
+#### `POST /callname/upload-raw`
+Excel 파일을 S3 temp에 스트리밍 업로드
+
+**Response:**
+```json
+{ "success": true, "s3Key": "callname/temp/uuid_file.xlsx" }
+```
+
+#### `POST /callname/upload-complete`
+업로드 완료 → 메타데이터 반환
+
+**Request Body:**
+```json
+{ "s3Key": "..." }
+```
+
+**Response:**
+```json
+{ "success": true, "uploadId": "uuid", "fileName": "...", "rowCount": 5000, "columns": [...] }
+```
+
+#### `GET /callname/upload/{upload_id}/analysis`
+컬럼 자동 감지 (zpwina, zpwino, access담당, 품질개선팀 등)
+
+**Response:**
+```json
+{ "success": true, "detectedColumns": { "zpwina": "F", "zpwino": "G" }, "totalRows": 5000 }
+```
+
+#### `POST /callname/upload/{upload_id}/column-values`
+특정 컬럼의 고유값 목록 조회 (필터용)
+
+**Request Body:**
+```json
+{ "column": "본부" }
+```
+
+**Response:**
+```json
+{ "success": true, "values": ["충청본부", "강원본부"], "count": 9 }
+```
+
+#### `POST /callname/process`
+매칭 실행 시작
+
+**Request Body:**
+```json
+{ "uploadId": "uuid", "filters": { "본부": ["충청본부"] }, "targetColumns": [...] }
+```
+
+**Response:**
+```json
+{ "success": true, "processId": "uuid" }
+```
+
+#### `GET /callname/process/{process_id}/stream`
+SSE(Server-Sent Events) 스트림으로 매칭 진행률 수신
+- Content-Type: `text/event-stream`
+
+**Events:**
+```json
+{ "progress": 45.0, "matched": 2500, "total": 5000 }
+```
+
+#### `GET /callname/process/{process_id}/download`
+매칭 결과 Excel 다운로드
+
+**Response:** `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`
+
+---
+
+## 7. 설치확인서 API (v2.0.0)
+
+Base URL: `https://api-sko-kca.skons.net`
+
+### 7.1 개별 생성
+
+#### `POST /cert/lookup`
+zpwino로 국소 정보 조회
+
+**Request Body:**
+```json
+{ "zpwino": "12345" }
+```
+
+**Response:**
+```json
+{ "success": true, "station": { } }
+```
+
+#### `POST /cert/generate`
+단일 설치확인서 HWP 생성
+
+**Request Body:**
+```json
+{ "zpwino": "12345", "data": { "안테나수_자사": 3 }, "format": "hwpx" }
+```
+
+**Response:** `application/octet-stream` (HWP file)
+
+### 7.2 일괄 생성
+
+#### `POST /cert/batch/lookup`
+다건 zpwino 일괄 조회
+
+**Request Body:**
+```json
+{ "zpwinos": ["12345", "12346"] }
+```
+
+**Response:**
+```json
+{ "success": true, "results": [...] }
+```
+
+#### `POST /cert/batch/upload-photos`
+사진 ZIP 업로드 (8MB 청크 스트리밍)
+- Content-Type: `multipart/form-data`
+
+**Response:**
+```json
+{ "success": true, "s3Key": "cert/photos/uuid.zip" }
+```
+
+#### `POST /cert/batch/generate`
+일괄 설치확인서 생성
+
+**Request Body:**
+```json
+{ "items": [...], "photoS3Key": "..." }
+```
+
+**Response:**
+```json
+{ "success": true, "jobId": "uuid" }
+```
+
+#### `GET /cert/batch/download/{job_id}`
+생성된 설치확인서 ZIP 다운로드
+
+**Response:** `application/zip`
+
+---
+
+## 8. 수검 관리 API (v2.0.0)
+
+Base URL: `https://api-sko-kca.skons.net`
+
+### 8.1 데이터 Import
+
+#### `POST /inspection/upload-raw`
+KCA Excel 파일을 S3에 스트리밍 업로드
+
+**Response:**
+```json
+{ "success": true, "s3Key": "inspection/temp/uuid.xlsx" }
+```
+
+#### `POST /inspection/enqueue`
+백그라운드 Import 잡 큐 등록
+
+**Request Body:**
+```json
+{ "s3Key": "...", "year": "2026", "uploadedBy": "user@email" }
+```
+
+**Response:**
+```json
+{ "success": true, "jobId": "uuid" }
+```
+
+#### `GET /inspection/job/{job_id}`
+Import 잡 상태 조회
+
+**Response:**
+```json
+{ "success": true, "status": "completed", "importedRows": 50000 }
+```
+
+### 8.2 메타데이터 및 설정
+
+#### `GET /inspection/meta`
+수검 메타데이터 조회 (연도, 상태값 등)
+
+**Response:**
+```json
+{ "success": true, "years": ["2025", "2026"], "statuses": [...] }
+```
+
+#### `GET /inspection/unassigned`
+미배정 수검 대상 조회
+
+**Query Parameters:** `year`
+
+**Response:**
+```json
+{ "success": true, "items": [...], "count": 500 }
+```
+
+#### `GET /inspection/column-values`
+특정 컬럼 고유값 조회
+
+**Query Parameters:** `year`, `sheet`, `column`
+
+**Response:**
+```json
+{ "success": true, "values": [...] }
+```
+
+#### `GET /inspection/org-map`
+조직 계층 맵 조회 (본부→팀→담당)
+
+**Response:**
+```json
+{ "success": true, "orgMap": { } }
+```
+
+### 8.3 Staging 워크플로우
+
+#### `POST /inspection/staging/preview`
+Staging 데이터 필터링 미리보기
+
+**Request Body:**
+```json
+{ "year": "2026", "filters": { }, "page": 1, "limit": 50 }
+```
+
+**Response:**
+```json
+{ "success": true, "items": [...], "total": 500 }
+```
+
+#### `POST /inspection/staging/confirm`
+Staging → 운영 DB 확정
+
+**Request Body:**
+```json
+{ "year": "2026", "filters": { } }
+```
+
+**Response:**
+```json
+{ "success": true, "confirmedCount": 500 }
+```
+
+### 8.4 데이터 조회 및 Export
+
+#### `POST /inspection/data`
+수검 데이터 조회 (필터, 검색, 페이지네이션)
+
+**Request Body:**
+```json
+{ "year": "2026", "filters": { }, "search": "...", "page": 1, "limit": 50 }
+```
+
+**Response:**
+```json
+{ "success": true, "items": [...], "total": 5000 }
+```
+
+#### `POST /inspection/export-xlsx`
+필터링된 수검 데이터 XLSX 내보내기
+
+**Request Body:**
+```json
+{ "year": "2026", "filters": { } }
+```
+
+**Response:** `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`
+
+#### `POST /inspection/summary`
+수검 통계 요약 (조직별, 상태별)
+
+**Request Body:**
+```json
+{ "year": "2026" }
+```
+
+**Response:**
+```json
+{ "success": true, "summary": { "total": 50000, "completed": 30000 } }
+```
+
+### 8.5 일정 관리
+
+#### `POST /inspection/schedule`
+수검 일정 등록/수정
+
+**Request Body:**
+```json
+{ "year": "2026", "허가번호": "12345", "호출명칭": "...", "분기": "1Q", "skt본부": "충청", "access담당": "홍길동" }
+```
+
+**Response:**
+```json
+{ "success": true }
+```
+
+#### `DELETE /inspection/schedule/{year}/{허가번호}`
+수검 일정 삭제
+
+**Response:**
+```json
+{ "success": true }
+```
+
+#### `GET /inspection/schedules`
+수검 일정 목록 조회
+
+**Query Parameters:** `year`, `access담당`
+
+**Response:**
+```json
+{ "success": true, "schedules": [...] }
+```
+
+### 8.6 결과 기록
+
+#### `POST /inspection/result`
+수검 결과 등록/수정
+
+**Request Body:**
+```json
+{ "year": "2026", "허가번호": "12345", "status": "합격", "검사일": "2026-03-15", "메모": "...", "철탑형태": "강관주" }
+```
+
+**Response:**
+```json
+{ "success": true }
+```
+
+#### `POST /inspection/result/photo`
+수검 결과 사진 업로드
+- Content-Type: `multipart/form-data`
+
+**Response:**
+```json
+{ "success": true, "photoUrl": "..." }
+```
+
+#### `DELETE /inspection/result/photo`
+수검 결과 사진 삭제
+
+**Request Body:**
+```json
+{ "year": "2026", "허가번호": "12345", "photoKey": "..." }
+```
+
+**Response:**
+```json
+{ "success": true }
+```
+
+### 8.7 사용자 조회
+
+#### `GET /inspection/my-list`
+내 배정 수검 목록
+
+**Query Parameters:** `year`
+
+**Response:**
+```json
+{ "success": true, "items": [...] }
+```
+
+#### `GET /inspection/progress`
+수검 진도율 통계
+
+**Query Parameters:** `year`
+
+**Response:**
+```json
+{ "success": true, "total": 50000, "completed": 30000, "rate": 60.0 }
+```
+
+#### `POST /inspection/build-ds-detail`
+DS 데이터에서 수검 상세 인덱스 빌드
+
+**Response:**
+```json
+{ "success": true }
+```
+
+---
+
+## 9. ERP-DS 비교 API (v2.0.0)
+
+Base URL: `https://api-sko-kca.skons.net`
+
+#### `POST /erp-ds/compare`
+ERP 유지보수 데이터 vs DS 무선시설 데이터 비교
+- zpwino 기반 매칭, 주소 비교, 철탑형태 정규화
+
+**Request Body:**
+```json
+{ "divisionId": "chungcheong", "importDate": "20260203" }
+```
+
+**Response:**
+```json
+{ "success": true, "matched": 4500, "mismatched": 300, "missing": 200, "details": [...] }
+```
+
+---
+
+## 10. S3 Storage
+
+### 10.1 무선국 관리 (ksa-photos-bucket)
 | 경로 | 설명 |
 |------|------|
 | `private/{identityId}/photos/{stationId}/{ts}_{filename}` | 현장 사진 |
 | `private/{identityId}/excel-originals/{categoryId}_{ts}.xlsx` | 원본 Excel |
 
-### 5.2 DS 데이터 (sko-kca-s3)
+### 10.2 DS 데이터 (sko-kca-s3)
 | 경로 | 설명 |
 |------|------|
 | `ds-raw/temp/{uuid}_{filename}` | 업로드 임시 ZIP |
 | `ds-raw/{divisionId}/{divisionCode}_{importDate}.zip` | 원본 ZIP 보관 |
 | `ds-exports/{divisionId}/{divisionCode}_{importDate}.xlsx` | 생성된 xlsx 캐시 |
+| `callname/temp/{uuid}_{filename}` | 호출명칭 매칭 임시 Excel |
+| `callname/db/{filename}` | 호출명칭 DB 파일 |
+| `cert/photos/{uuid}.zip` | 설치확인서 사진 ZIP |
+| `cert/output/{jobId}/` | 생성된 설치확인서 |
+| `inspection/temp/{uuid}.xlsx` | KCA Import 임시 파일 |
 
 ---
 
-## 6. Cognito Authentication
+## 11. Cognito Authentication
 
 | 항목 | 값 |
 |------|-----|
@@ -721,7 +1175,7 @@ Base URL: `https://c3jictzagh.execute-api.ap-northeast-2.amazonaws.com`
 
 ---
 
-## 7. DynamoDB Tables
+## 12. DynamoDB Tables
 
 | Table | PK | SK | 용도 |
 |-------|----|----|------|
@@ -730,6 +1184,8 @@ Base URL: `https://c3jictzagh.execute-api.ap-northeast-2.amazonaws.com`
 | kca-ds-jobs | jobId | — | 처리 잡 큐 |
 | kca-user-roles | user_id | — | 사용자 역할 관리 (admin/manager/member) |
 | kca-audit-logs | logId | — | 감사 로그 (역할 변경, 데이터 삭제 등) |
+| inspection.db | SQLite | — | 수검 데이터 (Staging/운영) |
+| ds_detail.db | SQLite | — | DS 수검 상세 인덱스 |
 
 ### kca-ds-uploads 주요 속성
 
@@ -748,7 +1204,7 @@ Base URL: `https://c3jictzagh.execute-api.ap-northeast-2.amazonaws.com`
 
 ---
 
-## 8. Error Codes
+## 13. Error Codes
 
 ### DS API 공통
 | Status | 설명 |
@@ -781,3 +1237,4 @@ Base URL: `https://c3jictzagh.execute-api.ap-northeast-2.amazonaws.com`
 | 1.3.0 | 2026-02-26 | DS API 서버 전체 추가 (upload-raw, enqueue, job, stats, export-xlsx, export-presign, data CRUD), S3 경로, DynamoDB 테이블 구조 추가 |
 | 1.3.1 | 2026-03-03 | Upload-Zero-Build: 메타데이터만 파싱 (xlsx 빌드 제거), storageType/fileManifest 추가, 트리플 라우팅 (s3-zip/s3/DynamoDB), export on-demand 빌드, kca-ds-uploads 속성 명세 |
 | 1.4.0 | 2026-03-04 | 보안 강화: HMAC 토큰 인증, SSO 로그인 토큰 발급, 관리자 패널 API (users/audit-logs/set-role), kca-user-roles·kca-audit-logs 테이블, Rate Limiting, 업로드 크기 제한, S3 경로 검증, CORS 제한, 에러 메시지 내부정보 차단, X-User-Id 폴백 제거 |
+| 2.0.0 | 2026-03-23 | 호출명칭 매칭 API (DB 관리 + 3-Step 매칭 워크플로우 + SSE 스트리밍), 설치확인서 API (개별/일괄 HWP 생성), 수검 관리 API (Import → Staging → 일정 → 결과 → 진도율), ERP-DS 비교 API, S3 경로 추가, SQLite DB 추가 |

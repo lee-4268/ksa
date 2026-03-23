@@ -99,20 +99,24 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
 
     // 파일 선택을 setState 전에 수행 — 웹에서 setState 후 FilePicker 호출 시 상태 꼬임 방지
     _kcaPickerOpen = true;
+    debugPrint('[KCA Import] FilePicker 호출 시작');
     final picked = await FilePicker.platform.pickFiles(
       type: FileType.custom,
       allowedExtensions: ['xlsx'],
       withData: true,
     );
     _kcaPickerOpen = false;
-    if (!mounted) return;
-    if (picked == null || picked.files.isEmpty) return;
+    debugPrint('[KCA Import] FilePicker 반환: picked=${picked != null}, files=${picked?.files.length ?? 0}');
+    if (!mounted) { debugPrint('[KCA Import] mounted=false, return'); return; }
+    if (picked == null || picked.files.isEmpty) { debugPrint('[KCA Import] 파일 미선택, return'); return; }
     final file = picked.files.first;
+    debugPrint('[KCA Import] file=${file.name}, bytes=${file.bytes?.length ?? 0}');
     if (file.bytes == null) {
       ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('파일을 읽을 수 없습니다.'), backgroundColor: Colors.red));
       return;
     }
+    debugPrint('[KCA Import] 업로드 시작');
     setState(() { _kcaImporting = true; _kcaProgress = 0; _kcaStage = '업로드 중...'; });
     try {
       final s3Key = await _inspSvc.uploadRaw(file.bytes!, file.name);
