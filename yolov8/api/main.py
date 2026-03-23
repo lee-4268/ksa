@@ -9046,6 +9046,40 @@ _SEOUL_GU_TO_TEAM: dict = {
 # 길이 내림차순 (긴 키워드 우선)
 _SEOUL_GU_SORTED: list = sorted(_SEOUL_GU_TO_TEAM.items(), key=lambda x: -len(x[0]))
 
+# ── 광역시/도 축약형 → 정식명 매핑 ──────────────────────────────────────────
+_ADDR_ABBR_MAP: dict = {
+    '서울 ': '서울특별시 ',
+    '부산 ': '부산광역시 ',
+    '대구 ': '대구광역시 ',
+    '인천 ': '인천광역시 ',
+    '광주 ': '광주광역시 ',
+    '대전 ': '대전광역시 ',
+    '울산 ': '울산광역시 ',
+    '세종 ': '세종특별자치시 ',
+    '경기 ': '경기도 ',
+    '강원 ': '강원특별자치도 ',
+    '충북 ': '충청북도 ',
+    '충남 ': '충청남도 ',
+    '전북 ': '전북특별자치도 ',
+    '전남 ': '전라남도 ',
+    '경북 ': '경상북도 ',
+    '경남 ': '경상남도 ',
+    '제주 ': '제주특별자치도 ',
+}
+
+def _normalize_addr(addr: str) -> str:
+    """주소 정규화: 앞쪽 괄호+코드 제거 + 축약형→정식명 변환.
+    '(701240)대구 동구' → '대구광역시 동구'
+    """
+    import re as _re
+    # 1) 앞쪽 괄호+숫자/공백 제거: "(701240)대구" → "대구"
+    addr = _re.sub(r'^\s*\([^)]*\)\s*', '', addr).strip()
+    # 2) 축약형 → 정식명
+    for abbr, full in _ADDR_ABBR_MAP.items():
+        if addr.startswith(abbr):
+            return full + addr[len(abbr):]
+    return addr
+
 # ── 법정동 코드표 (PNU 10자리 → 법정동명) ──────────────────────────────────
 _LEGAL_DONG_MAP: dict = {}
 
@@ -9113,6 +9147,9 @@ def _hdqt_from_addr(addr: str, known_hdqt: str = '',
     if not addr:
         return known_hdqt, ''
 
+    # 0) 축약형 정규화 ("대구 동구" → "대구광역시 동구")
+    addr = _normalize_addr(addr.strip())
+
     # 1) 서울 구명 (명확한 하드코딩)
     for kw, (hdqt, team) in _SEOUL_GU_SORTED:
         if kw not in addr:
@@ -9149,8 +9186,9 @@ def _hdqt_from_addr(addr: str, known_hdqt: str = '',
         for gu in gus:
             for dong in dongs:
                 compound_keys.append(f"{gu} {dong}")
-        # 복합(긴 것 우선) → 단일(긴 것 우선) 순서
-        candidates = sorted(compound_keys, key=len, reverse=True) + sorted(matches, key=len, reverse=True)
+        # 복합(긴 것 우선) → 단일 시/군/구만(긴 것 우선) — 단일 동/읍/면은 동명 충돌 위험
+        single_safe = [m for m in matches if m.endswith(('시', '군', '구'))]
+        candidates = sorted(compound_keys, key=len, reverse=True) + sorted(single_safe, key=len, reverse=True)
         for kw in candidates:
             team = learned_map.get(kw)
             if not team or team not in INSP_TEAM_TO_HDQT:
@@ -9191,10 +9229,13 @@ def _learn_addr_map_from_cert_db() -> dict:
             team = str(ons_team or '').strip()
             if team not in INSP_TEAM_TO_HDQT:
                 continue
-            matches = geo_re.findall(str(zpwiadr))
-            # 단일 키워드 (시, 군, 구, 읍, 면, 동)
+            # 주소 정규화: "(701240)대구 동구" → "대구광역시 동구"
+            normalized = _normalize_addr(str(zpwiadr))
+            matches = geo_re.findall(normalized)
+            # 단일 키워드 (시, 군, 구만 — 읍/면/동은 전국 동명 충돌 방지로 복합만 사용)
             for kw in matches:
-                kw_teams[kw][team] += 1
+                if kw.endswith(('시', '군', '구')):
+                    kw_teams[kw][team] += 1
             cities = [m for m in matches if m.endswith('시')]
             gus = [m for m in matches if m.endswith('구')]
             guns = [m for m in matches if m.endswith('군')]
