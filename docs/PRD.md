@@ -2,8 +2,8 @@
 
 ## Product Requirements Document
 
-**버전:** 1.4.0
-**최종 수정일:** 2026-03-04
+**버전:** 2.0.0
+**최종 수정일:** 2026-03-23
 **작성자:** Development Team
 
 ---
@@ -21,6 +21,8 @@ KSA (Korea Station Administration) - 무선국 검사 관리 시스템
 - 현장 검사원
 - 검사 관리 감독자
 - 본부별 DS 데이터 관리자
+- 본부별 수검 대상 관리자 (본부 담당자)
+- 품질개선팀 담당자
 
 ### 1.4 플랫폼 지원
 | 플랫폼 | 지원 여부 | 비고 |
@@ -123,6 +125,50 @@ KSA (Korea Station Administration) - 무선국 검사 관리 시스템
 | DS 파일 병합 | 브라우저에서 ZIP 내 XLS 파일 병합 → xlsx | P1 |
 | DS 데이터 조회 | 시트별 데이터 페이징 조회 및 검색 | P1 |
 | DS 데이터 삭제 | 본부/날짜별 데이터 삭제 | P1 |
+
+### 2.9 호출명칭 매칭 (v2.0.0)
+| 기능 | 설명 | 우선순위 |
+|------|------|----------|
+| Excel 업로드 | 수검 대상 Excel 업로드 → 호출명칭/통시/ZPWINA/ZPWINO 컬럼 자동 감지 | P0 |
+| 필터 설정 | 컬럼별 다중 선택 필터, 필터된 행 수 미리보기 | P0 |
+| 매칭 실행 | SSE 스트림 기반 실시간 진행률 → Access담당/품질개선팀/통시 컬럼 매칭 결과 Excel 다운로드 | P0 |
+| 호출명칭 DB 관리 | CSV/Excel 업로드로 호출명칭 DB 구축 (관리자 전용), replace/merge 모드 | P1 |
+
+### 2.10 설치확인서 생성 (v2.0.0)
+| 기능 | 설명 | 우선순위 |
+|------|------|----------|
+| 국소 자동 조회 | 국소명/허가번호 입력 → DB에서 기본 정보 자동 채움 | P0 |
+| 설치 상세 입력 | 안테나 수(자사/타사 구분), 설치대 유형 드롭다운, 공유/단독 구분 | P0 |
+| 공동 설치 정보 | SKT/KT/LGU+ 체크박스, 공동설치자 정보 | P0 |
+| 문서 생성 | PDF 또는 HWPX(한글) 형식 선택 → 다운로드 | P0 |
+| 일괄 생성 | Excel 일괄 업로드 → 컬럼 자동 매핑 → ZIP 다운로드 | P1 |
+| 첨부 파일 | 건설 도면, 현장 사진 다수 첨부 | P1 |
+
+### 2.11 수검 관리 시스템 (v2.0.0)
+| 기능 | 설명 | 우선순위 |
+|------|------|----------|
+| KCA 데이터 Import | KCA Excel 업로드 → 백그라운드 파싱 → Staging 영역 저장 | P0 |
+| 수검 일정 관리 | 연도/분기별 수검 일정 등록, Access담당 배정, 다중 필터링 | P0 |
+| 수검 결과 기록 | 합격/불합격/대기 상태, 검사일, 메모, 철탑형태 기록, 사진 첨부 | P0 |
+| 미배정 관리 | 미배정 수검 대상 조회 및 일괄 배정 | P0 |
+| 진도율 추적 | 연도별 완료/미완료 진도 통계 | P1 |
+| Staging 워크플로우 | 데이터 미리보기 → 확인(confirm) → 운영 DB 반영 | P1 |
+| 데이터 Export | 필터링된 수검 데이터 XLSX 내보내기 | P1 |
+
+### 2.12 ERP-DS 데이터 비교 (v2.0.0)
+| 기능 | 설명 | 우선순위 |
+|------|------|----------|
+| 데이터 비교 | ERP 유지보수 데이터 vs DS 무선시설 데이터 자동 비교 | P0 |
+| 불일치 검출 | 설치형태, 일련번호 등 불일치 항목 자동 추출 | P0 |
+| 비교 결과 표시 | 매칭/불일치/누락 건수 및 상세 내역 표시 | P1 |
+
+### 2.13 본부 대상 관리 (v2.0.0)
+| 기능 | 설명 | 우선순위 |
+|------|------|----------|
+| 본부 현황 대시보드 | 본부 전체 대상 국수, 완료 건수, 진도율 | P0 |
+| 대상 목록 관리 | 검색/필터, 다중 선택 일괄 상태 변경/삭제 | P0 |
+| 팀 배정 관리 | 팀별 진도 현황, 국소 팀 간 재배정 | P1 |
+| Excel Import/Export | 원본 서식 유지 Export + 수정본 Import | P0 |
 
 ---
 
@@ -245,6 +291,21 @@ DynamoDB Table: `kca-ds-jobs` (PK=jobId)
 | ensembleMethod | String | - | 앙상블 방식 (mean/max/vote) |
 | processingTimeMs | Float | - | 처리 시간 (ms) |
 
+### 3.8 수검 스케줄 (InspectionSchedule)
+
+| 필드명 | 타입 | 설명 |
+|--------|------|------|
+| year | String | 수검 연도 |
+| 허가번호 | String | 무선국 허가번호 |
+| 호출명칭 | String | 호출명칭 |
+| 분기 | String | 수검 분기 |
+| skt본부 | String | SKT 본부 |
+| access담당 | String | Access 담당자 |
+| 품질개선팀 | String | 품질개선팀 담당 |
+| status | String | 수검 상태 |
+| 검사일 | String | 검사 실시일 |
+| 메모 | String | 특이사항 |
+
 ---
 
 ## 4. Excel Export 상세 스펙
@@ -357,6 +418,27 @@ DS 데이터 관리 → 업로드 카드 → Excel Export 버튼
 → 없으면 서버사이드 빌드 → 다운로드 (다음부터 즉시 다운로드)
 ```
 
+### 6.6 호출명칭 매칭 흐름
+```
+호출명칭 매칭 → Step 1: Excel 업로드 → 컬럼 자동 감지
+→ Step 2: 필터 설정 (컬럼별 다중 선택)
+→ Step 3: 매칭 실행 (SSE 실시간 진행률)
+→ 결과 Excel 다운로드
+```
+
+### 6.7 설치확인서 생성 흐름
+```
+설치확인서 → 개별: 국소 조회 → 정보 입력 → PDF/HWPX 생성 다운로드
+         → 일괄: Excel 업로드 → 사진 ZIP 업로드 → 일괄 생성 → ZIP 다운로드
+```
+
+### 6.8 수검 관리 흐름
+```
+수검 관리 → KCA Excel Import → Staging 미리보기 → Confirm → 운영 DB
+→ 일정 등록/배정 → 현장 수검 → 결과 기록 → 진도율 확인
+→ 필요 시 XLSX Export
+```
+
 ---
 
 ## 7. 비기능 요구사항
@@ -427,12 +509,13 @@ DS 데이터 관리 → 업로드 카드 → Excel Export 버튼
 - **Instance:** c7i-flex.large (Ubuntu 22.04)
 - **Endpoint:** https://c3jictzagh.execute-api.ap-northeast-2.amazonaws.com
 
-### 8.4 Backend - DS API 서버 (EC2 #2)
+### 8.4 Backend - 통합 API 서버 (EC2 #2)
 - **Framework:** FastAPI + Uvicorn
 - **Service:** systemd (kca-api)
 - **Endpoint:** https://api-sko-kca.skons.net
-- **Storage:** AWS S3 (sko-kca-s3), DynamoDB
+- **Storage:** AWS S3 (sko-kca-s3), DynamoDB, SQLite (inspection.db, ds_detail.db)
 - **의존성:** xlrd (XLS 파싱), openpyxl (xlsx 생성), psutil (메모리 모니터링)
+- **API 범위:** DS 데이터, 호출명칭 매칭, 설치확인서 생성, 수검 관리, ERP-DS 비교
 
 ### 8.5 외부 API
 - Kakao Maps JavaScript API (Web)
@@ -487,7 +570,7 @@ DS 데이터 관리 → 업로드 카드 → Excel Export 버튼
 - [x] stuck job 10분 주기 자동 복구
 - [x] 컬럼 정합성 수정 (빈 헤더 건너뛰기 + 실제 컬럼 인덱스 보존)
 
-### v1.4.0 (현재)
+### v1.4.0
 - [x] HMAC-SHA256 토큰 인증 (i-NET SSO + Bearer 토큰)
 - [x] 관리자 패널 (사용자 관리, 역할 변경, 감사 로그)
 - [x] kca-user-roles 테이블 분리 (공유 Users 테이블 보호)
@@ -500,10 +583,15 @@ DS 데이터 관리 → 업로드 카드 → Excel Export 버튼
 - [x] X-User-Id 폴백 제거 (Bearer 토큰 전용)
 - [x] Amplify 자동 빌드 (amplify.yml + 환경변수)
 
-### v2.0.0 (예정)
-- [ ] FE/BE 레포지터리 분리
-- [ ] 오프라인 모드 강화
-- [ ] 다중 사용자 협업
+### v2.0.0 (현재)
+- [x] 호출명칭 매칭 시스템 (3-Step: 업로드→필터→매칭, SSE 스트리밍)
+- [x] 설치확인서 생성 (개별/일괄, PDF/HWPX, 사진 첨부)
+- [x] 수검 관리 시스템 (KCA Import → Staging → 일정 → 결과 → 진도율)
+- [x] ERP-DS 데이터 비교 (설치형태/일련번호 불일치 검출)
+- [x] 본부 대상 관리 (대시보드, 팀 배정, Excel Import/Export)
+- [x] 전국 현황 지도 대시보드 (9개 본부 진도율 시각화)
+- [ ] DS 파일 활용 장비 일련번호 매칭 (개발 예정)
+- [ ] DS 파일 활용 철탑형태 매칭 (개발 예정)
 
 ---
 
@@ -535,3 +623,4 @@ DS 데이터 관리 → 업로드 카드 → Excel Export 버튼
 | 1.3.0 | 2026-02-26 | DS 데이터 관리 전체 추가 (업로드/파싱/저장/Export/대시보드), sheetHeaders 설계, DS API 서버 분리 | Dev Team |
 | 1.3.1 | 2026-03-03 | Upload-Zero-Build (30분→10초), 트리플 라우팅, 자동갱신, 고스트 레코드 정리, 컬럼 정합성 수정 | Dev Team |
 | 1.4.0 | 2026-03-04 | 보안 강화: HMAC 토큰 인증, 관리자 패널, Rate Limiting, S3 경로 검증, CORS 제한, API 키 분리, 에러 보안 | Dev Team |
+| 2.0.0 | 2026-03-23 | 호출명칭 매칭, 설치확인서 생성, 수검 관리 시스템, ERP-DS 데이터 비교, 본부 대상 관리, 전국 현황 대시보드 추가 | Dev Team |

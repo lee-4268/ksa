@@ -97,30 +97,23 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
     if (confirmed != true) return;
     final year = int.tryParse(yearCtrl.text) ?? DateTime.now().year;
 
+    // 파일 선택을 setState 전에 수행 — 웹에서 setState 후 FilePicker 호출 시 상태 꼬임 방지
     _kcaPickerOpen = true;
-    setState(() { _kcaImporting = true; _kcaProgress = 0; _kcaStage = '파일 읽는 중...'; });
     final picked = await FilePicker.platform.pickFiles(
       type: FileType.custom,
       allowedExtensions: ['xlsx'],
       withData: true,
     );
-    if (picked == null || picked.files.isEmpty) {
-      _kcaPickerOpen = false;
-      if (mounted) setState(() { _kcaImporting = false; _kcaProgress = 0; _kcaStage = ''; });
-      return;
-    }
+    _kcaPickerOpen = false;
+    if (!mounted) return;
+    if (picked == null || picked.files.isEmpty) return;
     final file = picked.files.first;
     if (file.bytes == null) {
-      _kcaPickerOpen = false;
-      if (mounted) {
-        setState(() { _kcaImporting = false; _kcaProgress = 0; _kcaStage = ''; });
-        ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('파일을 읽을 수 없습니다.'), backgroundColor: Colors.red));
-      }
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('파일을 읽을 수 없습니다.'), backgroundColor: Colors.red));
       return;
     }
-    _kcaPickerOpen = false;
-    setState(() => _kcaStage = '업로드 중...');
+    setState(() { _kcaImporting = true; _kcaProgress = 0; _kcaStage = '업로드 중...'; });
     try {
       final s3Key = await _inspSvc.uploadRaw(file.bytes!, file.name);
       setState(() => _kcaStage = '처리 대기 중...');
