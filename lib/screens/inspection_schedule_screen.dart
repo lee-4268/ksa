@@ -56,6 +56,11 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
   Map<String, dynamic> _matrix = {};
   List<String> _quarters = [];
 
+  // 미배정 현황
+  int _unassignedTotal = 0;
+  Map<String, dynamic> _unassignedByRegion = {};
+  List<Map<String, dynamic>> _unassignedItems = [];
+
   Map<String, dynamic>? _detailData;
   String? _detailLicenseNo;
   bool _detailLoading = false;
@@ -99,7 +104,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
   }
 
   Future<void> _loadAll() async {
-    await Future.wait([_loadData(), _loadSummary()]);
+    await Future.wait([_loadData(), _loadSummary(), _loadUnassigned()]);
   }
 
   Future<void> _loadData() async {
@@ -129,6 +134,17 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
       setState(() {
         _matrix = Map<String, dynamic>.from(res['matrix'] ?? {});
         _quarters = List<String>.from(res['quarters'] ?? []);
+      });
+    } catch (_) {}
+  }
+
+  Future<void> _loadUnassigned() async {
+    try {
+      final res = await _svc.getUnassigned(_year);
+      setState(() {
+        _unassignedTotal = (res['total'] as num?)?.toInt() ?? 0;
+        _unassignedByRegion = Map<String, dynamic>.from(res['by_region'] ?? {});
+        _unassignedItems = List<Map<String, dynamic>>.from(res['items'] ?? []);
       });
     } catch (_) {}
   }
@@ -1036,23 +1052,182 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
 
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
-      child: Container(
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: const Color(0xFFE5E7EB)),
-          boxShadow: [
-            BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 8, offset: const Offset(0, 2)),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // 미배정 배너
+          if (_unassignedTotal > 0) ...[
+            _buildUnassignedBanner(),
+            const SizedBox(height: 16),
           ],
-        ),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(12),
-          child: Table(
-            border: TableBorder.all(color: const Color(0xFFE5E7EB)),
-            defaultColumnWidth: const IntrinsicColumnWidth(),
-            children: rows,
+          // 매트릭스 테이블
+          Container(
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: const Color(0xFFE5E7EB)),
+              boxShadow: [
+                BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 8, offset: const Offset(0, 2)),
+              ],
+            ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(12),
+              child: Table(
+                border: TableBorder.all(color: const Color(0xFFE5E7EB)),
+                defaultColumnWidth: const IntrinsicColumnWidth(),
+                children: rows,
+              ),
           ),
         ),
+      ]),
+    );
+  }
+
+  Widget _buildUnassignedBanner() {
+    final regionEntries = _unassignedByRegion.entries.toList();
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: _orange.withValues(alpha: 0.3)),
+        boxShadow: [
+          BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 8, offset: const Offset(0, 2)),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(6),
+                decoration: BoxDecoration(
+                  color: _orange.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Icon(Icons.warning_amber_rounded, size: 18, color: _orange),
+              ),
+              const SizedBox(width: 10),
+              Text('미배정 $_unassignedTotal건',
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: _orange)),
+              const SizedBox(width: 8),
+              Text('본부/팀이 매핑되지 않은 항목', style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+              const Spacer(),
+              TextButton.icon(
+                icon: const Icon(Icons.list_alt, size: 16),
+                label: const Text('상세보기', style: TextStyle(fontSize: 12)),
+                style: TextButton.styleFrom(foregroundColor: _orange),
+                onPressed: () => _showUnassignedDialog(),
+              ),
+            ],
+          ),
+          if (regionEntries.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 6,
+              children: regionEntries.take(10).map((e) => Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFFF7ED),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: _orange.withValues(alpha: 0.2)),
+                ),
+                child: Text('${e.key}  ${e.value}건',
+                    style: const TextStyle(fontSize: 11, color: Color(0xFF92400E))),
+              )).toList(),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  void _showUnassignedDialog() {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Colors.white,
+        surfaceTintColor: Colors.transparent,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Row(children: [
+          Icon(Icons.warning_amber_rounded, color: _orange, size: 22),
+          const SizedBox(width: 8),
+          Text('미배정 항목 ($_unassignedTotal건)',
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+        ]),
+        content: SizedBox(
+          width: 700,
+          height: 500,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // 지역별 요약
+              if (_unassignedByRegion.isNotEmpty) ...[
+                const Text('지역별 분포', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 6,
+                  children: _unassignedByRegion.entries.map((e) => Chip(
+                    label: Text('${e.key}: ${e.value}건', style: const TextStyle(fontSize: 11)),
+                    backgroundColor: const Color(0xFFFFF7ED),
+                    side: BorderSide(color: _orange.withValues(alpha: 0.2)),
+                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    visualDensity: VisualDensity.compact,
+                  )).toList(),
+                ),
+                const SizedBox(height: 12),
+                const Divider(height: 1),
+                const SizedBox(height: 8),
+              ],
+              // 상세 목록
+              Text('상세 목록 (${_unassignedItems.length}건)', style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+              const SizedBox(height: 8),
+              Expanded(
+                child: SingleChildScrollView(
+                  child: SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: DataTable(
+                      headingRowColor: WidgetStateProperty.all(const Color(0xFFF9FAFB)),
+                      headingRowHeight: 38,
+                      dataRowMinHeight: 36,
+                      dataRowMaxHeight: 40,
+                      columnSpacing: 16,
+                      columns: const [
+                        DataColumn(label: Text('허가번호', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600))),
+                        DataColumn(label: Text('호출명칭', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600))),
+                        DataColumn(label: Text('도로명주소', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600))),
+                        DataColumn(label: Text('국종군', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600))),
+                        DataColumn(label: Text('분기', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600))),
+                        DataColumn(label: Text('통시', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600))),
+                        DataColumn(label: Text('본부', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600))),
+                        DataColumn(label: Text('팀', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600))),
+                      ],
+                      rows: _unassignedItems.map((item) => DataRow(cells: [
+                        DataCell(Text('${item['허가번호'] ?? ''}', style: const TextStyle(fontSize: 11))),
+                        DataCell(SizedBox(width: 150, child: Text('${item['호출명칭'] ?? ''}', style: const TextStyle(fontSize: 11), overflow: TextOverflow.ellipsis))),
+                        DataCell(SizedBox(width: 200, child: Text('${item['도로명주소'] ?? ''}', style: const TextStyle(fontSize: 11), overflow: TextOverflow.ellipsis))),
+                        DataCell(Text('${item['국종군'] ?? ''}', style: const TextStyle(fontSize: 11))),
+                        DataCell(Text('${item['분기'] ?? ''}', style: const TextStyle(fontSize: 11))),
+                        DataCell(Text('${item['통시'] ?? ''}', style: const TextStyle(fontSize: 11))),
+                        DataCell(Text('${item['access담당'] ?? ''}', style: TextStyle(fontSize: 11, color: (item['access담당'] ?? '').isEmpty ? Colors.red.shade300 : Colors.black87))),
+                        DataCell(Text('${item['품질개선팀'] ?? ''}', style: TextStyle(fontSize: 11, color: (item['품질개선팀'] ?? '').isEmpty ? Colors.red.shade300 : Colors.black87))),
+                      ])).toList(),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('닫기'),
+          ),
+        ],
       ),
     );
   }

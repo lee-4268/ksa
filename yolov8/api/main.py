@@ -9529,8 +9529,10 @@ def _process_inspection_sync(job_id: str, s3_key: str, year: int, uploaded_by: s
             total_s1 = _proc_sheet(ws, 'sheet1', 72, 85, False,
                                    learned_map=learned_addr_map)
 
-        wb.close(); gc.collect()
+        wb.close()
         os.unlink(tmp_path)
+        _release_memory()
+        _log_mem("inspection Excel 파싱 완료")
 
         # ── 미배정 항목 상세 로그 ──
         try:
@@ -9572,6 +9574,14 @@ def _process_inspection_sync(job_id: str, s3_key: str, year: int, uploaded_by: s
             conn.close()
         except Exception:
             pass
+        # 대형 딕셔너리 명시 해제 + OS에 메모리 반환
+        try:
+            cert_map.clear()
+            learned_addr_map.clear()
+        except Exception:
+            pass
+        _release_memory()
+        _log_mem("inspection import 완료 후")
 
 # ── Endpoints ──────────────────────────────────────────────
 
@@ -9708,6 +9718,38 @@ async def inspection_meta(request: Request):
     rows = conn.execute('SELECT * FROM inspection_meta ORDER BY year DESC').fetchall()
     conn.close()
     return {"items": [dict(r) for r in rows]}
+
+@app.get("/inspection/unassigned")
+async def inspection_unassigned(request: Request, year: int = Query(...)):
+    """미배정(본부/팀 없음) 항목 조회 — 관리자 화면에서 확인용."""
+    await _verify_auth(request)
+    import sqlite3
+    if not os.path.exists(_INSP_DB):
+        return {"total": 0, "items": [], "by_region": {}}
+    conn = sqlite3.connect(_INSP_DB, timeout=30)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        'SELECT 허가번호, 호출명칭, 도로명주소, 설치장소, 국종군, 분기, 통시, 공대, access담당, 품질개선팀 '
+        'FROM inspection_targets '
+        'WHERE year=? AND (access담당 IS NULL OR access담당="" OR 품질개선팀 IS NULL OR 품질개선팀="")',
+        (year,)
+    ).fetchall()
+    # 지역별 그룹핑 (시/군/구 추출)
+    import re
+    geo_re = re.compile(r'[가-힣]{2,}(?:시|군|구)')
+    by_region: dict = {}
+    for r in rows:
+        addr = r['도로명주소'] or r['설치장소'] or ''
+        matches = geo_re.findall(addr)
+        region = ' '.join(matches[:2]) if matches else '주소없음'
+        by_region.setdefault(region, 0)
+        by_region[region] += 1
+    conn.close()
+    return {
+        "total": len(rows),
+        "items": [dict(r) for r in rows],
+        "by_region": dict(sorted(by_region.items(), key=lambda x: -x[1])),
+    }
 
 @app.get("/inspection/column-values")
 async def inspection_column_values(request: Request, year: int, col: str, sheet: str = "all"):

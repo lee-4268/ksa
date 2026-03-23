@@ -65,6 +65,15 @@ class InspectionService {
     return List<Map<String, dynamic>>.from(body['items'] ?? []);
   }
 
+  // ── 미배정 항목 조회 ────────────────────────────────────
+
+  Future<Map<String, dynamic>> getUnassigned(int year) async {
+    final uri = Uri.parse('$_baseUrl/inspection/unassigned')
+        .replace(queryParameters: {'year': '$year'});
+    final resp = await http.get(uri, headers: _headers).timeout(_apiTimeout);
+    return json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+  }
+
   // ── Staging (필터링 후 확정) ─────────────────────────────
 
   Future<List<Map<String, dynamic>>> getStagingColumnValues(int year, String col) async {
