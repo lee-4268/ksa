@@ -99,29 +99,28 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
 
     _kcaPickerOpen = true;
     setState(() { _kcaImporting = true; _kcaProgress = 0; _kcaStage = '파일 읽는 중...'; });
-    try {
-      final picked = await FilePicker.platform.pickFiles(
-        type: FileType.custom,
-        allowedExtensions: ['xlsx'],
-        withData: true,
-      );
-      if (picked == null || picked.files.isEmpty) {
-        if (mounted) setState(() { _kcaImporting = false; _kcaStage = ''; });
-        _kcaPickerOpen = false;
-        return;
-      }
-      final file = picked.files.first;
-      if (file.bytes == null) {
-        if (mounted) {
-          setState(() { _kcaImporting = false; _kcaStage = ''; });
-          ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('파일을 읽을 수 없습니다.'), backgroundColor: Colors.red));
-        }
-        _kcaPickerOpen = false;
-        return;
-      }
+    final picked = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: ['xlsx'],
+      withData: true,
+    );
+    if (picked == null || picked.files.isEmpty) {
       _kcaPickerOpen = false;
-      setState(() => _kcaStage = '업로드 중...');
+      if (mounted) setState(() { _kcaImporting = false; _kcaProgress = 0; _kcaStage = ''; });
+      return;
+    }
+    final file = picked.files.first;
+    if (file.bytes == null) {
+      _kcaPickerOpen = false;
+      if (mounted) {
+        setState(() { _kcaImporting = false; _kcaProgress = 0; _kcaStage = ''; });
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('파일을 읽을 수 없습니다.'), backgroundColor: Colors.red));
+      }
+      return;
+    }
+    _kcaPickerOpen = false;
+    setState(() => _kcaStage = '업로드 중...');
     try {
       final s3Key = await _inspSvc.uploadRaw(file.bytes!, file.name);
       setState(() => _kcaStage = '처리 대기 중...');
