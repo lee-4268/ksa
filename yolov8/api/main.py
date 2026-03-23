@@ -9046,6 +9046,64 @@ _SEOUL_GU_TO_TEAM: dict = {
 # 길이 내림차순 (긴 키워드 우선)
 _SEOUL_GU_SORTED: list = sorted(_SEOUL_GU_TO_TEAM.items(), key=lambda x: -len(x[0]))
 
+# ── 법정동 코드표 (PNU 10자리 → 법정동명) ──────────────────────────────────
+_LEGAL_DONG_MAP: dict = {}
+
+def _load_legal_dong_map():
+    """법정동 코드 TSV 파일 로드 (서버 시작 시 1회)."""
+    global _LEGAL_DONG_MAP
+    tsv_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "legal_dong_code.tsv")
+    if not os.path.exists(tsv_path):
+        logger.warning(f"법정동 코드 파일 없음: {tsv_path}")
+        return
+    count = 0
+    with open(tsv_path, encoding='utf-8') as f:
+        next(f)  # 헤더 스킵
+        for line in f:
+            parts = line.strip().split('\t')
+            if len(parts) >= 3 and parts[2] == '존재':
+                _LEGAL_DONG_MAP[parts[0]] = parts[1]
+                count += 1
+    logger.info(f"법정동 코드표 로드 완료: {count}개")
+
+# 모듈 로드 시 즉시 실행 (가벼운 딕셔너리, ~2MB)
+_load_legal_dong_map()
+
+
+def _pnu_to_addr(pnu: str) -> str:
+    """PNU 19자리 → '서울특별시 강남구 역삼동 산168-5' 형태로 변환.
+    [0:10]  = 법정동코드 10자리
+    [10:11] = 산 여부 (1=산, 2=일반)
+    [11:15] = 본번 4자리
+    [15:19] = 부번 4자리
+    """
+    pnu = str(pnu).strip()
+    if len(pnu) < 10:
+        return ''
+    dong_code = pnu[:10]
+    dong_name = _LEGAL_DONG_MAP.get(dong_code, '')
+    if not dong_name:
+        # 읍면동 코드로 못 찾으면 시군구(5자리)로 시도
+        sigungu = pnu[:5] + '00000'
+        dong_name = _LEGAL_DONG_MAP.get(sigungu, '')
+    if not dong_name:
+        return ''
+    # 번지 추출
+    if len(pnu) >= 15:
+        try:
+            is_san = pnu[10] == '1'  # 1=산, 2=일반
+            bon = int(pnu[11:15])    # 본번 4자리
+            bu = int(pnu[15:19]) if len(pnu) >= 19 else 0  # 부번 4자리
+            if bon > 0:
+                san_prefix = '산' if is_san else ''
+                dong_name += f' {san_prefix}{bon}'
+                if bu > 0:
+                    dong_name += f'-{bu}'
+        except ValueError:
+            pass
+    return dong_name
+
+
 def _hdqt_from_addr(addr: str, known_hdqt: str = '',
                     learned_map: dict | None = None) -> tuple:
     """도로명주소/설치장소에서 (본부, 팀) 추론.
@@ -9066,14 +9124,33 @@ def _hdqt_from_addr(addr: str, known_hdqt: str = '',
     # 2) 학습된 맵 (임포트 시 same-file known-team rows에서 학습)
     if learned_map:
         import re as _re
-        geo_re = _re.compile(r'[가-힣]{2,}(?:시|군|구)')
+        geo_re = _re.compile(r'[가-힣]{2,}(?:시|군|구|읍|면|동)')
         matches = geo_re.findall(addr)
-        # 2a) 복합 키워드 우선 ("부산광역시 강서구" → "부산광역시 강서구")
         cities = [m for m in matches if m.endswith('시')]
         gus = [m for m in matches if m.endswith('구')]
-        compound_keys = [f"{city} {gu}" for city in cities for gu in gus]
-        # 복합 → 단일(긴 것 우선) 순서
-        candidates = compound_keys + sorted(matches, key=len, reverse=True)
+        guns = [m for m in matches if m.endswith('군')]
+        eups = [m for m in matches if m.endswith('읍')]
+        myeons = [m for m in matches if m.endswith('면')]
+        dongs = [m for m in matches if m.endswith('동')]
+        # 복합 키워드: 시+구, 시+군, 군+읍, 군+면, 시+동, 구+동
+        compound_keys = []
+        for city in cities:
+            for gu in gus:
+                compound_keys.append(f"{city} {gu}")
+            for gun in guns:
+                compound_keys.append(f"{city} {gun}")
+            for dong in dongs:
+                compound_keys.append(f"{city} {dong}")
+        for gun in guns:
+            for eup in eups:
+                compound_keys.append(f"{gun} {eup}")
+            for myeon in myeons:
+                compound_keys.append(f"{gun} {myeon}")
+        for gu in gus:
+            for dong in dongs:
+                compound_keys.append(f"{gu} {dong}")
+        # 복합(긴 것 우선) → 단일(긴 것 우선) 순서
+        candidates = sorted(compound_keys, key=len, reverse=True) + sorted(matches, key=len, reverse=True)
         for kw in candidates:
             team = learned_map.get(kw)
             if not team or team not in INSP_TEAM_TO_HDQT:
@@ -9103,7 +9180,7 @@ def _learn_addr_map_from_cert_db() -> dict:
         logger.warning("cert DB 없음 — 주소→팀 학습 생략")
         return {}
 
-    geo_re = re.compile(r'[가-힣]{2,}(?:시|군|구)')
+    geo_re = re.compile(r'[가-힣]{2,}(?:시|군|구|읍|면|동)')
     kw_teams: dict = defaultdict(Counter)
 
     try:
@@ -9115,15 +9192,31 @@ def _learn_addr_map_from_cert_db() -> dict:
             if team not in INSP_TEAM_TO_HDQT:
                 continue
             matches = geo_re.findall(str(zpwiadr))
-            # 단일 키워드 (시, 군, 구)
+            # 단일 키워드 (시, 군, 구, 읍, 면, 동)
             for kw in matches:
                 kw_teams[kw][team] += 1
-            # 복합 키워드: "시+구" 조합 (부산 강서구 vs 서울 강서구 구분)
             cities = [m for m in matches if m.endswith('시')]
             gus = [m for m in matches if m.endswith('구')]
+            guns = [m for m in matches if m.endswith('군')]
+            eups = [m for m in matches if m.endswith('읍')]
+            myeons = [m for m in matches if m.endswith('면')]
+            dongs = [m for m in matches if m.endswith('동')]
+            # 복합 키워드: 시+구, 시+군, 군+읍, 군+면, 시+동, 구+동
             for city in cities:
                 for gu in gus:
                     kw_teams[f"{city} {gu}"][team] += 1
+                for gun in guns:
+                    kw_teams[f"{city} {gun}"][team] += 1
+                for dong in dongs:
+                    kw_teams[f"{city} {dong}"][team] += 1
+            for gun in guns:
+                for eup in eups:
+                    kw_teams[f"{gun} {eup}"][team] += 1
+                for myeon in myeons:
+                    kw_teams[f"{gun} {myeon}"][team] += 1
+            for gu in gus:
+                for dong in dongs:
+                    kw_teams[f"{gu} {dong}"][team] += 1
         c.close()
     except Exception as e:
         logger.warning(f"cert DB 주소 학습 실패: {e}")
@@ -9159,6 +9252,55 @@ def _learn_addr_map_from_cert_db() -> dict:
         logger.info(f"  [비율 미달(<60%)] {len(skipped_low_ratio)}개: "
                      f"{dict(sorted(skipped_low_ratio.items(), key=lambda x: -x[1]['total']))}")
     return learned
+
+
+def _learn_pnu_map_from_cert_db() -> dict:
+    """cert DB에서 PNU코드(법정동코드) 10자리 → 팀 다수결 학습.
+
+    PNU 10자리 = 시도(2) + 시군구(3) + 읍면동(5) → 동 단위 정확 매핑.
+    주소 텍스트 파싱보다 정확하고, 경계 지역도 읍면동 단위로 구분 가능.
+    """
+    import sqlite3
+    from collections import Counter, defaultdict
+
+    if not _cert_cache_db_path or not os.path.exists(_cert_cache_db_path):
+        logger.warning("cert DB 없음 — PNU→팀 학습 생략")
+        return {}
+
+    pnu_teams: dict = defaultdict(Counter)
+
+    try:
+        c = sqlite3.connect(_cert_cache_db_path, timeout=30)
+        for zpcode, ons_team in c.execute(
+            'SELECT zpcode, ons_team_nm FROM cert WHERE zpcode IS NOT NULL AND zpcode != ""'
+        ):
+            team = str(ons_team or '').strip()
+            if team not in INSP_TEAM_TO_HDQT:
+                continue
+            pnu = str(zpcode).strip()
+            if len(pnu) < 10:
+                continue
+            pnu10 = pnu[:10]
+            pnu_teams[pnu10][team] += 1
+        c.close()
+    except Exception as e:
+        logger.warning(f"cert DB PNU 학습 실패: {e}")
+        return {}
+
+    learned: dict = {}
+    for pnu10, counter in pnu_teams.items():
+        total = sum(counter.values())
+        if total < 3:       # PNU 10자리는 매우 구체적이므로 3건이면 충분
+            continue
+        top_team, top_cnt = counter.most_common(1)[0]
+        ratio = top_cnt / total
+        if ratio >= 0.50:   # 동 단위라 50%면 충분히 신뢰
+            learned[pnu10] = top_team
+
+    logger.info(f"PNU→팀 학습 완료(cert DB): {len(learned)}개 PNU 확정 "
+                f"(전체 후보: {len(pnu_teams)}개)")
+    return learned
+
 _DS_DETAIL_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ds_detail.db")
 _inspection_jobs: Dict[str, dict] = {}
 DYNAMODB_INSP_SCHEDULES = os.environ.get("DYNAMODB_INSPECTION_SCHEDULES", "kca-inspection-schedules")
@@ -9168,7 +9310,7 @@ DYNAMODB_INSP_RESULTS = os.environ.get("DYNAMODB_INSPECTION_RESULTS", "kca-inspe
 
 def _init_inspection_db():
     import sqlite3
-    conn = sqlite3.connect(_INSP_DB, timeout=30)
+    conn = sqlite3.connect(_INSP_DB, timeout=60)
     conn.execute('PRAGMA journal_mode=WAL')  # 읽기/쓰기 동시 허용
     conn.execute('''CREATE TABLE IF NOT EXISTS inspection_targets (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -9240,7 +9382,7 @@ def _insp_job_write_sync(job_id: str, **kw):
     """inspection_jobs 테이블에 job 상태 upsert (동기, to_thread 사용)."""
     import sqlite3, json as _json
     now = datetime.now(timezone.utc).isoformat()
-    conn = sqlite3.connect(_INSP_DB, timeout=30)
+    conn = sqlite3.connect(_INSP_DB, timeout=60)
     existing = conn.execute(
         'SELECT job_id FROM inspection_jobs WHERE job_id=?', (job_id,)).fetchone()
     if existing:
@@ -9260,7 +9402,7 @@ def _insp_job_write_sync(job_id: str, **kw):
 
 def _insp_job_read_sync(job_id: str):
     import sqlite3
-    conn = sqlite3.connect(_INSP_DB, timeout=30)
+    conn = sqlite3.connect(_INSP_DB, timeout=60)
     conn.row_factory = sqlite3.Row
     row = conn.execute(
         'SELECT * FROM inspection_jobs WHERE job_id=?', (job_id,)).fetchone()
@@ -9372,7 +9514,7 @@ def _process_inspection_sync(job_id: str, s3_key: str, year: int, uploaded_by: s
     # conn을 최상단에서 열어 _upd와 데이터 writes가 같은 연결 사용
     # → 두 번째 연결이 lock을 시도하는 OperationalError 방지
     _init_inspection_db()
-    conn = sqlite3.connect(_INSP_DB, timeout=30)
+    conn = sqlite3.connect(_INSP_DB, timeout=60)
     conn.execute('PRAGMA synchronous=NORMAL')
     now_iso = datetime.now(timezone.utc).isoformat
 
@@ -9395,9 +9537,9 @@ def _process_inspection_sync(job_id: str, s3_key: str, year: int, uploaded_by: s
         s3 = get_s3_client()
         s3.download_file(S3_BUCKET_NAME, s3_key, tmp_path)
 
-        _upd(12, "Excel 열기 중...")
-        wb = openpyxl.load_workbook(tmp_path, read_only=True, data_only=True)
-        sheet_names = wb.sheetnames
+        _upd(12, "Excel 시트 목록 확인 중...")
+        # ZIP 내부의 workbook.xml만 읽어 시트 이름 추출 (openpyxl 로드 불필요)
+        sheet_names = _list_xlsx_sheet_names(tmp_path)
 
         # 해당 연도 기존 데이터 삭제
         conn.execute('DELETE FROM inspection_targets_staging WHERE year=?', (year,))
@@ -9444,12 +9586,17 @@ def _process_inspection_sync(job_id: str, s3_key: str, year: int, uploaded_by: s
 
         _INVALID_TEAM = {'#N/A', '#n/a', 'N/A', 'n/a', '미배정', '-', '없음', ''}
 
-        def _proc_sheet(ws, sheet_label, pct_start, pct_end, is_skt,
-                        learned_map=None):
+        def _proc_sheet(rows, sheet_label, pct_start, pct_end, is_skt,
+                        learned_map=None, total_rows=0):
             nonlocal matched, unmatched
             batch = []; row_count = 0
-            for i, row in enumerate(ws.iter_rows(min_row=2, values_only=True)):
-                if row[2] is None: continue  # 허가번호 없는 행 스킵
+            for i, row in enumerate(rows):
+                # 허가번호(col 2) 없거나 빈 행 스킵 — None, 빈 문자열, 공백 모두 제외
+                if len(row) <= 2:
+                    continue
+                raw_license = str(row[2] or '').strip()
+                if not raw_license:
+                    continue
                 # #N/A, 미배정 등 무효값 → 빈 문자열로 정규화
                 access = str(row[31] or '').strip() if is_skt and len(row) > 31 else ''
                 if access in _INVALID_TEAM: access = ''
@@ -9483,7 +9630,12 @@ def _process_inspection_sync(job_id: str, s3_key: str, year: int, uploaded_by: s
                         품질 = fb_team
                     else:
                         # 4) 주소 키워드로 팀 추론 (ERP cert DB 학습 맵 + Seoul 구명)
-                        addr = str(row[14] or '') + ' ' + str(row[13] or '')
+                        #    row[13],[14],[15],[22] — 주소 관련 컬럼 전부 활용
+                        addr_parts = []
+                        for ci in (13, 14, 15, 22):
+                            if len(row) > ci and row[ci]:
+                                addr_parts.append(str(row[ci]).strip())
+                        addr = ' '.join(addr_parts)
                         inferred_hdqt, inferred_team = _hdqt_from_addr(
                             addr, known_hdqt=access or fb_access,
                             learned_map=learned_map)
@@ -9493,46 +9645,102 @@ def _process_inspection_sync(job_id: str, s3_key: str, year: int, uploaded_by: s
                         elif inferred_hdqt:
                             access = inferred_hdqt
 
+                # 5) 여전히 미배정이면 PNU코드 → 법정동 주소 변환 → 팀 추론
+                _pnu_debug_count = getattr(_proc_sheet, '_pnu_dbg', 0)
+                if not 품질 or 품질 not in INSP_TEAM_TO_HDQT:
+                    pnu_raw = str(row[0] or '').strip()
+                    # 미배정 건 중 첫 10건만 디버그 로그
+                    if _pnu_debug_count < 10:
+                        logger.info(f"  [PNU 디버그] row[0]='{pnu_raw}' len={len(pnu_raw)} 품질='{품질}' access='{access}'")
+                        _proc_sheet._pnu_dbg = _pnu_debug_count + 1
+                    if pnu_raw and len(pnu_raw) >= 10:
+                        pnu_addr = _pnu_to_addr(pnu_raw)
+                        if _pnu_debug_count < 10:
+                            logger.info(f"  [PNU 디버그] pnu10='{pnu_raw[:10]}' → addr='{pnu_addr}'")
+                        if pnu_addr:
+                            pnu_hdqt, pnu_team = _hdqt_from_addr(
+                                pnu_addr, known_hdqt=access,
+                                learned_map=learned_map)
+                            if pnu_team:
+                                access = INSP_TEAM_TO_HDQT[pnu_team]
+                                품질 = pnu_team
+                            elif pnu_hdqt:
+                                access = pnu_hdqt
+
+                def _safe_int(v, default=0):
+                    """문자열/숫자 → int 안전 변환."""
+                    if not v or v == '':
+                        return default
+                    try:
+                        return int(float(str(v)))
+                    except (ValueError, TypeError):
+                        return default
+
+                def _safe_str(v):
+                    return str(v).strip() if v else ''
+
                 batch.append((
                     year, sheet_label,
-                    str(row[0] or ''), str(row[2] or ''), str(row[3] or ''), str(row[4] or ''),
-                    str(row[11] or ''), str(row[8] or ''), str(row[9] or ''),
-                    int(row[10]) if row[10] else 0,
-                    str(row[12] or ''), str(row[13] or ''), str(row[14] or ''),
-                    int(row[16]) if row[16] else 0,
+                    _safe_str(row[0] if len(row) > 0 else ''),
+                    _safe_str(row[2] if len(row) > 2 else ''),
+                    _safe_str(row[3] if len(row) > 3 else ''),
+                    _safe_str(row[4] if len(row) > 4 else ''),
+                    _safe_str(row[11] if len(row) > 11 else ''),
+                    _safe_str(row[8] if len(row) > 8 else ''),
+                    _safe_str(row[9] if len(row) > 9 else ''),
+                    _safe_int(row[10] if len(row) > 10 else 0),
+                    _safe_str(row[12] if len(row) > 12 else ''),
+                    _safe_str(row[13] if len(row) > 13 else ''),
+                    _safe_str(row[14] if len(row) > 14 else ''),
+                    _safe_int(row[16] if len(row) > 16 else 0),
                     tongsi, gongtae,
-                    str(row[26] or '') if is_skt and len(row) > 26 else (str(row[26] or '') if len(row) > 26 else ''),
-                    str(row[25] or '') if is_skt and len(row) > 25 else (str(row[25] or '') if len(row) > 25 else ''),
-                    int(row[27]) if is_skt and len(row) > 27 and row[27] else (int(row[27]) if len(row) > 27 and row[27] else year),
+                    _safe_str(row[26] if is_skt and len(row) > 26 else (row[26] if len(row) > 26 else '')),
+                    _safe_str(row[25] if is_skt and len(row) > 25 else (row[25] if len(row) > 25 else '')),
+                    _safe_int(row[27] if len(row) > 27 else '', year),
                     skt본부, access, 품질,
                 ))
                 row_count += 1
                 if len(batch) >= 5000:
                     conn.executemany(INSERT_SQL, batch); batch.clear()
-                    pct = int(pct_start + (pct_end - pct_start) * row_count / max(ws.max_row, 1))
+                    pct = int(pct_start + (pct_end - pct_start) * row_count / max(total_rows, 1))
                     _upd(pct, f"{sheet_label} 처리 중... ({row_count:,}행)")
             if batch: conn.executemany(INSERT_SQL, batch)
             conn.commit()
             return row_count
 
-        # SKT 시트
+        # SKT 시트 — ZIP+XML 경량 파서 (openpyxl 제거, 메모리 ~95% 절감)
         if 'SKT' in sheet_names:
             _upd(20, "SKT 시트 처리 중...")
-            ws = wb['SKT']
-            total_skt = _proc_sheet(ws, 'SKT', 20, 70, True,
-                                    learned_map=learned_addr_map)
+            _log_mem("SKT 시트 처리 전")
+
+            def _light_rows(path, sname):
+                """_iter_xlsx_rows_light 래퍼: (row_num, cells) → cells(리스트)로 변환."""
+                for _rn, cells in _iter_xlsx_rows_light(path, sheet_name=sname):
+                    if _rn == 0:
+                        continue  # 헤더(0행) 스킵
+                    yield cells
+
+            total_skt = _proc_sheet(
+                _light_rows(tmp_path, 'SKT'),
+                'SKT', 20, 70, True,
+                learned_map=learned_addr_map,
+                total_rows=0)
+            _release_memory()
+            _log_mem("SKT 시트 처리 후")
 
         # Sheet1 (시기조정)
         if 'Sheet1' in sheet_names:
             _upd(72, "시기조정 시트 처리 중...")
-            ws = wb['Sheet1']
-            total_s1 = _proc_sheet(ws, 'sheet1', 72, 85, False,
-                                   learned_map=learned_addr_map)
+            total_s1 = _proc_sheet(
+                _light_rows(tmp_path, 'Sheet1'),
+                'sheet1', 72, 85, False,
+                learned_map=learned_addr_map,
+                total_rows=0)
+            _release_memory()
+            _log_mem("시기조정 시트 처리 후")
 
-        wb.close()
         os.unlink(tmp_path)
         _release_memory()
-        _log_mem("inspection Excel 파싱 완료")
 
         # ── 미배정 항목 상세 로그 ──
         try:
@@ -9714,7 +9922,7 @@ async def inspection_meta(request: Request):
     await _verify_auth(request)
     import sqlite3
     if not os.path.exists(_INSP_DB): return {"items": []}
-    conn = sqlite3.connect(_INSP_DB, timeout=30); conn.row_factory = sqlite3.Row
+    conn = sqlite3.connect(_INSP_DB, timeout=60); conn.row_factory = sqlite3.Row
     rows = conn.execute('SELECT * FROM inspection_meta ORDER BY year DESC').fetchall()
     conn.close()
     return {"items": [dict(r) for r in rows]}
@@ -9726,7 +9934,7 @@ async def inspection_unassigned(request: Request, year: int = Query(...)):
     import sqlite3
     if not os.path.exists(_INSP_DB):
         return {"total": 0, "items": [], "by_region": {}}
-    conn = sqlite3.connect(_INSP_DB, timeout=30)
+    conn = sqlite3.connect(_INSP_DB, timeout=60)
     conn.row_factory = sqlite3.Row
     rows = conn.execute(
         'SELECT 허가번호, 호출명칭, 도로명주소, 설치장소, 국종군, 분기, 통시, 공대, access담당, 품질개선팀 '
@@ -9759,7 +9967,7 @@ async def inspection_column_values(request: Request, year: int, col: str, sheet:
     if col not in ALLOWED_COLS: raise HTTPException(400, "허용되지 않은 컬럼")
     import sqlite3
     if not os.path.exists(_INSP_DB): return {"values": []}
-    conn = sqlite3.connect(_INSP_DB, timeout=30)
+    conn = sqlite3.connect(_INSP_DB, timeout=60)
     where = "year=?"
     params: list = [year]
     if sheet != "all": where += " AND sheet=?"; params.append(sheet)
@@ -9776,7 +9984,7 @@ async def inspection_staging_column_values(request: Request, year: int, col: str
     if col not in ALLOWED_COLS: raise HTTPException(400, "허용되지 않은 컬럼")
     import sqlite3
     if not os.path.exists(_INSP_DB): return {"values": []}
-    conn = sqlite3.connect(_INSP_DB, timeout=30)
+    conn = sqlite3.connect(_INSP_DB, timeout=60)
     rows = conn.execute(
         f'SELECT "{col}", COUNT(*) as cnt FROM inspection_targets_staging WHERE year=? GROUP BY "{col}" ORDER BY cnt DESC',
         (year,)).fetchall()
@@ -9790,7 +9998,7 @@ async def inspection_org_map(request: Request, year: int):
     import sqlite3
     if not os.path.exists(_INSP_DB):
         return {"org": {}, "quarters": [], "nation_groups": [], "kca_results": []}
-    conn = sqlite3.connect(_INSP_DB, timeout=30); conn.row_factory = sqlite3.Row
+    conn = sqlite3.connect(_INSP_DB, timeout=60); conn.row_factory = sqlite3.Row
     rows = conn.execute(
         'SELECT DISTINCT "access담당", "품질개선팀" FROM inspection_targets WHERE year=? AND "access담당" != "" ORDER BY "access담당", "품질개선팀"',
         (year,)).fetchall()
@@ -9819,7 +10027,7 @@ async def inspection_staging_preview(request: Request, req: InspStagingPreviewRe
     import sqlite3
     if not os.path.exists(_INSP_DB): return {"total": 0, "filtered": 0}
     ALLOWED_COLS = {'분기','국종군','부서','kca검토결과','시기조정','skt본부','access담당','품질개선팀','허가상태','허가번호','호출명칭','연도주기','검사주기','설치장소','도로명주소','장치수','통시','공대','기준연도','pnu_code'}
-    conn = sqlite3.connect(_INSP_DB, timeout=30)
+    conn = sqlite3.connect(_INSP_DB, timeout=60)
     total = conn.execute('SELECT COUNT(*) FROM inspection_targets_staging WHERE year=?', (req.year,)).fetchone()[0]
 
     where = ["year=?"]
@@ -9856,7 +10064,7 @@ async def inspection_staging_confirm(request: Request, req: InspStagingConfirmRe
         params.extend(vals)
     where_sql = " AND ".join(where)
 
-    conn = sqlite3.connect(_INSP_DB, timeout=30)
+    conn = sqlite3.connect(_INSP_DB, timeout=60)
     conn.execute('PRAGMA synchronous=NORMAL')
 
     # 기존 본 테이블 데이터 삭제 (같은 연도)
@@ -9919,7 +10127,7 @@ async def inspection_data(request: Request, req: InspectionDataReq):
     if not os.path.exists(_INSP_DB): return {"items": [], "total": 0}
     where_sql, params = _build_insp_where(req.year, req.sheet, req.filters, req.search, req.addr)
     def _read():
-        c = sqlite3.connect(_INSP_DB, timeout=30); c.row_factory = sqlite3.Row
+        c = sqlite3.connect(_INSP_DB, timeout=60); c.row_factory = sqlite3.Row
         total = c.execute(f'SELECT COUNT(*) FROM inspection_targets WHERE {where_sql}', params).fetchone()[0]
         offset = (req.page - 1) * req.page_size
         rows = c.execute(f'SELECT * FROM inspection_targets WHERE {where_sql} ORDER BY id LIMIT ? OFFSET ?',
@@ -9953,7 +10161,7 @@ async def inspection_export_xlsx(request: Request, req: InspectionExportReq):
     def _build():
         import openpyxl
         from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-        c = sqlite3.connect(_INSP_DB, timeout=30); c.row_factory = sqlite3.Row
+        c = sqlite3.connect(_INSP_DB, timeout=60); c.row_factory = sqlite3.Row
         rows = c.execute(f'SELECT * FROM inspection_targets WHERE {where_sql} ORDER BY id', params).fetchall()
         c.close()
 
@@ -10013,7 +10221,7 @@ async def inspection_summary(request: Request, req: InspectionSummaryReq):
     if not os.path.exists(_INSP_DB): return {"matrix": {}}
     where_sql, params = _build_insp_where(req.year, req.sheet, req.filters, req.search, req.addr)
     def _read():
-        c = sqlite3.connect(_INSP_DB, timeout=30); c.row_factory = sqlite3.Row
+        c = sqlite3.connect(_INSP_DB, timeout=60); c.row_factory = sqlite3.Row
         rows = c.execute(
             f'SELECT access담당, 품질개선팀, 분기, COUNT(*) as cnt FROM inspection_targets WHERE {where_sql} GROUP BY access담당, 품질개선팀, 분기',
             params).fetchall()
@@ -10042,7 +10250,7 @@ async def inspection_detail(request: Request, year: int, 허가번호: str):
     # 1. inspection.db 기본 정보
     target = None
     if os.path.exists(_INSP_DB):
-        conn = sqlite3.connect(_INSP_DB, timeout=30); conn.row_factory = sqlite3.Row
+        conn = sqlite3.connect(_INSP_DB, timeout=60); conn.row_factory = sqlite3.Row
         row = conn.execute('SELECT * FROM inspection_targets WHERE year=? AND 허가번호=? LIMIT 1',
                            (year, 허가번호)).fetchone()
         conn.close()
@@ -10066,7 +10274,7 @@ async def inspection_detail(request: Request, year: int, 허가번호: str):
     result = None
     if os.path.exists(_INSP_DB):
         def _read_sched_result():
-            c = sqlite3.connect(_INSP_DB, timeout=30); c.row_factory = sqlite3.Row
+            c = sqlite3.connect(_INSP_DB, timeout=60); c.row_factory = sqlite3.Row
             s = c.execute('SELECT * FROM inspection_schedules WHERE pk=?', (pk,)).fetchone()
             r = c.execute('SELECT * FROM inspection_results WHERE pk=?', (pk,)).fetchone()
             c.close()
@@ -10088,7 +10296,7 @@ async def inspection_schedule_upsert(request: Request, req: InspectionScheduleRe
     pk = f"{req.year}#{req.허가번호}"
     now = datetime.now(timezone.utc).isoformat()
     def _write():
-        c = sqlite3.connect(_INSP_DB, timeout=30)
+        c = sqlite3.connect(_INSP_DB, timeout=60)
         c.execute('''INSERT OR REPLACE INTO inspection_schedules
             (pk, year, 허가번호, 호출명칭, 분기, skt본부, access담당, 품질개선팀,
              수검예정주차, 수검시작일, 수검종료일, 지역, 등록자, 등록일시)
@@ -10108,7 +10316,7 @@ async def inspection_schedule_delete(year: int, 허가번호: str, request: Requ
     if role not in {"admin", "manager"}: raise HTTPException(403, "권한 없음")
     pk = f"{year}#{허가번호}"
     def _del():
-        c = sqlite3.connect(_INSP_DB, timeout=30)
+        c = sqlite3.connect(_INSP_DB, timeout=60)
         c.execute('DELETE FROM inspection_schedules WHERE pk=?', (pk,))
         c.commit(); c.close()
     await asyncio.to_thread(_del)
@@ -10119,7 +10327,7 @@ async def inspection_schedules_list(request: Request, year: int, access담당: s
     """일정 목록 조회 (팀별 필터 가능)."""
     await _verify_auth(request)
     def _read():
-        c = sqlite3.connect(_INSP_DB, timeout=30); c.row_factory = sqlite3.Row
+        c = sqlite3.connect(_INSP_DB, timeout=60); c.row_factory = sqlite3.Row
         if access담당:
             rows = c.execute(
                 'SELECT * FROM inspection_schedules WHERE year=? AND access담당=?',
@@ -10140,7 +10348,7 @@ async def inspection_result_upsert(request: Request, req: InspectionResultReq):
     pk = f"{req.year}#{req.허가번호}"
     now = datetime.now(timezone.utc).isoformat()
     def _write():
-        c = sqlite3.connect(_INSP_DB, timeout=30); c.row_factory = sqlite3.Row
+        c = sqlite3.connect(_INSP_DB, timeout=60); c.row_factory = sqlite3.Row
         # 기존 사진 목록 보존
         existing = c.execute('SELECT 사진S3키 FROM inspection_results WHERE pk=?', (pk,)).fetchone()
         photos_json = existing['사진S3키'] if existing else '[]'
@@ -10169,7 +10377,7 @@ async def inspection_result_photo_upload(request: Request, year: int, 허가번�
     pk = f"{year}#{허가번호}"
     now = datetime.now(timezone.utc).isoformat()
     def _add_photo():
-        c = sqlite3.connect(_INSP_DB, timeout=30); c.row_factory = sqlite3.Row
+        c = sqlite3.connect(_INSP_DB, timeout=60); c.row_factory = sqlite3.Row
         existing = c.execute('SELECT 사진S3키 FROM inspection_results WHERE pk=?', (pk,)).fetchone()
         photos = _j.loads(existing['사진S3키']) if existing and existing['사진S3키'] else []
         photos.append(s3_key)
@@ -10193,7 +10401,7 @@ async def inspection_result_photo_delete(request: Request, year: int, 허가번�
     s3.delete_object(Bucket=S3_BUCKET_NAME, Key=s3_key)
     pk = f"{year}#{허가번호}"
     def _del_photo():
-        c = sqlite3.connect(_INSP_DB, timeout=30); c.row_factory = sqlite3.Row
+        c = sqlite3.connect(_INSP_DB, timeout=60); c.row_factory = sqlite3.Row
         existing = c.execute('SELECT 사진S3키 FROM inspection_results WHERE pk=?', (pk,)).fetchone()
         photos = _j.loads(existing['사진S3키']) if existing and existing['사진S3키'] else []
         photos = [p for p in photos if p != s3_key]
@@ -10229,7 +10437,7 @@ async def inspection_my_list(request: Request, year: int):
     # SQLite schedules + results 조인
     import json as _j
     def _read_my_list():
-        c = sqlite3.connect(_INSP_DB, timeout=30); c.row_factory = sqlite3.Row
+        c = sqlite3.connect(_INSP_DB, timeout=60); c.row_factory = sqlite3.Row
         if access_team and 품질팀:
             rows = c.execute(
                 'SELECT s.*, r.status, r.검사일, r.메모, r.철탑형태, r.사진S3키 '
@@ -10272,7 +10480,7 @@ async def inspection_progress(request: Request, year: int):
         return {"items": []}
 
     def _query():
-        c = sqlite3.connect(_INSP_DB, timeout=30); c.row_factory = sqlite3.Row
+        c = sqlite3.connect(_INSP_DB, timeout=60); c.row_factory = sqlite3.Row
         # 본부별 전체 수검대상 수
         total_rows = c.execute(
             'SELECT access담당, COUNT(*) as cnt FROM inspection_targets WHERE year=? GROUP BY access담당',
@@ -10314,5 +10522,6 @@ if __name__ == "__main__":
         "main:app",
         host="0.0.0.0",
         port=8000,
-        reload=True
+        workers=3,
+        reload=False,
     )
