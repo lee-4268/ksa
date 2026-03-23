@@ -55,10 +55,25 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
     } catch (_) {}
   }
 
-  bool _kcaPickerOpen = false;
-
   Future<void> _importKcaFile() async {
-    if (_kcaPickerOpen || _kcaImporting) return;  // 중복 호출 방지
+    if (_kcaImporting) return;
+
+    // 1) 먼저 파일 선택 — 다이얼로그 전에 수행해서 타이밍 문제 방지
+    final picked = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: ['xlsx'],
+      withData: true,
+    );
+    if (!mounted) return;
+    if (picked == null || picked.files.isEmpty) return;
+    final file = picked.files.first;
+    if (file.bytes == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('파일을 읽을 수 없습니다.'), backgroundColor: Colors.red));
+      return;
+    }
+
+    // 2) 파일 선택 후 연도 확인 다이얼로그
     final yearCtrl = TextEditingController(text: '${DateTime.now().year}');
     final confirmed = await showDialog<bool>(
       context: context,
@@ -69,8 +84,10 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
         title: const Text('KCA 수검대상 파일 Import',
             style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
         content: Column(mainAxisSize: MainAxisSize.min, children: [
-          const Text('KCA에서 받은 수검대상 Excel 파일을 업로드합니다.\n(복사본 20XX년 정기검사...최종.xlsx)',
-              style: TextStyle(fontSize: 13, color: Colors.black54)),
+          Text('선택된 파일: ${file.name}',
+              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+          Text('${(file.bytes!.length / 1024 / 1024).toStringAsFixed(1)} MB',
+              style: const TextStyle(fontSize: 12, color: Colors.black45)),
           const SizedBox(height: 16),
           TextField(
             controller: yearCtrl,
@@ -89,35 +106,15 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
                 backgroundColor: const Color(0xFFE53935), foregroundColor: Colors.white,
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('파일 선택'),
+            child: const Text('업로드 시작'),
           ),
         ],
       ),
     );
-    if (confirmed != true) return;
+    if (confirmed != true || !mounted) return;
     final year = int.tryParse(yearCtrl.text) ?? DateTime.now().year;
 
-    // 파일 선택을 setState 전에 수행 — 웹에서 setState 후 FilePicker 호출 시 상태 꼬임 방지
-    _kcaPickerOpen = true;
-    debugPrint('[KCA Import] FilePicker 호출 시작');
-    final picked = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: ['xlsx'],
-      withData: true,
-    );
-    _kcaPickerOpen = false;
-    debugPrint('[KCA Import] FilePicker 반환: picked=${picked != null}, files=${picked?.files.length ?? 0}');
-    if (!mounted) { debugPrint('[KCA Import] mounted=false, return'); return; }
-    if (picked == null || picked.files.isEmpty) { debugPrint('[KCA Import] 파일 미선택, return'); return; }
-    final file = picked.files.first;
-    debugPrint('[KCA Import] file=${file.name}, bytes=${file.bytes?.length ?? 0}');
-    if (file.bytes == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('파일을 읽을 수 없습니다.'), backgroundColor: Colors.red));
-      return;
-    }
-    debugPrint('[KCA Import] 업로드 시작');
-    // 최신 인증 토큰 갱신 (세션 연장 시 토큰이 바뀔 수 있음)
+    // 3) 업로드 시작
     _inspSvc.setAuthToken(context.read<AuthService>().authToken);
     setState(() { _kcaImporting = true; _kcaProgress = 0; _kcaStage = '업로드 중...'; });
     try {
@@ -166,7 +163,6 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('오류: $e'), backgroundColor: Colors.red));
     } finally {
-      _kcaPickerOpen = false;
       if (mounted) setState(() { _kcaImporting = false; _kcaProgress = 0; _kcaStage = ''; });
     }
   }
