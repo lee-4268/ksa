@@ -1,5 +1,7 @@
 import 'dart:async';
 import 'dart:typed_data';
+// ignore: avoid_web_libraries_in_flutter
+import 'dart:html' as html;
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -55,25 +57,44 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
     } catch (_) {}
   }
 
+  /// dart:html로 직접 파일 선택 — FilePicker 패키지의 웹 불안정 이슈 우회
+  Future<({String name, Uint8List bytes})?> _pickXlsxFile() {
+    final completer = Completer<({String name, Uint8List bytes})?>();
+    final input = html.FileUploadInputElement()..accept = '.xlsx';
+
+    input.onChange.listen((_) {
+      final files = input.files;
+      if (files == null || files.isEmpty) {
+        if (!completer.isCompleted) completer.complete(null);
+        return;
+      }
+      final reader = html.FileReader();
+      reader.onLoadEnd.listen((_) {
+        final data = reader.result;
+        if (data is List<int>) {
+          completer.complete((name: files[0]!.name, bytes: Uint8List.fromList(data)));
+        } else {
+          if (!completer.isCompleted) completer.complete(null);
+        }
+      });
+      reader.readAsArrayBuffer(files[0]!);
+    });
+
+    input.click();
+    return completer.future;
+  }
+
   Future<void> _importKcaFile() async {
     if (_kcaImporting) return;
 
-    // 1) 먼저 파일 선택 — 다이얼로그 전에 수행해서 타이밍 문제 방지
-    final picked = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: ['xlsx'],
-      withData: true,
-    );
+    // 1) dart:html로 직접 파일 선택 — 안정적
+    final result = await _pickXlsxFile();
     if (!mounted) return;
-    if (picked == null || picked.files.isEmpty) return;
-    final file = picked.files.first;
-    if (file.bytes == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('파일을 읽을 수 없습니다.'), backgroundColor: Colors.red));
-      return;
-    }
+    if (result == null) return;
 
     // 2) 파일 선택 후 연도 확인 다이얼로그
+    final fileName = result.name;
+    final fileBytes = result.bytes;
     final yearCtrl = TextEditingController(text: '${DateTime.now().year}');
     final confirmed = await showDialog<bool>(
       context: context,
@@ -84,9 +105,9 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
         title: const Text('KCA 수검대상 파일 Import',
             style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
         content: Column(mainAxisSize: MainAxisSize.min, children: [
-          Text('선택된 파일: ${file.name}',
+          Text('선택된 파일: $fileName',
               style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-          Text('${(file.bytes!.length / 1024 / 1024).toStringAsFixed(1)} MB',
+          Text('${(fileBytes.length / 1024 / 1024).toStringAsFixed(1)} MB',
               style: const TextStyle(fontSize: 12, color: Colors.black45)),
           const SizedBox(height: 16),
           TextField(
@@ -118,7 +139,7 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
     _inspSvc.setAuthToken(context.read<AuthService>().authToken);
     setState(() { _kcaImporting = true; _kcaProgress = 0; _kcaStage = '업로드 중...'; });
     try {
-      final s3Key = await _inspSvc.uploadRaw(file.bytes!, file.name);
+      final s3Key = await _inspSvc.uploadRaw(fileBytes, fileName);
       setState(() => _kcaStage = '처리 대기 중...');
       final auth = context.read<AuthService>();
       final jobId = await _inspSvc.enqueue(s3Key, year, auth.userName ?? '');

@@ -4,6 +4,7 @@ Flutter PWA + Mobile Web Support
 """
 
 import os
+import sys
 import json
 import uuid
 import shutil
@@ -9068,13 +9069,22 @@ _ADDR_ABBR_MAP: dict = {
 }
 
 def _normalize_addr(addr: str) -> str:
-    """주소 정규화: 앞쪽 괄호+코드 제거 + 축약형→정식명 변환.
+    """주소 정규화: 앞쪽 괄호+코드 제거 + 띄어쓰기 변형 처리 + 축약형→정식명 변환.
     '(701240)대구 동구' → '대구광역시 동구'
+    '부산 광역시 북구' → '부산광역시 북구'
     """
     import re as _re
     # 1) 앞쪽 괄호+숫자/공백 제거: "(701240)대구" → "대구"
     addr = _re.sub(r'^\s*\([^)]*\)\s*', '', addr).strip()
-    # 2) 축약형 → 정식명
+    # 2) "부산 광역시" → "부산광역시" 등 띄어쓰기 변형 정규화
+    addr = _re.sub(r'(서울)\s*(특별시)', r'\1\2', addr)
+    addr = _re.sub(r'(부산|대구|인천|광주|대전|울산)\s*(광역시)', r'\1\2', addr)
+    addr = _re.sub(r'(세종)\s*(특별자치시)', r'\1\2', addr)
+    addr = _re.sub(r'(경기|충청북|충청남|전라북|전라남|경상북|경상남)\s*(도)', r'\1\2', addr)
+    addr = _re.sub(r'(강원)\s*(특별자치도)', r'\1\2', addr)
+    addr = _re.sub(r'(전북)\s*(특별자치도)', r'\1\2', addr)
+    addr = _re.sub(r'(제주)\s*(특별자치도)', r'\1\2', addr)
+    # 3) 축약형 → 정식명
     for abbr, full in _ADDR_ABBR_MAP.items():
         if addr.startswith(abbr):
             return full + addr[len(abbr):]
@@ -9588,11 +9598,16 @@ def _process_inspection_sync(job_id: str, s3_key: str, year: int, uploaded_by: s
         conn.commit()
 
         # cert 전체를 dict에 로드 → 행마다 DB 연결 불필요 (74만행 × DB연결 제거)
+        # cert DB가 이미 빌드되어 있으면 재사용 (subprocess에서 45초 절약)
         _upd(14, "ERP 데이터 로드 중...")
-        _cert_cache_load()
+        _cert_db = os.path.join(_tempfile.gettempdir(), "cert_cache.db")
+        if not os.path.exists(_cert_db) or os.path.getsize(_cert_db) < 1000:
+            _cert_cache_load()
+        else:
+            logger.info(f"cert DB 캐시 재사용: {_cert_db}")
         cert_map: dict = {}
         try:
-            c2 = sqlite3.connect(_cert_cache_db_path, timeout=30)
+            c2 = sqlite3.connect(_cert_db, timeout=60)
             for r in c2.execute('SELECT zpwina, zpwino, area_hdofc_nm, ons_team_nm FROM cert'):
                 hdofc = str(r[2] or ''); team = str(r[3] or '')
                 if r[0]: cert_map[str(r[0])] = (hdofc, team)
@@ -9600,9 +9615,28 @@ def _process_inspection_sync(job_id: str, s3_key: str, year: int, uploaded_by: s
             c2.close()
         except Exception: pass
 
-        # 호출명칭 DB(cert)에서 주소 키워드 → 팀 다수결 학습
+        # 학습 맵 캐시: JSON 파일이 있으면 재사용 (23초 절약)
+        _learned_cache = os.path.join(_tempfile.gettempdir(), "learned_addr_map.json")
         _upd(17, "주소-팀 매핑 학습 중 (ERP 데이터)...")
-        learned_addr_map: dict = _learn_addr_map_from_cert_db()
+        if os.path.exists(_learned_cache):
+            try:
+                import json as _j2
+                cache_age = _time_mod.time() - os.path.getmtime(_learned_cache)
+                if cache_age < 86400:  # 24시간 이내면 재사용
+                    with open(_learned_cache, 'r', encoding='utf-8') as f:
+                        learned_addr_map = _j2.load(f)
+                    logger.info(f"학습 맵 캐시 재사용: {len(learned_addr_map)}개 키워드 ({cache_age:.0f}초 전)")
+                else:
+                    raise ValueError("캐시 만료")
+            except Exception:
+                learned_addr_map = _learn_addr_map_from_cert_db()
+                with open(_learned_cache, 'w', encoding='utf-8') as f:
+                    _j2.dump(learned_addr_map, f, ensure_ascii=False)
+        else:
+            import json as _j2
+            learned_addr_map = _learn_addr_map_from_cert_db()
+            with open(_learned_cache, 'w', encoding='utf-8') as f:
+                _j2.dump(learned_addr_map, f, ensure_ascii=False)
 
         def _match_access(tongsi: str, gongtae: str):
             """cert dict에서 통시코드로 access담당/품질개선팀 조회 (O(1))."""
@@ -9900,7 +9934,7 @@ async def inspection_upload_raw(request: Request):
 
 @app.post("/inspection/enqueue")
 async def inspection_enqueue(request: Request, req: InspectionEnqueueReq):
-    """KCA Import 백그라운드 잡 생성."""
+    """KCA Import 백그라운드 잡 생성 — 별도 프로세스로 실행 (API 서버 블록 방지)."""
     empno = await _verify_auth(request)
     role = await asyncio.to_thread(_get_user_role_sync, empno)
     if role not in {"admin", "manager"}:
@@ -9909,8 +9943,21 @@ async def inspection_enqueue(request: Request, req: InspectionEnqueueReq):
     job_id = str(uuid.uuid4())
     _init_inspection_db()
     await asyncio.to_thread(_insp_job_write_sync, job_id, status='processing', stage='대기 중...', percent=0)
-    asyncio.get_event_loop().run_in_executor(
-        _bounded_executor, _process_inspection_sync, job_id, req.s3Key, req.year, req.uploadedBy)
+
+    # 별도 프로세스로 Import 실행 — API 서버가 블록되지 않음
+    import subprocess
+    worker_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'inspection_worker.py')
+    log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), f'inspection_{job_id[:8]}.log')
+    venv_python = sys.executable  # 현재 가상환경의 python
+    log_fh = open(log_path, 'w')
+    subprocess.Popen(
+        [venv_python, worker_path, job_id, req.s3Key, str(req.year), req.uploadedBy],
+        cwd=os.path.dirname(os.path.abspath(__file__)),
+        stdout=log_fh,
+        stderr=log_fh,
+        start_new_session=True,  # 부모 프로세스와 완전 분리
+    )
+    logger.info(f"inspection import subprocess 시작: job={job_id}")
     return {"success": True, "jobId": job_id}
 
 @app.get("/inspection/job/{job_id}")
