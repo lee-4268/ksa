@@ -432,26 +432,69 @@ async function _mergeDsFilesFromDart(zipArrayBuffer, progressCallback, completio
     zip = null;
 
     // ========================================================
+    // 시트 분할: 100만 행 초과 시 장치(1), 장치(2) 로 분할
+    // ========================================================
+    var MAX_ROWS_PER_SHEET = 1000000; // Excel 한도 1,048,576, 안전 여유
+    var finalSheetOrder = [];   // 분할 후 실제 시트 순서
+    var finalSheetData = {};    // 시트명 → rows
+    var finalSheetFormats = {}; // 시트명 → preamble
+
+    for (var si2 = 0; si2 < sheetOrder.length; si2++) {
+      var sn = sheetOrder[si2];
+      var rows = allMergedRows[sn];
+      allMergedRows[sn] = null;
+
+      if (!rows || rows.length === 0) continue;
+
+      var header = rows[0];
+      var dataRows = rows.length - 1; // 헤더 제외 데이터 행 수
+
+      if (dataRows <= MAX_ROWS_PER_SHEET) {
+        // 분할 불필요
+        finalSheetOrder.push(sn);
+        finalSheetData[sn] = rows;
+        finalSheetFormats[sn] = sheetFormats[sn] || '';
+      } else {
+        // 분할 필요: 100만 행씩 청크
+        var splitNum = 1;
+        var offset = 1; // 헤더(row 0) 건너뜀
+        while (offset < rows.length) {
+          var chunk = [header].concat(rows.slice(offset, offset + MAX_ROWS_PER_SHEET));
+          offset += MAX_ROWS_PER_SHEET;
+          var splitName = sn + '(' + splitNum + ')';
+          // Excel 시트명 31자 제한
+          if (splitName.length > 31) splitName = splitName.substring(0, 31);
+          finalSheetOrder.push(splitName);
+          finalSheetData[splitName] = chunk;
+          finalSheetFormats[splitName] = sheetFormats[sn] || '';
+          splitNum++;
+        }
+        console.log('  시트 분할: ' + sn + ' → ' + (splitNum - 1) + '개 시트');
+      }
+      rows = null;
+    }
+
+    // ========================================================
     // 시트별 XML 생성 (데이터 사용 후 즉시 해제)
     // ========================================================
     var xlsxZip = new JSZip();
     var summaryParts = [];
-    var totalSheets = sheetOrder.length;
+    var totalSheets = finalSheetOrder.length;
 
     for (var sheetIdx = 0; sheetIdx < totalSheets; sheetIdx++) {
-      var currentSheet = sheetOrder[sheetIdx];
+      var currentSheet = finalSheetOrder[sheetIdx];
       var pctBase = 50 + Math.round((sheetIdx / totalSheets) * 40);
       progressCallback(currentSheet + ' XML 생성 중 (' + (sheetIdx + 1) + '/' + totalSheets + ')', pctBase);
 
-      var mergedRows = allMergedRows[currentSheet];
-      allMergedRows[currentSheet] = null;
+      var mergedRows = finalSheetData[currentSheet];
+      finalSheetData[currentSheet] = null;
 
       var dataRowCount = mergedRows ? (mergedRows.length > 0 ? mergedRows.length - 1 : 0) : 0;
       summaryParts.push(currentSheet + ': ' + dataRowCount.toLocaleString() + '행');
       console.log('  ' + currentSheet + ': ' + dataRowCount.toLocaleString() + '행');
 
       if (mergedRows && mergedRows.length > 0) {
-        var preamble = sheetFormats[currentSheet] || '';
+        var preamble = finalSheetFormats[currentSheet] || '';
         var sheetBlob = _buildSheetXml(mergedRows, preamble);
         xlsxZip.file('xl/worksheets/sheet' + (sheetIdx + 1) + '.xml', sheetBlob);
         sheetBlob = null;
@@ -469,7 +512,7 @@ async function _mergeDsFilesFromDart(zipArrayBuffer, progressCallback, completio
     // ========================================================
     xlsxZip.file('[Content_Types].xml', _buildContentTypes(totalSheets));
     xlsxZip.file('_rels/.rels', _buildRootRels());
-    xlsxZip.file('xl/workbook.xml', _buildWorkbook(sheetOrder));
+    xlsxZip.file('xl/workbook.xml', _buildWorkbook(finalSheetOrder));
     xlsxZip.file('xl/_rels/workbook.xml.rels', _buildWorkbookRels(totalSheets));
 
     // styles.xml: 고정 서식 (Arial 10pt, 가운데정렬, 헤더=회색배경)

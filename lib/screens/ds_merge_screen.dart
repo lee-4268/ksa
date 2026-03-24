@@ -1,10 +1,8 @@
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
-import '../services/auth_service.dart';
 import '../services/ds_merge_service.dart';
-import '../widgets/user_profile_button.dart';
 
 /// DS 파일 병합 화면
+/// ZIP 파일(들) 선택 → XLS 파일 병합 → xlsx 다운로드
 class DsMergeScreen extends StatefulWidget {
   const DsMergeScreen({super.key});
 
@@ -69,7 +67,7 @@ class _DsMergeScreenState extends State<DsMergeScreen> {
       body: Center(
         child: SingleChildScrollView(
           child: Container(
-            constraints: const BoxConstraints(maxWidth: 600),
+            constraints: const BoxConstraints(maxWidth: 620),
             padding: const EdgeInsets.all(24),
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
@@ -108,7 +106,7 @@ class _DsMergeScreenState extends State<DsMergeScreen> {
         ),
         const SizedBox(height: 8),
         Text(
-          '분할된 DS .xls 파일들을 하나의 .xlsx 파일로 병합합니다',
+          '분할된 DS ZIP 파일들을 선택하면 하나의 xlsx 파일로 병합하여 다운로드합니다',
           style: TextStyle(fontSize: 14, color: Colors.grey.shade600),
           textAlign: TextAlign.center,
         ),
@@ -138,11 +136,13 @@ class _DsMergeScreenState extends State<DsMergeScreen> {
           ]),
           const SizedBox(height: 12),
           _buildStep('1', 'DS .xls 파일들이 담긴 ZIP 파일을 준비합니다'),
-          _buildStep('2', '아래 버튼을 클릭하여 ZIP 파일을 선택합니다'),
-          _buildStep('3', '자동으로 병합 후 .xlsx 파일이 다운로드됩니다'),
+          _buildStep('2', '아래 버튼을 클릭하여 ZIP 파일을 선택합니다 (복수 선택 가능)'),
+          _buildStep('3', '복수 선택 시 모든 ZIP의 XLS 파일이 합쳐진 후 병합됩니다'),
+          _buildStep('4', '자동으로 병합 후 .xlsx 파일이 다운로드됩니다'),
           const SizedBox(height: 12),
           Text(
-            '* (100) 파일의 일반사항 → "일반사항(검사전)" 시트로 추가\n* _spt 파일의 "검사" 시트는 별도 시트로 추가됩니다',
+            '* (100) 파일의 일반사항 → "일반사항(검사전)" 시트로 추가\n'
+            '* _spt 파일의 "검사" 시트는 별도 시트로 추가됩니다',
             style: TextStyle(fontSize: 12, color: Colors.grey.shade500),
           ),
         ],

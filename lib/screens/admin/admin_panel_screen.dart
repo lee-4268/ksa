@@ -37,6 +37,10 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
   List<Map<String, dynamic>> _kcaMeta = [];
   bool _kcaPreviewLoading = false;
 
+  // 지오코딩
+  bool _geocoding = false;
+  String? _geocodeResult;
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
@@ -55,6 +59,21 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
       final items = await _inspSvc.getMeta();
       if (mounted) setState(() => _kcaMeta = items);
     } catch (_) {}
+  }
+
+  Future<void> _runGeocode() async {
+    final year = DateTime.now().year;
+    setState(() { _geocoding = true; _geocodeResult = null; });
+    try {
+      final result = await _inspSvc.geocodeTargets(year);
+      final updated = result['updated'] as int? ?? 0;
+      final total   = result['total']   as int? ?? 0;
+      if (mounted) setState(() => _geocodeResult = '$year년 $updated/$total 건 좌표 업데이트 완료');
+    } catch (e) {
+      if (mounted) setState(() => _geocodeResult = '오류: $e');
+    } finally {
+      if (mounted) setState(() => _geocoding = false);
+    }
   }
 
   /// dart:html로 직접 파일 선택 — FilePicker 패키지의 웹 불안정 이슈 우회
@@ -504,8 +523,29 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                     ),
                   ),
+                  const SizedBox(width: 8),
+                  OutlinedButton.icon(
+                    onPressed: _geocoding ? null : _runGeocode,
+                    icon: _geocoding
+                        ? const SizedBox(width: 14, height: 14,
+                            child: CircularProgressIndicator(strokeWidth: 2))
+                        : const Icon(Icons.location_on_outlined, size: 18),
+                    label: const Text('좌표 갱신'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.blue,
+                      side: const BorderSide(color: Colors.blue),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    ),
+                  ),
                 ],
               ]),
+              if (_geocodeResult != null) ...[
+                const SizedBox(height: 8),
+                Text(_geocodeResult!,
+                    style: TextStyle(
+                        fontSize: 12,
+                        color: _geocodeResult!.startsWith('오류') ? Colors.red : Colors.green.shade700)),
+              ],
           ],
         ),
       ),

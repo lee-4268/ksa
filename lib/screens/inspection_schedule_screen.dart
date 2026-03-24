@@ -30,20 +30,24 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
 
   // org-map 옵션
   Map<String, List<String>> _orgMap = {};
+  List<String> _hdqts = [];          // 정렬된 본부 목록 (캐시)
+  List<String> _currentTeams = [];   // 현재 선택 본부의 팀 목록 (캐시)
   List<String> _allQuarters = [];
   List<String> _allNationGroups = [];
   List<String> _allKcaResults = [];
 
   // pending 필터 (UI 선택 중)
-  String _pHdqt = '', _pTeam = '', _pSearch = '';
+  String _pHdqt = '', _pTeam = '', _pSearch = '', _pScheduled = '';
   List<String> _pQuarters = [], _pNationGroups = [], _pKcaResults = [];
 
   // applied 필터 (실제 쿼리)
-  String _aHdqt = '', _aTeam = '', _aSearch = '';
+  String _aHdqt = '', _aTeam = '', _aSearch = '', _aScheduled = '';
   List<String> _aQuarters = [], _aNationGroups = [], _aKcaResults = [];
 
   // 다중 선택 (일괄 일정 등록)
   final _selectedLicenseNos = <String>{};
+  // 이미 일정 등록된 허가번호 세트
+  Set<String> _scheduledNos = {};
 
   List<Map<String, dynamic>> _items = [];
   int _total = 0;
@@ -63,10 +67,33 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
   String? _detailLicenseNo;
   bool _detailLoading = false;
 
-  bool get _isAdmin {
-    final role = context.read<AuthService>().userRoleStr;
-    return role == 'admin' || role == 'manager';
+  // 권한 캐시 (build 중 context.read 반복 방지)
+  late bool _isAdmin;
+  late bool _isSuperAdmin;
+  late bool _isDivisionAdmin;
+  late String _myHdqt;
+
+  void _cacheAuthValues() {
+    final auth = context.read<AuthService>();
+    final role = auth.userRoleStr;
+    _isAdmin = role == 'admin' || role == 'manager';
+    _isSuperAdmin = auth.isSuperAdmin;
+    _isDivisionAdmin = auth.isDivisionAdmin;
+    final dept = auth.userDepartment ?? '';
+    _myHdqt = dept.replaceAll('Access담당', '').trim();
   }
+
+  /// 해당 item에 대해 일정 등록/체크 권한이 있는지
+  bool _canManageItem(Map<String, dynamic> item) {
+    if (_isSuperAdmin) return true;
+    if (_isDivisionAdmin) {
+      final itemHdqt = '${item['access담당'] ?? ''}';
+      return itemHdqt == _myHdqt;
+    }
+    return false; // member
+  }
+
+  bool _isScheduled(String licenseNo) => _scheduledNos.contains(licenseNo);
 
   Map<String, List<String>> get _activeFilters {
     final f = <String, List<String>>{};
@@ -80,13 +107,15 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
 
   bool get _hasActiveFilters =>
       _aHdqt.isNotEmpty || _aTeam.isNotEmpty || _aQuarters.isNotEmpty ||
-      _aNationGroups.isNotEmpty || _aKcaResults.isNotEmpty || _aSearch.isNotEmpty;
+      _aNationGroups.isNotEmpty || _aKcaResults.isNotEmpty || _aSearch.isNotEmpty ||
+      _aScheduled.isNotEmpty;
 
   @override
   void initState() {
     super.initState();
     _tabCtrl = TabController(length: 2, vsync: this);
     _svc = InspectionService()..setAuthToken(context.read<AuthService>().authToken);
+    _cacheAuthValues();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _loadOrgMap();
       _loadAll();
@@ -102,49 +131,99 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
   }
 
   Future<void> _loadAll() async {
-    await Future.wait([_loadData(), _loadSummary(), _loadUnassigned()]);
+    setState(() { _loading = true; _error = null; });
+    final results = await Future.wait([
+      _fetchData(),
+      _fetchSummary(),
+      _fetchUnassigned(),
+      _fetchScheduledNos(),
+    ]);
+    if (!mounted) return;
+    final dataRes   = results[0] as Map<String, dynamic>?;
+    final summRes   = results[1] as Map<String, dynamic>?;
+    final unassRes  = results[2] as Map<String, dynamic>?;
+    final schedNos  = results[3] as Set<String>?;
+    setState(() {
+      _loading = false;
+      if (dataRes != null) {
+        _items = List<Map<String, dynamic>>.from(dataRes['items'] ?? []);
+        _total = (dataRes['total'] as num?)?.toInt() ?? 0;
+      } else {
+        _error = '데이터 로드 실패';
+      }
+      if (summRes != null) {
+        _matrix = Map<String, dynamic>.from(summRes['matrix'] ?? {});
+        _quarters = List<String>.from(summRes['quarters'] ?? []);
+      }
+      if (unassRes != null) {
+        _unassignedTotal = (unassRes['total'] as num?)?.toInt() ?? 0;
+        _unassignedByRegion = Map<String, dynamic>.from(unassRes['by_region'] ?? {});
+        _unassignedItems = List<Map<String, dynamic>>.from(unassRes['items'] ?? []);
+      }
+      if (schedNos != null) _scheduledNos = schedNos;
+    });
   }
 
-  Future<void> _loadData() async {
-    setState(() { _loading = true; _error = null; });
+  Future<Map<String, dynamic>?> _fetchData() async {
     try {
-      final res = await _svc.getData(
+      return await _svc.getData(
         year: _year, sheet: _sheet,
         filters: _activeFilters,
         search: _aSearch,
         addr: _aSearch,
         page: _page, pageSize: 100,
+        scheduleYn: _aScheduled,
       );
-      setState(() {
+    } catch (_) { return null; }
+  }
+
+  Future<Map<String, dynamic>?> _fetchSummary() async {
+    try {
+      return await _svc.getSummary(
+        year: _year, sheet: _sheet,
+        filters: _activeFilters,
+        scheduleYn: _aScheduled,
+      );
+    } catch (_) { return null; }
+  }
+
+  Future<Map<String, dynamic>?> _fetchUnassigned() async {
+    try {
+      return await _svc.getUnassigned(_year);
+    } catch (_) { return null; }
+  }
+
+  Future<Set<String>?> _fetchScheduledNos() async {
+    try {
+      final schedules = await _svc.getSchedules(_year);
+      return schedules
+          .map((s) => (s['허가번호'] as String? ?? '').trim())
+          .where((s) => s.isNotEmpty)
+          .toSet();
+    } catch (_) { return null; }
+  }
+
+  // 일정 등록/수정/삭제 후 목록만 갱신
+  Future<void> _loadScheduledNos() async {
+    final nos = await _fetchScheduledNos();
+    if (!mounted || nos == null) return;
+    setState(() => _scheduledNos = nos);
+  }
+
+  // 페이지 이동 시 데이터만 갱신
+  Future<void> _loadData() async {
+    setState(() { _loading = true; _error = null; });
+    final res = await _fetchData();
+    if (!mounted) return;
+    setState(() {
+      _loading = false;
+      if (res != null) {
         _items = List<Map<String, dynamic>>.from(res['items'] ?? []);
         _total = (res['total'] as num?)?.toInt() ?? 0;
-      });
-    } catch (e) {
-      setState(() => _error = e.toString());
-    } finally {
-      setState(() => _loading = false);
-    }
-  }
-
-  Future<void> _loadSummary() async {
-    try {
-      final res = await _svc.getSummary(year: _year, sheet: _sheet, filters: _activeFilters);
-      setState(() {
-        _matrix = Map<String, dynamic>.from(res['matrix'] ?? {});
-        _quarters = List<String>.from(res['quarters'] ?? []);
-      });
-    } catch (_) {}
-  }
-
-  Future<void> _loadUnassigned() async {
-    try {
-      final res = await _svc.getUnassigned(_year);
-      setState(() {
-        _unassignedTotal = (res['total'] as num?)?.toInt() ?? 0;
-        _unassignedByRegion = Map<String, dynamic>.from(res['by_region'] ?? {});
-        _unassignedItems = List<Map<String, dynamic>>.from(res['items'] ?? []);
-      });
-    } catch (_) {}
+      } else {
+        _error = '데이터 로드 실패';
+      }
+    });
   }
 
   Future<void> _loadOrgMap() async {
@@ -156,6 +235,8 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
         org.forEach((hdqt, teams) {
           _orgMap[hdqt] = (teams as List? ?? []).map((e) => '$e').toList();
         });
+        _hdqts = _orgMap.keys.toList()..sort();
+        _currentTeams = _pHdqt.isNotEmpty ? (_orgMap[_pHdqt] ?? []) : [];
         _allQuarters = (res['quarters'] as List? ?? []).map((e) => '$e').toList();
         _allNationGroups = (res['nation_groups'] as List? ?? []).map((e) => '$e').toList();
         _allKcaResults = (res['kca_results'] as List? ?? []).map((e) => '$e').toList();
@@ -167,34 +248,33 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     setState(() { _detailLoading = true; _detailData = null; _detailLicenseNo = licenseNo; });
     try {
       final data = await _svc.getDetail(_year, licenseNo);
-      setState(() => _detailData = data);
+      if (!mounted) return;
+      setState(() { _detailData = data; _detailLoading = false; });
     } catch (_) {
-    } finally {
+      if (!mounted) return;
       setState(() => _detailLoading = false);
     }
   }
 
   void _applyFilters() {
-    setState(() {
-      _aHdqt = _pHdqt; _aTeam = _pTeam; _aSearch = _pSearch;
-      _aQuarters = List.from(_pQuarters);
-      _aNationGroups = List.from(_pNationGroups);
-      _aKcaResults = List.from(_pKcaResults);
-      _page = 1;
-    });
+    // setState 없이 먼저 값 업데이트 → _loadAll의 setState로 한 번만 리빌드
+    _aHdqt = _pHdqt; _aTeam = _pTeam; _aSearch = _pSearch;
+    _aScheduled = _pScheduled;
+    _aQuarters = List.from(_pQuarters);
+    _aNationGroups = List.from(_pNationGroups);
+    _aKcaResults = List.from(_pKcaResults);
+    _page = 1;
     _loadAll();
   }
 
   void _resetFilters() {
-    setState(() {
-      _pHdqt = _pTeam = _pSearch = '';
-      _aHdqt = _aTeam = _aSearch = '';
-      _pQuarters = []; _pNationGroups = []; _pKcaResults = [];
-      _aQuarters = []; _aNationGroups = []; _aKcaResults = [];
-      _searchCtrl.clear();
-      _page = 1;
-      _selectedLicenseNos.clear();
-    });
+    _pHdqt = _pTeam = _pSearch = _pScheduled = '';
+    _aHdqt = _aTeam = _aSearch = _aScheduled = '';
+    _pQuarters = []; _pNationGroups = []; _pKcaResults = [];
+    _aQuarters = []; _aNationGroups = []; _aKcaResults = [];
+    _searchCtrl.clear();
+    _page = 1;
+    _selectedLicenseNos.clear();
     _loadAll();
   }
 
@@ -207,55 +287,113 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     ));
   }
 
+  /// 로딩 팝업을 띄우면서 비동기 작업 실행 후 팝업 자동 닫기
+  Future<T> _withLoading<T>(String message, Future<T> Function() task) async {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => PopScope(
+        canPop: false,
+        child: Dialog(
+          backgroundColor: Colors.white,
+          surfaceTintColor: Colors.white,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 22),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              SizedBox(
+                width: 20, height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2, color: _primary),
+              ),
+              const SizedBox(width: 16),
+              Text(message, style: const TextStyle(fontSize: 14)),
+            ]),
+          ),
+        ),
+      ),
+    );
+    try {
+      return await task();
+    } finally {
+      if (mounted) Navigator.of(context, rootNavigator: true).pop();
+    }
+  }
+
   String _formatNumber(int n) => n.toString().replaceAllMapped(
       RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'), (m) => '${m[1]},');
 
   // ── Schedule 등록 ───────────────────────────────────────
 
   Future<void> _showScheduleDialog(Map<String, dynamic> item) async {
-    final weekCtrl = TextEditingController(text: item['schedule']?['수검예정주차'] ?? '');
-    final startCtrl = TextEditingController(text: item['schedule']?['수검시작일'] ?? '');
-    final endCtrl = TextEditingController(text: item['schedule']?['수검종료일'] ?? '');
-    final regionCtrl = TextEditingController(text: item['schedule']?['지역'] ?? '');
-    final confirmed = await showDialog<bool>(
+    final existing = item['schedule']?['수검예정주차'] as String? ?? '';
+    final match = RegExp(r'(\d+)월\s*(\d+)주차').firstMatch(existing);
+    final initMonth = match != null ? int.tryParse(match.group(1)!) : null;
+    final initWeek = match != null ? int.tryParse(match.group(2)!) : null;
+
+    final result = await showDialog<Map<String, int>>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: Colors.white,
-        surfaceTintColor: Colors.white,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('수검 일정 등록',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
-        content: SizedBox(
-          width: 360,
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            Text('${item['호출명칭'] ?? ''}\n${item['허가번호'] ?? ''}',
-                style: const TextStyle(fontSize: 13, color: Colors.black54)),
-            const SizedBox(height: 16),
-            _dialogField(weekCtrl, '수검예정주차', '예: 1월 3주차'),
-            const SizedBox(height: 10),
-            Row(children: [
-              Expanded(child: _dialogField(startCtrl, '시작일', '20260119')),
-              const SizedBox(width: 8),
-              Expanded(child: _dialogField(endCtrl, '종료일', '20260123')),
-            ]),
-            const SizedBox(height: 10),
-            _dialogField(regionCtrl, '지역', '예: 화성시'),
-          ]),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('취소')),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: _primary, foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('저장'),
+      builder: (ctx) {
+        int? selMonth = initMonth;
+        int? selWeek = initWeek;
+        return StatefulBuilder(
+          builder: (ctx, setDlgState) => AlertDialog(
+            backgroundColor: Colors.white,
+            surfaceTintColor: Colors.white,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            title: Text(item['schedule'] != null ? '수검 일정 수정' : '수검 일정 등록',
+                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+            content: SizedBox(
+              width: 320,
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+                Text('${item['호출명칭'] ?? ''}\n${item['허가번호'] ?? ''}',
+                    style: const TextStyle(fontSize: 13, color: Colors.black54)),
+                const SizedBox(height: 20),
+                Row(children: [
+                  Expanded(child: _weekDropdown('월', selMonth,
+                      List.generate(12, (i) => i + 1),
+                      (m) => '$m월',
+                      (v) => setDlgState(() => selMonth = v))),
+                  const SizedBox(width: 12),
+                  Expanded(child: _weekDropdown('주차', selWeek,
+                      List.generate(5, (i) => i + 1),
+                      (w) => '$w주차',
+                      (v) => setDlgState(() => selWeek = v))),
+                ]),
+                if (selMonth != null && selWeek != null) ...[
+                  const SizedBox(height: 12),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    decoration: BoxDecoration(
+                      color: _blue.withValues(alpha: 0.07),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text('$selMonth월 $selWeek주차',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(fontSize: 14, color: _blue, fontWeight: FontWeight.w600)),
+                  ),
+                ],
+              ]),
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('취소')),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(backgroundColor: _primary, foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
+                onPressed: selMonth != null && selWeek != null
+                    ? () => Navigator.pop(ctx, {'month': selMonth!, 'week': selWeek!})
+                    : null,
+                child: const Text('저장'),
+              ),
+            ],
           ),
-        ],
-      ),
+        );
+      },
     );
-    if (confirmed != true) return;
+    if (result == null) return;
+    final weekStr = '${result['month']}월 ${result['week']}주차';
     try {
-      await _svc.upsertSchedule({
+      await _withLoading('일정 저장 중...', () => _svc.upsertSchedule({
         'year': _year,
         '허가번호': item['허가번호'],
         '호출명칭': item['호출명칭'] ?? '',
@@ -263,70 +401,261 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
         'skt본부': item['skt본부'] ?? '',
         'access담당': item['access담당'] ?? '',
         '품질개선팀': item['품질개선팀'] ?? '',
-        '수검예정주차': weekCtrl.text,
-        '수검시작일': startCtrl.text,
-        '수검종료일': endCtrl.text,
-        '지역': regionCtrl.text,
-      });
+        '수검예정주차': weekStr,
+        '수검시작일': '',
+        '수검종료일': '',
+        '지역': '',
+      }));
       _showSnack('일정이 저장되었습니다.');
-      if (_detailLicenseNo != null) await _loadDetail(_detailLicenseNo!);
+      await Future.wait([
+        if (_detailLicenseNo != null) _loadDetail(_detailLicenseNo!),
+        _loadScheduledNos(),
+      ]);
     } catch (e) {
       _showSnack('저장 실패: $e', isError: true);
     }
   }
 
-  Future<void> _showBulkScheduleDialog() async {
-    final selectedItems = _items
-        .where((item) => _selectedLicenseNos.contains(item['허가번호'] as String? ?? ''))
-        .toList();
-    if (selectedItems.isEmpty) return;
-
-    final weekCtrl = TextEditingController();
-    final startCtrl = TextEditingController();
-    final endCtrl = TextEditingController();
-    final regionCtrl = TextEditingController();
-
-    final confirmed = await showDialog<bool>(
+  Future<void> _deleteScheduleConfirm(String licenseNo, String callname) async {
+    final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: Colors.white,
         surfaceTintColor: Colors.white,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: Text('일괄 일정 등록 (${selectedItems.length}건)',
+        title: const Text('일정 제거', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+        content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(callname, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+          Text(licenseNo, style: const TextStyle(fontSize: 12, color: Colors.black54)),
+          const SizedBox(height: 12),
+          const Text('수검 일정을 제거하시겠습니까?', style: TextStyle(fontSize: 14)),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('취소')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: _primary, foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('제거'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      await _withLoading('일정 삭제 중...', () => _svc.deleteSchedule(_year, licenseNo));
+      _showSnack('일정이 제거되었습니다.');
+      await Future.wait([
+        if (_detailLicenseNo != null) _loadDetail(_detailLicenseNo!),
+        _loadScheduledNos(),
+      ]);
+    } catch (e) {
+      _showSnack('제거 실패: $e', isError: true);
+    }
+  }
+
+  List<Widget> _buildBulkActionButtons() {
+    final scheduledSelected = _items
+        .where((item) {
+          final no = '${item['허가번호'] ?? ''}';
+          return _selectedLicenseNos.contains(no) && _isScheduled(no);
+        }).toList();
+    final unscheduledSelected = _items
+        .where((item) {
+          final no = '${item['허가번호'] ?? ''}';
+          return _selectedLicenseNos.contains(no) && !_isScheduled(no);
+        }).toList();
+
+    const btnShape = RoundedRectangleBorder(
+      borderRadius: BorderRadius.all(Radius.circular(10)),
+    );
+    const btnPad = EdgeInsets.symmetric(horizontal: 14, vertical: 8);
+
+    return [
+      if (unscheduledSelected.isNotEmpty)
+        ElevatedButton.icon(
+          icon: const Icon(Icons.event_available, size: 16),
+          label: Text('${unscheduledSelected.length}건 일정 등록'),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: _blue, foregroundColor: Colors.white,
+            shape: btnShape, padding: btnPad,
+          ),
+          onPressed: () => _showBulkUpsertDialog(unscheduledSelected, '일정 등록'),
+        ),
+      if (scheduledSelected.isNotEmpty) ...[
+        if (unscheduledSelected.isNotEmpty) const SizedBox(width: 8),
+        ElevatedButton.icon(
+          icon: const Icon(Icons.edit_calendar, size: 16),
+          label: Text('${scheduledSelected.length}건 일정 수정'),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: _blue, foregroundColor: Colors.white,
+            shape: btnShape, padding: btnPad,
+          ),
+          onPressed: () => _showBulkUpsertDialog(scheduledSelected, '일정 수정'),
+        ),
+        const SizedBox(width: 8),
+        ElevatedButton.icon(
+          icon: const Icon(Icons.delete_outline, size: 16),
+          label: Text('${scheduledSelected.length}건 일정 제거'),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: _primary, foregroundColor: Colors.white,
+            shape: btnShape, padding: btnPad,
+          ),
+          onPressed: () => _showBulkDeleteDialog(scheduledSelected),
+        ),
+      ],
+    ];
+  }
+
+  Future<void> _showBulkUpsertDialog(List<Map<String, dynamic>> targetItems, String actionTitle) async {
+    if (targetItems.isEmpty) return;
+
+    final result = await showDialog<Map<String, int>>(
+      context: context,
+      builder: (ctx) {
+        int? selMonth;
+        int? selWeek;
+        return StatefulBuilder(
+          builder: (ctx, setDlgState) => AlertDialog(
+            backgroundColor: Colors.white,
+            surfaceTintColor: Colors.white,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            title: Text('$actionTitle (${targetItems.length}건)',
+                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+            content: SizedBox(
+              width: 400,
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: _blue.withValues(alpha: 0.07),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text('선택된 국소 (${targetItems.length}건):',
+                        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+                    const SizedBox(height: 4),
+                    ...targetItems.take(5).map((item) => Text(
+                      '• ${item['호출명칭'] ?? ''} (${item['허가번호'] ?? ''})',
+                      style: const TextStyle(fontSize: 12),
+                    )),
+                    if (targetItems.length > 5)
+                      Text('…외 ${targetItems.length - 5}건',
+                          style: const TextStyle(fontSize: 12, color: Colors.black54)),
+                  ]),
+                ),
+                const SizedBox(height: 16),
+                Row(children: [
+                  Expanded(child: _weekDropdown('월', selMonth,
+                      List.generate(12, (i) => i + 1),
+                      (m) => '$m월',
+                      (v) => setDlgState(() => selMonth = v))),
+                  const SizedBox(width: 12),
+                  Expanded(child: _weekDropdown('주차', selWeek,
+                      List.generate(5, (i) => i + 1),
+                      (w) => '$w주차',
+                      (v) => setDlgState(() => selWeek = v))),
+                ]),
+                if (selMonth != null && selWeek != null) ...[
+                  const SizedBox(height: 12),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    decoration: BoxDecoration(
+                      color: _blue.withValues(alpha: 0.07),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text('$selMonth월 $selWeek주차',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(fontSize: 14, color: _blue, fontWeight: FontWeight.w600)),
+                  ),
+                ],
+              ]),
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('취소')),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(backgroundColor: _primary, foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
+                onPressed: selMonth != null && selWeek != null
+                    ? () => Navigator.pop(ctx, {'month': selMonth!, 'week': selWeek!})
+                    : null,
+                child: const Text('저장'),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+    if (result == null) return;
+    final weekStr = '${result['month']}월 ${result['week']}주차';
+
+    int successCount = 0, failCount = 0;
+    await _withLoading('일정 등록 중... (${targetItems.length}건)', () async {
+      final results = await Future.wait(
+        targetItems.map((item) => _svc.upsertSchedule({
+          'year': _year,
+          '허가번호': item['허가번호'],
+          '호출명칭': item['호출명칭'] ?? '',
+          '분기': item['분기'] ?? '',
+          'skt본부': item['skt본부'] ?? '',
+          'access담당': item['access담당'] ?? '',
+          '품질개선팀': item['품질개선팀'] ?? '',
+          '수검예정주차': weekStr,
+          '수검시작일': '',
+          '수검종료일': '',
+          '지역': '',
+        }).then((_) => true).catchError((_) => false)),
+      );
+      successCount = results.where((r) => r).length;
+      failCount = results.where((r) => !r).length;
+    });
+    setState(() => _selectedLicenseNos.clear());
+    await _loadScheduledNos();
+    if (failCount == 0) {
+      _showSnack('$successCount건 일정이 저장되었습니다.');
+    } else {
+      _showSnack('$successCount건 저장, $failCount건 실패', isError: true);
+    }
+  }
+
+  Future<void> _showBulkDeleteDialog(List<Map<String, dynamic>> targetItems) async {
+    if (targetItems.isEmpty) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Colors.white,
+        surfaceTintColor: Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text('일정 제거 (${targetItems.length}건)',
             style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
         content: SizedBox(
           width: 400,
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
             Container(
               width: double.infinity,
               padding: const EdgeInsets.all(10),
               decoration: BoxDecoration(
-                color: _blue.withValues(alpha: 0.07),
+                color: _primary.withValues(alpha: 0.06),
                 borderRadius: BorderRadius.circular(8),
               ),
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text('선택된 국소 (${selectedItems.length}건):',
+                Text('제거할 국소 (${targetItems.length}건):',
                     style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
                 const SizedBox(height: 4),
-                ...selectedItems.take(5).map((item) => Text(
+                ...targetItems.take(5).map((item) => Text(
                   '• ${item['호출명칭'] ?? ''} (${item['허가번호'] ?? ''})',
                   style: const TextStyle(fontSize: 12),
                 )),
-                if (selectedItems.length > 5)
-                  Text('…외 ${selectedItems.length - 5}건',
+                if (targetItems.length > 5)
+                  Text('…외 ${targetItems.length - 5}건',
                       style: const TextStyle(fontSize: 12, color: Colors.black54)),
               ]),
             ),
-            const SizedBox(height: 16),
-            _dialogField(weekCtrl, '수검예정주차', '예: 1월 3주차'),
-            const SizedBox(height: 10),
-            Row(children: [
-              Expanded(child: _dialogField(startCtrl, '시작일', '20260119')),
-              const SizedBox(width: 8),
-              Expanded(child: _dialogField(endCtrl, '종료일', '20260123')),
-            ]),
-            const SizedBox(height: 10),
-            _dialogField(regionCtrl, '지역', '예: 화성시'),
+            const SizedBox(height: 12),
+            const Text('선택된 국소의 수검 일정을 모두 제거하시겠습니까?',
+                style: TextStyle(fontSize: 14)),
           ]),
         ),
         actions: [
@@ -335,39 +664,29 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
             style: ElevatedButton.styleFrom(backgroundColor: _primary, foregroundColor: Colors.white,
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('저장'),
+            child: const Text('제거'),
           ),
         ],
       ),
     );
-    if (confirmed != true) return;
+    if (ok != true) return;
 
     int successCount = 0, failCount = 0;
-    for (final item in selectedItems) {
-      try {
-        await _svc.upsertSchedule({
-          'year': _year,
-          '허가번호': item['허가번호'],
-          '호출명칭': item['호출명칭'] ?? '',
-          '분기': item['분기'] ?? '',
-          'skt본부': item['skt본부'] ?? '',
-          'access담당': item['access담당'] ?? '',
-          '품질개선팀': item['품질개선팀'] ?? '',
-          '수검예정주차': weekCtrl.text,
-          '수검시작일': startCtrl.text,
-          '수검종료일': endCtrl.text,
-          '지역': regionCtrl.text,
-        });
-        successCount++;
-      } catch (_) {
-        failCount++;
-      }
-    }
+    await _withLoading('일정 삭제 중... (${targetItems.length}건)', () async {
+      final results = await Future.wait(
+        targetItems.map((item) =>
+          _svc.deleteSchedule(_year, '${item['허가번호'] ?? ''}')
+            .then((_) => true).catchError((_) => false)),
+      );
+      successCount = results.where((r) => r).length;
+      failCount = results.where((r) => !r).length;
+    });
     setState(() => _selectedLicenseNos.clear());
+    await _loadScheduledNos();
     if (failCount == 0) {
-      _showSnack('$successCount건 일정이 저장되었습니다.');
+      _showSnack('$successCount건 일정이 제거되었습니다.');
     } else {
-      _showSnack('$successCount건 저장, $failCount건 실패', isError: true);
+      _showSnack('$successCount건 제거, $failCount건 실패', isError: true);
     }
   }
 
@@ -388,7 +707,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
           'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
       final url = html.Url.createObjectUrlFromBlob(blob);
       html.AnchorElement(href: url)
-        ..setAttribute('download', '수검대상_${_year}년.xlsx')
+        ..setAttribute('download', '수검대상_$_year년.xlsx')
         ..click();
       html.Url.revokeObjectUrl(url);
     } catch (e) {
@@ -396,14 +715,27 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     }
   }
 
-  Widget _dialogField(TextEditingController ctrl, String label, String hint) {
-    return TextField(
-      controller: ctrl,
-      decoration: InputDecoration(
-        labelText: label, hintText: hint,
-        isDense: true,
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+  Widget _weekDropdown<T>(String hint, T? value, List<T> items,
+      String Function(T) label, ValueChanged<T?> onChanged) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border.all(color: Colors.grey.shade300),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<T>(
+          isExpanded: true,
+          isDense: true,
+          hint: Text(hint, style: const TextStyle(fontSize: 13)),
+          value: value,
+          icon: Icon(Icons.arrow_drop_down, color: _blue, size: 20),
+          dropdownColor: Colors.white,
+          style: const TextStyle(color: Colors.black87, fontSize: 13),
+          items: items.map((v) => DropdownMenuItem(value: v, child: Text(label(v)))).toList(),
+          onChanged: onChanged,
+        ),
       ),
     );
   }
@@ -454,8 +786,6 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
   // ── 필터 바 ────────────────────────────────────────────
 
   Widget _buildFilterBar() {
-    final hdqts = _orgMap.keys.toList()..sort();
-    final teams = _pHdqt.isNotEmpty ? (_orgMap[_pHdqt] ?? <String>[]) : <String>[];
 
     return Container(
       margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
@@ -520,17 +850,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                   child: Text('${_formatNumber(_total)}건',
                       style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF0369A1))),
                 ),
-              if (_selectedLicenseNos.isNotEmpty)
-                ElevatedButton.icon(
-                  icon: const Icon(Icons.event_available, size: 16),
-                  label: Text('${_selectedLicenseNos.length}건 일정 등록'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: _blue, foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                  ),
-                  onPressed: _showBulkScheduleDialog,
-                ),
+              if (_isAdmin && _selectedLicenseNos.isNotEmpty) ..._buildBulkActionButtons(),
             ],
           ),
           const SizedBox(height: 12),
@@ -542,9 +862,9 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
             runSpacing: 8,
             crossAxisAlignment: WrapCrossAlignment.center,
             children: [
-              _filterDropdown('본부', _pHdqt, ['', ...hdqts],
-                  (v) => setState(() { _pHdqt = v!; _pTeam = ''; })),
-              _filterDropdown('팀', _pTeam, ['', ...teams],
+              _filterDropdown('본부', _pHdqt, ['', ..._hdqts],
+                  (v) => setState(() { _pHdqt = v!; _pTeam = ''; _currentTeams = _orgMap[v] ?? []; })),
+              _filterDropdown('팀', _pTeam, ['', ..._currentTeams],
                   (v) => setState(() => _pTeam = v!)),
               _buildMultiDropdown('분기', _pQuarters, _allQuarters,
                   (v) => setState(() => _pQuarters = v)),
@@ -552,6 +872,9 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                   (v) => setState(() => _pNationGroups = v)),
               _buildMultiDropdown('검토여부', _pKcaResults, _allKcaResults,
                   (v) => setState(() => _pKcaResults = v)),
+              _filterDropdown('일정등록', _pScheduled, const ['', 'Y', 'N'],
+                  (v) => setState(() => _pScheduled = v ?? ''),
+                  displayMap: const {'Y': '등록됨', 'N': '미등록'}),
               const SizedBox(width: 4),
               ElevatedButton(
                 style: ElevatedButton.styleFrom(
@@ -663,7 +986,11 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
   }
 
   Widget _filterDropdown(String label, String value, List<String> options,
-      void Function(String?) onChanged) {
+      void Function(String?) onChanged, {Map<String, String>? displayMap}) {
+    String display(String v) {
+      if (v.isEmpty) return label;
+      return displayMap?[v] ?? v;
+    }
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
       decoration: BoxDecoration(
@@ -683,7 +1010,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
               .map((v) => DropdownMenuItem(
                     value: v,
                     child: Text(
-                      v.isEmpty ? label : v,
+                      display(v),
                       style: TextStyle(
                           color: v.isEmpty ? Colors.grey.shade500 : Colors.black87),
                     ),
@@ -780,6 +1107,12 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
         _loadAll();
       });
     }
+    if (_aScheduled.isNotEmpty) {
+      addChip('일정등록', _aScheduled == 'Y' ? '등록됨' : '미등록', () {
+        _pScheduled = ''; _aScheduled = ''; _page = 1;
+        _loadAll();
+      });
+    }
     return Wrap(spacing: 6, runSpacing: 4, children: chips);
   }
 
@@ -803,10 +1136,18 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
       );
     }
 
-    final allChecked = _items.isNotEmpty &&
-        _items.every((item) => _selectedLicenseNos.contains('${item['허가번호'] ?? ''}'));
+    // 체크 가능한 항목: 권한 있는 모든 항목 (배정 여부 무관)
+    final checkableItems = _isAdmin
+        ? _items.where((item) {
+            final no = '${item['허가번호'] ?? ''}';
+            return no.isNotEmpty && _canManageItem(item);
+          }).toList()
+        : <Map<String, dynamic>>[];
+
+    final allChecked = checkableItems.isNotEmpty &&
+        checkableItems.every((item) => _selectedLicenseNos.contains('${item['허가번호'] ?? ''}'));
     final someChecked = !allChecked &&
-        _items.any((item) => _selectedLicenseNos.contains('${item['허가번호'] ?? ''}'));
+        checkableItems.any((item) => _selectedLicenseNos.contains('${item['허가번호'] ?? ''}'));
 
     const headerStyle = TextStyle(
       fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF374151),
@@ -847,25 +1188,27 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                       border: Border(bottom: BorderSide(color: Color(0xFFE5E7EB))),
                     ),
                     columns: [
-                      DataColumn(label: Checkbox(
-                        value: someChecked ? null : allChecked,
-                        tristate: true,
-                        activeColor: _primary,
-                        onChanged: (v) {
-                          setState(() {
-                            if (v == true) {
-                              for (final item in _items) {
-                                final no = '${item['허가번호'] ?? ''}';
-                                if (no.isNotEmpty) _selectedLicenseNos.add(no);
-                              }
-                            } else {
-                              for (final item in _items) {
-                                _selectedLicenseNos.remove('${item['허가번호'] ?? ''}');
-                              }
-                            }
-                          });
-                        },
-                      )),
+                      DataColumn(label: _isAdmin
+                          ? Checkbox(
+                              value: someChecked ? null : allChecked,
+                              tristate: true,
+                              activeColor: _primary,
+                              onChanged: checkableItems.isEmpty ? null : (v) {
+                                setState(() {
+                                  if (v == true) {
+                                    for (final item in checkableItems) {
+                                      final no = '${item['허가번호'] ?? ''}';
+                                      if (no.isNotEmpty) _selectedLicenseNos.add(no);
+                                    }
+                                  } else {
+                                    for (final item in checkableItems) {
+                                      _selectedLicenseNos.remove('${item['허가번호'] ?? ''}');
+                                    }
+                                  }
+                                });
+                              },
+                            )
+                          : const SizedBox(width: 24)),
                       const DataColumn(label: Text('허가번호', style: headerStyle)),
                       const DataColumn(label: Text('호출명칭', style: headerStyle)),
                       const DataColumn(label: Text('국종군', style: headerStyle)),
@@ -901,16 +1244,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                         }),
                         onSelectChanged: (_) => _loadDetail(licenseNo),
                         cells: [
-                          DataCell(Checkbox(
-                            value: isChecked,
-                            activeColor: _primary,
-                            onChanged: (v) {
-                              setState(() {
-                                if (v == true) { _selectedLicenseNos.add(licenseNo); }
-                                else { _selectedLicenseNos.remove(licenseNo); }
-                              });
-                            },
-                          )),
+                          DataCell(_buildRowCheckbox(item, licenseNo, isChecked)),
                           DataCell(Text(licenseNo, style: cellStyle)),
                           DataCell(SizedBox(width: 180, child: Text('${item['호출명칭'] ?? ''}', style: cellStyle, overflow: TextOverflow.ellipsis))),
                           DataCell(Text('${item['국종군'] ?? ''}', style: cellStyle)),
@@ -942,6 +1276,33 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
       ),
       _buildPagination(),
     ]);
+  }
+
+  Widget _buildRowCheckbox(Map<String, dynamic> item, String licenseNo, bool isChecked) {
+    // member: 체크박스 미표시
+    if (!_isAdmin) return const SizedBox(width: 24);
+
+    // 본부관리자: 본인 본부 외 항목 비활성화
+    if (!_canManageItem(item)) {
+      return Tooltip(
+        message: '다른 본부의 국소입니다',
+        child: Checkbox(value: false, activeColor: _primary, onChanged: null),
+      );
+    }
+
+    // 이미 일정 등록된 항목: 파란 체크박스 (체크 가능, 수정/제거 대상 선택용)
+    final color = _isScheduled(licenseNo) ? _blue : _primary;
+    return Checkbox(
+      value: isChecked,
+      activeColor: color,
+      side: BorderSide(color: color.withValues(alpha: 0.6), width: 1.5),
+      onChanged: (v) {
+        setState(() {
+          if (v == true) { _selectedLicenseNos.add(licenseNo); }
+          else { _selectedLicenseNos.remove(licenseNo); }
+        });
+      },
+    );
   }
 
   Widget _buildStatusChip(String val) {
@@ -1377,17 +1738,42 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
             if (_isAdmin)
               Padding(
                 padding: const EdgeInsets.only(top: 8),
-                child: OutlinedButton.icon(
-                  icon: const Icon(Icons.edit_calendar, size: 16),
-                  label: Text(schedule != null ? '일정 수정' : '일정 등록',
-                      style: const TextStyle(fontSize: 13)),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: _blue,
-                    side: BorderSide(color: _blue),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                  ),
-                  onPressed: () => _showScheduleDialog({...?target, 'schedule': schedule}),
-                ),
+                child: schedule != null
+                    ? Row(children: [
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            icon: const Icon(Icons.edit_calendar, size: 16),
+                            label: const Text('일정 수정', style: TextStyle(fontSize: 13)),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: _blue,
+                              side: BorderSide(color: _blue),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                            ),
+                            onPressed: () => _showScheduleDialog({...?target, 'schedule': schedule}),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        OutlinedButton.icon(
+                          icon: const Icon(Icons.delete_outline, size: 16),
+                          label: const Text('제거', style: TextStyle(fontSize: 13)),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: _primary,
+                            side: BorderSide(color: _primary),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                          ),
+                          onPressed: () => _deleteScheduleConfirm(licenseNo, callname),
+                        ),
+                      ])
+                    : OutlinedButton.icon(
+                        icon: const Icon(Icons.edit_calendar, size: 16),
+                        label: const Text('일정 등록', style: TextStyle(fontSize: 13)),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: _blue,
+                          side: BorderSide(color: _blue),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        ),
+                        onPressed: () => _showScheduleDialog({...?target, 'schedule': schedule}),
+                      ),
               ),
 
             const SizedBox(height: 16),

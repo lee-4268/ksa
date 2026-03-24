@@ -129,6 +129,7 @@ class InspectionService {
     String addr = '',
     int page = 1,
     int pageSize = 100,
+    String scheduleYn = '',
   }) async {
     final resp = await http.post(
       Uri.parse('$_baseUrl/inspection/data'),
@@ -137,6 +138,7 @@ class InspectionService {
         'year': year, 'sheet': sheet,
         'filters': filters, 'search': search, 'addr': addr,
         'page': page, 'page_size': pageSize,
+        'schedule_yn': scheduleYn,
       }),
     ).timeout(_apiTimeout);
     return json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
@@ -148,6 +150,7 @@ class InspectionService {
     Map<String, List<String>> filters = const {},
     String search = '',
     String addr = '',
+    String scheduleYn = '',
   }) async {
     final resp = await http.post(
       Uri.parse('$_baseUrl/inspection/summary'),
@@ -155,6 +158,7 @@ class InspectionService {
       body: json.encode({
         'year': year, 'sheet': sheet,
         'filters': filters, 'search': search, 'addr': addr,
+        'schedule_yn': scheduleYn,
       }),
     ).timeout(_apiTimeout);
     return json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
@@ -252,12 +256,38 @@ class InspectionService {
     if (resp.statusCode != 200) throw Exception('사진 삭제 실패');
   }
 
+  /// YOLO 철탑형태 분류 (POST /predict)
+  Future<Map<String, dynamic>> classifyTower(
+      Uint8List imageBytes, String filename) async {
+    final uri = Uri.parse('$_baseUrl/predict');
+    final req = http.MultipartRequest('POST', uri)
+      ..headers['Authorization'] = 'Bearer ${_authToken ?? ''}'
+      ..files.add(
+          http.MultipartFile.fromBytes('file', imageBytes, filename: filename));
+    final streamed = await req.send().timeout(const Duration(minutes: 2));
+    final body = json.decode(await streamed.stream.bytesToString())
+        as Map<String, dynamic>;
+    if (streamed.statusCode != 200) {
+      throw Exception(body['detail'] ?? '분류 실패');
+    }
+    return body;
+  }
+
   Future<String> getPhotoUrl(String s3Key) async {
     final uri = Uri.parse('$_baseUrl/inspection/result/photo-url').replace(
         queryParameters: {'s3_key': s3Key});
     final resp = await http.get(uri, headers: _headers).timeout(_apiTimeout);
     final body = json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
     return body['url'] as String;
+  }
+
+  /// 사진 바이너리 직접 반환 (Flutter web CORS 우회)
+  Future<Uint8List> getPhotoData(String s3Key) async {
+    final uri = Uri.parse('$_baseUrl/inspection/result/photo-data').replace(
+        queryParameters: {'s3_key': s3Key});
+    final resp = await http.get(uri, headers: _headers).timeout(const Duration(minutes: 1));
+    if (resp.statusCode != 200) throw Exception('사진 로드 실패: ${resp.statusCode}');
+    return resp.bodyBytes;
   }
 
   Future<List<Map<String, dynamic>>> getMyList(int year) async {
@@ -274,6 +304,17 @@ class InspectionService {
     final resp = await http.get(uri, headers: _headers).timeout(_apiTimeout);
     final body = json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
     return List<Map<String, dynamic>>.from(body['items'] ?? []);
+  }
+
+  Future<Map<String, dynamic>> geocodeTargets(int year) async {
+    final resp = await http.post(
+      Uri.parse('$_baseUrl/inspection/geocode-targets').replace(
+          queryParameters: {'year': '$year'}),
+      headers: _headers,
+    ).timeout(const Duration(minutes: 30));
+    final body = json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+    if (resp.statusCode != 200) throw Exception(body['detail'] ?? '지오코딩 실패');
+    return body;
   }
 
   Future<String> buildDsDetail(String divisionId, String importDate) async {

@@ -9370,8 +9370,13 @@ def _init_inspection_db():
         부서 TEXT, 분기 TEXT, 연도주기 TEXT, 검사주기 INTEGER,
         허가상태 TEXT, 설치장소 TEXT, 도로명주소 TEXT, 장치수 INTEGER,
         통시 TEXT, 공대 TEXT, kca검토결과 TEXT, 시기조정 TEXT,
-        기준연도 INTEGER, skt본부 TEXT, access담당 TEXT, 품질개선팀 TEXT
+        기준연도 INTEGER, skt본부 TEXT, access담당 TEXT, 품질개선팀 TEXT,
+        위도 REAL, 경도 REAL
     )''')
+    # 마이그레이션: 기존 DB에 위도/경도 컬럼 추가
+    for col in ('위도 REAL', '경도 REAL'):
+        try: conn.execute(f'ALTER TABLE inspection_targets ADD COLUMN {col}')
+        except Exception: pass
     conn.execute('CREATE INDEX IF NOT EXISTS idx_it_year ON inspection_targets(year)')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_it_허가번호 ON inspection_targets(허가번호)')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_it_분기 ON inspection_targets(분기)')
@@ -9466,6 +9471,12 @@ def _init_ds_detail_db():
     conn.execute('''CREATE TABLE IF NOT EXISTS ds_일반사항 (
         허가번호 TEXT PRIMARY KEY, 무선국명 TEXT, 호출명칭 TEXT
     )''')
+    # 마이그레이션: 통합시설명칭 컬럼 추가 (기존 DB 호환)
+    try:
+        conn.execute('ALTER TABLE ds_일반사항 ADD COLUMN 통합시설명칭 TEXT')
+        conn.commit()
+    except Exception:
+        pass  # 이미 존재하면 무시
     conn.execute('''CREATE TABLE IF NOT EXISTS ds_장치 (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         허가번호 TEXT, 장치번호 TEXT, 기기일련번호 TEXT
@@ -9511,14 +9522,16 @@ def _build_ds_detail_from_zip_sync(zip_path: str):
                     if '일반사항' in sheet_names:
                         ws = wb.sheet_by_name('일반사항')
                         hi = _col_idx(ws, '허가번호'); mi = _col_idx(ws, '무선국명'); ci = _col_idx(ws, '호출명칭')
+                        zi = _col_idx(ws, '통합시설명칭')
                         if hi >= 0:
                             batch = []
                             for r in range(1, ws.nrows):
                                 h = str(ws.cell_value(r, hi) or '').strip()
                                 m = str(ws.cell_value(r, mi) or '').strip() if mi >= 0 else ''
                                 c = str(ws.cell_value(r, ci) or '').strip() if ci >= 0 else ''
-                                if h: batch.append((h, m, c))
-                            conn.executemany('INSERT OR REPLACE INTO ds_일반사항(허가번호,무선국명,호출명칭) VALUES(?,?,?)', batch)
+                                z = str(ws.cell_value(r, zi) or '').strip() if zi >= 0 else ''
+                                if h: batch.append((h, m, c, z))
+                            conn.executemany('INSERT OR REPLACE INTO ds_일반사항(허가번호,무선국명,호출명칭,통합시설명칭) VALUES(?,?,?,?)', batch)
 
                     # 장치
                     if '장치' in sheet_names:
@@ -10168,7 +10181,180 @@ async def inspection_staging_confirm(request: Request, req: InspStagingConfirmRe
     conn.commit()
     conn.close()
 
+    # 백그라운드: Kakao 지오코딩 → inspection_targets 위도/경도 채우기
+    async def _populate_coords():
+        try:
+            import sqlite3 as _sq, requests as _req, time as _time
+            _conn = _sq.connect(_INSP_DB, timeout=60)
+            rows = _conn.execute(
+                'SELECT id, 도로명주소, 설치장소 FROM inspection_targets WHERE year=? AND (위도 IS NULL OR 위도=0)',
+                (req.year,)).fetchall()
+            if not rows:
+                _conn.close(); return
+
+            logger.info(f"Kakao 지오코딩 시작: {len(rows)}건")
+            KAKAO_KEY = "cb3f4b95ada5f92fc3924b9685aec16b"
+
+            # 주소 중복 제거 + 10개 동시 요청
+            addr_map: dict = {}
+            for rid, road_addr, install_addr in rows:
+                addr = (road_addr or '').strip() or (install_addr or '').strip()
+                if addr:
+                    addr_map.setdefault(addr, []).append(rid)
+
+            import aiohttp as _aio
+            sem = asyncio.Semaphore(10)
+
+            async def _geocode_one(session, addr):
+                async with sem:
+                    try:
+                        async with session.get(
+                            'https://dapi.kakao.com/v2/local/search/address.json',
+                            params={'query': addr, 'size': 1},
+                            headers={'Authorization': f'KakaoAK {KAKAO_KEY}'},
+                            timeout=_aio.ClientTimeout(total=5),
+                        ) as r:
+                            if r.status == 200:
+                                docs = (await r.json()).get('documents', [])
+                                if docs:
+                                    x = float(docs[0].get('x', 0))
+                                    y = float(docs[0].get('y', 0))
+                                    if x and y:
+                                        await asyncio.sleep(0.11)
+                                        return addr, (y, x)
+                    except Exception:
+                        pass
+                    await asyncio.sleep(0.11)
+                    return addr, None
+
+            async with _aio.ClientSession() as session:
+                coord_results = await asyncio.gather(
+                    *[_geocode_one(session, a) for a in addr_map])
+
+            coord_cache = {a: c for a, c in coord_results if c}
+            updates = [(coord_cache[a][0], coord_cache[a][1], rid)
+                       for a, ids in addr_map.items() if a in coord_cache
+                       for rid in ids]
+            if updates:
+                _conn.executemany('UPDATE inspection_targets SET 위도=?, 경도=? WHERE id=?', updates)
+                _conn.commit()
+                logger.info(f"inspection_targets 좌표 업데이트: {len(updates)}/{len(rows)}건")
+            else:
+                logger.warning("Kakao 지오코딩 결과 없음 (주소 확인 필요)")
+            _conn.close()
+        except Exception as e:
+            logger.warning(f"inspection coords 업데이트 실패 (non-fatal): {e}")
+
+    asyncio.create_task(_populate_coords())
     return {"success": True, "count": count}
+
+
+@app.post("/inspection/geocode-targets")
+async def inspection_geocode_targets(request: Request, year: int):
+    """기존 inspection_targets의 위경도를 Kakao 지오코딩으로 채움 (관리자 1회성).
+    최적화: 주소 중복 제거 + 10개 동시 요청 → 순차 대비 ~20x 빠름.
+    """
+    empno = await _verify_auth(request)
+    role = await asyncio.to_thread(_get_user_role_sync, empno)
+    if role not in {"admin", "manager"}:
+        raise HTTPException(403, "관리자/매니저만 가능")
+    if not os.path.exists(_INSP_DB):
+        raise HTTPException(400, "DB 없음")
+
+    KAKAO_KEY = "cb3f4b95ada5f92fc3924b9685aec16b"
+    CONCURRENCY = 10  # Kakao 10 req/s 제한
+
+    # 1. 좌표 없는 항목 조회
+    def _fetch_rows():
+        conn = sqlite3.connect(_INSP_DB, timeout=60)
+        rows = conn.execute(
+            'SELECT id, 도로명주소, 설치장소 FROM inspection_targets '
+            'WHERE year=? AND (위도 IS NULL OR 위도=0)', (year,)).fetchall()
+        conn.close()
+        return rows
+
+    rows = await asyncio.to_thread(_fetch_rows)
+    if not rows:
+        return {"success": True, "total": 0, "updated": 0}
+
+    total = len(rows)
+
+    # 2. 주소 중복 제거: {주소: [id, ...]}
+    addr_map: dict = {}
+    no_addr: list = []
+    for rid, road_addr, install_addr in rows:
+        addr = (road_addr or '').strip() or (install_addr or '').strip()
+        if not addr:
+            no_addr.append(rid)
+            continue
+        addr_map.setdefault(addr, []).append(rid)
+
+    unique_addrs = list(addr_map.keys())
+    logger.info(f"geocode-targets: {total}건 중 고유 주소 {len(unique_addrs)}개 (year={year})")
+
+    # 3. 고유 주소 → 좌표 (동시 10개)
+    coord_cache: dict = {}  # {주소: (lat, lng) or None}
+
+    async def _geocode_one(session, addr: str):
+        try:
+            async with session.get(
+                'https://dapi.kakao.com/v2/local/search/address.json',
+                params={'query': addr, 'size': 1},
+                headers={'Authorization': f'KakaoAK {KAKAO_KEY}'},
+                timeout=aiohttp.ClientTimeout(total=5),
+            ) as resp:
+                if resp.status == 200:
+                    docs = (await resp.json()).get('documents', [])
+                    if docs:
+                        x = float(docs[0].get('x', 0))
+                        y = float(docs[0].get('y', 0))
+                        if x and y:
+                            return addr, (y, x)
+        except Exception:
+            pass
+        return addr, None
+
+    try:
+        import aiohttp
+    except ImportError:
+        raise HTTPException(503, "aiohttp 미설치 — pip install aiohttp")
+
+    # 4. 배치(500개)씩 처리 → 코루틴 동시 생성 수 제한 → OOM 방지
+    BATCH = 500
+    sem = asyncio.Semaphore(CONCURRENCY)
+
+    async def _limited(session, addr):
+        async with sem:
+            result = await _geocode_one(session, addr)
+            await asyncio.sleep(0.11)
+            return result
+
+    updated = 0
+    async with aiohttp.ClientSession() as session:
+        for i in range(0, len(unique_addrs), BATCH):
+            batch = unique_addrs[i:i + BATCH]
+            results = await asyncio.gather(*[_limited(session, a) for a in batch])
+
+            # 배치 결과 즉시 DB 저장 후 메모리 해제
+            def _write(res=results):
+                upd = []
+                for addr, coord in res:
+                    if coord:
+                        for rid in addr_map.get(addr, []):
+                            upd.append((coord[0], coord[1], rid))
+                if not upd:
+                    return 0
+                c = sqlite3.connect(_INSP_DB, timeout=60)
+                c.executemany('UPDATE inspection_targets SET 위도=?, 경도=? WHERE id=?', upd)
+                c.commit(); c.close()
+                return len(upd)
+
+            updated += await asyncio.to_thread(_write)
+            logger.info(f"geocode-targets: {min(i+BATCH, len(unique_addrs))}/{len(unique_addrs)} 주소 처리 ({updated}건 업데이트)")
+
+    logger.info(f"geocode-targets 완료: {updated}/{total}건 (year={year})")
+    return {"success": True, "total": total, "unique_addrs": len(unique_addrs), "updated": updated}
+
 
 class InspectionDataReq(BaseModel):
     year: int
@@ -10178,8 +10364,9 @@ class InspectionDataReq(BaseModel):
     addr: str = ""       # 도로명주소/설치장소 검색
     page: int = 1
     page_size: int = 100
+    schedule_yn: str = ""  # 일정등록 여부 필터 (Y/N)
 
-def _build_insp_where(year, sheet, filters, search, addr):
+def _build_insp_where(year, sheet, filters, search, addr, schedule_yn=""):
     """inspection_data / export 공통 WHERE 절 빌더."""
     ALLOWED_COLS = {'분기','국종군','부서','kca검토결과','시기조정','skt본부','access담당','품질개선팀','허가상태'}
     where = ["year=?"]
@@ -10206,6 +10393,12 @@ def _build_insp_where(year, sheet, filters, search, addr):
             where.append('(도로명주소 LIKE ? OR 설치장소 LIKE ?)')
             akw = f'%{a}%'
             params.extend([akw, akw])
+    if schedule_yn == 'Y':
+        where.append('허가번호 IN (SELECT 허가번호 FROM inspection_schedules WHERE year=?)')
+        params.append(year)
+    elif schedule_yn == 'N':
+        where.append('허가번호 NOT IN (SELECT 허가번호 FROM inspection_schedules WHERE year=?)')
+        params.append(year)
     return " AND ".join(where), params
 
 @app.post("/inspection/data")
@@ -10213,7 +10406,7 @@ async def inspection_data(request: Request, req: InspectionDataReq):
     """필터 적용 데이터 조회 (페이지네이션)."""
     await _verify_auth(request)
     if not os.path.exists(_INSP_DB): return {"items": [], "total": 0}
-    where_sql, params = _build_insp_where(req.year, req.sheet, req.filters, req.search, req.addr)
+    where_sql, params = _build_insp_where(req.year, req.sheet, req.filters, req.search, req.addr, req.schedule_yn)
     def _read():
         c = sqlite3.connect(_INSP_DB, timeout=60); c.row_factory = sqlite3.Row
         total = c.execute(f'SELECT COUNT(*) FROM inspection_targets WHERE {where_sql}', params).fetchone()[0]
@@ -10301,13 +10494,14 @@ class InspectionSummaryReq(BaseModel):
     filters: dict = {}
     search: str = ""
     addr: str = ""
+    schedule_yn: str = ""
 
 @app.post("/inspection/summary")
 async def inspection_summary(request: Request, req: InspectionSummaryReq):
     """본부×분기 매트릭스 집계."""
     await _verify_auth(request)
     if not os.path.exists(_INSP_DB): return {"matrix": {}}
-    where_sql, params = _build_insp_where(req.year, req.sheet, req.filters, req.search, req.addr)
+    where_sql, params = _build_insp_where(req.year, req.sheet, req.filters, req.search, req.addr, req.schedule_yn)
     def _read():
         c = sqlite3.connect(_INSP_DB, timeout=60); c.row_factory = sqlite3.Row
         rows = c.execute(
@@ -10397,12 +10591,12 @@ async def inspection_schedule_upsert(request: Request, req: InspectionScheduleRe
     await asyncio.to_thread(_record_audit_log_sync, "inspection_schedule_upsert", "inspection_schedule", pk, empno)
     return {"success": True}
 
-@app.delete("/inspection/schedule/{year}/{허가번호}")
-async def inspection_schedule_delete(year: int, 허가번호: str, request: Request):
+@app.delete("/inspection/schedule/{year}/{license_no}")
+async def inspection_schedule_delete(year: int, license_no: str, request: Request):
     empno = await _verify_auth(request)
     role = await asyncio.to_thread(_get_user_role_sync, empno)
     if role not in {"admin", "manager"}: raise HTTPException(403, "권한 없음")
-    pk = f"{year}#{허가번호}"
+    pk = f"{year}#{license_no}"
     def _del():
         c = sqlite3.connect(_INSP_DB, timeout=60)
         c.execute('DELETE FROM inspection_schedules WHERE pk=?', (pk,))
@@ -10507,6 +10701,21 @@ async def inspection_result_photo_url(request: Request, s3_key: str):
     url = s3.generate_presigned_url('get_object', Params={'Bucket': S3_BUCKET_NAME, 'Key': s3_key}, ExpiresIn=3600)
     return {"url": url}
 
+@app.get("/inspection/result/photo-data")
+async def inspection_result_photo_data(request: Request, s3_key: str):
+    """사진 바이너리 직접 반환 (Flutter web CORS 우회용)."""
+    await _verify_auth(request)
+    if not s3_key.startswith("inspection/photos/"): raise HTTPException(400, "허용되지 않은 경로")
+    s3 = get_s3_client()
+    try:
+        obj = await asyncio.to_thread(
+            lambda: s3.get_object(Bucket=S3_BUCKET_NAME, Key=s3_key))
+        content_type = obj.get('ContentType', 'image/jpeg')
+        data = await asyncio.to_thread(obj['Body'].read)
+        return Response(content=data, media_type=content_type)
+    except Exception as e:
+        raise HTTPException(404, f"사진을 찾을 수 없습니다: {e}")
+
 @app.get("/inspection/my-list")
 async def inspection_my_list(request: Request, year: int):
     """내 팀 배정 수검 목록 (팀원용)."""
@@ -10516,7 +10725,8 @@ async def inspection_my_list(request: Request, year: int):
     users_table = dynamodb.Table(DYNAMODB_TABLES["users"])
     user_item = await asyncio.to_thread(lambda: users_table.get_item(
         Key={"user_id": empno},
-        ProjectionExpression="region, team",
+        ProjectionExpression="#r, team",
+        ExpressionAttributeNames={"#r": "region"},  # region은 DynamoDB 예약어
     ))
     user_data = user_item.get("Item", {})
     # region: "경북Access담당" → "경북" (inspection_schedules.access담당과 매칭)
@@ -10530,26 +10740,22 @@ async def inspection_my_list(request: Request, year: int):
     import json as _j
     def _read_my_list():
         c = sqlite3.connect(_INSP_DB, timeout=60); c.row_factory = sqlite3.Row
+        _sel = ('SELECT s.*, t.위도, t.경도, t.설치장소 as t_설치장소, '
+                'r.status, r.검사일, r.메모, r.철탑형태, r.사진S3키 '
+                'FROM inspection_schedules s '
+                'LEFT JOIN inspection_targets t ON s.허가번호=t.허가번호 AND t.year=s.year '
+                'LEFT JOIN inspection_results r ON s.pk=r.pk ')
         if access_team and 품질팀:
             rows = c.execute(
-                'SELECT s.*, r.status, r.검사일, r.메모, r.철탑형태, r.사진S3키 '
-                'FROM inspection_schedules s '
-                'LEFT JOIN inspection_results r ON s.pk=r.pk '
-                'WHERE s.year=? AND (s.access담당=? OR s.품질개선팀=?)',
+                _sel + 'WHERE s.year=? AND (s.access담당=? OR s.품질개선팀=?)',
                 (year, access_team, 품질팀)).fetchall()
         elif access_team:
             rows = c.execute(
-                'SELECT s.*, r.status, r.검사일, r.메모, r.철탑형태, r.사진S3키 '
-                'FROM inspection_schedules s '
-                'LEFT JOIN inspection_results r ON s.pk=r.pk '
-                'WHERE s.year=? AND s.access담당=?',
+                _sel + 'WHERE s.year=? AND s.access담당=?',
                 (year, access_team)).fetchall()
         else:
             rows = c.execute(
-                'SELECT s.*, r.status, r.검사일, r.메모, r.철탑형태, r.사진S3키 '
-                'FROM inspection_schedules s '
-                'LEFT JOIN inspection_results r ON s.pk=r.pk '
-                'WHERE s.year=? AND s.품질개선팀=?',
+                _sel + 'WHERE s.year=? AND s.품질개선팀=?',
                 (year, 품질팀)).fetchall()
         c.close()
         items = []
