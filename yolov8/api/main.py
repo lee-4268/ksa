@@ -10511,13 +10511,17 @@ async def inspection_result_photo_url(request: Request, s3_key: str):
 async def inspection_my_list(request: Request, year: int):
     """내 팀 배정 수검 목록 (팀원용)."""
     empno = await _verify_auth(request)
-    # empno로 access담당 조회 (user_roles에서)
+    # Users 테이블에서 region(본부=access담당), team(품질개선팀) 조회
     dynamodb = get_dynamodb_resource()
-    roles_table = dynamodb.Table(DYNAMODB_TABLES["user_roles"])
-    role_item = await asyncio.to_thread(lambda: roles_table.get_item(Key={"user_id": empno}))
-    user_data = role_item.get("Item", {})
-    access_team = user_data.get("access담당", "")
-    품질팀 = user_data.get("품질개선팀", "")
+    users_table = dynamodb.Table(DYNAMODB_TABLES["users"])
+    user_item = await asyncio.to_thread(lambda: users_table.get_item(
+        Key={"user_id": empno},
+        ProjectionExpression="region, team",
+    ))
+    user_data = user_item.get("Item", {})
+    # region: "경북Access담당" → "경북" (inspection_schedules.access담당과 매칭)
+    access_team = user_data.get("region", "").replace("Access담당", "").strip()
+    품질팀 = user_data.get("team", "")
 
     if not access_team and not 품질팀:
         return {"items": [], "message": "팀 배정 없음"}
