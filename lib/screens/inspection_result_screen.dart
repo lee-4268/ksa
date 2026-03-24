@@ -53,9 +53,9 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
       ..setAuthToken(context.read<AuthService>().authToken);
     if (widget.initialData != null) {
       _applyData(widget.initialData!);
-    } else {
-      _loadData();
     }
+    // 항상 서버에서 전체 데이터 로드 (사진, DS 정보 등 완전한 데이터)
+    _loadData();
   }
 
   @override

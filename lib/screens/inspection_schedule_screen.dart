@@ -1,10 +1,8 @@
 import 'dart:async';
-import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/auth_service.dart';
 import '../services/inspection_service.dart';
-import '../widgets/user_profile_button.dart';
 import 'inspection_result_screen.dart';
 // ignore: avoid_web_libraries_in_flutter
 import 'dart:html' as html;
@@ -790,9 +788,20 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
   Widget _buildDataTab() {
     if (_loading) return const Center(child: CircularProgressIndicator());
     if (_error != null) return Center(child: Text('오류: $_error', style: const TextStyle(color: Colors.red)));
-    if (_items.isEmpty) return const Center(
-        child: Text('데이터 없음\nKCA 파일을 Import하세요',
-            textAlign: TextAlign.center, style: TextStyle(color: Colors.black38)));
+    if (_items.isEmpty) {
+      return Center(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Icon(Icons.search_off_rounded, size: 40, color: Colors.grey.shade300),
+          const SizedBox(height: 8),
+          Text('$_year년 $_sheet 데이터 없음',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Colors.grey.shade400, fontSize: 14)),
+          const SizedBox(height: 4),
+          Text(_hasActiveFilters ? '필터 조건을 변경하거나 초기화하세요' : '관리자 패널에서 KCA 파일을 Import하세요',
+              style: TextStyle(color: Colors.grey.shade400, fontSize: 12)),
+        ]),
+      );
+    }
 
     final allChecked = _items.isNotEmpty &&
         _items.every((item) => _selectedLicenseNos.contains('${item['허가번호'] ?? ''}'));
@@ -860,12 +869,20 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                       const DataColumn(label: Text('허가번호', style: headerStyle)),
                       const DataColumn(label: Text('호출명칭', style: headerStyle)),
                       const DataColumn(label: Text('국종군', style: headerStyle)),
+                      const DataColumn(label: Text('부서', style: headerStyle)),
                       const DataColumn(label: Text('분기', style: headerStyle)),
+                      const DataColumn(label: Text('연도주기', style: headerStyle)),
+                      const DataColumn(label: Text('검사주기', style: headerStyle)),
                       const DataColumn(label: Text('허가상태', style: headerStyle)),
+                      const DataColumn(label: Text('설치장소', style: headerStyle)),
                       const DataColumn(label: Text('도로명주소', style: headerStyle)),
                       const DataColumn(label: Text('장치수', style: headerStyle)),
                       const DataColumn(label: Text('통시', style: headerStyle)),
+                      const DataColumn(label: Text('공대', style: headerStyle)),
                       const DataColumn(label: Text('KCA검토결과', style: headerStyle)),
+                      const DataColumn(label: Text('시기조정', style: headerStyle)),
+                      const DataColumn(label: Text('기준연도', style: headerStyle)),
+                      const DataColumn(label: Text('SKT본부', style: headerStyle)),
                       const DataColumn(label: Text('Access담당', style: headerStyle)),
                       const DataColumn(label: Text('품질개선팀', style: headerStyle)),
                     ],
@@ -895,14 +912,22 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                             },
                           )),
                           DataCell(Text(licenseNo, style: cellStyle)),
-                          DataCell(SizedBox(width: 200, child: Text('${item['호출명칭'] ?? ''}', style: cellStyle, overflow: TextOverflow.ellipsis))),
+                          DataCell(SizedBox(width: 180, child: Text('${item['호출명칭'] ?? ''}', style: cellStyle, overflow: TextOverflow.ellipsis))),
                           DataCell(Text('${item['국종군'] ?? ''}', style: cellStyle)),
+                          DataCell(Text('${item['부서'] ?? ''}', style: cellStyle)),
                           DataCell(Text('${item['분기'] ?? ''}', style: cellStyle)),
+                          DataCell(Text('${item['연도주기'] ?? ''}', style: cellStyle)),
+                          DataCell(Text('${item['검사주기'] ?? ''}', style: cellStyle)),
                           DataCell(_buildStatusChip('${item['허가상태'] ?? ''}')),
-                          DataCell(SizedBox(width: 200, child: Text('${item['도로명주소'] ?? ''}', style: cellStyle, overflow: TextOverflow.ellipsis))),
+                          DataCell(SizedBox(width: 160, child: Text('${item['설치장소'] ?? ''}', style: cellStyle, overflow: TextOverflow.ellipsis))),
+                          DataCell(SizedBox(width: 180, child: Text('${item['도로명주소'] ?? ''}', style: cellStyle, overflow: TextOverflow.ellipsis))),
                           DataCell(Text('${item['장치수'] ?? ''}', style: cellStyle)),
                           DataCell(Text('${item['통시'] ?? ''}', style: cellStyle)),
+                          DataCell(Text('${item['공대'] ?? ''}', style: cellStyle)),
                           DataCell(_buildKcaChip('${item['kca검토결과'] ?? ''}')),
+                          DataCell(Text('${item['시기조정'] ?? ''}', style: cellStyle)),
+                          DataCell(Text('${item['기준연도'] ?? ''}', style: cellStyle)),
+                          DataCell(Text('${item['skt본부'] ?? ''}', style: cellStyle)),
                           DataCell(Text('${item['access담당'] ?? ''}', style: cellStyle)),
                           DataCell(Text('${item['품질개선팀'] ?? ''}', style: cellStyle)),
                         ],

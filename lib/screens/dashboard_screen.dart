@@ -2,8 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/auth_service.dart';
 import '../widgets/korea_map_widget.dart';
-import 'map_screen.dart';
 import 'inspection_schedule_screen.dart';
+import 'inspection_my_list_screen.dart';
 import 'division_management_screen.dart';
 import 'admin/admin_panel_screen.dart';
 import 'ds_dashboard_screen.dart';
@@ -232,7 +232,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                   title: '수검 관리',
                   subtitle: '무선국 검사 및 현장 수검 관리',
                   color: _blueAccent,
-                  onTap: () => _navigateFromDrawer(const MapScreen()),
+                  onTap: () => _navigateFromDrawer(const InspectionMyListScreen()),
                 ),
                 _buildDrawerItem(
                   icon: Icons.calendar_month,
