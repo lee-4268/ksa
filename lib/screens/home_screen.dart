@@ -4,7 +4,6 @@ import '../providers/station_provider.dart';
 import '../services/auth_service.dart';
 import '../services/cloud_data_service.dart';
 import '../services/weather_service.dart';
-import 'map_screen.dart';
 import 'division_management_screen.dart';
 import 'dashboard_screen.dart';
 import 'admin/admin_panel_screen.dart';
@@ -14,6 +13,7 @@ import 'callname_screen.dart';
 import 'certificate_screen.dart';
 import 'erp_ds_compare_screen.dart';
 import 'inspection_schedule_screen.dart';
+import 'inspection_my_list_screen.dart';
 
 /// 앱 셸 — 사이드바 상시 표시 + 오른쪽 콘텐츠 전환
 class HomeScreen extends StatefulWidget {
@@ -83,7 +83,7 @@ class _HomeScreenState extends State<HomeScreen> {
     switch (title) {
       case '홈': return _HomeContent(onNavigate: (i) => setState(() => _selectedIndex = i), menuItems: items);
       case '전국 현황': return const DashboardScreen();
-      case '수검 관리': return const MapScreen();
+      case '수검 관리': return const InspectionMyListScreen();
       case '일정 및 통계': return const InspectionScheduleScreen();
       case 'DS 데이터': return const DsDashboardScreen();
       case 'DS 병합': return const DsMergeScreen();
