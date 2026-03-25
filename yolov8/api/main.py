@@ -854,8 +854,12 @@ app = FastAPI(
 _cors_env = os.environ.get("CORS_ALLOWED_ORIGINS", "")
 ALLOWED_ORIGINS = [x.strip() for x in _cors_env.split(",") if x.strip()]
 if not ALLOWED_ORIGINS:
-    logger.warning("CORS_ALLOWED_ORIGINS 환경변수 미설정 — localhost만 허용")
-    ALLOWED_ORIGINS = ["http://localhost:3000", "http://localhost:8080"]
+    logger.warning("CORS_ALLOWED_ORIGINS 환경변수 미설정 — 기본 도메인만 허용")
+    ALLOWED_ORIGINS = [
+        "http://localhost:3000",
+        "http://localhost:8080",
+        "https://playground.idcube.sktelecom.com",
+    ]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
@@ -9907,6 +9911,28 @@ class InspectionResultReq(BaseModel):
     메모: str = ""
     철탑형태: str = ""
 
+class InspectionStationReq(BaseModel):
+    year: int
+    허가번호: str
+    호출명칭: str = ""
+    국종군: str = ""
+    부서: str = ""
+    분기: str = ""
+    연도주기: str = ""
+    검사주기: Optional[int] = None
+    허가상태: str = "허가"
+    설치장소: str = ""
+    도로명주소: str = ""
+    장치수: Optional[int] = None
+    통시: str = ""
+    공대: str = ""
+    kca검토결과: str = ""
+    시기조정: str = ""
+    기준연도: Optional[int] = None
+    skt본부: str = ""
+    access담당: str = ""
+    품질개선팀: str = ""
+
 @app.post("/inspection/upload-raw")
 async def inspection_upload_raw(request: Request):
     """KCA Excel → S3 스트리밍 업로드."""
@@ -10643,6 +10669,53 @@ async def inspection_result_upsert(request: Request, req: InspectionResultReq):
     await asyncio.to_thread(_write)
     await asyncio.to_thread(_record_audit_log_sync, "inspection_result_upsert", "inspection_result", pk, empno)
     return {"success": True}
+
+@app.post("/inspection/station")
+async def inspection_station_add(request: Request, req: InspectionStationReq):
+    """개별 수검 대상 국소 추가 (admin/manager 전용)."""
+    empno = await _verify_auth(request)
+    role = await asyncio.to_thread(_get_user_role_sync, empno)
+    if role not in {"admin", "manager"}:
+        raise HTTPException(403, "관리자/매니저만 가능")
+    if not req.허가번호.strip():
+        raise HTTPException(400, "허가번호 필수")
+    if not req.skt본부.strip():
+        raise HTTPException(400, "본부 필수")
+    def _insert():
+        import sqlite3 as _sq
+        c = _sq.connect(_INSP_DB, timeout=60)
+        # 중복 허가번호+연도 방지 (이미 있으면 업데이트)
+        existing = c.execute(
+            'SELECT id FROM inspection_targets WHERE year=? AND 허가번호=?',
+            (req.year, req.허가번호.strip())).fetchone()
+        if existing:
+            c.execute('''UPDATE inspection_targets SET
+                호출명칭=?, 국종군=?, 부서=?, 분기=?, 연도주기=?, 검사주기=?,
+                허가상태=?, 설치장소=?, 도로명주소=?, 장치수=?, 통시=?, 공대=?,
+                kca검토결과=?, 시기조정=?, 기준연도=?, skt본부=?, access담당=?, 품질개선팀=?
+                WHERE year=? AND 허가번호=?''',
+                (req.호출명칭, req.국종군, req.부서, req.분기, req.연도주기, req.검사주기,
+                 req.허가상태, req.설치장소, req.도로명주소, req.장치수, req.통시, req.공대,
+                 req.kca검토결과, req.시기조정, req.기준연도, req.skt본부, req.access담당, req.품질개선팀,
+                 req.year, req.허가번호.strip()))
+            action = "updated"
+        else:
+            c.execute('''INSERT INTO inspection_targets
+                (year, sheet, 허가번호, 호출명칭, 국종군, 부서, 분기, 연도주기, 검사주기,
+                 허가상태, 설치장소, 도로명주소, 장치수, 통시, 공대, kca검토결과, 시기조정,
+                 기준연도, skt본부, access담당, 품질개선팀)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+                (req.year, 'SKT', req.허가번호.strip(), req.호출명칭, req.국종군, req.부서,
+                 req.분기, req.연도주기, req.검사주기, req.허가상태, req.설치장소,
+                 req.도로명주소, req.장치수, req.통시, req.공대, req.kca검토결과,
+                 req.시기조정, req.기준연도, req.skt본부, req.access담당, req.품질개선팀))
+            action = "inserted"
+        c.commit(); c.close()
+        return action
+    action = await asyncio.to_thread(_insert)
+    await asyncio.to_thread(_record_audit_log_sync, f"inspection_station_{action}", "inspection_targets",
+                            f"{req.year}#{req.허가번호}", empno)
+    return {"success": True, "action": action}
 
 @app.post("/inspection/result/photo")
 async def inspection_result_photo_upload(request: Request, year: int, 허가번호: str,
