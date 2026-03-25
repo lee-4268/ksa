@@ -173,7 +173,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                 ),
                 const SizedBox(height: 16),
                 const Text(
-                  '무선국 관리 시스템',
+                  '무선국 수검 시스템',
                   style: TextStyle(
                     color: Colors.white,
                     fontSize: 20,
@@ -424,7 +424,7 @@ class _DashboardScreenState extends State<DashboardScreen>
           ),
           const SizedBox(width: 10),
           const Text(
-            '무선국 관리 시스템',
+            '무선국 수검 시스템',
             style: TextStyle(
               color: Colors.black87,
               fontSize: 18,

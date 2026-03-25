@@ -83,7 +83,9 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
   }
 
   Future<void> _loadData() async {
-    setState(() { _loading = true; _error = null; });
+    // initialData가 이미 있으면 로딩 스피너 없이 백그라운드 갱신
+    if (_data == null) setState(() { _loading = true; });
+    setState(() => _error = null);
     try {
       final d = await _svc.getDetail(widget.year, widget.licenseNo);
       setState(() => _applyData(d));
@@ -373,12 +375,24 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
 
   // ── 기본 정보 ───────────────────────────────────────────
 
+  /// 안테나 목록에서 key에 해당하는 값을 중복 제거 후 공백으로 연결
   String _antennaField(List<dynamic> list, String key) {
-    for (final a in list) {
-      final v = (a as Map<String, dynamic>)[key]?.toString().trim() ?? '';
-      if (v.isNotEmpty) return v;
-    }
-    return '';
+    final seen = <String>{};
+    final vals = list
+        .map((a) => (a as Map<String, dynamic>)[key]?.toString().trim() ?? '')
+        .where((v) => v.isNotEmpty && seen.add(v))
+        .toList();
+    return vals.join(' ');
+  }
+
+  /// 기기일련번호: 중복 제거 후 줄바꿈으로 연결
+  String _serialNumbers(List<dynamic> list) {
+    final seen = <String>{};
+    final vals = list
+        .map((a) => (a as Map<String, dynamic>)['기기일련번호']?.toString().trim() ?? '')
+        .where((v) => v.isNotEmpty && seen.add(v))
+        .toList();
+    return vals.join('\n');
   }
 
   String _fmtDate(String raw) {
@@ -391,11 +405,13 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
   Widget _buildBasicInfoCard(
       Map<String, dynamic>? target, Map<String, dynamic>? ds) {
     final antennaList = (ds?['안테나'] as List<dynamic>?) ?? [];
+    final deviceList  = (ds?['장치']  as List<dynamic>?) ?? [];
     final gain      = _antennaField(antennaList, '이득');
     final antCount  = _antennaField(antennaList, '기');
     final mountType = _antennaField(antennaList, '공중선주 설치형태명').isNotEmpty
         ? _antennaField(antennaList, '공중선주 설치형태명')
         : _antennaField(antennaList, '공중선주설치형태명');
+    final serial    = _serialNumbers(deviceList);  // 기기일련번호는 ds['장치'] 테이블
     final lat  = target?['위도']?.toString() ?? '';
     final lng  = target?['경도']?.toString() ?? '';
     final coord = (lat.isNotEmpty && lng.isNotEmpty) ? '$lat, $lng' : '';
@@ -403,7 +419,7 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
     return _card(
       title: '기본 정보',
       icon: Icons.info_outline,
-      iconColor: _primary,   // 빨간색
+      iconColor: _primary,
       child: Column(children: [
         _infoRow('허가번호',
             target?['허가번호']?.toString() ?? widget.licenseNo),
@@ -415,6 +431,7 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
         if (gain.isNotEmpty)      _infoRow('이득(dB)', gain),
         if (antCount.isNotEmpty)  _infoRow('기수',     antCount),
         if (mountType.isNotEmpty) _infoRow('설치대',   mountType),
+        if (serial.isNotEmpty)    _infoRow('기기일련번호', serial),
         if (coord.isNotEmpty)     _infoRow('좌표',     coord),
         if (_inspDateCtrl.text.isNotEmpty)
           _infoRow('검사일', _fmtDate(_inspDateCtrl.text)),

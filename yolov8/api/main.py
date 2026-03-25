@@ -10202,43 +10202,53 @@ async def inspection_staging_confirm(request: Request, req: InspStagingConfirmRe
                 if addr:
                     addr_map.setdefault(addr, []).append(rid)
 
-            import aiohttp as _aio
-            sem = asyncio.Semaphore(10)
+            from concurrent.futures import ThreadPoolExecutor, as_completed as _asc
+            CONCURRENCY = 10
+            BATCH = 500
 
-            async def _geocode_one(session, addr):
-                async with sem:
-                    try:
-                        async with session.get(
-                            'https://dapi.kakao.com/v2/local/search/address.json',
-                            params={'query': addr, 'size': 1},
-                            headers={'Authorization': f'KakaoAK {KAKAO_KEY}'},
-                            timeout=_aio.ClientTimeout(total=5),
-                        ) as r:
-                            if r.status == 200:
-                                docs = (await r.json()).get('documents', [])
-                                if docs:
-                                    x = float(docs[0].get('x', 0))
-                                    y = float(docs[0].get('y', 0))
-                                    if x and y:
-                                        await asyncio.sleep(0.11)
-                                        return addr, (y, x)
-                    except Exception:
-                        pass
-                    await asyncio.sleep(0.11)
-                    return addr, None
+            def _geocode_one_sync(addr):
+                try:
+                    r = _req.get(
+                        'https://dapi.kakao.com/v2/local/search/address.json',
+                        params={'query': addr, 'size': 1},
+                        headers={'Authorization': f'KakaoAK {KAKAO_KEY}'},
+                        timeout=5,
+                    )
+                    if r.status_code == 200:
+                        docs = r.json().get('documents', [])
+                        if docs:
+                            x = float(docs[0].get('x', 0))
+                            y = float(docs[0].get('y', 0))
+                            if x and y:
+                                return addr, (y, x)
+                except Exception:
+                    pass
+                return addr, None
 
-            async with _aio.ClientSession() as session:
-                coord_results = await asyncio.gather(
-                    *[_geocode_one(session, a) for a in addr_map])
+            unique_addrs = list(addr_map.keys())
+            coord_cache: dict = {}
+            total_updated = 0
 
-            coord_cache = {a: c for a, c in coord_results if c}
-            updates = [(coord_cache[a][0], coord_cache[a][1], rid)
-                       for a, ids in addr_map.items() if a in coord_cache
-                       for rid in ids]
-            if updates:
-                _conn.executemany('UPDATE inspection_targets SET 위도=?, 경도=? WHERE id=?', updates)
-                _conn.commit()
-                logger.info(f"inspection_targets 좌표 업데이트: {len(updates)}/{len(rows)}건")
+            for i in range(0, len(unique_addrs), BATCH):
+                batch = unique_addrs[i:i + BATCH]
+                with ThreadPoolExecutor(max_workers=CONCURRENCY) as pool:
+                    futures = {pool.submit(_geocode_one_sync, a): a for a in batch}
+                    for fut in _asc(futures):
+                        a, c = fut.result()
+                        if c:
+                            coord_cache[a] = c
+
+                # 배치 결과 즉시 DB 기록
+                batch_updates = [(coord_cache[a][0], coord_cache[a][1], rid)
+                                 for a in batch if a in coord_cache
+                                 for rid in addr_map[a]]
+                if batch_updates:
+                    _conn.executemany('UPDATE inspection_targets SET 위도=?, 경도=? WHERE id=?', batch_updates)
+                    _conn.commit()
+                    total_updated += len(batch_updates)
+
+            if total_updated:
+                logger.info(f"inspection_targets 좌표 업데이트: {total_updated}/{len(rows)}건")
             else:
                 logger.warning("Kakao 지오코딩 결과 없음 (주소 확인 필요)")
             _conn.close()
@@ -10292,65 +10302,55 @@ async def inspection_geocode_targets(request: Request, year: int):
     unique_addrs = list(addr_map.keys())
     logger.info(f"geocode-targets: {total}건 중 고유 주소 {len(unique_addrs)}개 (year={year})")
 
-    # 3. 고유 주소 → 좌표 (동시 10개)
-    coord_cache: dict = {}  # {주소: (lat, lng) or None}
+    # 3. requests + ThreadPoolExecutor로 동시 10개 처리 (aiohttp 불필요)
+    import requests as _req
+    from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    async def _geocode_one(session, addr: str):
+    def _geocode_one(addr: str):
         try:
-            async with session.get(
+            r = _req.get(
                 'https://dapi.kakao.com/v2/local/search/address.json',
                 params={'query': addr, 'size': 1},
                 headers={'Authorization': f'KakaoAK {KAKAO_KEY}'},
-                timeout=aiohttp.ClientTimeout(total=5),
-            ) as resp:
-                if resp.status == 200:
-                    docs = (await resp.json()).get('documents', [])
-                    if docs:
-                        x = float(docs[0].get('x', 0))
-                        y = float(docs[0].get('y', 0))
-                        if x and y:
-                            return addr, (y, x)
+                timeout=5,
+            )
+            if r.status_code == 200:
+                docs = r.json().get('documents', [])
+                if docs:
+                    x = float(docs[0].get('x', 0))
+                    y = float(docs[0].get('y', 0))
+                    if x and y:
+                        return addr, (y, x)
         except Exception:
             pass
         return addr, None
 
-    try:
-        import aiohttp
-    except ImportError:
-        raise HTTPException(503, "aiohttp 미설치 — pip install aiohttp")
-
-    # 4. 배치(500개)씩 처리 → 코루틴 동시 생성 수 제한 → OOM 방지
+    # 4. 배치(500개)씩 → ThreadPoolExecutor(10) → OOM 방지
     BATCH = 500
-    sem = asyncio.Semaphore(CONCURRENCY)
-
-    async def _limited(session, addr):
-        async with sem:
-            result = await _geocode_one(session, addr)
-            await asyncio.sleep(0.11)
-            return result
-
     updated = 0
-    async with aiohttp.ClientSession() as session:
-        for i in range(0, len(unique_addrs), BATCH):
-            batch = unique_addrs[i:i + BATCH]
-            results = await asyncio.gather(*[_limited(session, a) for a in batch])
 
-            # 배치 결과 즉시 DB 저장 후 메모리 해제
-            def _write(res=results):
-                upd = []
-                for addr, coord in res:
-                    if coord:
-                        for rid in addr_map.get(addr, []):
-                            upd.append((coord[0], coord[1], rid))
-                if not upd:
-                    return 0
-                c = sqlite3.connect(_INSP_DB, timeout=60)
-                c.executemany('UPDATE inspection_targets SET 위도=?, 경도=? WHERE id=?', upd)
-                c.commit(); c.close()
-                return len(upd)
+    def _process_batch(batch_addrs):
+        results = []
+        with ThreadPoolExecutor(max_workers=CONCURRENCY) as pool:
+            futures = {pool.submit(_geocode_one, a): a for a in batch_addrs}
+            for fut in as_completed(futures):
+                results.append(fut.result())
+        upd = []
+        for addr, coord in results:
+            if coord:
+                for rid in addr_map.get(addr, []):
+                    upd.append((coord[0], coord[1], rid))
+        if upd:
+            c = sqlite3.connect(_INSP_DB, timeout=60)
+            c.executemany('UPDATE inspection_targets SET 위도=?, 경도=? WHERE id=?', upd)
+            c.commit(); c.close()
+        return len(upd)
 
-            updated += await asyncio.to_thread(_write)
-            logger.info(f"geocode-targets: {min(i+BATCH, len(unique_addrs))}/{len(unique_addrs)} 주소 처리 ({updated}건 업데이트)")
+    for i in range(0, len(unique_addrs), BATCH):
+        batch = unique_addrs[i:i + BATCH]
+        batch_updated = await asyncio.to_thread(_process_batch, batch)
+        updated += batch_updated
+        logger.info(f"geocode-targets: {min(i+BATCH, len(unique_addrs))}/{len(unique_addrs)} 주소 처리 ({updated}건 업데이트)")
 
     logger.info(f"geocode-targets 완료: {updated}/{total}건 (year={year})")
     return {"success": True, "total": total, "unique_addrs": len(unique_addrs), "updated": updated}

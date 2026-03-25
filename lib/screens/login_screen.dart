@@ -154,7 +154,7 @@ class _LoginScreenState extends State<LoginScreen> {
                           ),
                           const SizedBox(width: 12),
                           Text(
-                            '무선국 관리 시스템',
+                            '무선국 수검 시스템',
                             style: TextStyle(
                               fontSize: 24,
                               fontWeight: FontWeight.bold,
