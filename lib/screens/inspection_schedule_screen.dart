@@ -1673,6 +1673,17 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     final gainList = dsAntennas.map((a) => a['이득'] ?? '').where((v) => v.toString().isNotEmpty).map((v) => v.toString()).toSet().toList();
     final installTypeSet = dsAntennas.map((a) => a['공중선주설치형태명'] ?? '').where((v) => v.toString().isNotEmpty).toSet();
     final serialList = dsDevices.map((dv) => dv['기기일련번호'] ?? '').where((v) => v.toString().isNotEmpty).map((v) => v.toString()).toSet().toList();
+    final callnameList = List<Map<String, dynamic>>.from(d['callname_list'] ?? []);
+    // eqp_ser_no(zpcname) 형식으로 조합, 중복 제거
+    final facilityNames = callnameList
+        .where((e) => (e['zpcname'] as String? ?? '').isNotEmpty)
+        .map((e) {
+          final ser = (e['eqp_ser_no'] as String? ?? '').trim();
+          final name = (e['zpcname'] as String? ?? '').trim();
+          return ser.isNotEmpty ? '$ser($name)' : name;
+        })
+        .toSet()
+        .toList();
 
     final statusColor = result == null ? Colors.grey
         : result['status'] == '합격' ? _green
@@ -1717,6 +1728,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
             _infoRow('허가번호', licenseNo),
             _infoRow('설치장소', location),
             _infoRow('호출명칭', callname),
+            if (facilityNames.isNotEmpty) _infoRow('통합시설명칭', facilityNames.join('\n')),
             if (gainList.isNotEmpty) _infoRow('이득(dB)', gainList.join('  ')),
             if (kisuList.isNotEmpty) _infoRow('기수', kisuList.join('  ')),
             if (installTypeSet.isNotEmpty) _infoRow('설치대', installTypeSet.join(', ')),

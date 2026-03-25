@@ -234,7 +234,7 @@ CALLNAME_CSV_PREFIX = "callname-db/"
 CALLNAME_CACHE_TTL = 86400  # 24시간
 CALLNAME_SESSION_TTL = 1800  # 30분
 CALLNAME_MAX_SESSIONS = 3
-CALLNAME_USE_COLS = ["zpwina", "zpwino", "zpwiadr", "zpcode", "area_hdofc_nm", "ons_team_nm", "zpirty3", "eqp_ser_no"]
+CALLNAME_USE_COLS = ["zpwina", "zpwino", "zpwiadr", "zpcode", "zpcname", "area_hdofc_nm", "ons_team_nm", "zpirty3", "eqp_ser_no"]
 CALLNAME_POSSIBLE_CALLNAME_COLS = ["호출명칭", "callname", "CALLNAME", "호출명", "call_name"]
 CALLNAME_POSSIBLE_TONGSI_COLS = ["통시", "통합시설코드", "zpcode"]
 CALLNAME_POSSIBLE_ZPWINA_COLS = ["zpwina", "ZPWINA", "Zpwina", "호출명칭", "호출명"]
@@ -6083,7 +6083,7 @@ def _cert_cache_load():
         conn.execute("PRAGMA synchronous=OFF")
         conn.execute("""CREATE TABLE IF NOT EXISTS cert (
             zpwino TEXT, zpwina TEXT, zpwiadr TEXT,
-            zpcode TEXT, area_hdofc_nm TEXT, ons_team_nm TEXT, zpirty3 TEXT,
+            zpcode TEXT, zpcname TEXT, area_hdofc_nm TEXT, ons_team_nm TEXT, zpirty3 TEXT,
             eqp_ser_no TEXT
         )""")
         conn.execute("DELETE FROM cert")
@@ -6094,15 +6094,16 @@ def _cert_cache_load():
             batch.append((
                 row.get("zpwino", ""), row.get("zpwina", ""),
                 row.get("zpwiadr", ""), row.get("zpcode", ""),
+                row.get("zpcname", ""),
                 row.get("area_hdofc_nm", ""), row.get("ons_team_nm", ""),
                 row.get("zpirty3", ""), row.get("eqp_ser_no", ""),
             ))
             if len(batch) >= 5000:
-                conn.executemany("INSERT INTO cert VALUES (?,?,?,?,?,?,?,?)", batch)
+                conn.executemany("INSERT INTO cert VALUES (?,?,?,?,?,?,?,?,?)", batch)
                 total += len(batch)
                 batch.clear()
         if batch:
-            conn.executemany("INSERT INTO cert VALUES (?,?,?,?,?,?,?,?)", batch)
+            conn.executemany("INSERT INTO cert VALUES (?,?,?,?,?,?,?,?,?)", batch)
             total += len(batch)
 
         conn.execute("CREATE INDEX IF NOT EXISTS idx_zpwino ON cert(zpwino)")
@@ -10593,7 +10594,21 @@ async def inspection_detail(request: Request, year: int, 허가번호: str):
             try: result['사진S3키'] = _j.loads(result['사진S3키'])
             except Exception: result['사진S3키'] = []
 
-    return {"target": target, "ds": ds_info, "schedule": schedule, "result": result}
+    # 4. callname_matching_cache에서 통합시설명칭 조회 (zpwino=허가번호)
+    callname_list: list = []
+    if _cert_cache_db_path and os.path.exists(_cert_cache_db_path):
+        def _read_zpcname():
+            import sqlite3 as _sq
+            c = _sq.connect(_cert_cache_db_path); c.row_factory = _sq.Row
+            rows = c.execute(
+                "SELECT eqp_ser_no, zpcname FROM cert WHERE zpwino=? AND zpcname!=''",
+                (허가번호,)
+            ).fetchall()
+            c.close()
+            return [{"eqp_ser_no": r["eqp_ser_no"], "zpcname": r["zpcname"]} for r in rows]
+        callname_list = await asyncio.to_thread(_read_zpcname)
+
+    return {"target": target, "ds": ds_info, "schedule": schedule, "result": result, "callname_list": callname_list}
 
 @app.post("/inspection/schedule")
 async def inspection_schedule_upsert(request: Request, req: InspectionScheduleReq):
