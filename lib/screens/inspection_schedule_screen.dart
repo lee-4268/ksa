@@ -1728,11 +1728,15 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
             _infoRow('허가번호', licenseNo),
             _infoRow('설치장소', location),
             _infoRow('호출명칭', callname),
-            if (facilityNames.isNotEmpty) _infoRow('통합시설명칭', facilityNames.join('\n')),
+            if (facilityNames.isNotEmpty || serialList.isNotEmpty) _infoRow(
+              '일련번호 및 통합시설명칭',
+              facilityNames.isNotEmpty
+                  ? facilityNames.join('\n')
+                  : serialList.join('\n'),
+            ),
             if (gainList.isNotEmpty) _infoRow('이득(dB)', gainList.join('  ')),
             if (kisuList.isNotEmpty) _infoRow('기수', kisuList.join('  ')),
             if (installTypeSet.isNotEmpty) _infoRow('설치대', installTypeSet.join(', ')),
-            if (serialList.isNotEmpty) _infoRow('기기일련번호', serialList.join('\n')),
             _infoRow('분기', target?['분기'] ?? ''),
             _infoRow('국종군', target?['국종군'] ?? ''),
             _infoRow('KCA검토결과', target?['kca검토결과'] ?? ''),
