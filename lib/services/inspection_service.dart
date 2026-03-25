@@ -317,6 +317,37 @@ class InspectionService {
     return body;
   }
 
+  Future<Uint8List> exportInspectionReport({
+    required int year,
+    List<String> licenseNos = const [],
+    String sheet = 'all',
+    Map<String, List<String>> filters = const {},
+    String search = '',
+    String addr = '',
+    String scheduleYn = '',
+    String sheetTitle = '',
+  }) async {
+    final resp = await http.post(
+      Uri.parse('$_baseUrl/inspection/export-inspection-report'),
+      headers: _headers,
+      body: json.encode({
+        'year': year,
+        '\ud5c8\uac00\ubc88\ud638_list': licenseNos,
+        'sheet': sheet,
+        'filters': filters,
+        'search': search,
+        'addr': addr,
+        'schedule_yn': scheduleYn,
+        'sheet_title': sheetTitle,
+      }),
+    ).timeout(const Duration(minutes: 3));
+    if (resp.statusCode != 200) {
+      final b = json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+      throw Exception(b['detail'] ?? '\uac80\uc0ac\ub0b4\uc5ed\uc11c \uc0dd\uc131 \uc2e4\ud328');
+    }
+    return resp.bodyBytes;
+  }
+
   Future<String> buildDsDetail(String divisionId, String importDate) async {
     final uri = Uri.parse('$_baseUrl/inspection/build-ds-detail').replace(
         queryParameters: {'division_id': divisionId, 'import_date': importDate});

@@ -717,6 +717,119 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     }
   }
 
+  Future<void> _showInspectionReportDialog() async {
+    final titleCtrl = TextEditingController();
+    // 선택된 항목이 있으면 선택 모드, 없으면 현재 필터 전체
+    final useSelected = _selectedLicenseNos.isNotEmpty;
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx2, setS) => AlertDialog(
+          title: const Text('검사내역서 생성', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+          content: SizedBox(
+            width: 380,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: Colors.blue.shade50,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.blue.shade200),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.info_outline, size: 16, color: Colors.blue.shade700),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          useSelected
+                              ? '선택된 ${_selectedLicenseNos.length}개 국소로 검사내역서를 생성합니다.'
+                              : '현재 필터 조건의 전체 $_total건으로 검사내역서를 생성합니다.',
+                          style: TextStyle(fontSize: 12, color: Colors.blue.shade800),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 16),
+                const Text('시트 제목 (선택)', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500)),
+                const SizedBox(height: 6),
+                TextField(
+                  controller: titleCtrl,
+                  decoration: InputDecoration(
+                    hintText: '예: 남구_동대구(78)_김성욱',
+                    hintStyle: TextStyle(fontSize: 12, color: Colors.grey.shade400),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    isDense: true,
+                  ),
+                  style: const TextStyle(fontSize: 13),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('취소'),
+            ),
+            ElevatedButton.icon(
+              icon: const Icon(Icons.download, size: 16),
+              label: const Text('생성 및 다운로드'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF1565C0),
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              ),
+              onPressed: () {
+                Navigator.pop(ctx);
+                _exportInspectionReport(
+                  licenseNos: useSelected ? _selectedLicenseNos.toList() : [],
+                  sheetTitle: titleCtrl.text.trim(),
+                );
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+    titleCtrl.dispose();
+  }
+
+  Future<void> _exportInspectionReport({
+    List<String> licenseNos = const [],
+    String sheetTitle = '',
+  }) async {
+    try {
+      _showSnack('검사내역서 생성 중...');
+      final bytes = await _svc.exportInspectionReport(
+        year: _year,
+        licenseNos: licenseNos,
+        sheet: _sheet,
+        filters: _activeFilters,
+        search: _aSearch,
+        addr: _aSearch,
+        scheduleYn: _aScheduled,
+        sheetTitle: sheetTitle,
+      );
+      final label = sheetTitle.isNotEmpty ? sheetTitle : '전체';
+      final blob = html.Blob([bytes],
+          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      final url = html.Url.createObjectUrlFromBlob(blob);
+      html.AnchorElement(href: url)
+        ..setAttribute('download', '검사내역서_$_year년_$label.xlsx')
+        ..click();
+      html.Url.revokeObjectUrl(url);
+      _showSnack('검사내역서 다운로드 완료');
+    } catch (e) {
+      _showSnack('검사내역서 생성 실패: $e', isError: true);
+    }
+  }
+
   Widget _weekDropdown<T>(String hint, T? value, List<T> items,
       String Function(T) label, ValueChanged<T?> onChanged) {
     return Container(
@@ -908,6 +1021,17 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                   padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                 ),
                 onPressed: _exportExcel,
+              ),
+              OutlinedButton.icon(
+                icon: const Icon(Icons.assignment, size: 16),
+                label: const Text('검사내역서', style: TextStyle(fontSize: 13)),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: const Color(0xFF1565C0),
+                  side: const BorderSide(color: Color(0xFF1565C0)),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                ),
+                onPressed: _showInspectionReportDialog,
               ),
             ],
           ),

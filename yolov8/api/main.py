@@ -9376,10 +9376,10 @@ def _init_inspection_db():
         허가상태 TEXT, 설치장소 TEXT, 도로명주소 TEXT, 장치수 INTEGER,
         통시 TEXT, 공대 TEXT, kca검토결과 TEXT, 시기조정 TEXT,
         기준연도 INTEGER, skt본부 TEXT, access담당 TEXT, 품질개선팀 TEXT,
-        위도 REAL, 경도 REAL
+        위도 REAL, 경도 REAL, 검사종류 TEXT DEFAULT ''
     )''')
-    # 마이그레이션: 기존 DB에 위도/경도 컬럼 추가
-    for col in ('위도 REAL', '경도 REAL'):
+    # 마이그레이션: 기존 DB에 위도/경도/검사종류 컬럼 추가
+    for col in ('위도 REAL', '경도 REAL', "검사종류 TEXT DEFAULT ''"):
         try: conn.execute(f'ALTER TABLE inspection_targets ADD COLUMN {col}')
         except Exception: pass
     conn.execute('CREATE INDEX IF NOT EXISTS idx_it_year ON inspection_targets(year)')
@@ -9396,8 +9396,12 @@ def _init_inspection_db():
         부서 TEXT, 분기 TEXT, 연도주기 TEXT, 검사주기 INTEGER,
         허가상태 TEXT, 설치장소 TEXT, 도로명주소 TEXT, 장치수 INTEGER,
         통시 TEXT, 공대 TEXT, kca검토결과 TEXT, 시기조정 TEXT,
-        기준연도 INTEGER, skt본부 TEXT, access담당 TEXT, 품질개선팀 TEXT
+        기준연도 INTEGER, skt본부 TEXT, access담당 TEXT, 품질개선팀 TEXT,
+        검사종류 TEXT DEFAULT ''
     )''')
+    # 마이그레이션: 기존 스테이징에 검사종류 추가
+    try: conn.execute("ALTER TABLE inspection_targets_staging ADD COLUMN 검사종류 TEXT DEFAULT ''")
+    except Exception: pass
     conn.execute('''CREATE TABLE IF NOT EXISTS inspection_meta (
         year INTEGER PRIMARY KEY,
         sheet TEXT, total_skt INTEGER, total_sheet1 INTEGER,
@@ -9484,16 +9488,34 @@ def _init_ds_detail_db():
         pass  # 이미 존재하면 무시
     conn.execute('''CREATE TABLE IF NOT EXISTS ds_장치 (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        허가번호 TEXT, 장치번호 TEXT, 기기일련번호 TEXT
+        허가번호 TEXT, 장치번호 TEXT, 기기일련번호 TEXT, 형식검정번호 TEXT
     )''')
+    # 마이그레이션: 형식검정번호 컬럼 추가
+    try: conn.execute('ALTER TABLE ds_장치 ADD COLUMN 형식검정번호 TEXT'); conn.commit()
+    except Exception: pass
     conn.execute('''CREATE TABLE IF NOT EXISTS ds_안테나 (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         허가번호 TEXT, 장치번호 TEXT,
-        기 TEXT, 이득 TEXT, 공중선주설치형태명 TEXT
+        기 TEXT, 이득 TEXT, 공중선주설치형태명 TEXT,
+        공중선일련번호 TEXT, 공중선형식명 TEXT
+    )''')
+    # 마이그레이션: 공중선일련번호, 공중선형식명 컬럼 추가
+    for _mc in ('공중선일련번호 TEXT', '공중선형식명 TEXT'):
+        try: conn.execute(f'ALTER TABLE ds_안테나 ADD COLUMN {_mc}'); conn.commit()
+        except Exception: pass
+    conn.execute('''CREATE TABLE IF NOT EXISTS ds_전파형식 (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        허가번호 TEXT, 장치번호 TEXT, 공중선전력 TEXT
+    )''')
+    conn.execute('''CREATE TABLE IF NOT EXISTS ds_주파수 (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        허가번호 TEXT, 장치번호 TEXT, 주파수 TEXT, 송수신구분 TEXT
     )''')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_dsd_일반 ON ds_일반사항(허가번호)')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_dsd_장치 ON ds_장치(허가번호)')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_dsd_안테나 ON ds_안테나(허가번호)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_dsd_전파 ON ds_전파형식(허가번호)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_dsd_주파수 ON ds_주파수(허가번호)')
     conn.commit(); conn.close()
 
 try:
@@ -9505,10 +9527,12 @@ except Exception as _e:
 # ── ds_detail.db 빌드 (XLS ZIP → 장치/안테나/일반사항) ────
 
 def _build_ds_detail_from_zip_sync(zip_path: str):
-    """DS ZIP에서 일반사항/장치/안테나 시트 파싱 → ds_detail.db 갱신."""
+    """DS ZIP에서 일반사항/장치/안테나/전파형식/주파수 시트 파싱 → ds_detail.db 갱신."""
     import sqlite3, zipfile
     _init_ds_detail_db()
     conn = sqlite3.connect(_DS_DETAIL_DB)
+    # 기존 허가번호 목록을 수집해서 ZIP 완료 후 삭제 (재빌드 시 중복 방지)
+    _seen_licenses: set = set()
     try:
         with zipfile.ZipFile(zip_path, 'r') as zf:
             xls_names = [n for n in zf.namelist() if n.lower().endswith('.xls') and not n.startswith('__')]
@@ -9519,9 +9543,14 @@ def _build_ds_detail_from_zip_sync(zip_path: str):
                     wb = xlrd.open_workbook(file_contents=raw)
                     sheet_names = wb.sheet_names()
 
-                    def _col_idx(ws, name):
+                    def _col_idx(ws, *names):
                         h = [str(ws.cell_value(0, c)) for c in range(ws.ncols)]
-                        return h.index(name) if name in h else -1
+                        for name in names:
+                            if name in h: return h.index(name)
+                        return -1
+
+                    def _sv(ws, r, ci):
+                        return str(ws.cell_value(r, ci) or '').strip() if ci >= 0 else ''
 
                     # 일반사항
                     if '일반사항' in sheet_names:
@@ -9531,41 +9560,73 @@ def _build_ds_detail_from_zip_sync(zip_path: str):
                         if hi >= 0:
                             batch = []
                             for r in range(1, ws.nrows):
-                                h = str(ws.cell_value(r, hi) or '').strip()
-                                m = str(ws.cell_value(r, mi) or '').strip() if mi >= 0 else ''
-                                c = str(ws.cell_value(r, ci) or '').strip() if ci >= 0 else ''
-                                z = str(ws.cell_value(r, zi) or '').strip() if zi >= 0 else ''
-                                if h: batch.append((h, m, c, z))
+                                h = _sv(ws, r, hi)
+                                if h:
+                                    _seen_licenses.add(h)
+                                    batch.append((h, _sv(ws, r, mi), _sv(ws, r, ci), _sv(ws, r, zi)))
                             conn.executemany('INSERT OR REPLACE INTO ds_일반사항(허가번호,무선국명,호출명칭,통합시설명칭) VALUES(?,?,?,?)', batch)
 
                     # 장치
                     if '장치' in sheet_names:
                         ws = wb.sheet_by_name('장치')
-                        hi = _col_idx(ws, '허가번호'); ji = _col_idx(ws, '장치번호'); si = _col_idx(ws, '기기일련번호')
-                        if hi >= 0 and si >= 0:
+                        hi = _col_idx(ws, '허가번호'); ji = _col_idx(ws, '장치번호')
+                        si = _col_idx(ws, '기기일련번호')
+                        fi = _col_idx(ws, '형식검정번호')
+                        if hi >= 0:
                             batch = []
                             for r in range(1, ws.nrows):
-                                h = str(ws.cell_value(r, hi) or '').strip()
-                                j = str(ws.cell_value(r, ji) or '').strip() if ji >= 0 else ''
-                                s = str(ws.cell_value(r, si) or '').strip()
-                                if h and s: batch.append((h, j, s))
-                            conn.executemany('INSERT INTO ds_장치(허가번호,장치번호,기기일련번호) VALUES(?,?,?)', batch)
+                                h = _sv(ws, r, hi)
+                                if h:
+                                    _seen_licenses.add(h)
+                                    batch.append((h, _sv(ws, r, ji), _sv(ws, r, si), _sv(ws, r, fi)))
+                            conn.executemany('INSERT INTO ds_장치(허가번호,장치번호,기기일련번호,형식검정번호) VALUES(?,?,?,?)', batch)
 
                     # 안테나
                     if '안테나' in sheet_names:
                         ws = wb.sheet_by_name('안테나')
                         hi = _col_idx(ws, '허가번호'); ji = _col_idx(ws, '장치번호')
-                        ki = _col_idx(ws, '기'); ei = _col_idx(ws, '이득'); pi = _col_idx(ws, '공중선주 설치형태명')
+                        ki = _col_idx(ws, '기'); ei = _col_idx(ws, '이득')
+                        pi = _col_idx(ws, '공중선주 설치형태명', '공중선주설치형태명')
+                        ai = _col_idx(ws, '공중선일련번호')
+                        ni = _col_idx(ws, '공중선형식명')
                         if hi >= 0:
                             batch = []
                             for r in range(1, ws.nrows):
-                                h = str(ws.cell_value(r, hi) or '').strip()
-                                j = str(ws.cell_value(r, ji) or '').strip() if ji >= 0 else ''
-                                k = str(ws.cell_value(r, ki) or '').strip() if ki >= 0 else ''
-                                e = str(ws.cell_value(r, ei) or '').strip() if ei >= 0 else ''
-                                p = str(ws.cell_value(r, pi) or '').strip() if pi >= 0 else ''
-                                if h: batch.append((h, j, k, e, p))
-                            conn.executemany('INSERT INTO ds_안테나(허가번호,장치번호,기,이득,공중선주설치형태명) VALUES(?,?,?,?,?)', batch)
+                                h = _sv(ws, r, hi)
+                                if h:
+                                    _seen_licenses.add(h)
+                                    batch.append((h, _sv(ws, r, ji), _sv(ws, r, ki), _sv(ws, r, ei),
+                                                  _sv(ws, r, pi), _sv(ws, r, ai), _sv(ws, r, ni)))
+                            conn.executemany('INSERT INTO ds_안테나(허가번호,장치번호,기,이득,공중선주설치형태명,공중선일련번호,공중선형식명) VALUES(?,?,?,?,?,?,?)', batch)
+
+                    # 전파형식
+                    if '전파형식' in sheet_names:
+                        ws = wb.sheet_by_name('전파형식')
+                        hi = _col_idx(ws, '허가번호'); ji = _col_idx(ws, '장치번호')
+                        pi = _col_idx(ws, '공중선전력', '공중선 전력')
+                        if hi >= 0:
+                            batch = []
+                            for r in range(1, ws.nrows):
+                                h = _sv(ws, r, hi)
+                                if h:
+                                    _seen_licenses.add(h)
+                                    batch.append((h, _sv(ws, r, ji), _sv(ws, r, pi)))
+                            conn.executemany('INSERT INTO ds_전파형식(허가번호,장치번호,공중선전력) VALUES(?,?,?)', batch)
+
+                    # 주파수
+                    if '주파수' in sheet_names:
+                        ws = wb.sheet_by_name('주파수')
+                        hi = _col_idx(ws, '허가번호'); ji = _col_idx(ws, '장치번호')
+                        fi = _col_idx(ws, '주파수', '주파수(MHz)')
+                        di = _col_idx(ws, '송수신구분', '송수신 구분')
+                        if hi >= 0:
+                            batch = []
+                            for r in range(1, ws.nrows):
+                                h = _sv(ws, r, hi)
+                                if h:
+                                    _seen_licenses.add(h)
+                                    batch.append((h, _sv(ws, r, ji), _sv(ws, r, fi), _sv(ws, r, di)))
+                            conn.executemany('INSERT INTO ds_주파수(허가번호,장치번호,주파수,송수신구분) VALUES(?,?,?,?)', batch)
 
                     wb.release_resources()
                 except Exception as xe:
@@ -9672,15 +9733,15 @@ def _process_inspection_sync(job_id: str, s3_key: str, year: int, uploaded_by: s
         INSERT_SQL = '''INSERT INTO inspection_targets_staging
             (year,sheet,pnu_code,허가번호,호출명칭,국종군,부서,분기,연도주기,검사주기,
              허가상태,설치장소,도로명주소,장치수,통시,공대,kca검토결과,시기조정,
-             기준연도,skt본부,access담당,품질개선팀)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)'''
+             기준연도,skt본부,access담당,품질개선팀,검사종류)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)'''
 
         total_skt = 0; total_s1 = 0; matched = 0; unmatched = 0
 
         _INVALID_TEAM = {'#N/A', '#n/a', 'N/A', 'n/a', '미배정', '-', '없음', ''}
 
         def _proc_sheet(rows, sheet_label, pct_start, pct_end, is_skt,
-                        learned_map=None, total_rows=0):
+                        learned_map=None, total_rows=0, insp_type_col=-1):
             nonlocal matched, unmatched
             batch = []; row_count = 0
             for i, row in enumerate(rows):
@@ -9772,6 +9833,7 @@ def _process_inspection_sync(job_id: str, s3_key: str, year: int, uploaded_by: s
                 def _safe_str(v):
                     return str(v).strip() if v else ''
 
+                insp_type_raw = _safe_str(row[insp_type_col] if insp_type_col >= 0 and len(row) > insp_type_col else '')
                 batch.append((
                     year, sheet_label,
                     _safe_str(row[0] if len(row) > 0 else ''),
@@ -9791,6 +9853,7 @@ def _process_inspection_sync(job_id: str, s3_key: str, year: int, uploaded_by: s
                     _safe_str(row[25] if is_skt and len(row) > 25 else (row[25] if len(row) > 25 else '')),
                     _safe_int(row[27] if len(row) > 27 else '', year),
                     skt본부, access, 품질,
+                    insp_type_raw,
                 ))
                 row_count += 1
                 if len(batch) >= 5000:
@@ -9806,6 +9869,17 @@ def _process_inspection_sync(job_id: str, s3_key: str, year: int, uploaded_by: s
             _upd(20, "SKT 시트 처리 중...")
             _log_mem("SKT 시트 처리 전")
 
+            # 헤더 행에서 검사종류 컬럼 인덱스 탐색
+            _insp_type_col = -1
+            for _rn, cells in _iter_xlsx_rows_light(tmp_path, sheet_name='SKT'):
+                if _rn == 0:
+                    for _ci, _cv in enumerate(cells):
+                        if str(_cv).strip() == '검사종류':
+                            _insp_type_col = _ci
+                            break
+                break
+            logger.info(f"SKT 시트 검사종류 컬럼 인덱스: {_insp_type_col}")
+
             def _light_rows(path, sname):
                 """_iter_xlsx_rows_light 래퍼: (row_num, cells) → cells(리스트)로 변환."""
                 for _rn, cells in _iter_xlsx_rows_light(path, sheet_name=sname):
@@ -9817,18 +9891,29 @@ def _process_inspection_sync(job_id: str, s3_key: str, year: int, uploaded_by: s
                 _light_rows(tmp_path, 'SKT'),
                 'SKT', 20, 70, True,
                 learned_map=learned_addr_map,
-                total_rows=0)
+                total_rows=0,
+                insp_type_col=_insp_type_col)
             _release_memory()
             _log_mem("SKT 시트 처리 후")
 
         # Sheet1 (시기조정)
         if 'Sheet1' in sheet_names:
             _upd(72, "시기조정 시트 처리 중...")
+            # Sheet1에도 검사종류 탐색
+            _s1_insp_type_col = -1
+            for _rn, cells in _iter_xlsx_rows_light(tmp_path, sheet_name='Sheet1'):
+                if _rn == 0:
+                    for _ci, _cv in enumerate(cells):
+                        if str(_cv).strip() == '검사종류':
+                            _s1_insp_type_col = _ci
+                            break
+                break
             total_s1 = _proc_sheet(
                 _light_rows(tmp_path, 'Sheet1'),
                 'sheet1', 72, 85, False,
                 learned_map=learned_addr_map,
-                total_rows=0)
+                total_rows=0,
+                insp_type_col=_s1_insp_type_col)
             _release_memory()
             _log_mem("시기조정 시트 처리 후")
 
@@ -10199,7 +10284,7 @@ async def inspection_staging_confirm(request: Request, req: InspStagingConfirmRe
     conn.execute('DELETE FROM inspection_targets WHERE year=?', (req.year,))
 
     # 스테이징에서 필터된 데이터를 본 테이블로 복사
-    cols = 'year,sheet,pnu_code,허가번호,호출명칭,국종군,부서,분기,연도주기,검사주기,허가상태,설치장소,도로명주소,장치수,통시,공대,kca검토결과,시기조정,기준연도,skt본부,access담당,품질개선팀'
+    cols = 'year,sheet,pnu_code,허가번호,호출명칭,국종군,부서,분기,연도주기,검사주기,허가상태,설치장소,도로명주소,장치수,통시,공대,kca검토결과,시기조정,기준연도,skt본부,access담당,품질개선팀,검사종류'
     count = conn.execute(f'SELECT COUNT(*) FROM inspection_targets_staging WHERE {where_sql}', params).fetchone()[0]
     conn.execute(f'INSERT INTO inspection_targets ({cols}) SELECT {cols} FROM inspection_targets_staging WHERE {where_sql}', params)
 
@@ -10896,6 +10981,293 @@ async def inspection_progress(request: Request, year: int):
             "percent": round(completed / total * 100, 1) if total > 0 else 0.0,
         })
     return {"items": items}
+
+
+class InspectionReportReq(BaseModel):
+    year: int
+    허가번호_list: list = []   # 빈 리스트이면 필터 기반 전체 조회
+    sheet: str = "all"
+    filters: dict = {}
+    search: str = ""
+    addr: str = ""
+    schedule_yn: str = ""
+    sheet_title: str = ""     # 시트명 (예: "남구_동대구(78)_김성욱")
+
+@app.post("/inspection/export-inspection-report")
+async def inspection_export_report(request: Request, req: InspectionReportReq):
+    """검사내역서 Excel 생성 (정확한 형식 일치)."""
+    await _verify_auth(request)
+    if not HAS_OPENPYXL:
+        raise HTTPException(503, "openpyxl 미설치")
+    if not os.path.exists(_INSP_DB):
+        raise HTTPException(404, "수검 데이터 없음")
+
+    def _build():
+        import openpyxl
+        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+        from openpyxl.utils import get_column_letter
+
+        # ── 1. 대상 목록 조회 ────────────────────────────────
+        conn_i = sqlite3.connect(_INSP_DB, timeout=60); conn_i.row_factory = sqlite3.Row
+        if req.허가번호_list:
+            ph = ','.join('?' * len(req.허가번호_list))
+            targets = conn_i.execute(
+                f'SELECT * FROM inspection_targets WHERE year=? AND 허가번호 IN ({ph})',
+                [req.year] + list(req.허가번호_list)).fetchall()
+        else:
+            where_sql, params = _build_insp_where(
+                req.year, req.sheet, req.filters, req.search, req.addr, req.schedule_yn)
+            targets = conn_i.execute(
+                f'SELECT * FROM inspection_targets WHERE {where_sql} ORDER BY id',
+                params).fetchall()
+        conn_i.close()
+        if not targets:
+            raise ValueError("조회된 수검 대상이 없습니다")
+
+        # ── 2. DS 데이터 일괄 조회 ───────────────────────────
+        license_nos = [t['허가번호'] for t in targets]
+        ph = ','.join('?' * len(license_nos))
+
+        ds_장치_map: dict = {}    # 허가번호 → 가장 높은 장치번호 row
+        ds_안테나_map: dict = {}  # 허가번호 → 첫 번째 안테나 row
+        ds_전파_map: dict = {}    # 허가번호 → 첫 번째 전파형식 row
+        ds_주파수_map: dict = {}  # 허가번호 → {TX:..., RX:...}
+
+        if os.path.exists(_DS_DETAIL_DB):
+            conn_d = sqlite3.connect(_DS_DETAIL_DB); conn_d.row_factory = sqlite3.Row
+
+            # 장치: 허가번호별 최고 장치번호 행 선택
+            rows = conn_d.execute(
+                f'SELECT 허가번호, 장치번호, 기기일련번호, 형식검정번호 FROM ds_장치 WHERE 허가번호 IN ({ph})',
+                license_nos).fetchall()
+            for r in rows:
+                hn = r['허가번호']
+                cur = ds_장치_map.get(hn)
+                # 장치번호 숫자 비교 → 높은 것 선택
+                try:
+                    cur_num = int(str(cur['장치번호'] or 0)) if cur else -1
+                    new_num = int(str(r['장치번호'] or 0))
+                except ValueError:
+                    cur_num, new_num = 0, 1
+                if cur is None or new_num > cur_num:
+                    ds_장치_map[hn] = dict(r)
+
+            # 안테나: 허가번호별 첫 번째 행
+            rows = conn_d.execute(
+                f'SELECT * FROM ds_안테나 WHERE 허가번호 IN ({ph}) ORDER BY id',
+                license_nos).fetchall()
+            for r in rows:
+                hn = r['허가번호']
+                if hn not in ds_안테나_map:
+                    ds_안테나_map[hn] = dict(r)
+
+            # 전파형식: 허가번호별 첫 번째 행
+            rows = conn_d.execute(
+                f'SELECT 허가번호, 공중선전력 FROM ds_전파형식 WHERE 허가번호 IN ({ph}) ORDER BY id',
+                license_nos).fetchall()
+            for r in rows:
+                hn = r['허가번호']
+                if hn not in ds_전파_map:
+                    ds_전파_map[hn] = dict(r)
+
+            # 주파수: TX/RX 수집
+            rows = conn_d.execute(
+                f'SELECT 허가번호, 주파수, 송수신구분 FROM ds_주파수 WHERE 허가번호 IN ({ph}) ORDER BY id',
+                license_nos).fetchall()
+            _freq_tmp: dict = {}
+            for r in rows:
+                hn = r['허가번호']
+                if hn not in _freq_tmp:
+                    _freq_tmp[hn] = {}
+                구분 = str(r['송수신구분'] or '').strip().upper()
+                주파수 = str(r['주파수'] or '').strip()
+                if 'TX' in 구분 or '송신' in 구분:
+                    _freq_tmp[hn].setdefault('TX', 주파수)
+                elif 'RX' in 구분 or '수신' in 구분:
+                    _freq_tmp[hn].setdefault('RX', 주파수)
+                else:
+                    _freq_tmp[hn].setdefault('ALL', 주파수)
+            for hn, fmap in _freq_tmp.items():
+                tx = fmap.get('TX', fmap.get('ALL', ''))
+                rx = fmap.get('RX', fmap.get('ALL', ''))
+                parts = []
+                if tx: parts.append(f'TX : {tx}')
+                if rx: parts.append(f'RX : {rx}')
+                ds_주파수_map[hn] = '\n'.join(parts)
+
+            conn_d.close()
+
+        # ── 3. cert_cache에서 zpcode 조회 ────────────────────
+        zpcode_map: dict = {}
+        if _cert_cache_db_path and os.path.exists(_cert_cache_db_path):
+            import sqlite3 as _sq2
+            c2 = _sq2.connect(_cert_cache_db_path)
+            rows = c2.execute(
+                f'SELECT zpwino, zpcode FROM cert WHERE zpwino IN ({ph})',
+                license_nos).fetchall()
+            for r in rows:
+                if r[0] and r[0] not in zpcode_map:
+                    zpcode_map[r[0]] = str(r[1] or '').strip()
+            c2.close()
+
+        # ── 4. Excel 생성 ────────────────────────────────────
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        sheet_title = req.sheet_title or f"{req.year}년_검사내역서"
+        ws.title = sheet_title[:31]  # Excel 시트명 최대 31자
+
+        # 스타일 정의
+        _font_base = Font(name='맑은 고딕', size=10)
+        _font_bold = Font(name='맑은 고딕', size=10, bold=True)
+        _font_title = Font(name='맑은 고딕', size=18, bold=True)
+        _font_red   = Font(name='맑은 고딕', size=10, color='FFFF0000')
+
+        _fill_yellow  = PatternFill('solid', fgColor='FFFFFF00')
+        _fill_hdr_lt  = PatternFill('solid', fgColor='FFBFBFBF')  # 헤더 회색
+        _fill_none    = PatternFill(fill_type=None)
+
+        _thin_side = Side(style='thin')
+        _thin_border = Border(left=_thin_side, right=_thin_side,
+                              top=_thin_side, bottom=_thin_side)
+        _med_side  = Side(style='medium')
+        _med_border = Border(left=_med_side, right=_med_side,
+                             top=_med_side, bottom=_med_side)
+
+        _al_center = Alignment(horizontal='center', vertical='center', wrap_text=True)
+        _al_left   = Alignment(horizontal='left',   vertical='center', wrap_text=True)
+
+        COL_WIDTHS = {
+            1: 8.125, 2: 13.0,  3: 9.0,   4: 20.375, 5: 28.5,
+            6: 9.0,   7: 27.25, 8: 9.0,   9: 35.125, 10: 20.875,
+            11: 10.5, 12: 22.75,13: 9.0,  14: 20.25, 15: 19.0,
+            16: 13.0, 17: 14.25,18: 13.625,19: 11.125,20: 44.125,
+            21: 9.0,
+        }
+        for col_idx, w in COL_WIDTHS.items():
+            ws.column_dimensions[get_column_letter(col_idx)].width = w
+
+        def _set(r, c, val, font=None, fill=None, border=None, align=None):
+            cell = ws.cell(row=r, column=c, value=val)
+            if font:   cell.font   = font
+            if fill:   cell.fill   = fill
+            if border: cell.border = border
+            if align:  cell.alignment = align
+            return cell
+
+        # ── 행 1: 제목 ──────────────────────────────────────
+        ws.row_dimensions[1].height = 39.95
+        ws.merge_cells('A1:T1')
+        _set(1, 1, '검사신청 접수',
+             font=_font_title, align=_al_center, border=_med_border)
+
+        # ── 행 2-3: 이중 헤더 ───────────────────────────────
+        ws.row_dimensions[2].height = 16.5
+        ws.row_dimensions[3].height = 16.5
+
+        _HDR_FONT = Font(name='맑은 고딕', size=10, bold=True)
+        _HDR_FILL = PatternFill('solid', fgColor='BFBFBF')
+
+        def _hdr(r, c, val):
+            _set(r, c, val, font=_HDR_FONT, fill=_HDR_FILL,
+                 border=_thin_border, align=_al_center)
+
+        # 단순 병합 헤더 (2행-3행 병합)
+        for col, label in [(1,'순번'),(2,'(허가자료)\n설치형태'),(3,'tosi_code'),
+                           (4,'허가번호'),(5,'name'),(6,'검사종류'),
+                           (7,'특이사항'),(11,'공중선전력'),(12,'허가주파수\n(채널)'),
+                           (17,'공용화/환경친화'),(18,'수수료'),(19,'검사지'),
+                           (20,'설치장소')]:
+            ws.merge_cells(start_row=2, start_column=col, end_row=3, end_column=col)
+            _hdr(2, col, label)
+
+        # 장치사항 그룹 (H2:J2)
+        ws.merge_cells('H2:J2'); _hdr(2, 8, '장치사항')
+        for col, lbl in [(8,'장치수'),(9,'기기명칭1'),(10,'기기일련번호1')]:
+            _hdr(3, col, lbl)
+
+        # 공중선 그룹 (M2:P2)
+        ws.merge_cells('M2:P2'); _hdr(2, 13, '공중선')
+        for col, lbl in [(13,'장치'),(14,'형식'),(15,'기수'),(16,'이득')]:
+            _hdr(3, col, lbl)
+
+        # ── 데이터 행 ────────────────────────────────────────
+        DATA_ROW_HEIGHT = 71.25
+        for seq, t in enumerate(targets, 1):
+            r = seq + 3
+            ws.row_dimensions[r].height = DATA_ROW_HEIGHT
+            hn = t['허가번호']
+
+            # DS 데이터 조합
+            jt   = ds_장치_map.get(hn, {})
+            ant  = ds_안테나_map.get(hn, {})
+            pwr  = ds_전파_map.get(hn, {})
+            freq = ds_주파수_map.get(hn, '')
+
+            설치형태  = ant.get('공중선주설치형태명', '')
+            tosi_code = zpcode_map.get(hn, '')
+            검사종류_raw = str(t['검사종류'] or '').strip()
+            기기명칭1    = jt.get('형식검정번호', '')
+            기기일련번호1 = jt.get('기기일련번호', '')
+            공중선전력   = pwr.get('공중선전력', '')
+            공중선장치   = ant.get('공중선일련번호', '')
+            공중선형식   = ant.get('공중선형식명', '')
+            기수         = ant.get('기', '')
+            이득         = ant.get('이득', '')
+
+            row_data = [
+                seq,                       # A: 순번
+                설치형태,                   # B: 설치형태
+                tosi_code,                 # C: tosi_code
+                hn,                        # D: 허가번호
+                t['호출명칭'] or '',        # E: name
+                검사종류_raw,              # F: 검사종류
+                '',                        # G: 특이사항
+                t['장치수'] or '',          # H: 장치수
+                기기명칭1,                  # I: 기기명칭1
+                기기일련번호1,              # J: 기기일련번호1
+                공중선전력,                 # K: 공중선전력
+                freq,                      # L: 허가주파수(채널)
+                공중선장치,                 # M: 공중선 장치
+                공중선형식,                 # N: 공중선 형식
+                기수,                      # O: 기수
+                이득,                      # P: 이득
+                '',                        # Q: 공용화/환경친화
+                '',                        # R: 수수료
+                '',                        # S: 검사지
+                t['설치장소'] or '',        # T: 설치장소
+            ]
+            for c_idx, val in enumerate(row_data, 1):
+                if c_idx == 2:  # B열: 빨간 글씨 + 노란 배경
+                    _set(r, c_idx, val, font=_font_red, fill=_fill_yellow,
+                         border=_thin_border, align=_al_center)
+                elif c_idx in (7, 20):  # G(특이사항), T(설치장소): 왼쪽 정렬
+                    _set(r, c_idx, val, font=_font_base,
+                         border=_thin_border, align=_al_left)
+                else:
+                    _set(r, c_idx, val, font=_font_base,
+                         border=_thin_border, align=_al_center)
+
+        # 빈 열 U 추가 (원본과 동일)
+        last_data_row = len(targets) + 3
+        for r in range(1, last_data_row + 1):
+            ws.cell(row=r, column=21).border = _thin_border
+
+        buf = io.BytesIO()
+        wb.save(buf); buf.seek(0)
+        return buf.getvalue()
+
+    try:
+        data = await asyncio.to_thread(_build)
+    except ValueError as ve:
+        raise HTTPException(400, str(ve))
+
+    fname = f"검사내역서_{req.year}년_{req.sheet_title or '전체'}.xlsx"
+    from urllib.parse import quote as _q
+    return Response(
+        content=data,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{_q(fname)}"}
+    )
 
 
 # ============================================================
