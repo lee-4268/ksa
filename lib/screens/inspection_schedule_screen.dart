@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:typed_data';
+import 'package:archive/archive.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/auth_service.dart';
@@ -1667,10 +1669,10 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     final stationName = (dsGeneral?['무선국명'] ?? '') as String;
     final licenseNo = (target?['허가번호'] ?? '') as String;
     final location = (target?['도로명주소'] ?? target?['설치장소'] ?? '') as String;
-    final kisuList = dsAntennas.map((a) => a['기'] ?? '').where((v) => v.toString().isNotEmpty).toList();
-    final gainList = dsAntennas.map((a) => a['이득'] ?? '').where((v) => v.toString().isNotEmpty).toList();
+    final kisuList = dsAntennas.map((a) => a['기'] ?? '').where((v) => v.toString().isNotEmpty).map((v) => v.toString()).toSet().toList();
+    final gainList = dsAntennas.map((a) => a['이득'] ?? '').where((v) => v.toString().isNotEmpty).map((v) => v.toString()).toSet().toList();
     final installTypeSet = dsAntennas.map((a) => a['공중선주설치형태명'] ?? '').where((v) => v.toString().isNotEmpty).toSet();
-    final serialList = dsDevices.map((dv) => dv['기기일련번호'] ?? '').where((v) => v.toString().isNotEmpty).toList();
+    final serialList = dsDevices.map((dv) => dv['기기일련번호'] ?? '').where((v) => v.toString().isNotEmpty).map((v) => v.toString()).toSet().toList();
 
     final statusColor = result == null ? Colors.grey
         : result['status'] == '합격' ? _green
@@ -1718,7 +1720,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
             if (gainList.isNotEmpty) _infoRow('이득(dB)', gainList.join('  ')),
             if (kisuList.isNotEmpty) _infoRow('기수', kisuList.join('  ')),
             if (installTypeSet.isNotEmpty) _infoRow('설치대', installTypeSet.join(', ')),
-            if (serialList.isNotEmpty) _infoRow('기기일련번호', serialList.take(3).join('\n')),
+            if (serialList.isNotEmpty) _infoRow('기기일련번호', serialList.join('\n')),
             _infoRow('분기', target?['분기'] ?? ''),
             _infoRow('국종군', target?['국종군'] ?? ''),
             _infoRow('KCA검토결과', target?['kca검토결과'] ?? ''),
@@ -1728,7 +1730,6 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
             if (schedule != null) ...[
               _infoRow('담당', '${target?['access담당'] ?? ''} / ${target?['품질개선팀'] ?? ''}'),
               _infoRow('예정주차', schedule['수검예정주차'] ?? ''),
-              _infoRow('예정기간', '${schedule['수검시작일'] ?? ''} ~ ${schedule['수검종료일'] ?? ''}'),
               _infoRow('지역', schedule['지역'] ?? ''),
             ] else
               Padding(
@@ -1778,7 +1779,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
 
             const SizedBox(height: 16),
             _sectionHeader('수검 결과', Icons.assignment_turned_in_outlined, _green),
-            _buildResultSection(result),
+            _buildResultSection(result, callname),
 
             const SizedBox(height: 16),
             SizedBox(
@@ -1845,19 +1846,332 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     );
   }
 
-  Widget _buildResultSection(Map<String, dynamic>? result) {
+  Widget _buildResultSection(Map<String, dynamic>? result, String callname) {
     if (result == null) {
       return Padding(
         padding: const EdgeInsets.symmetric(vertical: 8),
         child: Text('결과 미입력', style: TextStyle(fontSize: 13, color: Colors.grey.shade400)),
       );
     }
+
+    // 사진 S3키 목록
+    final rawPhotos = result['사진S3키'];
+    final photoKeys = <String>[];
+    if (rawPhotos is List) {
+      for (final k in rawPhotos) {
+        final s = k.toString();
+        if (s.isNotEmpty) photoKeys.add(s);
+      }
+    }
+
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       _infoRow('상태', result['status'] ?? ''),
       _infoRow('검사일', result['검사일'] ?? ''),
       _infoRow('철탑형태', result['철탑형태'] ?? ''),
       if ((result['메모'] ?? '').isNotEmpty) _infoRow('특이사항', result['메모'] ?? ''),
+      if (photoKeys.isNotEmpty) ...[
+        const SizedBox(height: 10),
+        Row(children: [
+          Text('특이사항 사진',
+              style: TextStyle(fontSize: 13, color: Colors.grey.shade600)),
+          const Spacer(),
+          if (photoKeys.length > 1)
+            _ZipDownloadButton(
+              photoKeys: photoKeys,
+              callname: callname,
+              svc: _svc,
+            ),
+        ]),
+        const SizedBox(height: 8),
+        GridView.builder(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: 3,
+            mainAxisSpacing: 6,
+            crossAxisSpacing: 6,
+            childAspectRatio: 1,
+          ),
+          itemCount: photoKeys.length,
+          itemBuilder: (context, i) {
+            final s3Key = photoKeys[i];
+            return FutureBuilder<Uint8List>(
+              future: _svc.getPhotoData(s3Key),
+              builder: (context, snap) {
+                if (snap.connectionState == ConnectionState.waiting) {
+                  return Container(
+                    decoration: BoxDecoration(
+                      color: Colors.grey.shade100,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Center(
+                        child: CircularProgressIndicator(strokeWidth: 2)),
+                  );
+                }
+                if (!snap.hasData || snap.hasError) {
+                  return Container(
+                    decoration: BoxDecoration(
+                      color: Colors.grey.shade200,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Icon(Icons.broken_image, color: Colors.grey),
+                  );
+                }
+                final bytes = snap.data!;
+                return GestureDetector(
+                  onTap: () => _showPhotoViewer(context, photoKeys, bytes, i),
+                  child: Stack(children: [
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(8),
+                      child: Image.memory(bytes, fit: BoxFit.cover,
+                          width: double.infinity, height: double.infinity),
+                    ),
+                    Positioned(
+                      top: 4, right: 4,
+                      child: Container(
+                        padding: const EdgeInsets.all(3),
+                        decoration: BoxDecoration(
+                          color: Colors.black45,
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: const Icon(Icons.zoom_in, size: 14, color: Colors.white),
+                      ),
+                    ),
+                  ]),
+                );
+              },
+            );
+          },
+        ),
+      ],
     ]);
+  }
+
+  void _showPhotoViewer(BuildContext context, List<String> photoKeys,
+      Uint8List initialBytes, int initialIndex) {
+    showDialog(
+      context: context,
+      barrierColor: Colors.black87,
+      builder: (_) => _PhotoViewerDialog(
+        photoKeys: photoKeys,
+        initialBytes: initialBytes,
+        initialIndex: initialIndex,
+        svc: _svc,
+      ),
+    );
+  }
+}
+
+// ── 사진 전체화면 뷰어 ─────────────────────────────────────
+
+class _PhotoViewerDialog extends StatefulWidget {
+  final List<String> photoKeys;
+  final Uint8List initialBytes;
+  final int initialIndex;
+  final InspectionService svc;
+
+  const _PhotoViewerDialog({
+    required this.photoKeys,
+    required this.initialBytes,
+    required this.initialIndex,
+    required this.svc,
+  });
+
+  @override
+  State<_PhotoViewerDialog> createState() => _PhotoViewerDialogState();
+}
+
+class _PhotoViewerDialogState extends State<_PhotoViewerDialog> {
+  late int _index;
+  late Uint8List _bytes;
+  bool _loading = false;
+  final _transformCtrl = TransformationController();
+
+  @override
+  void initState() {
+    super.initState();
+    _index = widget.initialIndex;
+    _bytes = widget.initialBytes;
+  }
+
+  @override
+  void dispose() {
+    _transformCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _goto(int idx) async {
+    if (idx < 0 || idx >= widget.photoKeys.length) return;
+    setState(() { _loading = true; });
+    try {
+      final bytes = await widget.svc.getPhotoData(widget.photoKeys[idx]);
+      _transformCtrl.value = Matrix4.identity();
+      setState(() { _index = idx; _bytes = bytes; });
+    } finally {
+      setState(() { _loading = false; });
+    }
+  }
+
+  void _download() {
+    final ext = widget.photoKeys[_index].split('.').last.toLowerCase();
+    final mime = ext == 'png' ? 'image/png' : 'image/jpeg';
+    final fileName = 'photo_${_index + 1}.$ext';
+    final blob = html.Blob([_bytes], mime);
+    final url = html.Url.createObjectUrlFromBlob(blob);
+    html.AnchorElement(href: url)
+      ..setAttribute('download', fileName)
+      ..click();
+    html.Url.revokeObjectUrl(url);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final total = widget.photoKeys.length;
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      insetPadding: const EdgeInsets.all(12),
+      child: Stack(children: [
+        // 사진 (핀치/줌)
+        Center(
+          child: _loading
+              ? const CircularProgressIndicator(color: Colors.white)
+              : InteractiveViewer(
+                  transformationController: _transformCtrl,
+                  minScale: 0.5,
+                  maxScale: 5.0,
+                  child: Image.memory(_bytes, fit: BoxFit.contain),
+                ),
+        ),
+
+        // 상단 바: 인덱스 + 닫기
+        Positioned(
+          top: 0, left: 0, right: 0,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter, end: Alignment.bottomCenter,
+                colors: [Colors.black54, Colors.transparent],
+              ),
+            ),
+            child: Row(children: [
+              Text('${_index + 1} / $total',
+                  style: const TextStyle(color: Colors.white, fontSize: 14)),
+              const Spacer(),
+              // 현재 사진 다운로드
+              IconButton(
+                icon: const Icon(Icons.download, color: Colors.white),
+                tooltip: '다운로드',
+                onPressed: _download,
+              ),
+              IconButton(
+                icon: const Icon(Icons.close, color: Colors.white),
+                onPressed: () => Navigator.pop(context),
+              ),
+            ]),
+          ),
+        ),
+
+        // 이전 버튼
+        if (_index > 0)
+          Positioned(
+            left: 4, top: 0, bottom: 0,
+            child: Center(
+              child: IconButton(
+                icon: const Icon(Icons.chevron_left, color: Colors.white, size: 36),
+                onPressed: () => _goto(_index - 1),
+              ),
+            ),
+          ),
+
+        // 다음 버튼
+        if (_index < total - 1)
+          Positioned(
+            right: 4, top: 0, bottom: 0,
+            child: Center(
+              child: IconButton(
+                icon: const Icon(Icons.chevron_right, color: Colors.white, size: 36),
+                onPressed: () => _goto(_index + 1),
+              ),
+            ),
+          ),
+      ]),
+    );
+  }
+}
+
+// ── ZIP 일괄 다운로드 버튼 ────────────────────────────────
+
+class _ZipDownloadButton extends StatefulWidget {
+  final List<String> photoKeys;
+  final String callname;
+  final InspectionService svc;
+
+  const _ZipDownloadButton({
+    required this.photoKeys,
+    required this.callname,
+    required this.svc,
+  });
+
+  @override
+  State<_ZipDownloadButton> createState() => _ZipDownloadButtonState();
+}
+
+class _ZipDownloadButtonState extends State<_ZipDownloadButton> {
+  bool _downloading = false;
+
+  Future<void> _downloadZip() async {
+    setState(() => _downloading = true);
+    try {
+      final archive = Archive();
+      for (var i = 0; i < widget.photoKeys.length; i++) {
+        final key = widget.photoKeys[i];
+        final bytes = await widget.svc.getPhotoData(key);
+        final ext = key.split('.').last.toLowerCase();
+        archive.addFile(ArchiveFile('photo_${i + 1}.$ext', bytes.length, bytes));
+      }
+      final zipBytes = ZipEncoder().encode(archive)!;
+      final safeName = widget.callname.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
+      final blob = html.Blob([Uint8List.fromList(zipBytes)], 'application/zip');
+      final url = html.Url.createObjectUrlFromBlob(blob);
+      html.AnchorElement(href: url)
+        ..setAttribute('download', '$safeName.zip')
+        ..click();
+      html.Url.revokeObjectUrl(url);
+    } finally {
+      if (mounted) setState(() => _downloading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: _downloading ? null : _downloadZip,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        decoration: BoxDecoration(
+          color: Colors.blue.shade50,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: Colors.blue.shade200),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          _downloading
+              ? SizedBox(
+                  width: 12, height: 12,
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2, color: Colors.blue.shade600))
+              : Icon(Icons.download, size: 13, color: Colors.blue.shade700),
+          const SizedBox(width: 4),
+          Text(
+            _downloading ? '압축 중...' : 'ZIP 다운로드',
+            style: TextStyle(
+                fontSize: 12,
+                color: Colors.blue.shade700,
+                fontWeight: FontWeight.w500),
+          ),
+        ]),
+      ),
+    );
   }
 }
 
