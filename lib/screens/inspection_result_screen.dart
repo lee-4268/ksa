@@ -412,6 +412,16 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
         ? _antennaField(antennaList, '공중선주 설치형태명')
         : _antennaField(antennaList, '공중선주설치형태명');
     final serial    = _serialNumbers(deviceList);  // 기기일련번호는 ds['장치'] 테이블
+    final callnameList = List<Map<String, dynamic>>.from(_data?['callname_list'] ?? []);
+    final facilityNames = callnameList
+        .where((e) => (e['zpcname'] as String? ?? '').isNotEmpty)
+        .map((e) {
+          final ser = (e['eqp_ser_no'] as String? ?? '').trim();
+          final name = (e['zpcname'] as String? ?? '').trim();
+          return ser.isNotEmpty ? '$ser($name)' : name;
+        })
+        .toSet()
+        .toList();
     final lat  = target?['위도']?.toString() ?? '';
     final lng  = target?['경도']?.toString() ?? '';
     final coord = (lat.isNotEmpty && lng.isNotEmpty) ? '$lat, $lng' : '';
@@ -431,7 +441,9 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
         if (gain.isNotEmpty)      _infoRow('이득(dB)', gain),
         if (antCount.isNotEmpty)  _infoRow('기수',     antCount),
         if (mountType.isNotEmpty) _infoRow('설치대',   mountType),
-        if (serial.isNotEmpty)    _infoRow('기기일련번호', serial),
+        if (facilityNames.isNotEmpty || serial.isNotEmpty)
+          _infoRow('일련번호 및 통합시설명칭',
+              facilityNames.isNotEmpty ? facilityNames.join('\n') : serial),
         if (coord.isNotEmpty)     _infoRow('좌표',     coord),
         if (_inspDateCtrl.text.isNotEmpty)
           _infoRow('검사일', _fmtDate(_inspDateCtrl.text)),
