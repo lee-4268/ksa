@@ -69,7 +69,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _MenuItem('전산비교', Icons.compare_outlined, const Color(0xFF2563EB), description: 'ERP·DS 전산 데이터 비교'),
       if (auth.isDivisionAdmin)
         _MenuItem('대상 관리', Icons.business_outlined, const Color(0xFF7C3AED), description: '본부별 수검 대상 관리'),
-      if (auth.isAdmin)
+      if (auth.isSuperAdmin)
         _MenuItem('관리자', Icons.settings_outlined, const Color(0xFF6366F1), description: '시스템 설정 및 사용자 관리'),
     ];
   }

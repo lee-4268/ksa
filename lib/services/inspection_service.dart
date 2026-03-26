@@ -93,6 +93,20 @@ class InspectionService {
     return json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
   }
 
+  Future<Map<String, dynamic>> getStagingItems(int year, {
+    Map<String, List<String>> filters = const {},
+    String search = '',
+    int page = 1,
+    int pageSize = 500,
+  }) async {
+    final resp = await http.post(
+      Uri.parse('$_baseUrl/inspection/staging/items'),
+      headers: _headers,
+      body: json.encode({'year': year, 'filters': filters, 'search': search, 'page': page, 'pageSize': pageSize}),
+    ).timeout(_apiTimeout);
+    return json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+  }
+
   Future<int> confirmStaging(int year, Map<String, List<String>> filters) async {
     final resp = await http.post(
       Uri.parse('$_baseUrl/inspection/staging/confirm'),
@@ -346,6 +360,17 @@ class InspectionService {
       throw Exception(b['detail'] ?? '\uac80\uc0ac\ub0b4\uc5ed\uc11c \uc0dd\uc131 \uc2e4\ud328');
     }
     return resp.bodyBytes;
+  }
+
+  Future<Map<String, dynamic>> addFromStaging(int year, String licenseNo) async {
+    final resp = await http.post(
+      Uri.parse('$_baseUrl/inspection/add-from-staging'),
+      headers: _headers,
+      body: json.encode({'year': year, '\ud5c8\uac00\ubc88\ud638': licenseNo}),
+    ).timeout(_apiTimeout);
+    final body = json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+    if (resp.statusCode != 200) throw Exception(body['detail'] ?? '추가 실패');
+    return body['item'] as Map<String, dynamic>;
   }
 
   Future<String> buildDsDetail(String divisionId, String importDate) async {

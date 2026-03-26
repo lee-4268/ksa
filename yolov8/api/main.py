@@ -3905,6 +3905,13 @@ async def _process_ds_job(job_id: str, job_item: dict):
         _xlsx_build_queue.append((division_id, division_code, import_date))
         logger.info(f"DS job {job_id}: xlsx 빌드 큐 등록 ({len(_xlsx_build_queue)}건 대기)")
 
+        # 9.5. ds_detail.db 갱신 (검사내역서 export용 — non-fatal)
+        try:
+            await asyncio.to_thread(_build_ds_detail_from_zip_sync, zip_temp_path)
+            logger.info(f"DS job {job_id}: ds_detail.db 갱신 완료")
+        except Exception as _de:
+            logger.warning(f"DS job {job_id}: ds_detail.db 갱신 실패 (non-fatal): {_de}")
+
         # 10. 복수 ZIP인 경우 S3 임시 파일 정리 (non-fatal)
         if is_multi and s3_keys:
             for temp_key in s3_keys:
@@ -6123,6 +6130,26 @@ def _cert_cache_load():
         _cert_cache_db_path = db_path
         _cert_cache_ts = _time_mod.time()
         logger.info(f"설치확인서 SQLite 캐시 빌드 완료: {total}행, {_cert_cache_ts - t0:.1f}초")
+
+        # 주소→팀 학습 맵 워밍업 (import 시 즉시 캐시 히트)
+        import tempfile as _tf2, json as _jw
+        _addr_cache = os.path.join(_tf2.gettempdir(), "learned_addr_map.json")
+        _should_warm = True
+        if os.path.exists(_addr_cache):
+            try:
+                _age = _time_mod.time() - os.path.getmtime(_addr_cache)
+                if _age < 86400:
+                    with open(_addr_cache, 'r', encoding='utf-8') as _f:
+                        _existing = _jw.load(_f)
+                    if _existing:  # 유효한 캐시 있으면 워밍업 생략
+                        _should_warm = False
+            except Exception:
+                pass
+        if _should_warm:
+            _addr_map = _learn_addr_map_from_cert_db(db_path=db_path)
+            with open(_addr_cache, 'w', encoding='utf-8') as _f:
+                _jw.dump(_addr_map, _f, ensure_ascii=False)
+            logger.info(f"주소→팀 학습 맵 워밍업 완료: {len(_addr_map)}개 키워드")
 
 
 def _cert_cache_force_rebuild():
@@ -9216,7 +9243,7 @@ def _hdqt_from_addr(addr: str, known_hdqt: str = '',
     return known_hdqt, ''
 
 
-def _learn_addr_map_from_cert_db() -> dict:
+def _learn_addr_map_from_cert_db(db_path: str = "") -> dict:
     """호출명칭 DB(cert SQLite)에서 주소 키워드 → 팀 다수결 학습.
 
     원칙:
@@ -9229,7 +9256,8 @@ def _learn_addr_map_from_cert_db() -> dict:
     import re
     from collections import Counter, defaultdict
 
-    if not _cert_cache_db_path or not os.path.exists(_cert_cache_db_path):
+    _db = db_path or _cert_cache_db_path
+    if not _db or not os.path.exists(_db):
         logger.warning("cert DB 없음 — 주소→팀 학습 생략")
         return {}
 
@@ -9237,7 +9265,7 @@ def _learn_addr_map_from_cert_db() -> dict:
     kw_teams: dict = defaultdict(Counter)
 
     try:
-        c = sqlite3.connect(_cert_cache_db_path, timeout=30)
+        c = sqlite3.connect(_db, timeout=30)
         for zpwiadr, ons_team in c.execute(
             'SELECT zpwiadr, ons_team_nm FROM cert WHERE zpwiadr IS NOT NULL AND zpwiadr != ""'
         ):
@@ -9279,34 +9307,16 @@ def _learn_addr_map_from_cert_db() -> dict:
         return {}
 
     learned: dict = {}
-    skipped_low_samples: dict = {}   # 샘플 부족으로 제외된 키워드
-    skipped_low_ratio: dict = {}     # 비율 미달로 제외된 키워드
     for kw, counter in kw_teams.items():
         total = sum(counter.values())
-        if total < 10:
-            skipped_low_samples[kw] = {'total': total, 'teams': dict(counter.most_common())}
+        if total < 3:
             continue
-        top_team, top_cnt = counter.most_common(1)[0]
-        ratio = top_cnt / total
-        if ratio >= 0.60:
-            learned[kw] = top_team
-        else:
-            skipped_low_ratio[kw] = {
-                'total': total,
-                'top_team': top_team, 'top_ratio': f"{ratio:.1%}",
-                'teams': dict(counter.most_common(5)),
-            }
+        # 비율 기준 없이 다수결 — 가장 많은 팀으로 확정
+        top_team, _ = counter.most_common(1)[0]
+        learned[kw] = top_team
 
     logger.info(f"주소→팀 학습 완료(cert DB): {len(learned)}개 키워드 확정 "
                 f"(전체 후보: {len(kw_teams)}개)")
-    if learned:
-        logger.info(f"  [확정 키워드] {dict(sorted(learned.items()))}")
-    if skipped_low_samples:
-        logger.info(f"  [샘플 부족(<10)] {len(skipped_low_samples)}개: "
-                     f"{dict(sorted(skipped_low_samples.items(), key=lambda x: -x[1]['total']))}")
-    if skipped_low_ratio:
-        logger.info(f"  [비율 미달(<60%)] {len(skipped_low_ratio)}개: "
-                     f"{dict(sorted(skipped_low_ratio.items(), key=lambda x: -x[1]['total']))}")
     return learned
 
 
@@ -9346,12 +9356,11 @@ def _learn_pnu_map_from_cert_db() -> dict:
     learned: dict = {}
     for pnu10, counter in pnu_teams.items():
         total = sum(counter.values())
-        if total < 3:       # PNU 10자리는 매우 구체적이므로 3건이면 충분
+        if total < 1:
             continue
-        top_team, top_cnt = counter.most_common(1)[0]
-        ratio = top_cnt / total
-        if ratio >= 0.50:   # 동 단위라 50%면 충분히 신뢰
-            learned[pnu10] = top_team
+        # 비율 기준 없이 다수결 — 같은 법정동 내 국소는 대부분 동일 팀
+        top_team, _ = counter.most_common(1)[0]
+        learned[pnu10] = top_team
 
     logger.info(f"PNU→팀 학습 완료(cert DB): {len(learned)}개 PNU 확정 "
                 f"(전체 후보: {len(pnu_teams)}개)")
@@ -9531,8 +9540,24 @@ def _build_ds_detail_from_zip_sync(zip_path: str):
     import sqlite3, zipfile
     _init_ds_detail_db()
     conn = sqlite3.connect(_DS_DETAIL_DB)
-    # 기존 허가번호 목록을 수집해서 ZIP 완료 후 삭제 (재빌드 시 중복 방지)
+
+    # 1pass: 모든 데이터 수집 (INSERT 전 DELETE를 위해 허가번호 먼저 확보)
+    batches: dict = {'일반사항': [], '장치': [], '안테나': [], '전파형식': [], '주파수': []}
     _seen_licenses: set = set()
+
+    def _col_idx(ws, *names):
+        h = [str(ws.cell_value(0, c)) for c in range(ws.ncols)]
+        for name in names:
+            if name in h: return h.index(name)
+        return -1
+
+    def _sv(ws, r, ci):
+        return str(ws.cell_value(r, ci) or '').strip() if ci >= 0 else ''
+
+    def _hn(ws, r, ci):
+        """허가번호 정규화: 하이픈 제거 (inspection_targets와 형식 통일)"""
+        return _sv(ws, r, ci).replace('-', '')
+
     try:
         with zipfile.ZipFile(zip_path, 'r') as zf:
             xls_names = [n for n in zf.namelist() if n.lower().endswith('.xls') and not n.startswith('__')]
@@ -9543,43 +9568,29 @@ def _build_ds_detail_from_zip_sync(zip_path: str):
                     wb = xlrd.open_workbook(file_contents=raw)
                     sheet_names = wb.sheet_names()
 
-                    def _col_idx(ws, *names):
-                        h = [str(ws.cell_value(0, c)) for c in range(ws.ncols)]
-                        for name in names:
-                            if name in h: return h.index(name)
-                        return -1
-
-                    def _sv(ws, r, ci):
-                        return str(ws.cell_value(r, ci) or '').strip() if ci >= 0 else ''
-
                     # 일반사항
                     if '일반사항' in sheet_names:
                         ws = wb.sheet_by_name('일반사항')
                         hi = _col_idx(ws, '허가번호'); mi = _col_idx(ws, '무선국명'); ci = _col_idx(ws, '호출명칭')
                         zi = _col_idx(ws, '통합시설명칭')
                         if hi >= 0:
-                            batch = []
                             for r in range(1, ws.nrows):
-                                h = _sv(ws, r, hi)
+                                h = _hn(ws, r, hi)
                                 if h:
                                     _seen_licenses.add(h)
-                                    batch.append((h, _sv(ws, r, mi), _sv(ws, r, ci), _sv(ws, r, zi)))
-                            conn.executemany('INSERT OR REPLACE INTO ds_일반사항(허가번호,무선국명,호출명칭,통합시설명칭) VALUES(?,?,?,?)', batch)
+                                    batches['일반사항'].append((h, _sv(ws, r, mi), _sv(ws, r, ci), _sv(ws, r, zi)))
 
                     # 장치
                     if '장치' in sheet_names:
                         ws = wb.sheet_by_name('장치')
                         hi = _col_idx(ws, '허가번호'); ji = _col_idx(ws, '장치번호')
-                        si = _col_idx(ws, '기기일련번호')
-                        fi = _col_idx(ws, '형식검정번호')
+                        si = _col_idx(ws, '기기일련번호'); fi = _col_idx(ws, '형식검정번호')
                         if hi >= 0:
-                            batch = []
                             for r in range(1, ws.nrows):
-                                h = _sv(ws, r, hi)
+                                h = _hn(ws, r, hi)
                                 if h:
                                     _seen_licenses.add(h)
-                                    batch.append((h, _sv(ws, r, ji), _sv(ws, r, si), _sv(ws, r, fi)))
-                            conn.executemany('INSERT INTO ds_장치(허가번호,장치번호,기기일련번호,형식검정번호) VALUES(?,?,?,?)', batch)
+                                    batches['장치'].append((h, _sv(ws, r, ji), _sv(ws, r, si), _sv(ws, r, fi)))
 
                     # 안테나
                     if '안테나' in sheet_names:
@@ -9590,14 +9601,12 @@ def _build_ds_detail_from_zip_sync(zip_path: str):
                         ai = _col_idx(ws, '공중선일련번호')
                         ni = _col_idx(ws, '공중선형식명')
                         if hi >= 0:
-                            batch = []
                             for r in range(1, ws.nrows):
-                                h = _sv(ws, r, hi)
+                                h = _hn(ws, r, hi)
                                 if h:
                                     _seen_licenses.add(h)
-                                    batch.append((h, _sv(ws, r, ji), _sv(ws, r, ki), _sv(ws, r, ei),
-                                                  _sv(ws, r, pi), _sv(ws, r, ai), _sv(ws, r, ni)))
-                            conn.executemany('INSERT INTO ds_안테나(허가번호,장치번호,기,이득,공중선주설치형태명,공중선일련번호,공중선형식명) VALUES(?,?,?,?,?,?,?)', batch)
+                                    batches['안테나'].append((h, _sv(ws, r, ji), _sv(ws, r, ki), _sv(ws, r, ei),
+                                                             _sv(ws, r, pi), _sv(ws, r, ai), _sv(ws, r, ni)))
 
                     # 전파형식
                     if '전파형식' in sheet_names:
@@ -9605,13 +9614,11 @@ def _build_ds_detail_from_zip_sync(zip_path: str):
                         hi = _col_idx(ws, '허가번호'); ji = _col_idx(ws, '장치번호')
                         pi = _col_idx(ws, '공중선전력', '공중선 전력')
                         if hi >= 0:
-                            batch = []
                             for r in range(1, ws.nrows):
-                                h = _sv(ws, r, hi)
+                                h = _hn(ws, r, hi)
                                 if h:
                                     _seen_licenses.add(h)
-                                    batch.append((h, _sv(ws, r, ji), _sv(ws, r, pi)))
-                            conn.executemany('INSERT INTO ds_전파형식(허가번호,장치번호,공중선전력) VALUES(?,?,?)', batch)
+                                    batches['전파형식'].append((h, _sv(ws, r, ji), _sv(ws, r, pi)))
 
                     # 주파수
                     if '주파수' in sheet_names:
@@ -9620,18 +9627,29 @@ def _build_ds_detail_from_zip_sync(zip_path: str):
                         fi = _col_idx(ws, '주파수', '주파수(MHz)')
                         di = _col_idx(ws, '송수신구분', '송수신 구분')
                         if hi >= 0:
-                            batch = []
                             for r in range(1, ws.nrows):
-                                h = _sv(ws, r, hi)
+                                h = _hn(ws, r, hi)
                                 if h:
                                     _seen_licenses.add(h)
-                                    batch.append((h, _sv(ws, r, ji), _sv(ws, r, fi), _sv(ws, r, di)))
-                            conn.executemany('INSERT INTO ds_주파수(허가번호,장치번호,주파수,송수신구분) VALUES(?,?,?,?)', batch)
+                                    batches['주파수'].append((h, _sv(ws, r, ji), _sv(ws, r, fi), _sv(ws, r, di)))
 
                     wb.release_resources()
                 except Exception as xe:
                     logger.warning(f"ds_detail XLS 파싱 실패 {xls_name}: {xe}")
-        conn.commit()
+
+        # 2pass: 기존 데이터 삭제 후 재삽입
+        if _seen_licenses:
+            ph = ','.join('?' * len(_seen_licenses))
+            lic_list = list(_seen_licenses)
+            for tbl in ('ds_일반사항', 'ds_장치', 'ds_안테나', 'ds_전파형식', 'ds_주파수'):
+                conn.execute(f'DELETE FROM {tbl} WHERE 허가번호 IN ({ph})', lic_list)
+            conn.executemany('INSERT INTO ds_일반사항(허가번호,무선국명,호출명칭,통합시설명칭) VALUES(?,?,?,?)', batches['일반사항'])
+            conn.executemany('INSERT INTO ds_장치(허가번호,장치번호,기기일련번호,형식검정번호) VALUES(?,?,?,?)', batches['장치'])
+            conn.executemany('INSERT INTO ds_안테나(허가번호,장치번호,기,이득,공중선주설치형태명,공중선일련번호,공중선형식명) VALUES(?,?,?,?,?,?,?)', batches['안테나'])
+            conn.executemany('INSERT INTO ds_전파형식(허가번호,장치번호,공중선전력) VALUES(?,?,?)', batches['전파형식'])
+            conn.executemany('INSERT INTO ds_주파수(허가번호,장치번호,주파수,송수신구분) VALUES(?,?,?,?)', batches['주파수'])
+            conn.commit()
+            logger.info(f"ds_detail 재빌드 완료: {len(_seen_licenses)}개 허가번호")
     finally:
         conn.close()
 
@@ -9684,45 +9702,100 @@ def _process_inspection_sync(job_id: str, s3_key: str, year: int, uploaded_by: s
             _cert_cache_load()
         else:
             logger.info(f"cert DB 캐시 재사용: {_cert_db}")
+        def _norm_code(v) -> str:
+            """통시/공대 코드 정규화: float 문자열·앞자리 0 제거.
+            '5410001.0' → '5410001', '05410001' → '5410001'"""
+            s = str(v).strip()
+            if not s:
+                return s
+            # float 형태('12345.0') → 정수 문자열
+            if '.' in s:
+                try:
+                    s = str(int(float(s)))
+                except ValueError:
+                    pass
+            # 앞자리 0 제거 (숫자로만 구성된 경우)
+            if s.isdigit():
+                s = str(int(s))
+            return s
+
         cert_map: dict = {}
+        # (normed_zpcode, normed_zpwino) → zpcname
+        # zpcode=통시코드, zpwino=허가번호 — 동일 통시코드 복수 행 구분용
+        cert_name_map: dict = {}
         try:
             c2 = sqlite3.connect(_cert_db, timeout=60)
-            for r in c2.execute('SELECT zpwina, zpwino, area_hdofc_nm, ons_team_nm FROM cert'):
-                hdofc = str(r[2] or ''); team = str(r[3] or '')
-                if r[0]: cert_map[str(r[0])] = (hdofc, team)
-                if r[1]: cert_map[str(r[1])] = (hdofc, team)
+            for r in c2.execute('SELECT zpwina, zpwino, area_hdofc_nm, ons_team_nm, zpcode FROM cert'):
+                hdofc = str(r[2] or ''); team = str(r[3] or ''); name = str(r[0] or '')  # zpwina = 호출명칭
+                n_zpwina = _norm_code(r[0]) if r[0] else ''
+                n_zpwino = _norm_code(str(r[1] or '').replace('-', '')) if r[1] else ''
+                n_zpcode = _norm_code(r[4]) if r[4] else ''  # zpcode는 이제 r[4]
+                for ncode in filter(None, [n_zpwina, n_zpwino]):
+                    existing = cert_map.get(ncode)
+                    if existing is None:
+                        cert_map[ncode] = (hdofc, team, name)
+                    elif name and not existing[2]:
+                        cert_map[ncode] = (existing[0], existing[1], name)
+                # (통시코드, 허가번호) 쌍으로 zpcname 정확 매칭
+                if n_zpcode and n_zpwino and name:
+                    cert_name_map[(n_zpcode, n_zpwino)] = name
             c2.close()
-        except Exception: pass
+            logger.info(f"cert_map 로드: {len(cert_map)}개 코드, {len(cert_name_map)}개 (통시+허가) 매핑")
+        except Exception as e:
+            logger.warning(f"cert_map 로드 실패: {e}")
 
         # 학습 맵 캐시: JSON 파일이 있으면 재사용 (23초 절약)
         _learned_cache = os.path.join(_tempfile.gettempdir(), "learned_addr_map.json")
         _upd(17, "주소-팀 매핑 학습 중 (ERP 데이터)...")
+        import json as _j2
+        _cache_valid = False
         if os.path.exists(_learned_cache):
             try:
-                import json as _j2
                 cache_age = _time_mod.time() - os.path.getmtime(_learned_cache)
-                if cache_age < 86400:  # 24시간 이내면 재사용
+                if cache_age < 86400:
                     with open(_learned_cache, 'r', encoding='utf-8') as f:
                         learned_addr_map = _j2.load(f)
-                    logger.info(f"학습 맵 캐시 재사용: {len(learned_addr_map)}개 키워드 ({cache_age:.0f}초 전)")
-                else:
-                    raise ValueError("캐시 만료")
+                    if learned_addr_map:  # 비어있으면 재생성
+                        logger.info(f"학습 맵 캐시 재사용: {len(learned_addr_map)}개 키워드 ({cache_age:.0f}초 전)")
+                        _cache_valid = True
             except Exception:
-                learned_addr_map = _learn_addr_map_from_cert_db()
-                with open(_learned_cache, 'w', encoding='utf-8') as f:
-                    _j2.dump(learned_addr_map, f, ensure_ascii=False)
-        else:
-            import json as _j2
-            learned_addr_map = _learn_addr_map_from_cert_db()
+                pass
+        if not _cache_valid:
+            learned_addr_map = _learn_addr_map_from_cert_db(db_path=_cert_db)
             with open(_learned_cache, 'w', encoding='utf-8') as f:
                 _j2.dump(learned_addr_map, f, ensure_ascii=False)
 
         def _match_access(tongsi: str, gongtae: str):
-            """cert dict에서 통시코드로 access담당/품질개선팀 조회 (O(1))."""
+            """cert dict에서 통시코드로 access담당/품질개선팀 조회 (O(1)).
+            정규화된 코드로 조회 — float 문자열·앞자리 0 차이 허용."""
             for val in [tongsi, gongtae]:
-                if val and val in cert_map:
-                    return cert_map[val]
+                if not val:
+                    continue
+                normed = _norm_code(val)
+                if normed in cert_map:
+                    entry = cert_map[normed]
+                    return entry[0], entry[1]
             return '', ''
+
+        def _lookup_name(tongsi: str, gongtae: str, license_no: str = '') -> str:
+            """cert dict에서 통시코드+허가번호로 호출명칭(zpcname) 조회.
+            동일 통시코드에 복수 행이 있을 때 허가번호로 정확 매칭 우선."""
+            # 허가번호 하이픈 제거 후 정규화 (KCA "32-2015-61-0014690" → cert "322015610014690")
+            normed_lic = _norm_code(license_no.replace('-', '')) if license_no else ''
+            for val in [tongsi, gongtae]:
+                if not val:
+                    continue
+                normed = _norm_code(val)
+                # 1) 허가번호 정확 매칭
+                if normed_lic:
+                    name = cert_name_map.get((normed, normed_lic))
+                    if name:
+                        return name
+                # 2) 통시코드만으로 fallback
+                entry = cert_map.get(normed)
+                if entry and len(entry) > 2 and entry[2]:
+                    return entry[2]
+            return ''
 
         def _correct_hdqt(access: str, team: str) -> str:
             """팀명으로 본부 보정 — 하드코딩 INSP_TEAM_TO_HDQT 기준."""
@@ -9738,7 +9811,7 @@ def _process_inspection_sync(job_id: str, s3_key: str, year: int, uploaded_by: s
 
         total_skt = 0; total_s1 = 0; matched = 0; unmatched = 0
 
-        _INVALID_TEAM = {'#N/A', '#n/a', 'N/A', 'n/a', '미배정', '-', '없음', ''}
+        _INVALID_TEAM = {'#N/A', '#n/a', 'N/A', 'n/a', '미배정', '-', '없음', '', '0', '0.0'}
 
         def _proc_sheet(rows, sheet_label, pct_start, pct_end, is_skt,
                         learned_map=None, total_rows=0, insp_type_col=-1):
@@ -9800,17 +9873,10 @@ def _process_inspection_sync(job_id: str, s3_key: str, year: int, uploaded_by: s
                             access = inferred_hdqt
 
                 # 5) 여전히 미배정이면 PNU코드 → 법정동 주소 변환 → 팀 추론
-                _pnu_debug_count = getattr(_proc_sheet, '_pnu_dbg', 0)
                 if not 품질 or 품질 not in INSP_TEAM_TO_HDQT:
                     pnu_raw = str(row[0] or '').strip()
-                    # 미배정 건 중 첫 10건만 디버그 로그
-                    if _pnu_debug_count < 10:
-                        logger.info(f"  [PNU 디버그] row[0]='{pnu_raw}' len={len(pnu_raw)} 품질='{품질}' access='{access}'")
-                        _proc_sheet._pnu_dbg = _pnu_debug_count + 1
                     if pnu_raw and len(pnu_raw) >= 10:
                         pnu_addr = _pnu_to_addr(pnu_raw)
-                        if _pnu_debug_count < 10:
-                            logger.info(f"  [PNU 디버그] pnu10='{pnu_raw[:10]}' → addr='{pnu_addr}'")
                         if pnu_addr:
                             pnu_hdqt, pnu_team = _hdqt_from_addr(
                                 pnu_addr, known_hdqt=access,
@@ -9834,11 +9900,16 @@ def _process_inspection_sync(job_id: str, s3_key: str, year: int, uploaded_by: s
                     return str(v).strip() if v else ''
 
                 insp_type_raw = _safe_str(row[insp_type_col] if insp_type_col >= 0 and len(row) > insp_type_col else '')
+                호출명칭 = _safe_str(row[3] if len(row) > 3 else '')
+                if 호출명칭.startswith('#'):  # Excel 수식 오류(#N/A, #REF! 등) → 빈값 처리
+                    호출명칭 = ''
+                if not 호출명칭:
+                    호출명칭 = _lookup_name(tongsi, gongtae, raw_license)
                 batch.append((
                     year, sheet_label,
                     _safe_str(row[0] if len(row) > 0 else ''),
                     _safe_str(row[2] if len(row) > 2 else ''),
-                    _safe_str(row[3] if len(row) > 3 else ''),
+                    호출명칭,
                     _safe_str(row[4] if len(row) > 4 else ''),
                     _safe_str(row[11] if len(row) > 11 else ''),
                     _safe_str(row[8] if len(row) > 8 else ''),
@@ -10155,21 +10226,31 @@ async def inspection_unassigned(request: Request, year: int = Query(...)):
         'WHERE year=? AND (access담당 IS NULL OR access담당="" OR 품질개선팀 IS NULL OR 품질개선팀="")',
         (year,)
     ).fetchall()
-    # 지역별 그룹핑 (시/군/구 추출)
     import re
     geo_re = re.compile(r'[가-힣]{2,}(?:시|군|구)')
     by_region: dict = {}
+    by_reason: dict = {"코드없음": 0, "ERP미매칭": 0}
+    items = []
     for r in rows:
         addr = r['도로명주소'] or r['설치장소'] or ''
         matches = geo_re.findall(addr)
         region = ' '.join(matches[:2]) if matches else '주소없음'
         by_region.setdefault(region, 0)
         by_region[region] += 1
+        # 미배정 원인 분류
+        has_code = bool((r['통시'] or '').strip() or (r['공대'] or '').strip())
+        reason = "ERP미매칭" if has_code else "코드없음"
+        by_reason[reason] += 1
+        d = dict(r)
+        d['미배정원인'] = reason
+        items.append(d)
     conn.close()
     return {
         "total": len(rows),
-        "items": [dict(r) for r in rows],
+        "items": items[:500],   # 브라우저 OOM 방지: 상위 500건만 반환
+        "items_capped": len(rows) > 500,
         "by_region": dict(sorted(by_region.items(), key=lambda x: -x[1])),
+        "by_reason": by_reason,
     }
 
 @app.get("/inspection/column-values")
@@ -10255,6 +10336,46 @@ async def inspection_staging_preview(request: Request, req: InspStagingPreviewRe
     conn.close()
     return {"total": total, "filtered": filtered}
 
+class InspStagingItemsReq(BaseModel):
+    year: int
+    filters: dict = {}
+    search: str = ""
+    page: int = 1
+    pageSize: int = 500
+
+@app.post("/inspection/staging/items")
+async def inspection_staging_items(request: Request, req: InspStagingItemsReq):
+    """스테이징 항목 목록 조회 (대상 추가 선택용)."""
+    await _verify_auth(request)
+    import sqlite3
+    if not os.path.exists(_INSP_DB):
+        return {"items": [], "total": 0}
+    ALLOWED_COLS = {'분기','국종군','kca검토결과','access담당','품질개선팀','허가번호','호출명칭','설치장소','도로명주소'}
+    where = ["year=?"]
+    params: list = [req.year]
+    for col, vals in req.filters.items():
+        if col not in ALLOWED_COLS or not vals: continue
+        ph = ",".join("?" * len(vals))
+        where.append(f'"{col}" IN ({ph})')
+        params.extend(vals)
+    if req.search:
+        where.append('(호출명칭 LIKE ? OR 허가번호 LIKE ? OR 도로명주소 LIKE ? OR 설치장소 LIKE ?)')
+        kw = f'%{req.search}%'
+        params.extend([kw, kw, kw, kw])
+    where_sql = " AND ".join(where)
+    offset = (req.page - 1) * req.pageSize
+    conn = sqlite3.connect(_INSP_DB, timeout=60)
+    conn.row_factory = sqlite3.Row
+    total = conn.execute(f'SELECT COUNT(*) FROM inspection_targets_staging WHERE {where_sql}', params).fetchone()[0]
+    rows = conn.execute(
+        f'SELECT 허가번호, 호출명칭, 품질개선팀, 분기, 국종군, 도로명주소, access담당 '
+        f'FROM inspection_targets_staging WHERE {where_sql} '
+        f'ORDER BY CASE WHEN 호출명칭 = \'\' THEN 1 ELSE 0 END, 호출명칭 LIMIT ? OFFSET ?',
+        params + [req.pageSize, offset]
+    ).fetchall()
+    conn.close()
+    return {"items": [dict(r) for r in rows], "total": total}
+
 @app.post("/inspection/staging/confirm")
 async def inspection_staging_confirm(request: Request, req: InspStagingConfirmReq):
     """스테이징 데이터 중 필터된 항목만 본 테이블로 이동."""
@@ -10288,86 +10409,13 @@ async def inspection_staging_confirm(request: Request, req: InspStagingConfirmRe
     count = conn.execute(f'SELECT COUNT(*) FROM inspection_targets_staging WHERE {where_sql}', params).fetchone()[0]
     conn.execute(f'INSERT INTO inspection_targets ({cols}) SELECT {cols} FROM inspection_targets_staging WHERE {where_sql}', params)
 
-    # 스테이징 클리어
-    conn.execute('DELETE FROM inspection_targets_staging WHERE year=?', (req.year,))
+    # 확정된 항목만 스테이징에서 제거 (미확정 항목은 유지 → 개별 추가 용도)
+    conn.execute(f'DELETE FROM inspection_targets_staging WHERE {where_sql}', params)
     conn.commit()
     conn.close()
 
-    # 백그라운드: Kakao 지오코딩 → inspection_targets 위도/경도 채우기
-    async def _populate_coords():
-        try:
-            import sqlite3 as _sq, requests as _req, time as _time
-            _conn = _sq.connect(_INSP_DB, timeout=60)
-            rows = _conn.execute(
-                'SELECT id, 도로명주소, 설치장소 FROM inspection_targets WHERE year=? AND (위도 IS NULL OR 위도=0)',
-                (req.year,)).fetchall()
-            if not rows:
-                _conn.close(); return
-
-            logger.info(f"Kakao 지오코딩 시작: {len(rows)}건")
-            KAKAO_KEY = "cb3f4b95ada5f92fc3924b9685aec16b"
-
-            # 주소 중복 제거 + 10개 동시 요청
-            addr_map: dict = {}
-            for rid, road_addr, install_addr in rows:
-                addr = (road_addr or '').strip() or (install_addr or '').strip()
-                if addr:
-                    addr_map.setdefault(addr, []).append(rid)
-
-            from concurrent.futures import ThreadPoolExecutor, as_completed as _asc
-            CONCURRENCY = 10
-            BATCH = 500
-
-            def _geocode_one_sync(addr):
-                try:
-                    r = _req.get(
-                        'https://dapi.kakao.com/v2/local/search/address.json',
-                        params={'query': addr, 'size': 1},
-                        headers={'Authorization': f'KakaoAK {KAKAO_KEY}'},
-                        timeout=5,
-                    )
-                    if r.status_code == 200:
-                        docs = r.json().get('documents', [])
-                        if docs:
-                            x = float(docs[0].get('x', 0))
-                            y = float(docs[0].get('y', 0))
-                            if x and y:
-                                return addr, (y, x)
-                except Exception:
-                    pass
-                return addr, None
-
-            unique_addrs = list(addr_map.keys())
-            coord_cache: dict = {}
-            total_updated = 0
-
-            for i in range(0, len(unique_addrs), BATCH):
-                batch = unique_addrs[i:i + BATCH]
-                with ThreadPoolExecutor(max_workers=CONCURRENCY) as pool:
-                    futures = {pool.submit(_geocode_one_sync, a): a for a in batch}
-                    for fut in _asc(futures):
-                        a, c = fut.result()
-                        if c:
-                            coord_cache[a] = c
-
-                # 배치 결과 즉시 DB 기록
-                batch_updates = [(coord_cache[a][0], coord_cache[a][1], rid)
-                                 for a in batch if a in coord_cache
-                                 for rid in addr_map[a]]
-                if batch_updates:
-                    _conn.executemany('UPDATE inspection_targets SET 위도=?, 경도=? WHERE id=?', batch_updates)
-                    _conn.commit()
-                    total_updated += len(batch_updates)
-
-            if total_updated:
-                logger.info(f"inspection_targets 좌표 업데이트: {total_updated}/{len(rows)}건")
-            else:
-                logger.warning("Kakao 지오코딩 결과 없음 (주소 확인 필요)")
-            _conn.close()
-        except Exception as e:
-            logger.warning(f"inspection coords 업데이트 실패 (non-fatal): {e}")
-
-    asyncio.create_task(_populate_coords())
+    # 지오코딩은 별도 엔드포인트(/inspection/geocode-targets)로 분리
+    # — confirm 자체는 즉시 반환
     return {"success": True, "count": count}
 
 
@@ -10695,6 +10743,45 @@ async def inspection_detail(request: Request, year: int, 허가번호: str):
 
     return {"target": target, "ds": ds_info, "schedule": schedule, "result": result, "callname_list": callname_list}
 
+def _geocode_target_sync(year: int, 허가번호: str):
+    """일정 등록된 국소 1건 지오코딩 (좌표 이미 있으면 스킵 — 캐시 역할).
+    inspection_targets.위도/경도 업데이트."""
+    import requests as _req
+    try:
+        conn = sqlite3.connect(_INSP_DB, timeout=30)
+        row = conn.execute(
+            'SELECT id, 도로명주소, 설치장소, 위도 FROM inspection_targets WHERE year=? AND 허가번호=? LIMIT 1',
+            (year, 허가번호)
+        ).fetchone()
+        if not row:
+            conn.close(); return
+        rid, road_addr, install_addr, lat = row
+        # 이미 좌표 있으면 스킵 (캐시 히트)
+        if lat and lat != 0:
+            conn.close(); return
+        addr = (road_addr or '').strip() or (install_addr or '').strip()
+        if not addr:
+            conn.close(); return
+        r = _req.get(
+            'https://dapi.kakao.com/v2/local/search/address.json',
+            params={'query': addr, 'size': 1},
+            headers={'Authorization': 'KakaoAK cb3f4b95ada5f92fc3924b9685aec16b'},
+            timeout=5,
+        )
+        if r.status_code == 200:
+            docs = r.json().get('documents', [])
+            if docs:
+                x = float(docs[0].get('x', 0))
+                y = float(docs[0].get('y', 0))
+                if x and y:
+                    conn.execute('UPDATE inspection_targets SET 위도=?, 경도=? WHERE id=?', (y, x, rid))
+                    conn.commit()
+                    logger.debug(f"지오코딩 완료: {허가번호} ({y:.4f}, {x:.4f})")
+        conn.close()
+    except Exception as e:
+        logger.debug(f"지오코딩 실패 (non-fatal): {허가번호} — {e}")
+
+
 @app.post("/inspection/schedule")
 async def inspection_schedule_upsert(request: Request, req: InspectionScheduleReq):
     """수검 일정 등록/수정 (관리자/매니저)."""
@@ -10715,6 +10802,8 @@ async def inspection_schedule_upsert(request: Request, req: InspectionScheduleRe
         c.commit(); c.close()
     await asyncio.to_thread(_write)
     await asyncio.to_thread(_record_audit_log_sync, "inspection_schedule_upsert", "inspection_schedule", pk, empno)
+    # 백그라운드 지오코딩 (좌표 없는 경우만, 이미 있으면 즉시 스킵)
+    asyncio.create_task(asyncio.to_thread(_geocode_target_sync, req.year, req.허가번호))
     return {"success": True}
 
 @app.delete("/inspection/schedule/{year}/{license_no}")
@@ -11025,74 +11114,76 @@ async def inspection_export_report(request: Request, req: InspectionReportReq):
             raise ValueError("조회된 수검 대상이 없습니다")
 
         # ── 2. DS 데이터 일괄 조회 ───────────────────────────
-        license_nos = [t['허가번호'] for t in targets]
+        # 허가번호 정규화: 하이픈 포함/미포함 양쪽 버전 모두 조회
+        _raw_nos = [t['허가번호'] for t in targets]
+        license_nos = list({n for raw in _raw_nos for n in (raw, raw.replace('-', ''))})
+        # DS 결과를 원본 허가번호로 역매핑하기 위한 dict
+        _norm_to_raw = {}
+        for raw in _raw_nos:
+            _norm_to_raw[raw] = raw
+            _norm_to_raw[raw.replace('-', '')] = raw
         ph = ','.join('?' * len(license_nos))
 
-        ds_장치_map: dict = {}    # 허가번호 → 가장 높은 장치번호 row
-        ds_안테나_map: dict = {}  # 허가번호 → 첫 번째 안테나 row
-        ds_전파_map: dict = {}    # 허가번호 → 첫 번째 전파형식 row
+        ds_장치_map: dict = {}    # 허가번호 → list of 장치 rows
+        ds_안테나_map: dict = {}  # 허가번호 → list of 안테나 rows (장치번호 정렬)
+        ds_전파_map: dict = {}    # 허가번호 → list of 전파형식 rows
         ds_주파수_map: dict = {}  # 허가번호 → {TX:..., RX:...}
 
         if os.path.exists(_DS_DETAIL_DB):
             conn_d = sqlite3.connect(_DS_DETAIL_DB); conn_d.row_factory = sqlite3.Row
 
-            # 장치: 허가번호별 최고 장치번호 행 선택
+            # 장치: 허가번호별 전체 행 (장치번호 오름차순)
+            def _raw(hn):
+                return _norm_to_raw.get(hn, hn)
+
             rows = conn_d.execute(
-                f'SELECT 허가번호, 장치번호, 기기일련번호, 형식검정번호 FROM ds_장치 WHERE 허가번호 IN ({ph})',
+                f'SELECT 허가번호, 장치번호, 기기일련번호, 형식검정번호 FROM ds_장치 WHERE 허가번호 IN ({ph}) ORDER BY 허가번호, CAST(장치번호 AS INTEGER)',
                 license_nos).fetchall()
             for r in rows:
-                hn = r['허가번호']
-                cur = ds_장치_map.get(hn)
-                # 장치번호 숫자 비교 → 높은 것 선택
-                try:
-                    cur_num = int(str(cur['장치번호'] or 0)) if cur else -1
-                    new_num = int(str(r['장치번호'] or 0))
-                except ValueError:
-                    cur_num, new_num = 0, 1
-                if cur is None or new_num > cur_num:
-                    ds_장치_map[hn] = dict(r)
+                ds_장치_map.setdefault(_raw(r['허가번호']), []).append(dict(r))
 
-            # 안테나: 허가번호별 첫 번째 행
+            # 안테나: 허가번호별 전체 행 (장치번호 오름차순)
             rows = conn_d.execute(
-                f'SELECT * FROM ds_안테나 WHERE 허가번호 IN ({ph}) ORDER BY id',
+                f'SELECT * FROM ds_안테나 WHERE 허가번호 IN ({ph}) ORDER BY 허가번호, CAST(장치번호 AS INTEGER)',
                 license_nos).fetchall()
             for r in rows:
-                hn = r['허가번호']
-                if hn not in ds_안테나_map:
-                    ds_안테나_map[hn] = dict(r)
+                ds_안테나_map.setdefault(_raw(r['허가번호']), []).append(dict(r))
 
-            # 전파형식: 허가번호별 첫 번째 행
+            # 전파형식: 허가번호별 전체 행 (장치번호 오름차순)
             rows = conn_d.execute(
-                f'SELECT 허가번호, 공중선전력 FROM ds_전파형식 WHERE 허가번호 IN ({ph}) ORDER BY id',
+                f'SELECT 허가번호, 장치번호, 공중선전력 FROM ds_전파형식 WHERE 허가번호 IN ({ph}) ORDER BY 허가번호, CAST(장치번호 AS INTEGER)',
                 license_nos).fetchall()
             for r in rows:
-                hn = r['허가번호']
-                if hn not in ds_전파_map:
-                    ds_전파_map[hn] = dict(r)
+                ds_전파_map.setdefault(_raw(r['허가번호']), []).append(dict(r))
 
-            # 주파수: TX/RX 수집
+            # 주파수: TX/RX별 중복제거 후 합산
             rows = conn_d.execute(
                 f'SELECT 허가번호, 주파수, 송수신구분 FROM ds_주파수 WHERE 허가번호 IN ({ph}) ORDER BY id',
                 license_nos).fetchall()
             _freq_tmp: dict = {}
             for r in rows:
-                hn = r['허가번호']
+                hn = _raw(r['허가번호'])
                 if hn not in _freq_tmp:
-                    _freq_tmp[hn] = {}
+                    _freq_tmp[hn] = {'TX': [], 'RX': [], 'ALL': []}
                 구분 = str(r['송수신구분'] or '').strip().upper()
                 주파수 = str(r['주파수'] or '').strip()
+                if not 주파수:
+                    continue
                 if 'TX' in 구분 or '송신' in 구분:
-                    _freq_tmp[hn].setdefault('TX', 주파수)
+                    if 주파수 not in _freq_tmp[hn]['TX']:
+                        _freq_tmp[hn]['TX'].append(주파수)
                 elif 'RX' in 구분 or '수신' in 구분:
-                    _freq_tmp[hn].setdefault('RX', 주파수)
+                    if 주파수 not in _freq_tmp[hn]['RX']:
+                        _freq_tmp[hn]['RX'].append(주파수)
                 else:
-                    _freq_tmp[hn].setdefault('ALL', 주파수)
+                    if 주파수 not in _freq_tmp[hn]['ALL']:
+                        _freq_tmp[hn]['ALL'].append(주파수)
             for hn, fmap in _freq_tmp.items():
-                tx = fmap.get('TX', fmap.get('ALL', ''))
-                rx = fmap.get('RX', fmap.get('ALL', ''))
+                tx_vals = fmap['TX'] or fmap['ALL']
+                rx_vals = fmap['RX'] or fmap['ALL']
                 parts = []
-                if tx: parts.append(f'TX : {tx}')
-                if rx: parts.append(f'RX : {rx}')
+                if tx_vals: parts.append(f"TX : {','.join(tx_vals)}")
+                if rx_vals: parts.append(f"RX : {','.join(rx_vals)}")
                 ds_주파수_map[hn] = '\n'.join(parts)
 
             conn_d.close()
@@ -11167,6 +11258,15 @@ async def inspection_export_report(request: Request, req: InspectionReportReq):
         _HDR_FONT = Font(name='맑은 고딕', size=10, bold=True)
         _HDR_FILL = PatternFill('solid', fgColor='BFBFBF')
 
+        # 병합 전 모든 헤더 셀에 스타일 적용 (병합 후 누락 테두리 방지)
+        for _r in (2, 3):
+            for _c in range(1, 22):
+                _cell = ws.cell(row=_r, column=_c)
+                _cell.font = _HDR_FONT
+                _cell.fill = _HDR_FILL
+                _cell.border = _thin_border
+                _cell.alignment = _al_center
+
         def _hdr(r, c, val):
             _set(r, c, val, font=_HDR_FONT, fill=_HDR_FILL,
                  border=_thin_border, align=_al_center)
@@ -11198,21 +11298,36 @@ async def inspection_export_report(request: Request, req: InspectionReportReq):
             hn = t['허가번호']
 
             # DS 데이터 조합
-            jt   = ds_장치_map.get(hn, {})
-            ant  = ds_안테나_map.get(hn, {})
-            pwr  = ds_전파_map.get(hn, {})
-            freq = ds_주파수_map.get(hn, '')
+            jt_list  = ds_장치_map.get(hn, [])
+            ant_list = ds_안테나_map.get(hn, [])
+            pwr_list = ds_전파_map.get(hn, [])
+            freq     = ds_주파수_map.get(hn, '')
 
-            설치형태  = ant.get('공중선주설치형태명', '')
+            def _join(lst, key):
+                vals = [str(r.get(key) or '').strip() for r in lst]
+                return '\n'.join(v for v in vals if v)
+
+            # 공중선일련번호 기준 중복 제거 → 형식/기수/이득 행수 일치
+            _seen_ant: set = set()
+            deduped_ant: list = []
+            for _ant in ant_list:
+                _k = str(_ant.get('공중선일련번호') or '').strip()
+                if not _k or _k not in _seen_ant:
+                    _seen_ant.add(_k); deduped_ant.append(_ant)
+
             tosi_code = zpcode_map.get(hn, '')
             검사종류_raw = str(t['검사종류'] or '').strip()
-            기기명칭1    = jt.get('형식검정번호', '')
-            기기일련번호1 = jt.get('기기일련번호', '')
-            공중선전력   = pwr.get('공중선전력', '')
-            공중선장치   = ant.get('공중선일련번호', '')
-            공중선형식   = ant.get('공중선형식명', '')
-            기수         = ant.get('기', '')
-            이득         = ant.get('이득', '')
+            # "정기검사" → "정기", "임시검사" → "임시" 등 '검사' 접미사 제거
+            검사종류_display = 검사종류_raw.replace('검사', '').strip() or 검사종류_raw
+
+            설치형태     = ant_list[0].get('공중선주설치형태명', '') if ant_list else ''
+            기기명칭1    = jt_list[0].get('형식검정번호', '') if jt_list else ''
+            기기일련번호1 = jt_list[0].get('기기일련번호', '') if jt_list else ''
+            공중선전력   = _join(pwr_list, '공중선전력')
+            공중선장치   = _join(deduped_ant, '공중선일련번호')
+            공중선형식   = _join(deduped_ant, '공중선형식명')
+            기수         = _join(deduped_ant, '기')
+            이득         = _join(deduped_ant, '이득')
 
             row_data = [
                 seq,                       # A: 순번
@@ -11220,7 +11335,7 @@ async def inspection_export_report(request: Request, req: InspectionReportReq):
                 tosi_code,                 # C: tosi_code
                 hn,                        # D: 허가번호
                 t['호출명칭'] or '',        # E: name
-                검사종류_raw,              # F: 검사종류
+                검사종류_display,          # F: 검사종류 (정기검사→정기)
                 '',                        # G: 특이사항
                 t['장치수'] or '',          # H: 장치수
                 기기명칭1,                  # I: 기기명칭1
@@ -11268,6 +11383,101 @@ async def inspection_export_report(request: Request, req: InspectionReportReq):
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f"attachment; filename*=UTF-8''{_q(fname)}"}
     )
+
+
+class InspAddFromStagingReq(BaseModel):
+    year: int
+    허가번호: str
+
+
+@app.post("/inspection/add-from-staging")
+async def inspection_add_from_staging(request: Request, req: InspAddFromStagingReq):
+    """스테이징에서 단건 허가번호를 검색해 inspection_targets에 추가 (관리자/매니저 전용).
+    - admin(최고관리자): 본부 무관
+    - manager(본부관리자): 자신의 본부(access담당) 대상만 추가 가능
+    - kca검토결과='대상 추가' 로 삽입
+    """
+    empno = await _verify_auth(request)
+    role = await asyncio.to_thread(_get_user_role_sync, empno)
+    if role not in {"admin", "manager"}:
+        raise HTTPException(403, "관리자/매니저만 가능")
+
+    if not os.path.exists(_INSP_DB):
+        raise HTTPException(400, "DB 없음")
+
+    # manager이면 자기 본부(access담당) 확인
+    manager_access = ""
+    if role == "manager":
+        dynamodb = get_dynamodb_resource()
+        users_table = dynamodb.Table(DYNAMODB_TABLES["users"])
+        user_item = await asyncio.to_thread(lambda: users_table.get_item(
+            Key={"user_id": empno},
+            ProjectionExpression="#r",
+            ExpressionAttributeNames={"#r": "region"},
+        ))
+        # region: "경북Access담당" → "경북"
+        manager_access = user_item.get("Item", {}).get("region", "").replace("Access담당", "").strip()
+        if not manager_access:
+            raise HTTPException(403, "본부 정보가 설정되지 않았습니다")
+
+    def _do_add():
+        conn = sqlite3.connect(_INSP_DB, timeout=60)
+        conn.row_factory = sqlite3.Row
+        try:
+            # 스테이징에서 조회
+            row = conn.execute(
+                'SELECT * FROM inspection_targets_staging WHERE year=? AND 허가번호=? LIMIT 1',
+                (req.year, req.허가번호)
+            ).fetchone()
+            if not row:
+                raise ValueError(f"스테이징에서 찾을 수 없습니다: {req.허가번호}")
+
+            d = dict(row)
+
+            # manager 본부 검증
+            if manager_access and d.get("access담당", "") != manager_access:
+                raise PermissionError(f"본부 불일치: 대상={d.get('access담당')}, 내 본부={manager_access}")
+
+            # 이미 targets에 있는지 확인
+            exists = conn.execute(
+                'SELECT id FROM inspection_targets WHERE year=? AND 허가번호=? LIMIT 1',
+                (req.year, req.허가번호)
+            ).fetchone()
+            if exists:
+                raise ValueError(f"이미 수검 대상에 등록된 허가번호입니다: {req.허가번호}")
+
+            cols = 'year,sheet,pnu_code,허가번호,호출명칭,국종군,부서,분기,연도주기,검사주기,허가상태,설치장소,도로명주소,장치수,통시,공대,kca검토결과,시기조정,기준연도,skt본부,access담당,품질개선팀,검사종류'
+            ph = ','.join(['?'] * len(cols.split(',')))
+
+            vals = (
+                d.get('year'), d.get('sheet'), d.get('pnu_code'),
+                d.get('허가번호'), d.get('호출명칭'), d.get('국종군'), d.get('부서'),
+                d.get('분기'), d.get('연도주기'), d.get('검사주기'), d.get('허가상태'),
+                d.get('설치장소'), d.get('도로명주소'), d.get('장치수'),
+                d.get('통시'), d.get('공대'),
+                '대상 추가',  # kca검토결과 강제 설정
+                d.get('시기조정'), d.get('기준연도'), d.get('skt본부'),
+                d.get('access담당'), d.get('품질개선팀'), d.get('검사종류'),
+            )
+            conn.execute(f'INSERT INTO inspection_targets ({cols}) VALUES ({ph})', vals)
+            # 스테이징에서 제거
+            conn.execute(
+                'DELETE FROM inspection_targets_staging WHERE year=? AND 허가번호=?',
+                (req.year, req.허가번호)
+            )
+            conn.commit()
+            return dict(d) | {"kca검토결과": "대상 추가"}
+        finally:
+            conn.close()
+
+    try:
+        result = await asyncio.to_thread(_do_add)
+    except ValueError as ve:
+        raise HTTPException(400, str(ve))
+    except PermissionError as pe:
+        raise HTTPException(403, str(pe))
+
+    return {"success": True, "item": result}
 
 
 # ============================================================

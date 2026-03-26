@@ -63,7 +63,9 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
   // 미배정 현황
   int _unassignedTotal = 0;
   Map<String, dynamic> _unassignedByRegion = {};
+  Map<String, dynamic> _unassignedByReason = {};
   List<Map<String, dynamic>> _unassignedItems = [];
+  bool _unassignedCapped = false;
 
   Map<String, dynamic>? _detailData;
   String? _detailLicenseNo;
@@ -160,7 +162,9 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
       if (unassRes != null) {
         _unassignedTotal = (unassRes['total'] as num?)?.toInt() ?? 0;
         _unassignedByRegion = Map<String, dynamic>.from(unassRes['by_region'] ?? {});
+        _unassignedByReason = Map<String, dynamic>.from(unassRes['by_reason'] ?? {});
         _unassignedItems = List<Map<String, dynamic>>.from(unassRes['items'] ?? []);
+        _unassignedCapped = unassRes['items_capped'] == true;
       }
       if (schedNos != null) _scheduledNos = schedNos;
     });
@@ -184,6 +188,8 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
       return await _svc.getSummary(
         year: _year, sheet: _sheet,
         filters: _activeFilters,
+        search: _aSearch,
+        addr: _aSearch,
         scheduleYn: _aScheduled,
       );
     } catch (_) { return null; }
@@ -717,6 +723,34 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     }
   }
 
+  Future<void> _showAddFromStagingDialog() async {
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => _AddFromStagingDialog(
+        svc: _svc,
+        year: _year,
+        orgMap: _orgMap,
+        hdqts: _hdqts,
+        allQuarters: _allQuarters,
+        allNationGroups: _allNationGroups,
+        onConfirm: (licenseNos) async {
+          Navigator.pop(ctx);
+          int ok = 0;
+          for (final no in licenseNos) {
+            try {
+              await _svc.addFromStaging(_year, no);
+              ok++;
+            } catch (_) {}
+          }
+          _loadData();
+          _loadOrgMap();
+          _showSnack('$ok건이 수검 대상에 추가되었습니다 (검토여부: 대상 추가)');
+        },
+      ),
+    );
+  }
+
   Future<void> _showInspectionReportDialog() async {
     await showDialog<void>(
       context: context,
@@ -728,6 +762,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
         hdqts: _hdqts,
         allQuarters: _allQuarters,
         allNationGroups: _allNationGroups,
+        allKcaResults: _allKcaResults,
         onConfirm: (licenseNos, sheetTitle) {
           Navigator.pop(ctx);
           _exportInspectionReport(licenseNos: licenseNos, sheetTitle: sheetTitle);
@@ -895,6 +930,18 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                   ),
                   child: Text('${_formatNumber(_total)}건',
                       style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF0369A1))),
+                ),
+              if (_isAdmin)
+                OutlinedButton.icon(
+                  icon: const Icon(Icons.add_circle_outline, size: 16),
+                  label: const Text('대상 추가', style: TextStyle(fontSize: 13)),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: const Color(0xFF7B1FA2),
+                    side: const BorderSide(color: Color(0xFF7B1FA2)),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                  ),
+                  onPressed: _showAddFromStagingDialog,
                 ),
               if (_isAdmin && _selectedLicenseNos.isNotEmpty) ..._buildBulkActionButtons(),
             ],
@@ -1526,6 +1573,18 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     );
   }
 
+  Widget _reasonChip(String label, dynamic count, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: color.withValues(alpha: 0.3)),
+      ),
+      child: Text('$label $count건', style: TextStyle(fontSize: 11, color: color, fontWeight: FontWeight.w500)),
+    );
+  }
+
   Widget _buildUnassignedBanner() {
     final regionEntries = _unassignedByRegion.entries.toList();
     return Container(
@@ -1556,6 +1615,12 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                   style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: _orange)),
               const SizedBox(width: 8),
               Text('본부/팀이 매핑되지 않은 항목', style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+              if (_unassignedByReason.isNotEmpty) ...[
+                const SizedBox(width: 12),
+                _reasonChip('코드없음', _unassignedByReason['코드없음'] ?? 0, const Color(0xFF6B7280)),
+                const SizedBox(width: 4),
+                _reasonChip('ERP미매칭', _unassignedByReason['ERP미매칭'] ?? 0, const Color(0xFFDC2626)),
+              ],
               const Spacer(),
               TextButton.icon(
                 icon: const Icon(Icons.list_alt, size: 16),
@@ -1610,23 +1675,39 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
               if (_unassignedByRegion.isNotEmpty) ...[
                 const Text('지역별 분포', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
                 const SizedBox(height: 8),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 6,
-                  children: _unassignedByRegion.entries.map((e) => Chip(
-                    label: Text('${e.key}: ${e.value}건', style: const TextStyle(fontSize: 11)),
-                    backgroundColor: const Color(0xFFFFF7ED),
-                    side: BorderSide(color: _orange.withValues(alpha: 0.2)),
-                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    visualDensity: VisualDensity.compact,
-                  )).toList(),
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxHeight: 150),
+                  child: SingleChildScrollView(
+                    child: Wrap(
+                      spacing: 8,
+                      runSpacing: 6,
+                      children: _unassignedByRegion.entries.map((e) => Chip(
+                        label: Text('${e.key}: ${e.value}건', style: const TextStyle(fontSize: 11)),
+                        backgroundColor: const Color(0xFFFFF7ED),
+                        side: BorderSide(color: _orange.withValues(alpha: 0.2)),
+                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        visualDensity: VisualDensity.compact,
+                      )).toList(),
+                    ),
+                  ),
                 ),
                 const SizedBox(height: 12),
                 const Divider(height: 1),
                 const SizedBox(height: 8),
               ],
               // 상세 목록
-              Text('상세 목록 (${_unassignedItems.length}건)', style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+              Row(children: [
+                Text('상세 목록 (${_unassignedItems.length}건 표시)', style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+                if (_unassignedCapped) ...[
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                    decoration: BoxDecoration(color: const Color(0xFFFEF3C7), borderRadius: BorderRadius.circular(4)),
+                    child: Text('전체 $_unassignedTotal건 중 500건만 표시 (Excel 다운로드로 전체 확인)',
+                        style: const TextStyle(fontSize: 11, color: Color(0xFF92400E))),
+                  ),
+                ],
+              ]),
               const SizedBox(height: 8),
               Expanded(
                 child: SingleChildScrollView(
@@ -1639,25 +1720,36 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                       dataRowMaxHeight: 40,
                       columnSpacing: 16,
                       columns: const [
+                        DataColumn(label: Text('미배정원인', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600))),
                         DataColumn(label: Text('허가번호', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600))),
                         DataColumn(label: Text('호출명칭', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600))),
                         DataColumn(label: Text('도로명주소', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600))),
                         DataColumn(label: Text('국종군', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600))),
                         DataColumn(label: Text('분기', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600))),
                         DataColumn(label: Text('통시', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600))),
-                        DataColumn(label: Text('본부', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600))),
-                        DataColumn(label: Text('팀', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600))),
                       ],
-                      rows: _unassignedItems.map((item) => DataRow(cells: [
-                        DataCell(Text('${item['허가번호'] ?? ''}', style: const TextStyle(fontSize: 11))),
-                        DataCell(SizedBox(width: 150, child: Text('${item['호출명칭'] ?? ''}', style: const TextStyle(fontSize: 11), overflow: TextOverflow.ellipsis))),
-                        DataCell(SizedBox(width: 200, child: Text('${item['도로명주소'] ?? ''}', style: const TextStyle(fontSize: 11), overflow: TextOverflow.ellipsis))),
-                        DataCell(Text('${item['국종군'] ?? ''}', style: const TextStyle(fontSize: 11))),
-                        DataCell(Text('${item['분기'] ?? ''}', style: const TextStyle(fontSize: 11))),
-                        DataCell(Text('${item['통시'] ?? ''}', style: const TextStyle(fontSize: 11))),
-                        DataCell(Text('${item['access담당'] ?? ''}', style: TextStyle(fontSize: 11, color: (item['access담당'] ?? '').isEmpty ? Colors.red.shade300 : Colors.black87))),
-                        DataCell(Text('${item['품질개선팀'] ?? ''}', style: TextStyle(fontSize: 11, color: (item['품질개선팀'] ?? '').isEmpty ? Colors.red.shade300 : Colors.black87))),
-                      ])).toList(),
+                      rows: _unassignedItems.map((item) {
+                        final reason = item['미배정원인'] as String? ?? '';
+                        final isErp = reason == 'ERP미매칭';
+                        return DataRow(cells: [
+                          DataCell(Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: isErp ? const Color(0xFFFEE2E2) : const Color(0xFFF3F4F6),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: Text(reason,
+                                style: TextStyle(fontSize: 10, fontWeight: FontWeight.w500,
+                                    color: isErp ? const Color(0xFFDC2626) : const Color(0xFF6B7280))),
+                          )),
+                          DataCell(Text('${item['허가번호'] ?? ''}', style: const TextStyle(fontSize: 11))),
+                          DataCell(SizedBox(width: 150, child: Text('${item['호출명칭'] ?? ''}', style: const TextStyle(fontSize: 11), overflow: TextOverflow.ellipsis))),
+                          DataCell(SizedBox(width: 200, child: Text('${item['도로명주소'] ?? ''}', style: const TextStyle(fontSize: 11), overflow: TextOverflow.ellipsis))),
+                          DataCell(Text('${item['국종군'] ?? ''}', style: const TextStyle(fontSize: 11))),
+                          DataCell(Text('${item['분기'] ?? ''}', style: const TextStyle(fontSize: 11))),
+                          DataCell(Text('${item['통시'] ?? ''}', style: const TextStyle(fontSize: 11))),
+                        ]);
+                      }).toList(),
                     ),
                   ),
                 ),
@@ -2340,6 +2432,7 @@ class _InspectionReportDialog extends StatefulWidget {
   final List<String> hdqts;
   final List<String> allQuarters;
   final List<String> allNationGroups;
+  final List<String> allKcaResults;
   final void Function(List<String> licenseNos, String sheetTitle) onConfirm;
 
   const _InspectionReportDialog({
@@ -2349,6 +2442,7 @@ class _InspectionReportDialog extends StatefulWidget {
     required this.hdqts,
     required this.allQuarters,
     required this.allNationGroups,
+    required this.allKcaResults,
     required this.onConfirm,
   });
 
@@ -2360,7 +2454,7 @@ class _InspectionReportDialogState extends State<_InspectionReportDialog> {
   static const Color _blue = Color(0xFF1565C0);
 
   // 필터 상태
-  String _hdqt = '', _team = '', _quarter = '', _nationGroup = '';
+  String _hdqt = '', _team = '', _quarter = '', _nationGroup = '', _kcaResult = '';
   final _searchCtrl = TextEditingController();
   final _titleCtrl = TextEditingController();
 
@@ -2399,6 +2493,7 @@ class _InspectionReportDialogState extends State<_InspectionReportDialog> {
       if (_team.isNotEmpty) filters['품질개선팀'] = [_team];
       if (_quarter.isNotEmpty) filters['분기'] = [_quarter];
       if (_nationGroup.isNotEmpty) filters['국종군'] = [_nationGroup];
+      if (_kcaResult.isNotEmpty) filters['kca검토결과'] = [_kcaResult];
 
       final search = _searchCtrl.text.trim();
       final result = await widget.svc.getData(
@@ -2586,8 +2681,13 @@ class _InspectionReportDialogState extends State<_InspectionReportDialog> {
                   _loadCandidates();
                 })),
                 const SizedBox(width: 8),
-                Expanded(child: _dropdown('국종군', _nationGroup, widget.allNationGroups, (v) {
+                Expanded(child: _dropdown('밴드선택', _nationGroup, widget.allNationGroups, (v) {
                   setState(() => _nationGroup = v ?? '');
+                  _loadCandidates();
+                })),
+                const SizedBox(width: 8),
+                Expanded(child: _dropdown('검토여부', _kcaResult, widget.allKcaResults, (v) {
+                  setState(() => _kcaResult = v ?? '');
                   _loadCandidates();
                 })),
               ]),
@@ -2837,6 +2937,466 @@ class _InspectionReportDialogState extends State<_InspectionReportDialog> {
                     _confirmed.map((e) => e['허가번호'] as String).toList(),
                     _titleCtrl.text.trim(),
                   );
+                },
+              ),
+            ]),
+          ),
+        ]),
+      ),
+    );
+  }
+}
+
+// ── 대상 추가 선택 다이얼로그 ──────────────────────────
+
+class _AddFromStagingDialog extends StatefulWidget {
+  final InspectionService svc;
+  final int year;
+  final Map<String, List<String>> orgMap;
+  final List<String> hdqts;
+  final List<String> allQuarters;
+  final List<String> allNationGroups;
+  final void Function(List<String> licenseNos) onConfirm;
+
+  const _AddFromStagingDialog({
+    required this.svc,
+    required this.year,
+    required this.orgMap,
+    required this.hdqts,
+    required this.allQuarters,
+    required this.allNationGroups,
+    required this.onConfirm,
+  });
+
+  @override
+  State<_AddFromStagingDialog> createState() => _AddFromStagingDialogState();
+}
+
+class _AddFromStagingDialogState extends State<_AddFromStagingDialog> {
+  static const Color _purple = Color(0xFF7B1FA2);
+
+  String _hdqt = '', _team = '', _quarter = '', _nationGroup = '';
+  final _searchCtrl = TextEditingController();
+
+  List<Map<String, dynamic>> _candidates = [];
+  List<Map<String, dynamic>> _selected = [];
+  final _leftChecked = <String>{};
+  final _rightChecked = <String>{};
+  bool _loading = false;
+  int _total = 0;
+  bool _adding = false;
+
+  List<String> get _teams => _hdqt.isNotEmpty ? (widget.orgMap[_hdqt] ?? []) : [];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadCandidates();
+  }
+
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadCandidates() async {
+    setState(() { _loading = true; _candidates = []; _leftChecked.clear(); });
+    try {
+      final filters = <String, List<String>>{};
+      if (_hdqt.isNotEmpty) filters['access담당'] = [_hdqt];
+      if (_team.isNotEmpty) filters['품질개선팀'] = [_team];
+      if (_quarter.isNotEmpty) filters['분기'] = [_quarter];
+      if (_nationGroup.isNotEmpty) filters['국종군'] = [_nationGroup];
+      final result = await widget.svc.getStagingItems(
+        widget.year,
+        filters: filters,
+        search: _searchCtrl.text.trim(),
+      );
+      final items = List<Map<String, dynamic>>.from(result['items'] ?? []);
+      final selectedNos = _selected.map((e) => e['허가번호'] as String).toSet();
+      setState(() {
+        _total = result['total'] as int? ?? 0;
+        _candidates = items.where((e) => !selectedNos.contains(e['허가번호'])).toList();
+      });
+    } catch (_) {
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  void _moveToRight() {
+    if (_leftChecked.isEmpty) return;
+    final moving = _candidates.where((e) => _leftChecked.contains(e['허가번호'])).toList();
+    setState(() {
+      _selected.addAll(moving);
+      _candidates.removeWhere((e) => _leftChecked.contains(e['허가번호']));
+      _leftChecked.clear();
+    });
+  }
+
+  void _moveToLeft() {
+    if (_rightChecked.isEmpty) return;
+    final moving = _selected.where((e) => _rightChecked.contains(e['허가번호'])).toList();
+    setState(() {
+      _candidates.addAll(moving);
+      _selected.removeWhere((e) => _rightChecked.contains(e['허가번호']));
+      _rightChecked.clear();
+    });
+  }
+
+  void _toggleLeft(String no) => setState(() {
+    if (_leftChecked.contains(no)) _leftChecked.remove(no); else _leftChecked.add(no);
+  });
+
+  void _toggleRight(String no) => setState(() {
+    if (_rightChecked.contains(no)) _rightChecked.remove(no); else _rightChecked.add(no);
+  });
+
+  void _selectAllLeft() => setState(() {
+    if (_leftChecked.length == _candidates.length) _leftChecked.clear();
+    else _leftChecked.addAll(_candidates.map((e) => e['허가번호'] as String));
+  });
+
+  void _selectAllRight() => setState(() {
+    if (_rightChecked.length == _selected.length) _rightChecked.clear();
+    else _rightChecked.addAll(_selected.map((e) => e['허가번호'] as String));
+  });
+
+  Widget _dropdown(String hint, String? value, List<String> items, ValueChanged<String?> onChanged) {
+    return Container(
+      height: 34,
+      padding: const EdgeInsets.symmetric(horizontal: 10),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border.all(color: Colors.grey.shade300),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<String>(
+          isExpanded: true, isDense: true,
+          hint: Text(hint, style: const TextStyle(fontSize: 12)),
+          value: value?.isEmpty == true ? null : value,
+          icon: const Icon(Icons.arrow_drop_down, size: 18),
+          dropdownColor: Colors.white,
+          style: const TextStyle(fontSize: 12, color: Colors.black87),
+          items: [
+            DropdownMenuItem(value: '', child: Text('전체', style: TextStyle(color: Colors.grey.shade500))),
+            ...items.map((v) => DropdownMenuItem(value: v, child: Text(v))),
+          ],
+          onChanged: onChanged,
+        ),
+      ),
+    );
+  }
+
+  Widget _itemTile(Map<String, dynamic> item, bool checked, VoidCallback onTap) {
+    final no = item['허가번호'] as String? ?? '';
+    final name = item['호출명칭'] as String? ?? '';
+    final team = item['품질개선팀'] as String? ?? '';
+    final quarter = item['분기'] as String? ?? '';
+    return InkWell(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+        decoration: BoxDecoration(
+          color: checked ? Colors.purple.shade50 : Colors.transparent,
+          border: Border(bottom: BorderSide(color: Colors.grey.shade100)),
+        ),
+        child: Row(children: [
+          SizedBox(
+            width: 20, height: 20,
+            child: Checkbox(
+              value: checked, onChanged: (_) => onTap(),
+              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              activeColor: _purple,
+              side: BorderSide(color: Colors.grey.shade400),
+            ),
+          ),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(name, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
+                  maxLines: 1, overflow: TextOverflow.ellipsis),
+              Text('$no  $team  $quarter',
+                  style: TextStyle(fontSize: 10, color: Colors.grey.shade600),
+                  maxLines: 1, overflow: TextOverflow.ellipsis),
+            ]),
+          ),
+        ]),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final screenSize = MediaQuery.of(context).size;
+    return Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
+      child: SizedBox(
+        width: screenSize.width * 0.85,
+        height: screenSize.height * 0.85,
+        child: Column(children: [
+          // ── 헤더 ──
+          Container(
+            padding: const EdgeInsets.fromLTRB(20, 16, 16, 12),
+            decoration: const BoxDecoration(
+              color: _purple,
+              borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+            ),
+            child: Row(children: [
+              const Icon(Icons.add_circle_outline, color: Colors.white, size: 20),
+              const SizedBox(width: 8),
+              const Text('대상 추가',
+                  style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+              const Spacer(),
+              IconButton(
+                icon: const Icon(Icons.close, color: Colors.white, size: 20),
+                onPressed: () => Navigator.pop(context),
+                padding: EdgeInsets.zero, constraints: const BoxConstraints(),
+              ),
+            ]),
+          ),
+
+          // ── 필터 패널 ──
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            color: Colors.grey.shade50,
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [
+                Expanded(child: _dropdown('본부', _hdqt, widget.hdqts, (v) {
+                  setState(() { _hdqt = v ?? ''; _team = ''; });
+                  _loadCandidates();
+                })),
+                const SizedBox(width: 8),
+                Expanded(child: _dropdown('팀', _team, _teams, (v) {
+                  setState(() => _team = v ?? '');
+                  _loadCandidates();
+                })),
+                const SizedBox(width: 8),
+                Expanded(child: _dropdown('분기', _quarter, widget.allQuarters, (v) {
+                  setState(() => _quarter = v ?? '');
+                  _loadCandidates();
+                })),
+                const SizedBox(width: 8),
+                Expanded(child: _dropdown('밴드선택', _nationGroup, widget.allNationGroups, (v) {
+                  setState(() => _nationGroup = v ?? '');
+                  _loadCandidates();
+                })),
+              ]),
+              const SizedBox(height: 8),
+              Row(children: [
+                Expanded(
+                  child: SizedBox(
+                    height: 34,
+                    child: TextField(
+                      controller: _searchCtrl,
+                      decoration: InputDecoration(
+                        hintText: '호출명칭 / 허가번호 / 주소 검색',
+                        hintStyle: TextStyle(fontSize: 12, color: Colors.grey.shade400),
+                        prefixIcon: const Icon(Icons.search, size: 16),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
+                            borderSide: BorderSide(color: Colors.grey.shade300)),
+                        enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
+                            borderSide: BorderSide(color: Colors.grey.shade300)),
+                        contentPadding: const EdgeInsets.symmetric(vertical: 0, horizontal: 10),
+                        isDense: true, filled: true, fillColor: Colors.white,
+                      ),
+                      style: const TextStyle(fontSize: 12),
+                      onSubmitted: (_) => _loadCandidates(),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                ElevatedButton.icon(
+                  icon: const Icon(Icons.search, size: 14),
+                  label: const Text('검색', style: TextStyle(fontSize: 12)),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: _purple, foregroundColor: Colors.white,
+                    minimumSize: const Size(70, 34),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                    elevation: 0,
+                  ),
+                  onPressed: _loadCandidates,
+                ),
+              ]),
+            ]),
+          ),
+          const Divider(height: 1),
+
+          // ── 좌우 패널 ──
+          Expanded(
+            child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+              // 좌측: 후보 목록
+              Expanded(
+                child: Column(children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    color: Colors.grey.shade100,
+                    child: Row(children: [
+                      GestureDetector(
+                        onTap: _selectAllLeft,
+                        child: Row(children: [
+                          SizedBox(
+                            width: 18, height: 18,
+                            child: Checkbox(
+                              value: _candidates.isNotEmpty && _leftChecked.length == _candidates.length,
+                              onChanged: (_) => _selectAllLeft(),
+                              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              activeColor: _purple,
+                              side: BorderSide(color: Colors.grey.shade400),
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          Text('후보 목록', style: TextStyle(fontSize: 12,
+                              fontWeight: FontWeight.w600, color: Colors.grey.shade700)),
+                        ]),
+                      ),
+                      const Spacer(),
+                      if (_loading)
+                        SizedBox(width: 14, height: 14,
+                            child: CircularProgressIndicator(strokeWidth: 2, color: _purple))
+                      else
+                        Text('${_candidates.length}건 표시 / 전체 $_total건',
+                            style: TextStyle(fontSize: 10, color: Colors.grey.shade500)),
+                    ]),
+                  ),
+                  const Divider(height: 1),
+                  Expanded(
+                    child: _loading
+                        ? const Center(child: CircularProgressIndicator())
+                        : _candidates.isEmpty
+                            ? Center(child: Text('결과 없음',
+                                style: TextStyle(fontSize: 12, color: Colors.grey.shade400)))
+                            : ListView.builder(
+                                itemCount: _candidates.length,
+                                itemBuilder: (_, i) {
+                                  final item = _candidates[i];
+                                  final no = item['허가번호'] as String? ?? '';
+                                  return _itemTile(item, _leftChecked.contains(no), () => _toggleLeft(no));
+                                },
+                              ),
+                  ),
+                ]),
+              ),
+
+              // 중앙 화살표
+              Container(
+                width: 44,
+                color: Colors.grey.shade50,
+                child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+                  Tooltip(
+                    message: '추가할 목록으로 이동',
+                    child: Material(
+                      color: _leftChecked.isEmpty ? Colors.grey.shade300 : _purple,
+                      borderRadius: BorderRadius.circular(6),
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(6),
+                        onTap: _leftChecked.isEmpty ? null : _moveToRight,
+                        child: const SizedBox(width: 32, height: 32,
+                            child: Icon(Icons.arrow_forward, color: Colors.white, size: 16)),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Tooltip(
+                    message: '후보 목록으로 복원',
+                    child: Material(
+                      color: _rightChecked.isEmpty ? Colors.grey.shade300 : Colors.orange,
+                      borderRadius: BorderRadius.circular(6),
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(6),
+                        onTap: _rightChecked.isEmpty ? null : _moveToLeft,
+                        child: const SizedBox(width: 32, height: 32,
+                            child: Icon(Icons.arrow_back, color: Colors.white, size: 16)),
+                      ),
+                    ),
+                  ),
+                ]),
+              ),
+
+              const VerticalDivider(width: 1),
+
+              // 우측: 추가할 목록
+              Expanded(
+                child: Column(children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    color: Colors.purple.shade50,
+                    child: Row(children: [
+                      GestureDetector(
+                        onTap: _selectAllRight,
+                        child: Row(children: [
+                          SizedBox(
+                            width: 18, height: 18,
+                            child: Checkbox(
+                              value: _selected.isNotEmpty && _rightChecked.length == _selected.length,
+                              onChanged: (_) => _selectAllRight(),
+                              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              activeColor: Colors.orange,
+                              side: BorderSide(color: Colors.grey.shade400),
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          Text('추가할 목록', style: TextStyle(fontSize: 12,
+                              fontWeight: FontWeight.w600, color: _purple)),
+                        ]),
+                      ),
+                      const Spacer(),
+                      Text('${_selected.length}건',
+                          style: const TextStyle(fontSize: 10, color: _purple,
+                              fontWeight: FontWeight.w600)),
+                    ]),
+                  ),
+                  const Divider(height: 1),
+                  Expanded(
+                    child: _selected.isEmpty
+                        ? Center(child: Text('→ 버튼으로 대상을 선택하세요',
+                            style: TextStyle(fontSize: 11, color: Colors.grey.shade400)))
+                        : ListView.builder(
+                            itemCount: _selected.length,
+                            itemBuilder: (_, i) {
+                              final item = _selected[i];
+                              final no = item['허가번호'] as String? ?? '';
+                              return _itemTile(item, _rightChecked.contains(no), () => _toggleRight(no));
+                            },
+                          ),
+                  ),
+                ]),
+              ),
+            ]),
+          ),
+
+          const Divider(height: 1),
+
+          // ── 하단 버튼 ──
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            child: Row(children: [
+              const Spacer(),
+              TextButton(
+                onPressed: _adding ? null : () => Navigator.pop(context),
+                child: const Text('취소'),
+              ),
+              const SizedBox(width: 8),
+              ElevatedButton.icon(
+                icon: _adding
+                    ? const SizedBox(width: 14, height: 14,
+                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                    : const Icon(Icons.add_circle_outline, size: 16),
+                label: Text(_adding ? '추가 중...' : '대상 추가 (${_selected.length}건)',
+                    style: const TextStyle(fontSize: 13)),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: _selected.isEmpty ? Colors.grey.shade400 : _purple,
+                  foregroundColor: Colors.white,
+                  minimumSize: const Size(160, 38),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  elevation: 0,
+                ),
+                onPressed: (_selected.isEmpty || _adding) ? null : () {
+                  setState(() => _adding = true);
+                  widget.onConfirm(_selected.map((e) => e['허가번호'] as String).toList());
                 },
               ),
             ]),
