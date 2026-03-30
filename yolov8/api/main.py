@@ -10371,16 +10371,25 @@ async def inspection_staging_items(request: Request, req: InspStagingItemsReq):
     if req.search:
         import re as _re_stg
         keywords = [k.strip() for k in _re_stg.split(r'[,\s]+', req.search.strip()) if k.strip()]
-        or_parts = []
-        for kw in keywords:
-            kw_clean = kw.replace('-', '')
-            or_parts.append(
-                "(REPLACE(호출명칭,'-','') LIKE ? OR REPLACE(허가번호,'-','') LIKE ? OR REPLACE(도로명주소,'-','') LIKE ? OR REPLACE(설치장소,'-','') LIKE ?)"
-            )
-            pat = f'%{kw_clean}%'
-            params.extend([pat, pat, pat, pat])
-        if or_parts:
-            where.append(f"({' OR '.join(or_parts)})")
+        # 모든 키워드가 허가번호 형식(숫자+하이픈, 15자리)이면 IN 절로 최적화
+        _hn_re = _re_stg.compile(r'^[\d\-]{15,19}$')
+        all_hn = all(_hn_re.match(kw) for kw in keywords) and len(keywords) > 1
+        if all_hn:
+            clean_nos = [kw.replace('-', '') for kw in keywords]
+            ph = ','.join('?' * len(clean_nos))
+            where.append(f"REPLACE(허가번호,'-','') IN ({ph})")
+            params.extend(clean_nos)
+        else:
+            or_parts = []
+            for kw in keywords:
+                kw_clean = kw.replace('-', '')
+                or_parts.append(
+                    "(REPLACE(호출명칭,'-','') LIKE ? OR REPLACE(허가번호,'-','') LIKE ? OR REPLACE(도로명주소,'-','') LIKE ? OR REPLACE(설치장소,'-','') LIKE ?)"
+                )
+                pat = f'%{kw_clean}%'
+                params.extend([pat, pat, pat, pat])
+            if or_parts:
+                where.append(f"({' OR '.join(or_parts)})")
     where_sql = " AND ".join(where)
     offset = (req.page - 1) * req.pageSize
     conn = sqlite3.connect(_INSP_DB, timeout=60)
@@ -10562,27 +10571,40 @@ def _build_insp_where(year, sheet, filters, search, addr, schedule_yn=""):
     import re as _re_search
     keywords = [k.strip() for k in _re_search.split(r'[,\s]+', s) if k.strip()] if s else []
     addr_keywords = [k.strip() for k in _re_search.split(r'[,\s]+', a) if k.strip()] if a else []
+    _hn_re2 = _re_search.compile(r'^[\d\-]{15,19}$')
     if keywords and addr_keywords and keywords == addr_keywords:
-        # 동일 키워드: 호출명칭/허가번호/주소 통합 OR
-        or_parts = []
-        for kw in keywords:
-            kw_clean = kw.replace('-', '')
-            or_parts.append(
-                "(REPLACE(호출명칭,'-','') LIKE ? OR REPLACE(허가번호,'-','') LIKE ? OR REPLACE(도로명주소,'-','') LIKE ? OR REPLACE(설치장소,'-','') LIKE ?)"
-            )
-            pat = f'%{kw_clean}%'
-            params.extend([pat, pat, pat, pat])
-        if or_parts:
-            where.append(f"({' OR '.join(or_parts)})")
-    else:
-        if keywords:
+        # 모든 키워드가 허가번호 형식이면 IN 절로 최적화
+        if all(_hn_re2.match(kw) for kw in keywords) and len(keywords) > 1:
+            clean_nos = [kw.replace('-', '') for kw in keywords]
+            ph = ','.join('?' * len(clean_nos))
+            where.append(f"REPLACE(허가번호,'-','') IN ({ph})")
+            params.extend(clean_nos)
+        else:
             or_parts = []
             for kw in keywords:
                 kw_clean = kw.replace('-', '')
-                or_parts.append("(REPLACE(호출명칭,'-','') LIKE ? OR REPLACE(허가번호,'-','') LIKE ?)")
+                or_parts.append(
+                    "(REPLACE(호출명칭,'-','') LIKE ? OR REPLACE(허가번호,'-','') LIKE ? OR REPLACE(도로명주소,'-','') LIKE ? OR REPLACE(설치장소,'-','') LIKE ?)"
+                )
                 pat = f'%{kw_clean}%'
-                params.extend([pat, pat])
-            where.append(f"({' OR '.join(or_parts)})")
+                params.extend([pat, pat, pat, pat])
+            if or_parts:
+                where.append(f"({' OR '.join(or_parts)})")
+    else:
+        if keywords:
+            if all(_hn_re2.match(kw) for kw in keywords) and len(keywords) > 1:
+                clean_nos = [kw.replace('-', '') for kw in keywords]
+                ph = ','.join('?' * len(clean_nos))
+                where.append(f"REPLACE(허가번호,'-','') IN ({ph})")
+                params.extend(clean_nos)
+            else:
+                or_parts = []
+                for kw in keywords:
+                    kw_clean = kw.replace('-', '')
+                    or_parts.append("(REPLACE(호출명칭,'-','') LIKE ? OR REPLACE(허가번호,'-','') LIKE ?)")
+                    pat = f'%{kw_clean}%'
+                    params.extend([pat, pat])
+                where.append(f"({' OR '.join(or_parts)})")
         if addr_keywords:
             or_parts = []
             for kw in addr_keywords:
