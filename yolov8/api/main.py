@@ -216,25 +216,27 @@ DYNAMODB_TABLES = {
 DS_REGION_CODE_MAP = {
     "10": {"divisionId": "sudogwon", "divisionName": "수도권"},
     "20": {"divisionId": "gyeongnam", "divisionName": "경남본부"},
+    "26": {"divisionId": "gyeongnam", "divisionName": "경남본부"},      # 울산 → 경남본부
     "30": {"divisionId": "seobu", "divisionName": "서부본부"},
     "40": {"divisionId": "gangwon", "divisionName": "강원본부"},
     "50": {"divisionId": "chungcheong", "divisionName": "충청본부"},
     "55": {"divisionId": "chungcheong", "divisionName": "충청본부"},
     "60": {"divisionId": "gyeongbuk", "divisionName": "경북본부"},
     "70": {"divisionId": "seobu", "divisionName": "서부본부"},
+    "80": {"divisionId": "seobu", "divisionName": "서부본부"},          # 제주 → 서부본부
 }
 
-# 같은 본부로 병합되는 코드 (전북70→서부30, 충북55→충청50)
-DS_MERGED_CODES = {"70": "30", "55": "50"}
+# 같은 본부로 병합되는 코드 (전북70→서부30, 충북55→충청50, 울산26→경남20, 제주80→서부30)
+DS_MERGED_CODES = {"70": "30", "55": "50", "26": "20", "80": "30"}
 # 대표코드 → 함께 정리해야 할 파트너 코드
-DS_PARTNER_CODES = {"30": ["70"], "50": ["55"]}
+DS_PARTNER_CODES = {"30": ["70", "80"], "50": ["55"], "20": ["26"]}
 
 # ── 호출명칭 매칭 설정 ──────────────────────────────────────
 CALLNAME_CSV_PREFIX = "callname-db/"
 CALLNAME_CACHE_TTL = 86400  # 24시간
 CALLNAME_SESSION_TTL = 1800  # 30분
 CALLNAME_MAX_SESSIONS = 3
-CALLNAME_USE_COLS = ["zpwina", "zpwino", "zpwiadr", "zpcode", "zpcname", "area_hdofc_nm", "ons_team_nm", "zpirty3", "eqp_ser_no"]
+CALLNAME_USE_COLS = ["zpwina", "zpwino", "zpwiadr", "zpcode", "zpcname", "area_hdofc_nm", "ons_team_nm", "zpirty3", "eqp_ser_no", "zpprac1"]
 CALLNAME_POSSIBLE_CALLNAME_COLS = ["호출명칭", "callname", "CALLNAME", "호출명", "call_name"]
 CALLNAME_POSSIBLE_TONGSI_COLS = ["통시", "통합시설코드", "zpcode"]
 CALLNAME_POSSIBLE_ZPWINA_COLS = ["zpwina", "ZPWINA", "Zpwina", "호출명칭", "호출명"]
@@ -6091,7 +6093,7 @@ def _cert_cache_load():
         conn.execute("""CREATE TABLE IF NOT EXISTS cert (
             zpwino TEXT, zpwina TEXT, zpwiadr TEXT,
             zpcode TEXT, zpcname TEXT, area_hdofc_nm TEXT, ons_team_nm TEXT, zpirty3 TEXT,
-            eqp_ser_no TEXT
+            eqp_ser_no TEXT, zpprac1 TEXT
         )""")
         conn.execute("DELETE FROM cert")
 
@@ -6104,13 +6106,14 @@ def _cert_cache_load():
                 row.get("zpcname", ""),
                 row.get("area_hdofc_nm", ""), row.get("ons_team_nm", ""),
                 row.get("zpirty3", ""), row.get("eqp_ser_no", ""),
+                row.get("zpprac1", ""),
             ))
             if len(batch) >= 5000:
-                conn.executemany("INSERT INTO cert VALUES (?,?,?,?,?,?,?,?,?)", batch)
+                conn.executemany("INSERT INTO cert VALUES (?,?,?,?,?,?,?,?,?,?)", batch)
                 total += len(batch)
                 batch.clear()
         if batch:
-            conn.executemany("INSERT INTO cert VALUES (?,?,?,?,?,?,?,?,?)", batch)
+            conn.executemany("INSERT INTO cert VALUES (?,?,?,?,?,?,?,?,?,?)", batch)
             total += len(batch)
 
         conn.execute("CREATE INDEX IF NOT EXISTS idx_zpwino ON cert(zpwino)")
@@ -11262,17 +11265,37 @@ async def inspection_export_report(request: Request, req: InspectionReportReq):
 
             conn_d.close()
 
-        # ── 3. cert_cache에서 zpcode 조회 ────────────────────
-        zpcode_map: dict = {}
+        # ── 3. cert_cache에서 zpcode 조회 ──
+        # 우선순위: 1) 기기일련번호 매칭 → 2) 운용 상태 → 3) 호출명칭 매칭 → 4) fallback
+        zpcode_by_eqp: dict = {}    # key: "허가번호|기기일련번호" → zpcode
+        zpcode_by_active: dict = {} # key: "허가번호" → zpcode (zpprac1=운용)
+        zpcode_by_name: dict = {}   # key: "허가번호|호출명칭" → zpcode
+        zpcode_fallback: dict = {}  # key: "허가번호" → zpcode
         if _cert_cache_db_path and os.path.exists(_cert_cache_db_path):
             import sqlite3 as _sq2
             c2 = _sq2.connect(_cert_cache_db_path)
             rows = c2.execute(
-                f'SELECT zpwino, zpcode FROM cert WHERE zpwino IN ({ph})',
+                f'SELECT TRIM(zpwino), TRIM(zpwina), zpcode, TRIM(eqp_ser_no), TRIM(COALESCE(zpprac1,"")) FROM cert WHERE TRIM(zpwino) IN ({ph})',
                 license_nos).fetchall()
             for r in rows:
-                if r[0] and r[0] not in zpcode_map:
-                    zpcode_map[r[0]] = str(r[1] or '').strip()
+                k = str(r[0] or '').strip()
+                name = str(r[1] or '').strip()
+                code = str(r[2] or '').strip()
+                eqp = str(r[3] or '').strip()
+                status = str(r[4] or '').strip()
+                if not k or not code:
+                    continue
+                # 1) 기기일련번호 매칭
+                if eqp:
+                    zpcode_by_eqp[f"{k}|{eqp}"] = code
+                # 2) 운용 상태
+                if '운용' in status and k not in zpcode_by_active:
+                    zpcode_by_active[k] = code
+                # 3) 호출명칭 매칭
+                zpcode_by_name[f"{k}|{name}"] = code
+                # 4) fallback
+                if k not in zpcode_fallback:
+                    zpcode_fallback[k] = code
             c2.close()
 
         # ── 4. Excel 생성 ────────────────────────────────────
@@ -11403,15 +11426,14 @@ async def inspection_export_report(request: Request, req: InspectionReportReq):
                     result.append(v)
                 return '\n'.join(result)
 
-            # 장치수: 해당 허가번호의 장치번호 max값
+            # 장치수: 해당 허가번호의 장치번호 고유값 갯수
             장치수 = ''
             if jt_list:
-                try:
-                    장치수 = str(max(int(j.get('장치번호', 0) or 0) for j in jt_list))
-                except (ValueError, TypeError):
-                    장치수 = str(len(jt_list))
+                unique_jnos = set(str(j.get('장치번호') or '').strip() for j in jt_list)
+                unique_jnos.discard('')
+                장치수 = str(len(unique_jnos)) if unique_jnos else str(len(jt_list))
 
-            # 기기명칭/기기일련번호: 기기일련번호 기준 unique
+            # 기기명칭/기기일련번호: 기기일련번호 기준 unique (중복 장비 제거)
             _seen_serial: set = set()
             unique_장치: list = []
             for j in jt_list:
@@ -11421,11 +11443,22 @@ async def inspection_export_report(request: Request, req: InspectionReportReq):
                     unique_장치.append(j)
                 elif not serial:
                     unique_장치.append(j)  # 일련번호 없는 건 모두 포함
-            기기명칭1    = _join_unique(unique_장치, '형식검정번호')
-            기기일련번호1 = _join_unique(unique_장치, '기기일련번호')
+            기기명칭1    = _join_all(unique_장치, '형식검정번호')  # 일련번호 unique 행에 맞춰 (중복 형식도 유지)
+            기기일련번호1 = _join_unique(unique_장치, '기기일련번호')  # 일련번호는 중복 제거
 
             # 공중선전력: unique
-            공중선전력   = _join_unique(pwr_list, '공중선전력')
+            # 공중선전력: unique, 정수값 표시 (소수점 제거)
+            _pwr_seen = set(); _pwr_result = []
+            for _pw in pwr_list:
+                v = str(_pw.get('공중선전력') or '').strip()
+                if v:
+                    try:
+                        v = str(int(float(v)))
+                    except (ValueError, TypeError):
+                        pass
+                    if v not in _pwr_seen:
+                        _pwr_seen.add(v); _pwr_result.append(v)
+            공중선전력 = '\n'.join(_pwr_result)
 
             # 공중선일련번호 기준 중복 제거 → 형식/기수/이득 행수 일치
             _seen_ant: set = set()
@@ -11435,9 +11468,23 @@ async def inspection_export_report(request: Request, req: InspectionReportReq):
                 if not _k or _k not in _seen_ant:
                     _seen_ant.add(_k); deduped_ant.append(_ant)
 
-            tosi_code = zpcode_map.get(hn, '')
+            _callname = str(t['호출명칭'] or '').strip()
+            # tosi_code 우선순위: 1) 기기일련번호 매칭 → 2) 운용 상태 → 3) 호출명칭 → 4) fallback
+            tosi_code = ''
+            if unique_장치:
+                for _uj in unique_장치:
+                    _eqp = str(_uj.get('기기일련번호') or '').strip()
+                    if _eqp and f"{hn}|{_eqp}" in zpcode_by_eqp:
+                        tosi_code = zpcode_by_eqp[f"{hn}|{_eqp}"]
+                        break
+            if not tosi_code:
+                tosi_code = zpcode_by_active.get(hn, '')
+            if not tosi_code:
+                tosi_code = zpcode_by_name.get(f"{hn}|{_callname}", '')
+            if not tosi_code:
+                tosi_code = zpcode_fallback.get(hn, '')
             설치형태     = ant_list[0].get('공중선주설치형태명', '') if ant_list else ''
-            공중선장치   = _join_unique(deduped_ant, '공중선일련번호')
+            공중선장치   = _join_all(deduped_ant, '장치번호')
             공중선형식   = _join_all(deduped_ant, '공중선형식명')
             기수         = _join_all(deduped_ant, '기')
             이득         = _join_all(deduped_ant, '이득')
@@ -11491,6 +11538,10 @@ async def inspection_export_report(request: Request, req: InspectionReportReq):
                 else:
                     _set(r, c_idx, val, font=_font_base,
                          border=_thin_border, align=_al_center)
+
+        # Excel 자동 필터 설정 (3행 하위 헤더 기준, 샘플과 동일)
+        last_row = len(targets) + 3
+        ws.auto_filter.ref = f"A3:T{last_row}"
 
         buf = io.BytesIO()
         wb.save(buf); buf.seek(0)
