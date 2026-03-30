@@ -213,68 +213,67 @@ class _DashboardScreenState extends State<DashboardScreen>
               ],
             ),
           ),
-          // 메뉴 리스트
+          // 메뉴 리스트 (아코디언)
           Expanded(
             child: ListView(
               padding: EdgeInsets.zero,
               children: [
                 const SizedBox(height: 8),
+                // 홈
                 _buildDrawerItem(
-                  icon: Icons.dashboard_rounded,
-                  title: '전국 현황',
-                  subtitle: '본부별 수검 진행률 및 로드맵',
-                  color: const Color(0xFF00897B),
+                  icon: Icons.home_rounded,
+                  title: '홈',
+                  color: const Color(0xFF455A64),
                   isSelected: true,
                   onTap: () => Navigator.pop(context),
                 ),
-                _buildDrawerItem(
+                // 현황 관리
+                _buildAccordion(
+                  icon: Icons.dashboard_rounded,
+                  title: '현황 관리',
+                  color: const Color(0xFF00897B),
+                  children: [
+                    _buildSubItem('전국 현황', Icons.map_outlined,
+                        () => Navigator.pop(context)),
+                  ],
+                ),
+                // 수검 관리
+                _buildAccordion(
                   icon: Icons.description_outlined,
                   title: '수검 관리',
-                  subtitle: '무선국 검사 및 현장 수검 관리',
                   color: _blueAccent,
-                  onTap: () => _navigateFromDrawer(const InspectionMyListScreen()),
+                  children: [
+                    _buildSubItem('수검 관리', Icons.checklist,
+                        () => _navigateFromDrawer(const InspectionMyListScreen())),
+                    _buildSubItem('일정 및 통계', Icons.calendar_month,
+                        () => _navigateFromDrawer(const InspectionScheduleScreen())),
+                  ],
                 ),
-                _buildDrawerItem(
-                  icon: Icons.calendar_month,
-                  title: '일정 및 통계',
-                  subtitle: 'KCA 수검대상 현황 및 일정 관리',
-                  color: _greenColor,
-                  onTap: () => _navigateFromDrawer(const InspectionScheduleScreen()),
-                ),
-                _buildDrawerItem(
+                // DS 관리
+                _buildAccordion(
                   icon: Icons.storage,
-                  title: 'DS 데이터 관리',
-                  subtitle: '업로드, 조회, Excel Export 통합 관리',
+                  title: 'DS 관리',
                   color: const Color(0xFF5C6BC0),
-                  onTap: () => _navigateFromDrawer(const DsDashboardScreen()),
+                  children: [
+                    _buildSubItem('DS 데이터', Icons.table_chart_outlined,
+                        () => _navigateFromDrawer(const DsDashboardScreen())),
+                    _buildSubItem('DS 병합', Icons.merge_type,
+                        () => _navigateFromDrawer(const DsMergeScreen())),
+                  ],
                 ),
-                _buildDrawerItem(
-                  icon: Icons.merge_type,
-                  title: 'DS 파일 병합',
-                  subtitle: 'ZIP 파일을 병합하여 Excel 다운로드',
-                  color: const Color(0xFFF57C00),
-                  onTap: () => _navigateFromDrawer(const DsMergeScreen()),
-                ),
-                _buildDrawerItem(
-                  icon: Icons.compare_arrows,
-                  title: '호출명칭 매칭',
-                  subtitle: '통시/Access담당/품질개선팀 자동 매칭',
+                // 서류 관리
+                _buildAccordion(
+                  icon: Icons.folder_outlined,
+                  title: '서류 관리',
                   color: const Color(0xFFE53935),
-                  onTap: () => _navigateFromDrawer(const CallnameScreen()),
-                ),
-                _buildDrawerItem(
-                  icon: Icons.article_outlined,
-                  title: '설치확인서',
-                  subtitle: '개별/일괄 설치확인서 생성 (PDF/HWPX)',
-                  color: const Color(0xFF00838F),
-                  onTap: () => _navigateFromDrawer(const CertificateScreen()),
-                ),
-                _buildDrawerItem(
-                  icon: Icons.compare_arrows,
-                  title: '전산자료 비교',
-                  subtitle: 'ERP vs DS 설치대/일련번호 비교',
-                  color: const Color(0xFF1565C0),
-                  onTap: () => _navigateFromDrawer(const ErpDsCompareScreen()),
+                  children: [
+                    _buildSubItem('호출명칭', Icons.compare_arrows,
+                        () => _navigateFromDrawer(const CallnameScreen())),
+                    _buildSubItem('설치확인서', Icons.article_outlined,
+                        () => _navigateFromDrawer(const CertificateScreen())),
+                    _buildSubItem('전산비교', Icons.difference_outlined,
+                        () => _navigateFromDrawer(const ErpDsCompareScreen())),
+                  ],
                 ),
                 // 전체 대상 관리 (본부 담당자만 표시)
                 Consumer<AuthService>(
@@ -283,7 +282,6 @@ class _DashboardScreenState extends State<DashboardScreen>
                       return _buildDrawerItem(
                         icon: Icons.business,
                         title: '전체 대상 관리',
-                        subtitle: '본부 수검 대상 등록 및 관리',
                         color: const Color(0xFF7B1FA2),
                         onTap: () => _navigateFromDrawer(const DivisionManagementScreen()),
                       );
@@ -298,7 +296,6 @@ class _DashboardScreenState extends State<DashboardScreen>
                       return _buildDrawerItem(
                         icon: Icons.admin_panel_settings,
                         title: '관리자 패널',
-                        subtitle: '사용자 승인 및 팀 관리',
                         color: _indigoColor,
                         onTap: () => _navigateFromDrawer(const AdminPanelScreen()),
                       );
@@ -306,10 +303,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                     return const SizedBox.shrink();
                   },
                 ),
-                const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 16),
-                  child: Divider(height: 32),
-                ),
+                const SizedBox(height: 16),
               ],
             ),
           ),
@@ -322,41 +316,87 @@ class _DashboardScreenState extends State<DashboardScreen>
   Widget _buildDrawerItem({
     required IconData icon,
     required String title,
-    required String subtitle,
     required Color color,
     required VoidCallback onTap,
     bool isSelected = false,
   }) {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
       child: ListTile(
+        dense: true,
         leading: Container(
-          padding: const EdgeInsets.all(8),
+          padding: const EdgeInsets.all(7),
           decoration: BoxDecoration(
             color: color.withValues(alpha: 0.1),
-            borderRadius: BorderRadius.circular(10),
+            borderRadius: BorderRadius.circular(8),
           ),
-          child: Icon(icon, color: color, size: 22),
+          child: Icon(icon, color: color, size: 20),
         ),
         title: Text(
           title,
           style: TextStyle(
             fontWeight: FontWeight.w600,
-            fontSize: 15,
+            fontSize: 14,
             color: isSelected ? color : null,
           ),
-        ),
-        subtitle: Text(
-          subtitle,
-          style: TextStyle(fontSize: 12, color: Colors.grey[600]),
         ),
         onTap: onTap,
         selected: isSelected,
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(10),
         ),
         selectedTileColor: color.withValues(alpha: 0.05),
       ),
+    );
+  }
+
+  Widget _buildAccordion({
+    required IconData icon,
+    required String title,
+    required Color color,
+    required List<Widget> children,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+      child: Theme(
+        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+        child: ExpansionTile(
+          leading: Container(
+            padding: const EdgeInsets.all(7),
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Icon(icon, color: color, size: 20),
+          ),
+          title: Text(
+            title,
+            style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+          ),
+          tilePadding: const EdgeInsets.symmetric(horizontal: 16),
+          childrenPadding: const EdgeInsets.only(left: 24, bottom: 4),
+          dense: true,
+          visualDensity: VisualDensity.compact,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          collapsedShape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          iconColor: Colors.grey.shade500,
+          collapsedIconColor: Colors.grey.shade400,
+          children: children,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSubItem(String title, IconData icon, VoidCallback onTap) {
+    return ListTile(
+      dense: true,
+      visualDensity: VisualDensity.compact,
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+      leading: Icon(icon, size: 18, color: Colors.grey.shade600),
+      title: Text(title, style: const TextStyle(fontSize: 13)),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      hoverColor: Colors.grey.shade100,
+      onTap: onTap,
     );
   }
 
