@@ -11233,13 +11233,21 @@ async def inspection_export_report(request: Request, req: InspectionReportReq):
             rows = conn_d.execute(
                 f'SELECT 허가번호, 주파수, 송수신구분 FROM ds_주파수 WHERE 허가번호 IN ({ph}) ORDER BY id',
                 license_nos).fetchall()
+            def _freq_int(v):
+                """주파수 값 정수화: 879.0→879, 1732.5→1732.5"""
+                try:
+                    f = float(v)
+                    return str(int(f)) if f == int(f) else str(f)
+                except (ValueError, TypeError):
+                    return v
+
             _freq_tmp: dict = {}
             for r in rows:
                 hn = _raw(r['허가번호'])
                 if hn not in _freq_tmp:
                     _freq_tmp[hn] = {'TX': [], 'RX': [], 'ALL': []}
                 구분 = str(r['송수신구분'] or '').strip().upper()
-                주파수 = str(r['주파수'] or '').strip()
+                주파수 = _freq_int(str(r['주파수'] or '').strip())
                 if not 주파수:
                     continue
                 if 'TX' in 구분 or '송신' in 구분:
@@ -11418,11 +11426,17 @@ async def inspection_export_report(request: Request, req: InspectionReportReq):
                         seen.add(v); result.append(v)
                 return '\n'.join(result)
 
-            def _join_all(lst, key):
+            def _join_all(lst, key, as_int=False):
                 """모든 값을 순서대로 줄바꿈으로 결합 (중복 유지)"""
                 result = []
                 for row in lst:
                     v = str(row.get(key) or '').strip()
+                    if as_int and v:
+                        try:
+                            f = float(v)
+                            v = str(int(f)) if f == int(f) else str(f)
+                        except (ValueError, TypeError):
+                            pass
                     result.append(v)
                 return '\n'.join(result)
 
@@ -11485,10 +11499,18 @@ async def inspection_export_report(request: Request, req: InspectionReportReq):
                 tosi_code = zpcode_fallback.get(hn, '')
             설치형태     = ant_list[0].get('공중선주설치형태명', '') if ant_list else ''
             공중선장치   = _join_all(deduped_ant, '장치번호')
-            공중선형식   = _join_all(deduped_ant, '공중선형식명')
+            # 공중선형식: SECTOR만 괄호 안 값 추출, 나머지는 그대로
+            _ant_형식_vals = []
+            for _a in deduped_ant:
+                v = str(_a.get('공중선형식명') or '').strip()
+                if 'SECTOR' in v.upper() and '(' in v:
+                    _ant_형식_vals.append('SECTOR')
+                else:
+                    _ant_형식_vals.append(v)
+            공중선형식 = '\n'.join(_ant_형식_vals)
             기수         = _join_all(deduped_ant, '기')
-            이득         = _join_all(deduped_ant, '이득')
-            공용화       = str(일반.get('공용화구분코드명') or '').strip()
+            이득         = _join_all(deduped_ant, '이득', as_int=True)
+            공용화       = str(일반.get('공용화구분코드명') or '').strip() or '공란'
 
             # 설치장소: DS 설치장소 사용, 없으면 target의 설치장소
             설치장소 = t['설치장소'] or ''
