@@ -302,13 +302,16 @@ class _DivisionManagementScreenState extends State<DivisionManagementScreen>
       return _buildEmptyState();
     }
 
-    // 검색 및 필터 적용
+    // 검색 및 필터 적용 (복수검색: 쉼표/공백 구분, 하이픈 무시)
     var filteredTargets = targets.where((t) {
       if (_searchQuery.isNotEmpty) {
-        final query = _searchQuery.toLowerCase();
-        return t.stationName.toLowerCase().contains(query) ||
-               t.address.toLowerCase().contains(query) ||
-               t.licenseNumber.toLowerCase().contains(query);
+        final keywords = _searchQuery.split(RegExp(r'[,\s]+')).where((k) => k.isNotEmpty).toList();
+        return keywords.every((kw) {
+          final q = kw.toLowerCase().replaceAll('-', '');
+          return t.stationName.toLowerCase().replaceAll('-', '').contains(q) ||
+                 t.address.toLowerCase().replaceAll('-', '').contains(q) ||
+                 t.licenseNumber.toLowerCase().contains(q);
+        });
       }
       return true;
     }).where((t) {

@@ -896,7 +896,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                   controller: _searchCtrl,
                   onChanged: (v) => setState(() => _pSearch = v),
                   decoration: InputDecoration(
-                    hintText: '호출명칭, 허가번호 또는 주소',
+                    hintText: '호출명칭, 허가번호 또는 주소 (복수검색: 쉼표/공백 구분)',
                     hintStyle: TextStyle(fontSize: 13, color: Colors.grey.shade400),
                     isDense: true,
                     prefixIcon: Icon(Icons.search, size: 18, color: Colors.grey.shade400),
@@ -2699,7 +2699,7 @@ class _InspectionReportDialogState extends State<_InspectionReportDialog> {
                     child: TextField(
                       controller: _searchCtrl,
                       decoration: InputDecoration(
-                        hintText: '호출명칭 / 허가번호 / 주소 검색',
+                        hintText: '복수검색 가능 (쉼표/공백 구분)',
                         hintStyle: TextStyle(fontSize: 12, color: Colors.grey.shade400),
                         prefixIcon: const Icon(Icons.search, size: 16),
                         border: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
@@ -3193,7 +3193,7 @@ class _AddFromStagingDialogState extends State<_AddFromStagingDialog> {
                     child: TextField(
                       controller: _searchCtrl,
                       decoration: InputDecoration(
-                        hintText: '호출명칭 / 허가번호 / 주소 검색',
+                        hintText: '복수검색 가능 (쉼표/공백 구분)',
                         hintStyle: TextStyle(fontSize: 12, color: Colors.grey.shade400),
                         prefixIcon: const Icon(Icons.search, size: 16),
                         border: OutlineInputBorder(borderRadius: BorderRadius.circular(8),

@@ -9203,7 +9203,7 @@ def _hdqt_from_addr(addr: str, known_hdqt: str = '',
     # 2) 학습된 맵 (임포트 시 same-file known-team rows에서 학습)
     if learned_map:
         import re as _re
-        geo_re = _re.compile(r'[가-힣]{2,}(?:시|군|구|읍|면|동)')
+        geo_re = _re.compile(r'[가-힣]+(?:시|군|구|읍|면|동)')
         matches = geo_re.findall(addr)
         cities = [m for m in matches if m.endswith('시')]
         gus = [m for m in matches if m.endswith('구')]
@@ -9228,8 +9228,8 @@ def _hdqt_from_addr(addr: str, known_hdqt: str = '',
         for gu in gus:
             for dong in dongs:
                 compound_keys.append(f"{gu} {dong}")
-        # 복합(긴 것 우선) → 단일 시/군/구만(긴 것 우선) — 단일 동/읍/면은 동명 충돌 위험
-        single_safe = [m for m in matches if m.endswith(('시', '군', '구'))]
+        # 복합(긴 것 우선) → 단일(동 제외, 긴 것 우선) — 동만 동명 충돌 위험
+        single_safe = [m for m in matches if not m.endswith('동')]
         candidates = sorted(compound_keys, key=len, reverse=True) + sorted(single_safe, key=len, reverse=True)
         for kw in candidates:
             team = learned_map.get(kw)
@@ -9261,7 +9261,7 @@ def _learn_addr_map_from_cert_db(db_path: str = "") -> dict:
         logger.warning("cert DB 없음 — 주소→팀 학습 생략")
         return {}
 
-    geo_re = re.compile(r'[가-힣]{2,}(?:시|군|구|읍|면|동)')
+    geo_re = re.compile(r'[가-힣]+(?:시|군|구|읍|면|동)')
     kw_teams: dict = defaultdict(Counter)
 
     try:
@@ -9275,9 +9275,9 @@ def _learn_addr_map_from_cert_db(db_path: str = "") -> dict:
             # 주소 정규화: "(701240)대구 동구" → "대구광역시 동구"
             normalized = _normalize_addr(str(zpwiadr))
             matches = geo_re.findall(normalized)
-            # 단일 키워드 (시, 군, 구만 — 읍/면/동은 전국 동명 충돌 방지로 복합만 사용)
+            # 단일 키워드 (시, 군, 구, 읍, 면 — 동만 복합으로 제한, 동명 충돌 방지)
             for kw in matches:
-                if kw.endswith(('시', '군', '구')):
+                if not kw.endswith('동'):
                     kw_teams[kw][team] += 1
             cities = [m for m in matches if m.endswith('시')]
             gus = [m for m in matches if m.endswith('구')]
@@ -9495,6 +9495,12 @@ def _init_ds_detail_db():
         conn.commit()
     except Exception:
         pass  # 이미 존재하면 무시
+    # 마이그레이션: 공용화구분코드명 컬럼 추가
+    try:
+        conn.execute('ALTER TABLE ds_일반사항 ADD COLUMN 공용화구분코드명 TEXT')
+        conn.commit()
+    except Exception:
+        pass
     conn.execute('''CREATE TABLE IF NOT EXISTS ds_장치 (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         허가번호 TEXT, 장치번호 TEXT, 기기일련번호 TEXT, 형식검정번호 TEXT
@@ -9560,7 +9566,7 @@ def _build_ds_detail_from_zip_sync(zip_path: str):
 
     try:
         with zipfile.ZipFile(zip_path, 'r') as zf:
-            xls_names = [n for n in zf.namelist() if n.lower().endswith('.xls') and not n.startswith('__')]
+            xls_names = [n for n in zf.namelist() if n.lower().endswith('.xls') and not n.startswith('__') and '(100)' not in n]
             for xls_name in xls_names:
                 try:
                     with zf.open(xls_name) as xf:
@@ -9573,12 +9579,13 @@ def _build_ds_detail_from_zip_sync(zip_path: str):
                         ws = wb.sheet_by_name('일반사항')
                         hi = _col_idx(ws, '허가번호'); mi = _col_idx(ws, '무선국명'); ci = _col_idx(ws, '호출명칭')
                         zi = _col_idx(ws, '통합시설명칭')
+                        gi = _col_idx(ws, '공용화구분코드명')
                         if hi >= 0:
                             for r in range(1, ws.nrows):
                                 h = _hn(ws, r, hi)
                                 if h:
                                     _seen_licenses.add(h)
-                                    batches['일반사항'].append((h, _sv(ws, r, mi), _sv(ws, r, ci), _sv(ws, r, zi)))
+                                    batches['일반사항'].append((h, _sv(ws, r, mi), _sv(ws, r, ci), _sv(ws, r, zi), _sv(ws, r, gi)))
 
                     # 장치
                     if '장치' in sheet_names:
@@ -9643,7 +9650,7 @@ def _build_ds_detail_from_zip_sync(zip_path: str):
             lic_list = list(_seen_licenses)
             for tbl in ('ds_일반사항', 'ds_장치', 'ds_안테나', 'ds_전파형식', 'ds_주파수'):
                 conn.execute(f'DELETE FROM {tbl} WHERE 허가번호 IN ({ph})', lic_list)
-            conn.executemany('INSERT INTO ds_일반사항(허가번호,무선국명,호출명칭,통합시설명칭) VALUES(?,?,?,?)', batches['일반사항'])
+            conn.executemany('INSERT OR REPLACE INTO ds_일반사항(허가번호,무선국명,호출명칭,통합시설명칭,공용화구분코드명) VALUES(?,?,?,?,?)', batches['일반사항'])
             conn.executemany('INSERT INTO ds_장치(허가번호,장치번호,기기일련번호,형식검정번호) VALUES(?,?,?,?)', batches['장치'])
             conn.executemany('INSERT INTO ds_안테나(허가번호,장치번호,기,이득,공중선주설치형태명,공중선일련번호,공중선형식명) VALUES(?,?,?,?,?,?,?)', batches['안테나'])
             conn.executemany('INSERT INTO ds_전파형식(허가번호,장치번호,공중선전력) VALUES(?,?,?)', batches['전파형식'])
@@ -9697,10 +9704,13 @@ def _process_inspection_sync(job_id: str, s3_key: str, year: int, uploaded_by: s
         # cert 전체를 dict에 로드 → 행마다 DB 연결 불필요 (74만행 × DB연결 제거)
         # cert DB가 이미 빌드되어 있으면 재사용 (subprocess에서 45초 절약)
         _upd(14, "ERP 데이터 로드 중...")
+        global _cert_cache_db_path
         _cert_db = os.path.join(_tempfile.gettempdir(), "cert_cache.db")
         if not os.path.exists(_cert_db) or os.path.getsize(_cert_db) < 1000:
             _cert_cache_load()
         else:
+            # subprocess에서 _cert_cache_db_path가 비어있을 수 있으므로 세팅
+            _cert_cache_db_path = _cert_db
             logger.info(f"cert DB 캐시 재사용: {_cert_db}")
         def _norm_code(v) -> str:
             """통시/공대 코드 정규화: float 문자열·앞자리 0 제거.
@@ -10227,7 +10237,7 @@ async def inspection_unassigned(request: Request, year: int = Query(...)):
         (year,)
     ).fetchall()
     import re
-    geo_re = re.compile(r'[가-힣]{2,}(?:시|군|구)')
+    geo_re = re.compile(r'[가-힣]+(?:시|군|구)')
     by_region: dict = {}
     by_reason: dict = {"코드없음": 0, "ERP미매칭": 0}
     items = []
@@ -10359,9 +10369,18 @@ async def inspection_staging_items(request: Request, req: InspStagingItemsReq):
         where.append(f'"{col}" IN ({ph})')
         params.extend(vals)
     if req.search:
-        where.append('(호출명칭 LIKE ? OR 허가번호 LIKE ? OR 도로명주소 LIKE ? OR 설치장소 LIKE ?)')
-        kw = f'%{req.search}%'
-        params.extend([kw, kw, kw, kw])
+        import re as _re_stg
+        keywords = [k.strip() for k in _re_stg.split(r'[,\s]+', req.search.strip()) if k.strip()]
+        or_parts = []
+        for kw in keywords:
+            kw_clean = kw.replace('-', '')
+            or_parts.append(
+                "(REPLACE(호출명칭,'-','') LIKE ? OR REPLACE(허가번호,'-','') LIKE ? OR REPLACE(도로명주소,'-','') LIKE ? OR REPLACE(설치장소,'-','') LIKE ?)"
+            )
+            pat = f'%{kw_clean}%'
+            params.extend([pat, pat, pat, pat])
+        if or_parts:
+            where.append(f"({' OR '.join(or_parts)})")
     where_sql = " AND ".join(where)
     offset = (req.page - 1) * req.pageSize
     conn = sqlite3.connect(_INSP_DB, timeout=60)
@@ -10539,20 +10558,41 @@ def _build_insp_where(year, sheet, filters, search, addr, schedule_yn=""):
         params.extend(vals)
     s = search.strip()
     a = addr.strip()
-    if s and a and s == a:
+    # 복수검색: 쉼표/공백으로 분리 → 복수 키워드는 OR 조건
+    import re as _re_search
+    keywords = [k.strip() for k in _re_search.split(r'[,\s]+', s) if k.strip()] if s else []
+    addr_keywords = [k.strip() for k in _re_search.split(r'[,\s]+', a) if k.strip()] if a else []
+    if keywords and addr_keywords and keywords == addr_keywords:
         # 동일 키워드: 호출명칭/허가번호/주소 통합 OR
-        where.append('(호출명칭 LIKE ? OR 허가번호 LIKE ? OR 도로명주소 LIKE ? OR 설치장소 LIKE ?)')
-        kw = f'%{s}%'
-        params.extend([kw, kw, kw, kw])
+        or_parts = []
+        for kw in keywords:
+            kw_clean = kw.replace('-', '')
+            or_parts.append(
+                "(REPLACE(호출명칭,'-','') LIKE ? OR REPLACE(허가번호,'-','') LIKE ? OR REPLACE(도로명주소,'-','') LIKE ? OR REPLACE(설치장소,'-','') LIKE ?)"
+            )
+            pat = f'%{kw_clean}%'
+            params.extend([pat, pat, pat, pat])
+        if or_parts:
+            where.append(f"({' OR '.join(or_parts)})")
     else:
-        if s:
-            where.append('(호출명칭 LIKE ? OR 허가번호 LIKE ?)')
-            kw = f'%{s}%'
-            params.extend([kw, kw])
-        if a:
-            where.append('(도로명주소 LIKE ? OR 설치장소 LIKE ?)')
-            akw = f'%{a}%'
-            params.extend([akw, akw])
+        if keywords:
+            or_parts = []
+            for kw in keywords:
+                kw_clean = kw.replace('-', '')
+                or_parts.append("(REPLACE(호출명칭,'-','') LIKE ? OR REPLACE(허가번호,'-','') LIKE ?)")
+                pat = f'%{kw_clean}%'
+                params.extend([pat, pat])
+            where.append(f"({' OR '.join(or_parts)})")
+        if addr_keywords:
+            or_parts = []
+            for kw in addr_keywords:
+                kw_clean = kw.replace('-', '')
+                or_parts.append("(REPLACE(도로명주소,'-','') LIKE ? OR REPLACE(설치장소,'-','') LIKE ?)")
+                pat = f'%{kw_clean}%'
+                params.extend([pat, pat])
+            where.append(f"({' OR '.join(or_parts)})")
+            pat = f'%{kw_clean}%'
+            params.extend([pat, pat])
     if schedule_yn == 'Y':
         where.append('허가번호 IN (SELECT 허가번호 FROM inspection_schedules WHERE year=?)')
         params.append(year)
@@ -11127,15 +11167,23 @@ async def inspection_export_report(request: Request, req: InspectionReportReq):
         ds_장치_map: dict = {}    # 허가번호 → list of 장치 rows
         ds_안테나_map: dict = {}  # 허가번호 → list of 안테나 rows (장치번호 정렬)
         ds_전파_map: dict = {}    # 허가번호 → list of 전파형식 rows
-        ds_주파수_map: dict = {}  # 허가번호 → {TX:..., RX:...}
+        ds_주파수_map: dict = {}  # 허가번호 → formatted string
+        ds_일반_map: dict = {}    # 허가번호 → 일반사항 row (공용화 등)
 
         if os.path.exists(_DS_DETAIL_DB):
             conn_d = sqlite3.connect(_DS_DETAIL_DB); conn_d.row_factory = sqlite3.Row
 
-            # 장치: 허가번호별 전체 행 (장치번호 오름차순)
             def _raw(hn):
                 return _norm_to_raw.get(hn, hn)
 
+            # 일반사항: 공용화구분코드명
+            rows = conn_d.execute(
+                f'SELECT 허가번호, 공용화구분코드명 FROM ds_일반사항 WHERE 허가번호 IN ({ph})',
+                license_nos).fetchall()
+            for r in rows:
+                ds_일반_map[_raw(r['허가번호'])] = dict(r)
+
+            # 장치: 허가번호별 전체 행 (장치번호 오름차순)
             rows = conn_d.execute(
                 f'SELECT 허가번호, 장치번호, 기기일련번호, 형식검정번호 FROM ds_장치 WHERE 허가번호 IN ({ph}) ORDER BY 허가번호, CAST(장치번호 AS INTEGER)',
                 license_nos).fetchall()
@@ -11181,10 +11229,14 @@ async def inspection_export_report(request: Request, req: InspectionReportReq):
             for hn, fmap in _freq_tmp.items():
                 tx_vals = fmap['TX'] or fmap['ALL']
                 rx_vals = fmap['RX'] or fmap['ALL']
-                parts = []
-                if tx_vals: parts.append(f"TX : {','.join(tx_vals)}")
-                if rx_vals: parts.append(f"RX : {','.join(rx_vals)}")
-                ds_주파수_map[hn] = '\n'.join(parts)
+                # TX와 RX가 동일하면 TRX로 표시
+                if tx_vals and rx_vals and tx_vals == rx_vals:
+                    ds_주파수_map[hn] = f"TRX : {','.join(tx_vals)}"
+                else:
+                    parts = []
+                    if tx_vals: parts.append(f"TX : {','.join(tx_vals)}")
+                    if rx_vals: parts.append(f"RX : {','.join(rx_vals)}")
+                    ds_주파수_map[hn] = '\n'.join(parts)
 
             conn_d.close()
 
@@ -11207,11 +11259,12 @@ async def inspection_export_report(request: Request, req: InspectionReportReq):
         sheet_title = req.sheet_title or f"{req.year}년_검사내역서"
         ws.title = sheet_title[:31]  # Excel 시트명 최대 31자
 
-        # 스타일 정의
-        _font_base = Font(name='맑은 고딕', size=10)
-        _font_bold = Font(name='맑은 고딕', size=10, bold=True)
+        # 스타일 정의 (샘플과 일치)
+        _font_base = Font(name='맑은 고딕', size=11)
+        _font_base10 = Font(name='맑은 고딕', size=10)  # I,J열 (기기명칭/일련번호)
+        _font_bold = Font(name='맑은 고딕', size=9, bold=True)
         _font_title = Font(name='맑은 고딕', size=18, bold=True)
-        _font_red   = Font(name='맑은 고딕', size=10, color='FFFF0000')
+        _font_red   = Font(name='맑은 고딕', size=11, color='FFFF0000')
 
         _fill_yellow  = PatternFill('solid', fgColor='FFFFFF00')
         _fill_hdr_lt  = PatternFill('solid', fgColor='FFBFBFBF')  # 헤더 회색
@@ -11226,13 +11279,13 @@ async def inspection_export_report(request: Request, req: InspectionReportReq):
 
         _al_center = Alignment(horizontal='center', vertical='center', wrap_text=True)
         _al_left   = Alignment(horizontal='left',   vertical='center', wrap_text=True)
+        _al_shrink = Alignment(horizontal='center', vertical='center', wrap_text=False, shrink_to_fit=True)  # B,C열
 
         COL_WIDTHS = {
             1: 8.125, 2: 13.0,  3: 9.0,   4: 20.375, 5: 28.5,
             6: 9.0,   7: 27.25, 8: 9.0,   9: 35.125, 10: 20.875,
             11: 10.5, 12: 22.75,13: 9.0,  14: 20.25, 15: 19.0,
             16: 13.0, 17: 14.25,18: 13.625,19: 11.125,20: 44.125,
-            21: 9.0,
         }
         for col_idx, w in COL_WIDTHS.items():
             ws.column_dimensions[get_column_letter(col_idx)].width = w
@@ -11255,12 +11308,12 @@ async def inspection_export_report(request: Request, req: InspectionReportReq):
         ws.row_dimensions[2].height = 16.5
         ws.row_dimensions[3].height = 16.5
 
-        _HDR_FONT = Font(name='맑은 고딕', size=10, bold=True)
+        _HDR_FONT = Font(name='맑은 고딕', size=9, bold=True)
         _HDR_FILL = PatternFill('solid', fgColor='BFBFBF')
 
         # 병합 전 모든 헤더 셀에 스타일 적용 (병합 후 누락 테두리 방지)
         for _r in (2, 3):
-            for _c in range(1, 22):
+            for _c in range(1, 21):  # A~T (20열)까지만
                 _cell = ws.cell(row=_r, column=_c)
                 _cell.font = _HDR_FONT
                 _cell.fill = _HDR_FILL
@@ -11290,6 +11343,13 @@ async def inspection_export_report(request: Request, req: InspectionReportReq):
         for col, lbl in [(13,'장치'),(14,'형식'),(15,'기수'),(16,'이득')]:
             _hdr(3, col, lbl)
 
+        # ── 허가번호 하이픈 포맷 함수 (2-4-2-7) ───────────────
+        def _fmt_hn(hn_raw):
+            hn = str(hn_raw or '').replace('-', '')
+            if len(hn) == 15:
+                return f"{hn[:2]}-{hn[2:6]}-{hn[6:8]}-{hn[8:]}"
+            return hn_raw  # 형식 안 맞으면 원본 그대로
+
         # ── 데이터 행 ────────────────────────────────────────
         DATA_ROW_HEIGHT = 71.25
         for seq, t in enumerate(targets, 1):
@@ -11302,10 +11362,48 @@ async def inspection_export_report(request: Request, req: InspectionReportReq):
             ant_list = ds_안테나_map.get(hn, [])
             pwr_list = ds_전파_map.get(hn, [])
             freq     = ds_주파수_map.get(hn, '')
+            일반     = ds_일반_map.get(hn, {})
 
-            def _join(lst, key):
-                vals = [str(r.get(key) or '').strip() for r in lst]
-                return '\n'.join(v for v in vals if v)
+            def _join_unique(lst, key):
+                """unique 값만 순서 유지하며 줄바꿈으로 결합"""
+                seen = set(); result = []
+                for row in lst:
+                    v = str(row.get(key) or '').strip()
+                    if v and v not in seen:
+                        seen.add(v); result.append(v)
+                return '\n'.join(result)
+
+            def _join_all(lst, key):
+                """모든 값을 순서대로 줄바꿈으로 결합 (중복 유지)"""
+                result = []
+                for row in lst:
+                    v = str(row.get(key) or '').strip()
+                    result.append(v)
+                return '\n'.join(result)
+
+            # 장치수: 해당 허가번호의 장치번호 max값
+            장치수 = ''
+            if jt_list:
+                try:
+                    장치수 = str(max(int(j.get('장치번호', 0) or 0) for j in jt_list))
+                except (ValueError, TypeError):
+                    장치수 = str(len(jt_list))
+
+            # 기기명칭/기기일련번호: 기기일련번호 기준 unique
+            _seen_serial: set = set()
+            unique_장치: list = []
+            for j in jt_list:
+                serial = str(j.get('기기일련번호') or '').strip()
+                if serial and serial not in _seen_serial:
+                    _seen_serial.add(serial)
+                    unique_장치.append(j)
+                elif not serial:
+                    unique_장치.append(j)  # 일련번호 없는 건 모두 포함
+            기기명칭1    = _join_unique(unique_장치, '형식검정번호')
+            기기일련번호1 = _join_unique(unique_장치, '기기일련번호')
+
+            # 공중선전력: unique
+            공중선전력   = _join_unique(pwr_list, '공중선전력')
 
             # 공중선일련번호 기준 중복 제거 → 형식/기수/이득 행수 일치
             _seen_ant: set = set()
@@ -11316,56 +11414,61 @@ async def inspection_export_report(request: Request, req: InspectionReportReq):
                     _seen_ant.add(_k); deduped_ant.append(_ant)
 
             tosi_code = zpcode_map.get(hn, '')
-            검사종류_raw = str(t['검사종류'] or '').strip()
-            # "정기검사" → "정기", "임시검사" → "임시" 등 '검사' 접미사 제거
-            검사종류_display = 검사종류_raw.replace('검사', '').strip() or 검사종류_raw
-
             설치형태     = ant_list[0].get('공중선주설치형태명', '') if ant_list else ''
-            기기명칭1    = jt_list[0].get('형식검정번호', '') if jt_list else ''
-            기기일련번호1 = jt_list[0].get('기기일련번호', '') if jt_list else ''
-            공중선전력   = _join(pwr_list, '공중선전력')
-            공중선장치   = _join(deduped_ant, '공중선일련번호')
-            공중선형식   = _join(deduped_ant, '공중선형식명')
-            기수         = _join(deduped_ant, '기')
-            이득         = _join(deduped_ant, '이득')
+            공중선장치   = _join_unique(deduped_ant, '공중선일련번호')
+            공중선형식   = _join_all(deduped_ant, '공중선형식명')
+            기수         = _join_all(deduped_ant, '기')
+            이득         = _join_all(deduped_ant, '이득')
+            공용화       = str(일반.get('공용화구분코드명') or '').strip()
+
+            # 설치장소: DS 설치장소 사용, 없으면 target의 설치장소
+            설치장소 = t['설치장소'] or ''
+
+            # 검사지: 주소에서 두 번째 토큰만 추출 (화성시, 남구 등)
+            검사지 = ''
+            _addr_for_area = 설치장소 or t.get('도로명주소') or ''
+            _addr_parts = _addr_for_area.split()
+            if len(_addr_parts) >= 2:
+                검사지 = _addr_parts[1]
 
             row_data = [
                 seq,                       # A: 순번
                 설치형태,                   # B: 설치형태
                 tosi_code,                 # C: tosi_code
-                hn,                        # D: 허가번호
+                _fmt_hn(hn),               # D: 허가번호 (하이픈 포맷)
                 t['호출명칭'] or '',        # E: name
-                검사종류_display,          # F: 검사종류 (정기검사→정기)
+                '정기',                    # F: 검사종류 (항상 '정기')
                 '',                        # G: 특이사항
-                t['장치수'] or '',          # H: 장치수
-                기기명칭1,                  # I: 기기명칭1
-                기기일련번호1,              # J: 기기일련번호1
-                공중선전력,                 # K: 공중선전력
+                장치수,                    # H: 장치수 (장치번호 max)
+                기기명칭1,                  # I: 기기명칭1 (일련번호 unique)
+                기기일련번호1,              # J: 기기일련번호1 (unique)
+                공중선전력,                 # K: 공중선전력 (unique)
                 freq,                      # L: 허가주파수(채널)
                 공중선장치,                 # M: 공중선 장치
                 공중선형식,                 # N: 공중선 형식
                 기수,                      # O: 기수
                 이득,                      # P: 이득
-                '',                        # Q: 공용화/환경친화
+                공용화,                    # Q: 공용화/환경친화
                 '',                        # R: 수수료
-                '',                        # S: 검사지
-                t['설치장소'] or '',        # T: 설치장소
+                검사지,                    # S: 검사지
+                설치장소,                  # T: 설치장소
             ]
             for c_idx, val in enumerate(row_data, 1):
-                if c_idx == 2:  # B열: 빨간 글씨 + 노란 배경
+                if c_idx == 2:  # B열: 빨간 글씨 + 노란 배경 + 셀에 맞춤
                     _set(r, c_idx, val, font=_font_red, fill=_fill_yellow,
-                         border=_thin_border, align=_al_center)
+                         border=_thin_border, align=_al_shrink)
+                elif c_idx == 3:  # C열: 셀에 맞춤
+                    _set(r, c_idx, val, font=_font_base,
+                         border=_thin_border, align=_al_shrink)
                 elif c_idx in (7, 20):  # G(특이사항), T(설치장소): 왼쪽 정렬
                     _set(r, c_idx, val, font=_font_base,
                          border=_thin_border, align=_al_left)
+                elif c_idx in (9, 10):  # I(기기명칭), J(기기일련번호): 10pt
+                    _set(r, c_idx, val, font=_font_base10,
+                         border=_thin_border, align=_al_center)
                 else:
                     _set(r, c_idx, val, font=_font_base,
                          border=_thin_border, align=_al_center)
-
-        # 빈 열 U 추가 (원본과 동일)
-        last_data_row = len(targets) + 3
-        for r in range(1, last_data_row + 1):
-            ws.cell(row=r, column=21).border = _thin_border
 
         buf = io.BytesIO()
         wb.save(buf); buf.seek(0)
