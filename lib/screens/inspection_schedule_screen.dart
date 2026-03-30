@@ -3019,7 +3019,8 @@ class _AddFromStagingDialogState extends State<_AddFromStagingDialog> {
         _total = result['total'] as int? ?? 0;
         _candidates = items.where((e) => !selectedNos.contains(e['허가번호'])).toList();
       });
-    } catch (_) {
+    } catch (e) {
+      debugPrint('[대상추가 검색 에러] $e');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
