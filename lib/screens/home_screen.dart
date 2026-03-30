@@ -74,6 +74,14 @@ class _HomeScreenState extends State<HomeScreen> {
     ];
   }
 
+  // 아코디언 그룹 정의
+  static const _menuGroups = [
+    _MenuGroup('현황 관리', Icons.insights_outlined, Color(0xFF14B8A6), ['전국 현황']),
+    _MenuGroup('수검 관리', Icons.map_outlined, Color(0xFF3B82F6), ['수검 관리', '일정 및 통계']),
+    _MenuGroup('DS 관리', Icons.storage_outlined, Color(0xFF8B5CF6), ['DS 데이터', 'DS 병합']),
+    _MenuGroup('서류 관리', Icons.folder_outlined, Color(0xFFEF4444), ['호출명칭', '설치확인서', '전산비교']),
+  ];
+
   Widget _buildPage(int index, AuthService auth) {
     // 관리자/본부관리자에 따라 인덱스 매핑이 달라짐
     final items = _buildMenuItems(auth);
@@ -237,62 +245,165 @@ class _HomeScreenState extends State<HomeScreen> {
 
         // 메뉴
         Expanded(
-          child: ListView.builder(
-            padding: EdgeInsets.symmetric(vertical: 8, horizontal: collapsed ? 8 : 8),
-            itemCount: items.length,
-            itemBuilder: (_, i) {
-              final item = items[i];
-              final isSelected = _selectedIndex == i;
-              return Padding(
-                padding: const EdgeInsets.only(bottom: 2),
-                child: Material(
-                  color: isSelected ? item.color.withValues(alpha: 0.08) : Colors.transparent,
-                  borderRadius: BorderRadius.circular(8),
-                  child: InkWell(
-                    onTap: () {
-                      setState(() => _selectedIndex = i);
-                      if (inDrawer) Navigator.pop(context);
-                    },
-                    borderRadius: BorderRadius.circular(8),
-                    hoverColor: const Color(0xFFF3F4F6),
-                    child: Padding(
-                      padding: EdgeInsets.symmetric(
-                        horizontal: collapsed ? 0 : 10,
-                        vertical: collapsed ? 10 : 9,
-                      ),
-                      child: collapsed
-                          ? Tooltip(
-                              message: item.title,
-                              child: Center(
-                                child: Icon(item.icon, size: 20,
-                                    color: isSelected ? item.color : _textSecondary),
-                              ),
-                            )
-                          : Row(
-                              children: [
-                                Icon(item.icon, size: 18,
-                                    color: isSelected ? item.color : _textSecondary),
-                                const SizedBox(width: 10),
-                                Expanded(
-                                  child: Text(item.title,
-                                    style: TextStyle(
-                                      fontSize: 13,
-                                      fontWeight: isSelected ? FontWeight.w600 : FontWeight.w500,
-                                      color: isSelected ? item.color : const Color(0xFF374151),
-                                    ),
-                                  ),
-                                ),
-                              ],
+          child: collapsed
+              ? ListView(
+                  padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
+                  children: items.map((item) {
+                    final i = items.indexOf(item);
+                    final isSelected = _selectedIndex == i;
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 2),
+                      child: Tooltip(
+                        message: item.title,
+                        child: InkWell(
+                          onTap: () {
+                            setState(() => _selectedIndex = i);
+                            if (inDrawer) Navigator.pop(context);
+                          },
+                          borderRadius: BorderRadius.circular(8),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(vertical: 10),
+                            decoration: BoxDecoration(
+                              color: isSelected ? item.color.withValues(alpha: 0.08) : Colors.transparent,
+                              borderRadius: BorderRadius.circular(8),
                             ),
-                    ),
-                  ),
+                            child: Center(
+                              child: Icon(item.icon, size: 20,
+                                  color: isSelected ? item.color : _textSecondary),
+                            ),
+                          ),
+                        ),
+                      ),
+                    );
+                  }).toList(),
+                )
+              : ListView(
+                  padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
+                  children: [
+                    // 홈 (단일)
+                    _buildSidebarMenuItem(items, 0, inDrawer),
+                    const SizedBox(height: 4),
+                    // 아코디언 그룹
+                    for (final group in _menuGroups)
+                      _buildSidebarAccordion(group, items, inDrawer),
+                    // 대상 관리, 관리자 (조건부 단일 메뉴)
+                    for (var i = 0; i < items.length; i++)
+                      if (!_menuGroups.any((g) => g.childTitles.contains(items[i].title)) && items[i].title != '홈')
+                        _buildSidebarMenuItem(items, i, inDrawer),
+                  ],
                 ),
-              );
-            },
-          ),
         ),
         SizedBox(height: MediaQuery.of(context).padding.bottom),
       ],
+    );
+  }
+
+  Widget _buildSidebarMenuItem(List<_MenuItem> items, int i, bool inDrawer) {
+    final item = items[i];
+    final isSelected = _selectedIndex == i;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 2),
+      child: Material(
+        color: isSelected ? item.color.withValues(alpha: 0.08) : Colors.transparent,
+        borderRadius: BorderRadius.circular(8),
+        child: InkWell(
+          onTap: () {
+            setState(() => _selectedIndex = i);
+            if (inDrawer) Navigator.pop(context);
+          },
+          borderRadius: BorderRadius.circular(8),
+          hoverColor: const Color(0xFFF3F4F6),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+            child: Row(
+              children: [
+                Icon(item.icon, size: 18, color: isSelected ? item.color : _textSecondary),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(item.title,
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: isSelected ? FontWeight.w600 : FontWeight.w500,
+                      color: isSelected ? item.color : const Color(0xFF374151),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSidebarAccordion(_MenuGroup group, List<_MenuItem> items, bool inDrawer) {
+    final hasSelectedChild = group.childTitles.any((t) {
+      final idx = items.indexWhere((m) => m.title == t);
+      return idx >= 0 && _selectedIndex == idx;
+    });
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 2),
+      child: Theme(
+        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+        child: ExpansionTile(
+          initiallyExpanded: hasSelectedChild,
+          tilePadding: const EdgeInsets.symmetric(horizontal: 10),
+          childrenPadding: const EdgeInsets.only(bottom: 2),
+          dense: true,
+          visualDensity: VisualDensity.compact,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          collapsedShape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          iconColor: _textSecondary,
+          collapsedIconColor: _textSecondary,
+          title: Row(
+            children: [
+              Icon(group.icon, size: 18, color: hasSelectedChild ? group.color : _textSecondary),
+              const SizedBox(width: 10),
+              Text(
+                group.title,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: hasSelectedChild ? FontWeight.w600 : FontWeight.w500,
+                  color: hasSelectedChild ? group.color : const Color(0xFF374151),
+                ),
+              ),
+            ],
+          ),
+          children: group.childTitles.map((title) {
+            final idx = items.indexWhere((m) => m.title == title);
+            if (idx < 0) return const SizedBox.shrink();
+            final item = items[idx];
+            final isSelected = _selectedIndex == idx;
+            return Align(
+              alignment: Alignment.centerLeft,
+              child: Material(
+                color: isSelected ? item.color.withValues(alpha: 0.08) : Colors.transparent,
+                borderRadius: BorderRadius.circular(6),
+                child: InkWell(
+                  onTap: () {
+                    setState(() => _selectedIndex = idx);
+                    if (inDrawer) Navigator.pop(context);
+                  },
+                  borderRadius: BorderRadius.circular(6),
+                  hoverColor: const Color(0xFFF3F4F6),
+                  child: Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.only(left: 38, top: 7, bottom: 7, right: 10),
+                    child: Text(item.title,
+                      style: TextStyle(
+                        fontSize: 12.5,
+                        fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
+                        color: isSelected ? item.color : const Color(0xFF4B5563),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            );
+          }).toList(),
+        ),
+      ),
     );
   }
 
@@ -485,6 +596,14 @@ class _MenuItem {
   final Color color;
   final String description;
   const _MenuItem(this.title, this.icon, this.color, {this.description = ''});
+}
+
+class _MenuGroup {
+  final String title;
+  final IconData icon;
+  final Color color;
+  final List<String> childTitles;
+  const _MenuGroup(this.title, this.icon, this.color, this.childTitles);
 }
 
 // ── 홈 콘텐츠 (카드 메뉴 + 인사말) ──
