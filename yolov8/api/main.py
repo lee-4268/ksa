@@ -9647,12 +9647,15 @@ def _build_ds_detail_from_zip_sync(zip_path: str):
                 except Exception as xe:
                     logger.warning(f"ds_detail XLS 파싱 실패 {xls_name}: {xe}")
 
-        # 2pass: 기존 데이터 삭제 후 재삽입
+        # 2pass: 기존 데이터 삭제 후 재삽입 (SQLite 변수 제한 900개씩 배치)
         if _seen_licenses:
-            ph = ','.join('?' * len(_seen_licenses))
             lic_list = list(_seen_licenses)
+            _BATCH = 900
             for tbl in ('ds_일반사항', 'ds_장치', 'ds_안테나', 'ds_전파형식', 'ds_주파수'):
-                conn.execute(f'DELETE FROM {tbl} WHERE 허가번호 IN ({ph})', lic_list)
+                for i in range(0, len(lic_list), _BATCH):
+                    chunk = lic_list[i:i+_BATCH]
+                    ph = ','.join('?' * len(chunk))
+                    conn.execute(f'DELETE FROM {tbl} WHERE 허가번호 IN ({ph})', chunk)
             conn.executemany('INSERT OR REPLACE INTO ds_일반사항(허가번호,무선국명,호출명칭,통합시설명칭,공용화구분코드명) VALUES(?,?,?,?,?)', batches['일반사항'])
             conn.executemany('INSERT INTO ds_장치(허가번호,장치번호,기기일련번호,형식검정번호) VALUES(?,?,?,?)', batches['장치'])
             conn.executemany('INSERT INTO ds_안테나(허가번호,장치번호,기,이득,공중선주설치형태명,공중선일련번호,공중선형식명) VALUES(?,?,?,?,?,?,?)', batches['안테나'])
@@ -10404,8 +10407,37 @@ async def inspection_staging_items(request: Request, req: InspStagingItemsReq):
         f'ORDER BY CASE WHEN 호출명칭 = \'\' THEN 1 ELSE 0 END, 호출명칭 LIMIT ? OFFSET ?',
         params + [req.pageSize, offset]
     ).fetchall()
+    # 복수 허가번호 검색 시 피드백 통계
+    search_feedback = None
+    if req.search:
+        import re as _re_fb
+        keywords = [k.strip() for k in _re_fb.split(r'[,\s]+', req.search.strip()) if k.strip()]
+        _hn_re2 = _re_fb.compile(r'^[\d\-]{15,19}$')
+        if len(keywords) > 1 and all(_hn_re2.match(kw) for kw in keywords):
+            searched_nos = {kw.replace('-', '') for kw in keywords}
+            # staging에서 찾은 허가번호
+            found_in_staging = {r['허가번호'].replace('-', '') for r in rows}
+            # inspection_targets(본 테이블)에서 이미 추가된 허가번호
+            ph2 = ','.join('?' * len(searched_nos))
+            slist = list(searched_nos)
+            already_rows = conn.execute(
+                f"SELECT REPLACE(허가번호,'-','') FROM inspection_targets WHERE year=? AND REPLACE(허가번호,'-','') IN ({ph2})",
+                [req.year] + slist
+            ).fetchall()
+            already_added = {r[0] for r in already_rows}
+            not_found = searched_nos - found_in_staging - already_added
+            search_feedback = {
+                "searched": len(searched_nos),
+                "found": len(found_in_staging),
+                "already_added": len(already_added),
+                "not_found": len(not_found),
+                "not_found_nos": sorted(not_found)[:20],
+            }
     conn.close()
-    return {"items": [dict(r) for r in rows], "total": total}
+    result = {"items": [dict(r) for r in rows], "total": total}
+    if search_feedback:
+        result["search_feedback"] = search_feedback
+    return result
 
 @app.post("/inspection/staging/confirm")
 async def inspection_staging_confirm(request: Request, req: InspStagingConfirmReq):

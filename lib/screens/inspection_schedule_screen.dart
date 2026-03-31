@@ -2985,6 +2985,7 @@ class _AddFromStagingDialogState extends State<_AddFromStagingDialog> {
   bool _loading = false;
   int _total = 0;
   bool _adding = false;
+  Map<String, dynamic>? _searchFeedback;
 
   List<String> get _teams => _hdqt.isNotEmpty ? (widget.orgMap[_hdqt] ?? []) : [];
 
@@ -3001,7 +3002,7 @@ class _AddFromStagingDialogState extends State<_AddFromStagingDialog> {
   }
 
   Future<void> _loadCandidates() async {
-    setState(() { _loading = true; _candidates = []; _leftChecked.clear(); });
+    setState(() { _loading = true; _candidates = []; _leftChecked.clear(); _searchFeedback = null; });
     try {
       final filters = <String, List<String>>{};
       if (_hdqt.isNotEmpty) filters['access담당'] = [_hdqt];
@@ -3018,6 +3019,7 @@ class _AddFromStagingDialogState extends State<_AddFromStagingDialog> {
       setState(() {
         _total = result['total'] as int? ?? 0;
         _candidates = items.where((e) => !selectedNos.contains(e['허가번호'])).toList();
+        _searchFeedback = result['search_feedback'] as Map<String, dynamic>?;
       });
     } catch (e) {
       debugPrint('[대상추가 검색 에러] $e');
@@ -3222,6 +3224,34 @@ class _AddFromStagingDialogState extends State<_AddFromStagingDialog> {
                   onPressed: _loadCandidates,
                 ),
               ]),
+              if (_searchFeedback != null) ...[
+                const SizedBox(height: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: Colors.blue.shade50,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.blue.shade200),
+                  ),
+                  child: Row(children: [
+                    Icon(Icons.info_outline, size: 14, color: Colors.blue.shade700),
+                    const SizedBox(width: 8),
+                    Expanded(child: Text.rich(
+                      TextSpan(style: const TextStyle(fontSize: 11), children: [
+                        TextSpan(text: '검색 ${_searchFeedback!['searched']}건  '),
+                        TextSpan(text: '후보 ${_searchFeedback!['found']}건',
+                            style: TextStyle(color: Colors.green.shade700, fontWeight: FontWeight.w600)),
+                        const TextSpan(text: '  '),
+                        TextSpan(text: '이미 추가됨 ${_searchFeedback!['already_added']}건',
+                            style: TextStyle(color: Colors.orange.shade800, fontWeight: FontWeight.w600)),
+                        const TextSpan(text: '  '),
+                        TextSpan(text: '미발견 ${_searchFeedback!['not_found']}건',
+                            style: TextStyle(color: Colors.red.shade700, fontWeight: FontWeight.w600)),
+                      ]),
+                    )),
+                  ]),
+                ),
+              ],
             ]),
           ),
           const Divider(height: 1),
