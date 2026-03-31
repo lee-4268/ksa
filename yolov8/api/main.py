@@ -115,6 +115,9 @@ def _cleanup_stale_temp_files(max_age_seconds: int = 3600):
             # cert_batch 임시파일
             elif fname.startswith("cert_batch_"):
                 should_check = True
+            # cert_cache WAL/SHM 임시파일
+            elif fname.startswith("cert_cache.db.tmp-"):
+                should_check = True
 
             if not should_check:
                 continue
@@ -122,8 +125,8 @@ def _cleanup_stale_temp_files(max_age_seconds: int = 3600):
             fpath = f"/tmp/{fname}"
             try:
                 if os.path.isdir(fpath):
-                    # cert_batch 디렉토리만 정리
-                    if fname.startswith("cert_batch_"):
+                    # cert_batch / ds_xlsxbuild / ds_ 임시 디렉토리 정리
+                    if fname.startswith(("cert_batch_", "ds_xlsxbuild_", "ds_")):
                         stat = os.stat(fpath)
                         if now - stat.st_mtime > max_age_seconds:
                             import shutil
@@ -11708,6 +11711,575 @@ async def inspection_add_from_staging(request: Request, req: InspAddFromStagingR
         raise HTTPException(403, str(pe))
 
     return {"success": True, "item": result}
+
+
+# ============================================================
+# Community Board (공지사항/요청사항)
+# ============================================================
+
+_COMMUNITY_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "community.db")
+
+
+def _init_community_db():
+    conn = sqlite3.connect(_COMMUNITY_DB, timeout=60)
+    conn.execute('PRAGMA journal_mode=WAL')
+    conn.execute('''CREATE TABLE IF NOT EXISTS notices (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT,
+        content TEXT,
+        division TEXT DEFAULT '전체',
+        author_empno TEXT,
+        author_name TEXT,
+        author_org TEXT DEFAULT '',
+        view_count INTEGER DEFAULT 0,
+        created_at TEXT,
+        updated_at TEXT
+    )''')
+    conn.execute('''CREATE TABLE IF NOT EXISTS requests (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT,
+        content TEXT,
+        status TEXT DEFAULT '접수',
+        is_secret INTEGER DEFAULT 0,
+        secret_password TEXT DEFAULT '',
+        author_empno TEXT,
+        author_name TEXT,
+        author_org TEXT DEFAULT '',
+        view_count INTEGER DEFAULT 0,
+        created_at TEXT,
+        updated_at TEXT
+    )''')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_notices_division ON notices(division)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_notices_created ON notices(created_at)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_requests_status ON requests(status)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_requests_created ON requests(created_at)')
+    conn.execute('''CREATE TABLE IF NOT EXISTS comments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        request_id INTEGER NOT NULL,
+        content TEXT NOT NULL,
+        author_empno TEXT NOT NULL,
+        author_name TEXT NOT NULL,
+        author_org TEXT DEFAULT '',
+        created_at TEXT,
+        FOREIGN KEY (request_id) REFERENCES requests(id) ON DELETE CASCADE
+    )''')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_comments_request ON comments(request_id)')
+    # 기존 테이블에 컬럼 추가 (이미 존재하면 무시)
+    for col, default in [('secret_password', "''")]:
+        try:
+            conn.execute(f"ALTER TABLE requests ADD COLUMN {col} TEXT DEFAULT {default}")
+        except Exception:
+            pass
+    conn.execute('PRAGMA foreign_keys = ON')
+    conn.commit()
+    conn.close()
+
+
+_init_community_db()
+
+
+class NoticeCreate(BaseModel):
+    title: str
+    content: str
+    division: str = "전체"
+
+
+class NoticeUpdate(BaseModel):
+    title: str
+    content: str
+    division: str = "전체"
+
+
+class RequestCreate(BaseModel):
+    title: str
+    content: str
+    is_secret: bool = False
+    secret_password: str = ''
+
+
+class RequestUpdate(BaseModel):
+    title: str
+    content: str
+
+
+class RequestStatusUpdate(BaseModel):
+    status: str
+
+
+class CommentCreate(BaseModel):
+    content: str
+
+
+_COMMUNITY_DIVISIONS = ['전체', '강남', '강북', '경기', '인천', '충청', '강원', '경남', '경북', '서부']
+
+
+def _get_user_info_for_community(empno: str) -> dict:
+    """Users DynamoDB 테이블에서 이름·소속 조회."""
+    try:
+        dynamodb = get_dynamodb_resource()
+        table = dynamodb.Table(DYNAMODB_TABLES["users"])
+        resp = table.get_item(
+            Key={"user_id": empno},
+            ProjectionExpression="#n, #r, #t",
+            ExpressionAttributeNames={"#n": "name", "#r": "region", "#t": "team"},
+        )
+        item = resp.get("Item", {})
+        name = item.get("name", empno)
+        region = item.get("region", "")
+        team = item.get("team", "")
+        org = team if team else region
+        return {"name": name, "org": org}
+    except Exception as e:
+        logger.warning(f"community user info 조회 실패 ({empno}): {e}")
+        return {"name": empno, "org": ""}
+
+
+# ── 공지사항 endpoints ──
+
+
+@app.get("/community/notices")
+async def list_notices(
+    request: Request,
+    division: str = Query(None),
+    search: str = Query(None),
+    page: int = Query(1, ge=1),
+    pageSize: int = Query(20, ge=1, le=100),
+):
+    empno = await _verify_auth(request)
+
+    def _do():
+        conn = sqlite3.connect(_COMMUNITY_DB, timeout=30)
+        conn.row_factory = sqlite3.Row
+        try:
+            where_clauses = []
+            params = []
+            if division:
+                where_clauses.append("division = ?")
+                params.append(division)
+            if search:
+                where_clauses.append("(title LIKE ? OR content LIKE ?)")
+                params.extend([f"%{search}%", f"%{search}%"])
+            where_sql = (" WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+
+            total = conn.execute(f"SELECT COUNT(*) FROM notices{where_sql}", params).fetchone()[0]
+
+            offset = (page - 1) * pageSize
+            rows = conn.execute(
+                f"SELECT * FROM notices{where_sql} ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                params + [pageSize, offset],
+            ).fetchall()
+
+            notices = []
+            for i, row in enumerate(rows):
+                d = dict(row)
+                d["번호"] = total - offset - i
+                d["is_mine"] = (d.get("author_empno") == empno)
+                notices.append(d)
+            return {"notices": notices, "total": total}
+        finally:
+            conn.close()
+
+    return await asyncio.to_thread(_do)
+
+
+@app.get("/community/notices/{notice_id}")
+async def get_notice(notice_id: int, request: Request):
+    empno = await _verify_auth(request)
+
+    def _do():
+        conn = sqlite3.connect(_COMMUNITY_DB, timeout=30)
+        conn.row_factory = sqlite3.Row
+        try:
+            row = conn.execute("SELECT * FROM notices WHERE id = ?", (notice_id,)).fetchone()
+            if not row:
+                raise HTTPException(404, "공지사항을 찾을 수 없습니다")
+            d = dict(row)
+            d["is_mine"] = (d.get("author_empno") == empno)
+            return d
+        finally:
+            conn.close()
+
+    return await asyncio.to_thread(_do)
+
+
+@app.post("/community/notices/{notice_id}/view")
+async def increment_notice_view(notice_id: int, request: Request):
+    await _verify_auth(request)
+
+    def _do():
+        conn = sqlite3.connect(_COMMUNITY_DB, timeout=30)
+        try:
+            conn.execute("UPDATE notices SET view_count = view_count + 1 WHERE id = ?", (notice_id,))
+            conn.commit()
+        finally:
+            conn.close()
+
+    await asyncio.to_thread(_do)
+    return {"success": True}
+
+
+@app.post("/community/notices")
+async def create_notice(body: NoticeCreate, request: Request):
+    empno = await _verify_auth(request)
+    role = await asyncio.to_thread(_get_user_role_sync, empno)
+    if role not in ("admin", "manager"):
+        raise HTTPException(403, "관리자 또는 매니저만 공지사항을 작성할 수 있습니다")
+
+    user_info = await asyncio.to_thread(_get_user_info_for_community, empno)
+    now = datetime.now(timezone.utc).isoformat()
+
+    def _do():
+        conn = sqlite3.connect(_COMMUNITY_DB, timeout=30)
+        conn.row_factory = sqlite3.Row
+        try:
+            cur = conn.execute(
+                "INSERT INTO notices (title, content, division, author_empno, author_name, author_org, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (body.title, body.content, body.division, empno, user_info["name"], user_info["org"], now, now),
+            )
+            conn.commit()
+            row = conn.execute("SELECT * FROM notices WHERE id = ?", (cur.lastrowid,)).fetchone()
+            return dict(row)
+        finally:
+            conn.close()
+
+    result = await asyncio.to_thread(_do)
+    return {"success": True, "notice": result}
+
+
+@app.put("/community/notices/{notice_id}")
+async def update_notice(notice_id: int, body: NoticeUpdate, request: Request):
+    empno = await _verify_auth(request)
+    now = datetime.now(timezone.utc).isoformat()
+
+    def _do():
+        conn = sqlite3.connect(_COMMUNITY_DB, timeout=30)
+        conn.row_factory = sqlite3.Row
+        try:
+            row = conn.execute("SELECT author_empno FROM notices WHERE id = ?", (notice_id,)).fetchone()
+            if not row:
+                raise HTTPException(404, "공지사항을 찾을 수 없습니다")
+            if row["author_empno"] != empno:
+                raise HTTPException(403, "작성자만 수정할 수 있습니다")
+            conn.execute(
+                "UPDATE notices SET title = ?, content = ?, division = ?, updated_at = ? WHERE id = ?",
+                (body.title, body.content, body.division, now, notice_id),
+            )
+            conn.commit()
+            updated = conn.execute("SELECT * FROM notices WHERE id = ?", (notice_id,)).fetchone()
+            return dict(updated)
+        finally:
+            conn.close()
+
+    result = await asyncio.to_thread(_do)
+    return {"success": True, "notice": result}
+
+
+@app.delete("/community/notices/{notice_id}")
+async def delete_notice(notice_id: int, request: Request):
+    empno = await _verify_auth(request)
+    role = await asyncio.to_thread(_get_user_role_sync, empno)
+
+    def _do():
+        conn = sqlite3.connect(_COMMUNITY_DB, timeout=30)
+        conn.row_factory = sqlite3.Row
+        try:
+            row = conn.execute("SELECT author_empno FROM notices WHERE id = ?", (notice_id,)).fetchone()
+            if not row:
+                raise HTTPException(404, "공지사항을 찾을 수 없습니다")
+            if row["author_empno"] != empno and role != "admin":
+                raise HTTPException(403, "작성자 또는 관리자만 삭제할 수 있습니다")
+            conn.execute("DELETE FROM notices WHERE id = ?", (notice_id,))
+            conn.commit()
+        finally:
+            conn.close()
+
+    await asyncio.to_thread(_do)
+    return {"success": True}
+
+
+# ── 요청사항 endpoints ──
+
+
+@app.get("/community/requests")
+async def list_requests(
+    request: Request,
+    status: str = Query(None),
+    search: str = Query(None),
+    page: int = Query(1, ge=1),
+    pageSize: int = Query(20, ge=1, le=100),
+):
+    empno = await _verify_auth(request)
+    role = await asyncio.to_thread(_get_user_role_sync, empno)
+
+    def _do():
+        conn = sqlite3.connect(_COMMUNITY_DB, timeout=30)
+        conn.row_factory = sqlite3.Row
+        try:
+            where_clauses = []
+            params = []
+            if status:
+                where_clauses.append("status = ?")
+                params.append(status)
+            if search:
+                where_clauses.append("(title LIKE ? OR content LIKE ?)")
+                params.extend([f"%{search}%", f"%{search}%"])
+            where_sql = (" WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+
+            total = conn.execute(f"SELECT COUNT(*) FROM requests{where_sql}", params).fetchone()[0]
+
+            offset = (page - 1) * pageSize
+            rows = conn.execute(
+                f"SELECT * FROM requests{where_sql} ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                params + [pageSize, offset],
+            ).fetchall()
+
+            items = []
+            for i, row in enumerate(rows):
+                d = dict(row)
+                d["번호"] = total - offset - i
+                # 비밀글: 작성자/관리자가 아니면 제목·내용 숨김
+                d["is_mine"] = (d.get("author_empno") == empno)
+                if d["is_secret"] and d["author_empno"] != empno and role != "admin":
+                    d["title"] = "비밀글입니다"
+                    d["content"] = ""
+                items.append(d)
+            return {"requests": items, "total": total}
+        finally:
+            conn.close()
+
+    return await asyncio.to_thread(_do)
+
+
+@app.get("/community/requests/{req_id}")
+async def get_request_detail(req_id: int, request: Request):
+    empno = await _verify_auth(request)
+    role = await asyncio.to_thread(_get_user_role_sync, empno)
+
+    def _do():
+        conn = sqlite3.connect(_COMMUNITY_DB, timeout=30)
+        conn.row_factory = sqlite3.Row
+        try:
+            row = conn.execute("SELECT * FROM requests WHERE id = ?", (req_id,)).fetchone()
+            if not row:
+                raise HTTPException(404, "요청사항을 찾을 수 없습니다")
+            d = dict(row)
+            d["is_mine"] = (d.get("author_empno") == empno)
+            if d["is_secret"] and d["author_empno"] != empno and role != "admin":
+                raise HTTPException(403, "비밀글은 작성자와 관리자만 열람할 수 있습니다")
+            return d
+        finally:
+            conn.close()
+
+    return await asyncio.to_thread(_do)
+
+
+@app.post("/community/requests/{req_id}/view")
+async def increment_request_view(req_id: int, request: Request):
+    await _verify_auth(request)
+
+    def _do():
+        conn = sqlite3.connect(_COMMUNITY_DB, timeout=30)
+        try:
+            conn.execute("UPDATE requests SET view_count = view_count + 1 WHERE id = ?", (req_id,))
+            conn.commit()
+        finally:
+            conn.close()
+
+    await asyncio.to_thread(_do)
+    return {"success": True}
+
+
+@app.post("/community/requests")
+async def create_request(body: RequestCreate, request: Request):
+    empno = await _verify_auth(request)
+    user_info = await asyncio.to_thread(_get_user_info_for_community, empno)
+    now = datetime.now(timezone.utc).isoformat()
+
+    def _do():
+        conn = sqlite3.connect(_COMMUNITY_DB, timeout=30)
+        conn.row_factory = sqlite3.Row
+        try:
+            cur = conn.execute(
+                "INSERT INTO requests (title, content, is_secret, secret_password, author_empno, author_name, author_org, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (body.title, body.content, 1 if body.is_secret else 0, body.secret_password, empno, user_info["name"], user_info["org"], now, now),
+            )
+            conn.commit()
+            row = conn.execute("SELECT * FROM requests WHERE id = ?", (cur.lastrowid,)).fetchone()
+            return dict(row)
+        finally:
+            conn.close()
+
+    result = await asyncio.to_thread(_do)
+    return {"success": True, "request": result}
+
+
+@app.put("/community/requests/{req_id}")
+async def update_request(req_id: int, body: RequestUpdate, request: Request):
+    empno = await _verify_auth(request)
+    now = datetime.now(timezone.utc).isoformat()
+
+    def _do():
+        conn = sqlite3.connect(_COMMUNITY_DB, timeout=30)
+        conn.row_factory = sqlite3.Row
+        try:
+            row = conn.execute("SELECT author_empno FROM requests WHERE id = ?", (req_id,)).fetchone()
+            if not row:
+                raise HTTPException(404, "요청사항을 찾을 수 없습니다")
+            if row["author_empno"] != empno:
+                raise HTTPException(403, "작성자만 수정할 수 있습니다")
+            conn.execute(
+                "UPDATE requests SET title = ?, content = ?, updated_at = ? WHERE id = ?",
+                (body.title, body.content, now, req_id),
+            )
+            conn.commit()
+            updated = conn.execute("SELECT * FROM requests WHERE id = ?", (req_id,)).fetchone()
+            return dict(updated)
+        finally:
+            conn.close()
+
+    result = await asyncio.to_thread(_do)
+    return {"success": True, "request": result}
+
+
+@app.delete("/community/requests/{req_id}")
+async def delete_request(req_id: int, request: Request):
+    empno = await _verify_auth(request)
+    role = await asyncio.to_thread(_get_user_role_sync, empno)
+
+    def _do():
+        conn = sqlite3.connect(_COMMUNITY_DB, timeout=30)
+        conn.row_factory = sqlite3.Row
+        try:
+            row = conn.execute("SELECT author_empno FROM requests WHERE id = ?", (req_id,)).fetchone()
+            if not row:
+                raise HTTPException(404, "요청사항을 찾을 수 없습니다")
+            if row["author_empno"] != empno and role != "admin":
+                raise HTTPException(403, "작성자 또는 관리자만 삭제할 수 있습니다")
+            conn.execute("DELETE FROM requests WHERE id = ?", (req_id,))
+            conn.commit()
+        finally:
+            conn.close()
+
+    await asyncio.to_thread(_do)
+    return {"success": True}
+
+
+@app.put("/community/requests/{req_id}/status")
+async def update_request_status(req_id: int, body: RequestStatusUpdate, request: Request):
+    empno = await _verify_auth(request)
+    role = await asyncio.to_thread(_get_user_role_sync, empno)
+    if role != "admin":
+        raise HTTPException(403, "관리자만 상태를 변경할 수 있습니다")
+
+    valid_statuses = ("접수", "처리중", "완료")
+    if body.status not in valid_statuses:
+        raise HTTPException(400, f"유효하지 않은 상태: {body.status} (가능: {', '.join(valid_statuses)})")
+
+    now = datetime.now(timezone.utc).isoformat()
+
+    def _do():
+        conn = sqlite3.connect(_COMMUNITY_DB, timeout=30)
+        conn.row_factory = sqlite3.Row
+        try:
+            row = conn.execute("SELECT id FROM requests WHERE id = ?", (req_id,)).fetchone()
+            if not row:
+                raise HTTPException(404, "요청사항을 찾을 수 없습니다")
+            conn.execute(
+                "UPDATE requests SET status = ?, updated_at = ? WHERE id = ?",
+                (body.status, now, req_id),
+            )
+            conn.commit()
+            updated = conn.execute("SELECT * FROM requests WHERE id = ?", (req_id,)).fetchone()
+            return dict(updated)
+        finally:
+            conn.close()
+
+    result = await asyncio.to_thread(_do)
+    return {"success": True, "request": result}
+
+
+# ── 댓글 (Comments) ──────────────────────────────────────────
+
+@app.get("/community/requests/{req_id}/comments")
+async def list_comments(req_id: int, request: Request):
+    empno = await _verify_auth(request)
+
+    def _do():
+        conn = sqlite3.connect(_COMMUNITY_DB, timeout=30)
+        conn.row_factory = sqlite3.Row
+        try:
+            rows = conn.execute(
+                "SELECT * FROM comments WHERE request_id = ? ORDER BY created_at ASC",
+                (req_id,),
+            ).fetchall()
+            result = []
+            for r in rows:
+                d = dict(r)
+                d["is_mine"] = 1 if d.get("author_empno") == empno else 0
+                result.append(d)
+            return result
+        finally:
+            conn.close()
+
+    comments = await asyncio.to_thread(_do)
+    return {"comments": comments}
+
+
+@app.post("/community/requests/{req_id}/comments")
+async def create_comment(req_id: int, body: CommentCreate, request: Request):
+    empno = await _verify_auth(request)
+    user_info = await asyncio.to_thread(_get_user_info_for_community, empno)
+    now = datetime.now(timezone.utc).isoformat()
+
+    def _do():
+        conn = sqlite3.connect(_COMMUNITY_DB, timeout=30)
+        conn.execute('PRAGMA foreign_keys = ON')
+        conn.row_factory = sqlite3.Row
+        try:
+            # 요청사항 존재 확인
+            req_row = conn.execute("SELECT id FROM requests WHERE id = ?", (req_id,)).fetchone()
+            if not req_row:
+                raise HTTPException(404, "요청사항을 찾을 수 없습니다")
+            cur = conn.execute(
+                "INSERT INTO comments (request_id, content, author_empno, author_name, author_org, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (req_id, body.content, empno, user_info["name"], user_info["org"], now),
+            )
+            conn.commit()
+            row = conn.execute("SELECT * FROM comments WHERE id = ?", (cur.lastrowid,)).fetchone()
+            d = dict(row)
+            d["is_mine"] = 1
+            return d
+        finally:
+            conn.close()
+
+    comment = await asyncio.to_thread(_do)
+    return {"success": True, "comment": comment}
+
+
+@app.delete("/community/comments/{comment_id}")
+async def delete_comment(comment_id: int, request: Request):
+    empno = await _verify_auth(request)
+    role = await asyncio.to_thread(_get_user_role_sync, empno)
+
+    def _do():
+        conn = sqlite3.connect(_COMMUNITY_DB, timeout=30)
+        conn.row_factory = sqlite3.Row
+        try:
+            row = conn.execute("SELECT author_empno FROM comments WHERE id = ?", (comment_id,)).fetchone()
+            if not row:
+                raise HTTPException(404, "댓글을 찾을 수 없습니다")
+            if row["author_empno"] != empno and role != "admin":
+                raise HTTPException(403, "작성자 또는 관리자만 삭제할 수 있습니다")
+            conn.execute("DELETE FROM comments WHERE id = ?", (comment_id,))
+            conn.commit()
+        finally:
+            conn.close()
+
+    await asyncio.to_thread(_do)
+    return {"success": True}
 
 
 # ============================================================

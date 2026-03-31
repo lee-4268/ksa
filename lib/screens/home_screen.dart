@@ -14,6 +14,8 @@ import 'certificate_screen.dart';
 import 'erp_ds_compare_screen.dart';
 import 'inspection_schedule_screen.dart';
 import 'inspection_my_list_screen.dart';
+import 'notice_board_screen.dart';
+import 'request_board_screen.dart';
 
 /// 앱 셸 — 사이드바 상시 표시 + 오른쪽 콘텐츠 전환
 class HomeScreen extends StatefulWidget {
@@ -67,6 +69,8 @@ class _HomeScreenState extends State<HomeScreen> {
       _MenuItem('호출명칭', Icons.sync_alt_outlined, const Color(0xFFEF4444), description: '호출명칭 검색 및 비교'),
       _MenuItem('설치확인서', Icons.description_outlined, const Color(0xFF06B6D4), description: '설치확인서 조회 및 관리'),
       _MenuItem('전산비교', Icons.compare_outlined, const Color(0xFF2563EB), description: 'ERP·DS 전산 데이터 비교'),
+      _MenuItem('공지사항', Icons.campaign_outlined, const Color(0xFFE53935), description: '조직 내 공지사항'),
+      _MenuItem('요청사항', Icons.chat_bubble_outline, const Color(0xFF7C3AED), description: '문의 및 요청사항 등록'),
       if (auth.isDivisionAdmin)
         _MenuItem('대상 관리', Icons.business_outlined, const Color(0xFF7C3AED), description: '본부별 수검 대상 관리'),
       if (auth.isSuperAdmin)
@@ -80,6 +84,7 @@ class _HomeScreenState extends State<HomeScreen> {
     _MenuGroup('수검 관리', Icons.map_outlined, Color(0xFF3B82F6), ['수검 관리', '일정 및 통계']),
     _MenuGroup('DS 관리', Icons.storage_outlined, Color(0xFF8B5CF6), ['DS 데이터', 'DS 병합']),
     _MenuGroup('서류 관리', Icons.folder_outlined, Color(0xFFEF4444), ['호출명칭', '설치확인서', '전산비교']),
+    _MenuGroup('커뮤니티', Icons.forum_outlined, Color(0xFFE53935), ['공지사항', '요청사항']),
   ];
 
   Widget _buildPage(int index, AuthService auth) {
@@ -98,6 +103,8 @@ class _HomeScreenState extends State<HomeScreen> {
       case '호출명칭': return const CallnameScreen();
       case '설치확인서': return const CertificateScreen();
       case '전산비교': return const ErpDsCompareScreen();
+      case '공지사항': return const NoticeBoardScreen();
+      case '요청사항': return const RequestBoardScreen();
       case '대상 관리': return const DivisionManagementScreen();
       case '관리자': return const AdminPanelScreen();
       default: return _HomeContent(onNavigate: (i) => setState(() => _selectedIndex = i), menuItems: items);
