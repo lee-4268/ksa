@@ -6,7 +6,9 @@ import '../services/inspection_service.dart';
 
 /// 전국 현황 대시보드 화면
 class DashboardScreen extends StatefulWidget {
-  const DashboardScreen({super.key});
+  final bool showStats;
+  final void Function(String region)? onRegionSelected;
+  const DashboardScreen({super.key, this.showStats = true, this.onRegionSelected});
 
   @override
   State<DashboardScreen> createState() => _DashboardScreenState();
@@ -112,10 +114,38 @@ class _DashboardScreenState extends State<DashboardScreen>
   }
 
   Widget _buildBody() {
+    // 임베드 모드: 부모 SizedBox에서 높이 지정됨
+    if (!widget.showStats) {
+      return LayoutBuilder(
+        builder: (context, constraints) {
+          final isWide = constraints.maxWidth > 700;
+          if (isWide) {
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Expanded(flex: 3, child: _buildMapCard()),
+                const SizedBox(width: 16),
+                Expanded(flex: 2, child: _buildRegionDetailCard()),
+              ],
+            );
+          } else {
+            // 모바일: 세로 배치, 각각 고정 높이
+            final halfH = constraints.maxHeight / 2 - 8;
+            return Column(
+              children: [
+                SizedBox(height: halfH, child: _buildMapCard()),
+                const SizedBox(height: 16),
+                SizedBox(height: halfH, child: _buildRegionDetailCard()),
+              ],
+            );
+          }
+        },
+      );
+    }
+
     return LayoutBuilder(
       builder: (context, constraints) {
         final isWide = constraints.maxWidth > 800;
-
         if (isWide) {
           return _buildWideLayout();
         } else {
@@ -127,27 +157,28 @@ class _DashboardScreenState extends State<DashboardScreen>
 
   /// 넓은 화면 (웹/태블릿)
   Widget _buildWideLayout() {
+
     return SingleChildScrollView(
       padding: const EdgeInsets.all(24),
       child: Column(
         children: [
-          // 상단 통계 카드
           _buildStatsRow(),
           const SizedBox(height: 24),
-          // 지도 + 지역 상세 (가로 배치)
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                flex: 3,
-                child: _buildMapCard(),
-              ),
-              const SizedBox(width: 24),
-              Expanded(
-                flex: 2,
-                child: _buildRegionDetailCard(),
-              ),
-            ],
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final mapHeight = constraints.maxWidth * 0.45;
+              return SizedBox(
+                height: mapHeight.clamp(350, 500),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Expanded(flex: 3, child: _buildMapCard()),
+                    const SizedBox(width: 24),
+                    Expanded(flex: 2, child: _buildRegionDetailCard()),
+                  ],
+                ),
+              );
+            },
           ),
         ],
       ),
@@ -161,8 +192,10 @@ class _DashboardScreenState extends State<DashboardScreen>
       child: Column(
         children: [
           // 상단 통계 카드 (세로 배치)
-          _buildStatsColumn(),
-          const SizedBox(height: 16),
+          if (widget.showStats) ...[
+            _buildStatsColumn(),
+            const SizedBox(height: 16),
+          ],
           // 지도
           _buildMapCard(),
           const SizedBox(height: 16),
@@ -359,6 +392,9 @@ class _DashboardScreenState extends State<DashboardScreen>
                 setState(() {
                   _selectedRegion = regionId;
                 });
+                // 부모에게 본부 shortName 전달
+                final shortName = _regionData[regionId]?.shortName ?? '';
+                widget.onRegionSelected?.call(shortName);
               },
             ),
           ),
@@ -454,7 +490,6 @@ class _DashboardScreenState extends State<DashboardScreen>
         : null;
 
     return Container(
-      constraints: const BoxConstraints(minHeight: 400),
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
         color: Colors.white,
@@ -485,10 +520,13 @@ class _DashboardScreenState extends State<DashboardScreen>
             ],
           ),
           const SizedBox(height: 20),
-          if (selectedData != null)
-            _buildSelectedRegionDetail(selectedData)
-          else
-            _buildRegionList(),
+          Expanded(
+            child: SingleChildScrollView(
+              child: selectedData != null
+                  ? _buildSelectedRegionDetail(selectedData)
+                  : _buildRegionList(),
+            ),
+          ),
         ],
       ),
     );
@@ -553,7 +591,10 @@ class _DashboardScreenState extends State<DashboardScreen>
         const SizedBox(height: 20),
         // 선택 해제 버튼
         TextButton.icon(
-          onPressed: () => setState(() => _selectedRegion = null),
+          onPressed: () {
+            setState(() => _selectedRegion = null);
+            widget.onRegionSelected?.call('');
+          },
           icon: const Icon(Icons.list, size: 18),
           label: const Text('전체 목록 보기'),
           style: TextButton.styleFrom(
@@ -597,8 +638,13 @@ class _DashboardScreenState extends State<DashboardScreen>
   }
 
   Widget _buildRegionList() {
+    const _regionOrder = ['gangnam', 'gangbuk', 'gangwon', 'gyeonggi', 'gyeongnam', 'gyeongbuk', 'seobu', 'incheon', 'chungcheong'];
     final sortedRegions = _regionData.entries.toList()
-      ..sort((a, b) => b.value.progressRate.compareTo(a.value.progressRate));
+      ..sort((a, b) {
+        final ai = _regionOrder.indexOf(a.key);
+        final bi = _regionOrder.indexOf(b.key);
+        return (ai < 0 ? 99 : ai).compareTo(bi < 0 ? 99 : bi);
+      });
 
     return Column(
       children: [
@@ -614,7 +660,10 @@ class _DashboardScreenState extends State<DashboardScreen>
     final data = entry.value;
 
     return InkWell(
-      onTap: () => setState(() => _selectedRegion = entry.key),
+      onTap: () {
+        setState(() => _selectedRegion = entry.key);
+        widget.onRegionSelected?.call(data.shortName);
+      },
       borderRadius: BorderRadius.circular(10),
       child: Container(
         padding: const EdgeInsets.all(14),

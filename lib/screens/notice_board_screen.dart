@@ -1,3 +1,6 @@
+import 'dart:convert';
+
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -6,7 +9,8 @@ import '../services/community_service.dart';
 
 /// 공지사항 화면 — 목록 / 상세 / 작성·수정 3가지 뷰를 상태로 전환
 class NoticeBoardScreen extends StatefulWidget {
-  const NoticeBoardScreen({super.key});
+  final bool showHeader;
+  const NoticeBoardScreen({super.key, this.showHeader = true});
 
   @override
   State<NoticeBoardScreen> createState() => _NoticeBoardScreenState();
@@ -47,6 +51,8 @@ class _NoticeBoardScreenState extends State<NoticeBoardScreen> {
   final _contentCtrl = TextEditingController();
   String _writeDivision = '전체';
   bool _saving = false;
+  List<String> _images = [];
+  bool _uploading = false;
 
   @override
   void didChangeDependencies() {
@@ -112,6 +118,7 @@ class _NoticeBoardScreenState extends State<NoticeBoardScreen> {
     _titleCtrl.clear();
     _contentCtrl.clear();
     _writeDivision = '전체';
+    _images = [];
     setState(() => _mode = _ViewMode.write);
   }
 
@@ -121,7 +128,49 @@ class _NoticeBoardScreenState extends State<NoticeBoardScreen> {
     _titleCtrl.text = item['title'] ?? '';
     _contentCtrl.text = item['content'] ?? '';
     _writeDivision = item['division'] ?? '전체';
+    _images = _parseImages(item['images']);
     setState(() => _mode = _ViewMode.write);
+  }
+
+  List<String> _parseImages(dynamic raw) {
+    if (raw is List) return raw.cast<String>();
+    if (raw is String && raw.isNotEmpty) {
+      try {
+        final decoded = json.decode(raw);
+        if (decoded is List) return decoded.cast<String>();
+      } catch (_) {}
+    }
+    return [];
+  }
+
+  Future<void> _pickImage() async {
+    if (_images.length >= 5) {
+      _snack('이미지는 최대 5개까지 첨부할 수 있습니다.');
+      return;
+    }
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.image,
+      withData: true,
+    );
+    if (result == null || result.files.isEmpty) return;
+    final file = result.files.first;
+    if (file.bytes == null) return;
+    if (file.bytes!.length > 5 * 1024 * 1024) {
+      _snack('이미지 크기는 5MB 이하만 가능합니다.');
+      return;
+    }
+    setState(() => _uploading = true);
+    try {
+      final res = await _svc.uploadImage(file.bytes!, file.name);
+      final url = res['url'] as String? ?? '';
+      if (url.isNotEmpty) {
+        setState(() => _images.add(url));
+      }
+    } catch (e) {
+      _snack('이미지 업로드 실패: $e');
+    } finally {
+      setState(() => _uploading = false);
+    }
   }
 
   Future<void> _save() async {
@@ -138,11 +187,11 @@ class _NoticeBoardScreenState extends State<NoticeBoardScreen> {
     setState(() => _saving = true);
     try {
       if (_isEditing && _editId != null) {
-        await _svc.updateNotice(_editId!, title, content, division: _writeDivision);
+        await _svc.updateNotice(_editId!, title, content, division: _writeDivision, images: _images);
         _snack('공지사항이 수정되었습니다.');
         _openDetail(_editId!);
       } else {
-        final newId = await _svc.createNotice(title, content, division: _writeDivision);
+        final newId = await _svc.createNotice(title, content, division: _writeDivision, images: _images);
         _snack('공지사항이 등록되었습니다.');
         _openDetail(newId);
       }
@@ -228,13 +277,15 @@ class _NoticeBoardScreenState extends State<NoticeBoardScreen> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         // ── 타이틀 ──
-        const Text('공지사항', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
-        const SizedBox(height: 4),
-        Text(
-          '조직 내 공지사항을 확인하고 공유할 수 있습니다.',
-          style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
-        ),
-        const SizedBox(height: 20),
+        if (widget.showHeader) ...[
+          const Text('공지사항', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 4),
+          Text(
+            '조직 내 공지사항을 확인하고 공유할 수 있습니다.',
+            style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
+          ),
+          const SizedBox(height: 20),
+        ],
 
         // ── 본부 탭 ──
         _buildDivisionTabs(),
@@ -565,6 +616,49 @@ class _NoticeBoardScreenState extends State<NoticeBoardScreen> {
                     style: const TextStyle(fontSize: 14, height: 1.7),
                   ),
 
+                  // 첨부 이미지
+                  if (_parseImages(d['images']).isNotEmpty) ...[
+                    const SizedBox(height: 24),
+                    const Divider(),
+                    const SizedBox(height: 12),
+                    Text('첨부 이미지', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Colors.grey.shade700)),
+                    const SizedBox(height: 10),
+                    Wrap(
+                      spacing: 12,
+                      runSpacing: 12,
+                      children: _parseImages(d['images']).map((key) {
+                        return ClipRRect(
+                          borderRadius: BorderRadius.circular(8),
+                          child: Image.network(
+                            _svc.getImageUrl(key),
+                            width: 240,
+                            fit: BoxFit.cover,
+                            loadingBuilder: (_, child, progress) {
+                              if (progress == null) return child;
+                              return SizedBox(
+                                width: 240,
+                                height: 160,
+                                child: Center(child: CircularProgressIndicator(
+                                  value: progress.expectedTotalBytes != null
+                                      ? progress.cumulativeBytesLoaded / progress.expectedTotalBytes!
+                                      : null,
+                                  color: _primary,
+                                  strokeWidth: 2,
+                                )),
+                              );
+                            },
+                            errorBuilder: (_, __, ___) => Container(
+                              width: 240,
+                              height: 160,
+                              color: Colors.grey.shade100,
+                              child: Icon(Icons.broken_image, size: 40, color: Colors.grey.shade400),
+                            ),
+                          ),
+                        );
+                      }).toList(),
+                    ),
+                  ],
+
                   // 하단 구분선 + 수정/삭제 버튼
                   if (isMine || isAdmin) ...[
                     const SizedBox(height: 32),
@@ -740,6 +834,72 @@ class _NoticeBoardScreenState extends State<NoticeBoardScreen> {
                     ),
                   ),
                 ),
+                const SizedBox(height: 16),
+
+                // 이미지 첨부
+                const Text('이미지 첨부', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                const SizedBox(height: 6),
+                Row(
+                  children: [
+                    OutlinedButton.icon(
+                      onPressed: (_uploading || _images.length >= 5) ? null : _pickImage,
+                      icon: _uploading
+                          ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: _primary))
+                          : const Icon(Icons.add_photo_alternate_outlined, size: 18),
+                      label: Text(_uploading ? '업로드 중...' : '이미지 추가', style: const TextStyle(fontSize: 13)),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: _primary,
+                        side: const BorderSide(color: _primary),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Text('${_images.length}/5', style: TextStyle(fontSize: 12, color: Colors.grey.shade500)),
+                  ],
+                ),
+                if (_images.isNotEmpty) ...[
+                  const SizedBox(height: 10),
+                  Wrap(
+                    spacing: 10,
+                    runSpacing: 10,
+                    children: List.generate(_images.length, (i) {
+                      return Stack(
+                        children: [
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(8),
+                            child: Image.network(
+                              _svc.getImageUrl(_images[i]),
+                              width: 120,
+                              height: 90,
+                              fit: BoxFit.cover,
+                              errorBuilder: (_, __, ___) => Container(
+                                width: 120, height: 90,
+                                color: Colors.grey.shade100,
+                                child: Icon(Icons.broken_image, color: Colors.grey.shade400),
+                              ),
+                            ),
+                          ),
+                          Positioned(
+                            top: 2,
+                            right: 2,
+                            child: InkWell(
+                              onTap: () => setState(() => _images.removeAt(i)),
+                              child: Container(
+                                decoration: const BoxDecoration(
+                                  color: Colors.black54,
+                                  shape: BoxShape.circle,
+                                ),
+                                padding: const EdgeInsets.all(3),
+                                child: const Icon(Icons.close, size: 14, color: Colors.white),
+                              ),
+                            ),
+                          ),
+                        ],
+                      );
+                    }),
+                  ),
+                ],
                 const SizedBox(height: 20),
 
                 // 버튼

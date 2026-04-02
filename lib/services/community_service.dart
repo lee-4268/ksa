@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 
 /// 커뮤니티(공지사항/요청사항) 서비스
@@ -17,6 +18,17 @@ class CommunityService {
         'Authorization': 'Bearer ${_authToken ?? ''}',
         'Content-Type': 'application/json',
       };
+
+  // ── 통계 ────────────────────────────────────────────────────
+
+  Future<Map<String, dynamic>> getStats() async {
+    final resp = await http.get(
+      Uri.parse('$_baseUrl/community/stats'),
+      headers: _headers,
+    ).timeout(_apiTimeout);
+    if (resp.statusCode != 200) throw Exception('통계 조회 실패');
+    return json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+  }
 
   // ── 공지사항 ────────────────────────────────────────────────
 
@@ -65,11 +77,11 @@ class CommunityService {
     }
   }
 
-  Future<int> createNotice(String title, String content, {String division = '전체'}) async {
+  Future<int> createNotice(String title, String content, {String division = '전체', List<String> images = const []}) async {
     final resp = await http.post(
       Uri.parse('$_baseUrl/community/notices'),
       headers: _headers,
-      body: json.encode({'title': title, 'content': content, 'division': division}),
+      body: json.encode({'title': title, 'content': content, 'division': division, 'images': images}),
     ).timeout(_apiTimeout);
     final body = json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
     if (resp.statusCode != 200) {
@@ -79,11 +91,11 @@ class CommunityService {
     return (notice?['id'] as num?)?.toInt() ?? 0;
   }
 
-  Future<void> updateNotice(int id, String title, String content, {String division = '전체'}) async {
+  Future<void> updateNotice(int id, String title, String content, {String division = '전체', List<String> images = const []}) async {
     final resp = await http.put(
       Uri.parse('$_baseUrl/community/notices/$id'),
       headers: _headers,
-      body: json.encode({'title': title, 'content': content, 'division': division}),
+      body: json.encode({'title': title, 'content': content, 'division': division, 'images': images}),
     ).timeout(_apiTimeout);
     if (resp.statusCode != 200) {
       final body = json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
@@ -146,13 +158,14 @@ class CommunityService {
     }
   }
 
-  Future<int> createRequest(String title, String content, {bool isSecret = false, String secretPassword = ''}) async {
+  Future<int> createRequest(String title, String content, {bool isSecret = false, String secretPassword = '', List<String> images = const []}) async {
     final resp = await http.post(
       Uri.parse('$_baseUrl/community/requests'),
       headers: _headers,
       body: json.encode({
         'title': title, 'content': content,
         'is_secret': isSecret, 'secret_password': secretPassword,
+        'images': images,
       }),
     ).timeout(_apiTimeout);
     final body = json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
@@ -163,11 +176,11 @@ class CommunityService {
     return (req?['id'] as num?)?.toInt() ?? 0;
   }
 
-  Future<void> updateRequest(int id, String title, String content) async {
+  Future<void> updateRequest(int id, String title, String content, {List<String> images = const []}) async {
     final resp = await http.put(
       Uri.parse('$_baseUrl/community/requests/$id'),
       headers: _headers,
-      body: json.encode({'title': title, 'content': content}),
+      body: json.encode({'title': title, 'content': content, 'images': images}),
     ).timeout(_apiTimeout);
     if (resp.statusCode != 200) {
       final body = json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
@@ -218,6 +231,21 @@ class CommunityService {
     ).timeout(_apiTimeout);
     if (resp.statusCode != 200) throw Exception('댓글 삭제 실패');
   }
+
+  /// 이미지 업로드
+  Future<Map<String, dynamic>> uploadImage(Uint8List bytes, String filename) async {
+    final uri = Uri.parse('$_baseUrl/community/upload-image');
+    final request = http.MultipartRequest('POST', uri)
+      ..headers['Authorization'] = 'Bearer ${_authToken ?? ''}'
+      ..files.add(http.MultipartFile.fromBytes('file', bytes, filename: filename));
+    final streamed = await request.send().timeout(const Duration(minutes: 2));
+    final body = json.decode(await streamed.stream.bytesToString());
+    if (streamed.statusCode != 200) throw Exception(body['detail'] ?? '이미지 업로드 실패');
+    return body as Map<String, dynamic>;
+  }
+
+  /// 이미지 URL 생성
+  String getImageUrl(String imageKey) => '$_baseUrl/community/images/$imageKey';
 
   Future<void> updateRequestStatus(int id, String status) async {
     final resp = await http.put(

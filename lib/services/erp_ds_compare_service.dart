@@ -9,7 +9,7 @@ class ErpDsCompareService {
     defaultValue: 'https://api-sko-kca.skons.net',
   );
 
-  static const _apiTimeout = Duration(seconds: 120);
+  static const _apiTimeout = Duration(minutes: 5);
 
   String? _authToken;
   void setAuthToken(String? token) => _authToken = token;

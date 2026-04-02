@@ -5,7 +5,6 @@ import '../services/auth_service.dart';
 import '../services/cloud_data_service.dart';
 import '../services/weather_service.dart';
 import 'division_management_screen.dart';
-import 'dashboard_screen.dart';
 import 'admin/admin_panel_screen.dart';
 import 'ds_dashboard_screen.dart';
 import 'ds_merge_screen.dart';
@@ -14,8 +13,9 @@ import 'certificate_screen.dart';
 import 'erp_ds_compare_screen.dart';
 import 'inspection_schedule_screen.dart';
 import 'inspection_my_list_screen.dart';
-import 'notice_board_screen.dart';
-import 'request_board_screen.dart';
+import 'inspection_results_screen.dart';
+import 'community_screen.dart';
+import '../services/community_service.dart';
 
 /// 앱 셸 — 사이드바 상시 표시 + 오른쪽 콘텐츠 전환
 class HomeScreen extends StatefulWidget {
@@ -61,16 +61,15 @@ class _HomeScreenState extends State<HomeScreen> {
   List<_MenuItem> _buildMenuItems(AuthService auth) {
     return [
       _MenuItem('홈', Icons.home_outlined, const Color(0xFF374151), description: '메인 화면'),
-      _MenuItem('전국 현황', Icons.insights_outlined, const Color(0xFF14B8A6), description: '전국 무선국 현황 대시보드'),
-      _MenuItem('수검 관리', Icons.map_outlined, const Color(0xFF3B82F6), description: '수검 대상 지도 및 관리'),
+      _MenuItem('현장 수검 Map', Icons.map_outlined, const Color(0xFF3B82F6), description: '수검 대상 지도 및 관리'),
       _MenuItem('일정 및 통계', Icons.event_note_outlined, const Color(0xFF10B981), description: '수검 일정 조회 및 통계'),
+      _MenuItem('실적 관리', Icons.bar_chart_outlined, const Color(0xFFE53935), description: '본부별 수검 실적 현황'),
       _MenuItem('DS 데이터', Icons.storage_outlined, const Color(0xFF8B5CF6), description: 'DS 데이터 조회 및 분석'),
       _MenuItem('DS 병합', Icons.merge_outlined, const Color(0xFFF59E0B), description: 'DS 데이터 병합 처리'),
       _MenuItem('호출명칭', Icons.sync_alt_outlined, const Color(0xFFEF4444), description: '호출명칭 검색 및 비교'),
       _MenuItem('설치확인서', Icons.description_outlined, const Color(0xFF06B6D4), description: '설치확인서 조회 및 관리'),
       _MenuItem('전산비교', Icons.compare_outlined, const Color(0xFF2563EB), description: 'ERP·DS 전산 데이터 비교'),
-      _MenuItem('공지사항', Icons.campaign_outlined, const Color(0xFFE53935), description: '조직 내 공지사항'),
-      _MenuItem('요청사항', Icons.chat_bubble_outline, const Color(0xFF7C3AED), description: '문의 및 요청사항 등록'),
+      _MenuItem('커뮤니티', Icons.forum_outlined, const Color(0xFFE53935), description: '공지사항 및 요청사항'),
       if (auth.isDivisionAdmin)
         _MenuItem('대상 관리', Icons.business_outlined, const Color(0xFF7C3AED), description: '본부별 수검 대상 관리'),
       if (auth.isSuperAdmin)
@@ -80,11 +79,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
   // 아코디언 그룹 정의
   static const _menuGroups = [
-    _MenuGroup('현황 관리', Icons.insights_outlined, Color(0xFF14B8A6), ['전국 현황']),
-    _MenuGroup('수검 관리', Icons.map_outlined, Color(0xFF3B82F6), ['수검 관리', '일정 및 통계']),
+    _MenuGroup('수검 관리', Icons.map_outlined, Color(0xFF3B82F6), ['현장 수검 Map', '일정 및 통계', '실적 관리']),
     _MenuGroup('DS 관리', Icons.storage_outlined, Color(0xFF8B5CF6), ['DS 데이터', 'DS 병합']),
     _MenuGroup('서류 관리', Icons.folder_outlined, Color(0xFFEF4444), ['호출명칭', '설치확인서', '전산비교']),
-    _MenuGroup('커뮤니티', Icons.forum_outlined, Color(0xFFE53935), ['공지사항', '요청사항']),
   ];
 
   Widget _buildPage(int index, AuthService auth) {
@@ -95,16 +92,15 @@ class _HomeScreenState extends State<HomeScreen> {
 
     switch (title) {
       case '홈': return _HomeContent(onNavigate: (i) => setState(() => _selectedIndex = i), menuItems: items);
-      case '전국 현황': return const DashboardScreen();
-      case '수검 관리': return const InspectionMyListScreen();
+      case '현장 수검 Map': return const InspectionMyListScreen();
       case '일정 및 통계': return const InspectionScheduleScreen();
+      case '실적 관리': return const InspectionResultsScreen();
       case 'DS 데이터': return const DsDashboardScreen();
       case 'DS 병합': return const DsMergeScreen();
       case '호출명칭': return const CallnameScreen();
       case '설치확인서': return const CertificateScreen();
       case '전산비교': return const ErpDsCompareScreen();
-      case '공지사항': return const NoticeBoardScreen();
-      case '요청사항': return const RequestBoardScreen();
+      case '커뮤니티': return const CommunityScreen();
       case '대상 관리': return const DivisionManagementScreen();
       case '관리자': return const AdminPanelScreen();
       default: return _HomeContent(onNavigate: (i) => setState(() => _selectedIndex = i), menuItems: items);
@@ -628,10 +624,52 @@ class _HomeContentState extends State<_HomeContent> {
   WeatherInfo? _weather;
   bool _loadingWeather = true;
 
+  // 커뮤니티
+  final _commSvc = CommunityService();
+  bool _commTab = true; // true=공지사항, false=요청사항
+  List<Map<String, dynamic>> _commItems = [];
+  bool _commLoading = true;
+
+  // 일일 접속자
+  int _dailyVisitors = 0;
+
+  // 바로가기 캐러셀
+  int _carouselPage = 0;
+  late final PageController _pageController;
+
   @override
   void initState() {
     super.initState();
+    _pageController = PageController();
+    _commSvc.setAuthToken(context.read<AuthService>().authToken);
     _loadWeather();
+    _loadComm();
+  }
+
+  @override
+  void dispose() {
+    _pageController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadComm() async {
+    setState(() => _commLoading = true);
+    try {
+      final futures = await Future.wait([
+        _commTab ? _commSvc.getNotices(pageSize: 5) : _commSvc.getRequests(pageSize: 5),
+        _commSvc.getStats(),
+      ]);
+      final res = futures[0] as Map<String, dynamic>;
+      final stats = futures[1] as Map<String, dynamic>;
+      final key = _commTab ? 'notices' : 'requests';
+      if (mounted) setState(() {
+        _commItems = List<Map<String, dynamic>>.from(res[key] ?? []);
+        _dailyVisitors = (stats['daily_visitors'] as int?) ?? 0;
+        _commLoading = false;
+      });
+    } catch (_) {
+      if (mounted) setState(() { _commItems = []; _commLoading = false; });
+    }
   }
 
   Future<void> _loadWeather() async {
@@ -657,7 +695,7 @@ class _HomeContentState extends State<_HomeContent> {
           padding: const EdgeInsets.all(28),
           child: Center(
             child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 960),
+              constraints: const BoxConstraints(maxWidth: 2000),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -686,7 +724,28 @@ class _HomeContentState extends State<_HomeContent> {
                       ],
                     ),
                   ),
-                  const SizedBox(height: 28),
+                  const SizedBox(height: 20),
+
+                  // ── 커뮤니티 위젯 + 일일 접속자 (반응형) ──
+                  LayoutBuilder(
+                    builder: (context, cst) {
+                      final wide = cst.maxWidth > 600;
+                      if (wide) {
+                        return Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Expanded(flex: 3, child: _buildCommunityWidget()),
+                            const SizedBox(width: 16),
+                            Expanded(flex: 1, child: _buildDailyVisitorCard()),
+                          ],
+                        );
+                      }
+                      return _buildCommunityWidget();
+                    },
+                  ),
+                  const SizedBox(height: 20),
+
+                  const SizedBox(height: 20),
 
                   const Text('바로가기',
                       style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
@@ -695,28 +754,80 @@ class _HomeContentState extends State<_HomeContent> {
                       style: TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
                   const SizedBox(height: 16),
 
-                  // 카드 그리드
+                  // 카드 캐러셀 (PageView 애니메이션)
                   LayoutBuilder(
                     builder: (context, constraints) {
                       final w = constraints.maxWidth;
-                      final crossCount = w > 640 ? 3 : w > 400 ? 2 : 1;
-                      final ratio = w > 640 ? 2.0 : w > 400 ? 1.8 : 3.2;
-                      return GridView.builder(
-                        shrinkWrap: true,
-                        physics: const NeverScrollableScrollPhysics(),
-                        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                          crossAxisCount: crossCount,
-                          crossAxisSpacing: 12,
-                          mainAxisSpacing: 12,
-                          childAspectRatio: ratio,
+                      final perPage = w > 800 ? 5 : w > 600 ? 4 : w > 400 ? 3 : 2;
+                      final totalPages = (cards.length / perPage).ceil();
+                      final hasPrev = _carouselPage > 0;
+                      final hasNext = _carouselPage < totalPages - 1;
+
+                      return Container(
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: const Color(0xFFE5E7EB)),
                         ),
-                        itemCount: cards.length,
-                        itemBuilder: (_, i) {
-                          final card = cards[i];
-                          // 전체 menuItems에서 해당 카드의 인덱스를 찾아서 onNavigate에 전달
-                          final menuIndex = widget.menuItems.indexOf(card);
-                          return _buildCard(card, () => widget.onNavigate(menuIndex));
-                        },
+                        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 4),
+                        child: Row(
+                          children: [
+                            IconButton(
+                              onPressed: hasPrev ? () {
+                                _pageController.previousPage(
+                                  duration: const Duration(milliseconds: 350),
+                                  curve: Curves.easeInOut,
+                                );
+                              } : null,
+                              icon: Icon(Icons.chevron_left,
+                                  color: hasPrev ? const Color(0xFF374151) : Colors.grey.shade300),
+                              splashRadius: 20,
+                            ),
+                            Expanded(
+                              child: SizedBox(
+                                height: 150,
+                                child: PageView.builder(
+                                  controller: _pageController,
+                                  onPageChanged: (p) => setState(() => _carouselPage = p),
+                                  itemCount: totalPages,
+                                  itemBuilder: (_, pageIdx) {
+                                    final start = pageIdx * perPage;
+                                    final end = (start + perPage).clamp(0, cards.length);
+                                    final visible = cards.sublist(start, end);
+                                    return Row(
+                                      children: [
+                                        ...visible.map((card) {
+                                          final menuIndex = widget.menuItems.indexOf(card);
+                                          return Expanded(
+                                            child: Padding(
+                                              padding: const EdgeInsets.symmetric(horizontal: 6),
+                                              child: _buildCarouselCard(card, () => widget.onNavigate(menuIndex)),
+                                            ),
+                                          );
+                                        }),
+                                        ...List.generate(
+                                          (perPage - visible.length).clamp(0, perPage),
+                                          (_) => const Expanded(child: SizedBox()),
+                                        ),
+                                      ],
+                                    );
+                                  },
+                                ),
+                              ),
+                            ),
+                            IconButton(
+                              onPressed: hasNext ? () {
+                                _pageController.nextPage(
+                                  duration: const Duration(milliseconds: 350),
+                                  curve: Curves.easeInOut,
+                                );
+                              } : null,
+                              icon: Icon(Icons.chevron_right,
+                                  color: hasNext ? const Color(0xFF374151) : Colors.grey.shade300),
+                              splashRadius: 20,
+                            ),
+                          ],
+                        ),
                       );
                     },
                   ),
@@ -739,52 +850,194 @@ class _HomeContentState extends State<_HomeContent> {
     return '  ·  ${w.condition} ${w.icon}';
   }
 
-  Widget _buildCard(_MenuItem item, VoidCallback onTap) {
+  Widget _buildDailyVisitorCard() {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFE5E7EB)),
+      ),
+      child: Column(
+        children: [
+          Icon(Icons.people_outline, size: 28, color: Colors.blue.shade400),
+          const SizedBox(height: 10),
+          Text('$_dailyVisitors',
+              style: TextStyle(fontSize: 28, fontWeight: FontWeight.w700, color: Colors.blue.shade600)),
+          const SizedBox(height: 4),
+          Text('오늘 접속자',
+              style: TextStyle(fontSize: 12, color: Colors.grey.shade500)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCommunityWidget() {
+    // 커뮤니티 메뉴 인덱스 찾기
+    int commIdx() {
+      final idx = widget.menuItems.indexWhere((m) => m.title == '커뮤니티');
+      return idx >= 0 ? idx : 0;
+    }
+
     return Container(
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: const Color(0xFFE5E7EB)),
       ),
-      child: Material(
-        color: Colors.transparent,
-        borderRadius: BorderRadius.circular(12),
-        child: InkWell(
-          onTap: onTap,
-          borderRadius: BorderRadius.circular(12),
-          hoverColor: const Color(0xFFF9FAFB),
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisAlignment: MainAxisAlignment.center,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // 헤더: 커뮤니티 → + 탭 버튼
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 14, 12, 0),
+            child: Row(
               children: [
-                Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: item.color.withValues(alpha: 0.1),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Icon(item.icon, size: 18, color: item.color),
-                    ),
-                    const Spacer(),
-                    Icon(Icons.arrow_forward_ios, size: 12, color: Colors.grey.shade300),
-                  ],
+                GestureDetector(
+                  onTap: () => widget.onNavigate(commIdx()),
+                  child: Row(children: [
+                    const Text('커뮤니티',
+                        style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+                    const SizedBox(width: 4),
+                    Icon(Icons.arrow_forward_ios, size: 12, color: Colors.grey.shade400),
+                  ]),
                 ),
-                const SizedBox(height: 12),
-                Text(item.title,
-                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF111827))),
-                if (item.description.isNotEmpty) ...[
-                  const SizedBox(height: 4),
-                  Text(item.description,
-                      style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF)),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis),
-                ],
+                const SizedBox(width: 16),
+                _commTabBtn('공지사항', true),
+                const SizedBox(width: 4),
+                _commTabBtn('요청사항', false),
+                const Spacer(),
               ],
             ),
+          ),
+          const Divider(height: 20),
+          // 목록
+          if (_commLoading)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 24),
+              child: Center(child: SizedBox(width: 20, height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2))),
+            )
+          else if (_commItems.isEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 24),
+              child: Center(child: Text(
+                _commTab ? '등록된 공지사항이 없습니다.' : '등록된 요청사항이 없습니다.',
+                style: TextStyle(fontSize: 13, color: Colors.grey.shade400),
+              )),
+            )
+          else
+            ...List.generate(_commItems.length, (i) {
+              final item = _commItems[i];
+              final title = item['title'] as String? ?? '';
+              final date = (item['created_at'] as String? ?? '').split('T').first;
+              final isSecret = !_commTab && (item['is_secret'] == true || item['is_secret'] == 1);
+              return InkWell(
+                onTap: () => widget.onNavigate(commIdx()),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                  child: Row(
+                    children: [
+                      if (!_commTab) ...[
+                        _statusDot(item['status'] as String? ?? '접수'),
+                        const SizedBox(width: 8),
+                      ],
+                      if (isSecret) ...[
+                        Icon(Icons.lock, size: 13, color: Colors.grey.shade400),
+                        const SizedBox(width: 4),
+                      ],
+                      Expanded(
+                        child: Text(title,
+                            style: const TextStyle(fontSize: 13, color: Color(0xFF374151)),
+                            maxLines: 1, overflow: TextOverflow.ellipsis),
+                      ),
+                      const SizedBox(width: 12),
+                      Text(date,
+                          style: TextStyle(fontSize: 11, color: Colors.grey.shade400)),
+                    ],
+                  ),
+                ),
+              );
+            }),
+          const SizedBox(height: 8),
+        ],
+      ),
+    );
+  }
+
+  Widget _commTabBtn(String label, bool isNotice) {
+    final selected = _commTab == isNotice;
+    return GestureDetector(
+      onTap: () {
+        if (_commTab != isNotice) {
+          setState(() => _commTab = isNotice);
+          _loadComm();
+        }
+      },
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+        decoration: BoxDecoration(
+          color: selected ? const Color(0xFF1E293B) : Colors.transparent,
+          borderRadius: BorderRadius.circular(6),
+          border: selected ? null : Border.all(color: Colors.grey.shade300),
+        ),
+        child: Text(label,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
+              color: selected ? Colors.white : Colors.grey.shade600,
+            )),
+      ),
+    );
+  }
+
+  Widget _statusDot(String status) {
+    final color = status == '완료' ? Colors.green
+        : status == '처리중' ? Colors.orange
+        : Colors.blue;
+    return Container(
+      width: 7, height: 7,
+      decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+    );
+  }
+
+  Widget _buildCarouselCard(_MenuItem item, VoidCallback onTap) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(10),
+        hoverColor: const Color(0xFFF3F4F6),
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 8),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: const Color(0xFFE5E7EB)),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: item.color.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Icon(item.icon, size: 22, color: item.color),
+              ),
+              const SizedBox(height: 10),
+              Text(item.title,
+                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF111827)),
+                  textAlign: TextAlign.center),
+              if (item.description.isNotEmpty) ...[
+                const SizedBox(height: 4),
+                Text(item.description,
+                    style: const TextStyle(fontSize: 10, color: Color(0xFF9CA3AF)),
+                    textAlign: TextAlign.center,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis),
+              ],
+            ],
           ),
         ),
       ),

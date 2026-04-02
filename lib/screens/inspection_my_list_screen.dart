@@ -31,6 +31,9 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
 
   String _sortOrder = '최신순';
 
+  String _selectedWeek = '';
+  List<String> _weekOptions = [];
+
   // 드래그 (모바일)
   double _listHeightRatio = 0.40;
   static const double _minListRatio = 0.15;
@@ -41,13 +44,21 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
     super.initState();
     _svc = InspectionService()
       ..setAuthToken(context.read<AuthService>().authToken);
+    _loadWeeks();
     _loadInspection();
+  }
+
+  Future<void> _loadWeeks() async {
+    try {
+      final weeks = await _svc.getMyListWeeks(_year);
+      if (mounted) setState(() => _weekOptions = weeks);
+    } catch (_) {}
   }
 
   Future<void> _loadInspection() async {
     setState(() { _loadingInsp = true; _inspError = null; });
     try {
-      final items = await _svc.getMyList(_year);
+      final items = await _svc.getMyList(_year, week: _selectedWeek);
       setState(() => _assignedItems = items);
     } catch (e) {
       setState(() => _inspError = e.toString());
@@ -283,6 +294,8 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
               style: TextStyle(color: Colors.black87, fontSize: 17, fontWeight: FontWeight.w600)),
           const SizedBox(width: 12),
           _buildYearChips(),
+          const SizedBox(width: 8),
+          if (_weekOptions.isNotEmpty) _buildWeekDropdown(),
           const Spacer(),
           if (_loadingInsp)
             const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
@@ -305,7 +318,11 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
         final selected = y == _year;
         return GestureDetector(
           onTap: () {
-            if (_year != y) { setState(() => _year = y); _loadInspection(); }
+            if (_year != y) {
+              setState(() { _year = y; _selectedWeek = ''; _weekOptions = []; });
+              _loadWeeks();
+              _loadInspection();
+            }
           },
           child: Container(
             margin: const EdgeInsets.only(right: 6),
@@ -323,6 +340,37 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
           ),
         );
       }).toList(),
+    );
+  }
+
+  Widget _buildWeekDropdown() {
+    const primaryColor = Color(0xFFE53935);
+    final items = <DropdownMenuItem<String>>[
+      const DropdownMenuItem(value: '', child: Text('전체 주차')),
+      ..._weekOptions.map((w) => DropdownMenuItem(value: w, child: Text(w))),
+    ];
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border.all(color: Colors.grey.shade300),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<String>(
+          isExpanded: false,
+          isDense: true,
+          icon: const Icon(Icons.arrow_drop_down, color: primaryColor, size: 20),
+          dropdownColor: Colors.white,
+          style: const TextStyle(color: Colors.black87, fontSize: 13),
+          value: _selectedWeek,
+          items: items,
+          onChanged: (v) {
+            setState(() => _selectedWeek = v ?? '');
+            _loadInspection();
+          },
+        ),
+      ),
     );
   }
 

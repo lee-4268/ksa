@@ -338,7 +338,9 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     final initMonth = match != null ? int.tryParse(match.group(1)!) : null;
     final initWeek = match != null ? int.tryParse(match.group(2)!) : null;
 
-    final result = await showDialog<Map<String, int>>(
+    final existingInspector = item['schedule']?['검사관'] as String? ?? '';
+    final inspectorCtrl = TextEditingController(text: existingInspector);
+    final result = await showDialog<Map<String, dynamic>>(
       context: context,
       builder: (ctx) {
         int? selMonth = initMonth;
@@ -381,6 +383,17 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                         style: TextStyle(fontSize: 14, color: _blue, fontWeight: FontWeight.w600)),
                   ),
                 ],
+                const SizedBox(height: 16),
+                TextField(
+                  controller: inspectorCtrl,
+                  decoration: InputDecoration(
+                    labelText: '검사관',
+                    hintText: '검사관 이름 입력',
+                    isDense: true,
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                  ),
+                  style: const TextStyle(fontSize: 13),
+                ),
               ]),
             ),
             actions: [
@@ -389,7 +402,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                 style: ElevatedButton.styleFrom(backgroundColor: _primary, foregroundColor: Colors.white,
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
                 onPressed: selMonth != null && selWeek != null
-                    ? () => Navigator.pop(ctx, {'month': selMonth!, 'week': selWeek!})
+                    ? () => Navigator.pop(ctx, {'month': selMonth!, 'week': selWeek!, '검사관': inspectorCtrl.text.trim()})
                     : null,
                 child: const Text('저장'),
               ),
@@ -398,6 +411,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
         );
       },
     );
+    inspectorCtrl.dispose();
     if (result == null) return;
     final weekStr = '${result['month']}월 ${result['week']}주차';
     try {
@@ -413,6 +427,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
         '수검시작일': '',
         '수검종료일': '',
         '지역': '',
+        '검사관': result['검사관'] ?? '',
       }));
       _showSnack('일정이 저장되었습니다.');
       await Future.wait([
@@ -518,7 +533,8 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
   Future<void> _showBulkUpsertDialog(List<Map<String, dynamic>> targetItems, String actionTitle) async {
     if (targetItems.isEmpty) return;
 
-    final result = await showDialog<Map<String, int>>(
+    final inspectorCtrl = TextEditingController();
+    final result = await showDialog<Map<String, dynamic>>(
       context: context,
       builder: (ctx) {
         int? selMonth;
@@ -579,6 +595,17 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                         style: TextStyle(fontSize: 14, color: _blue, fontWeight: FontWeight.w600)),
                   ),
                 ],
+                const SizedBox(height: 16),
+                TextField(
+                  controller: inspectorCtrl,
+                  decoration: InputDecoration(
+                    labelText: '검사관',
+                    hintText: '검사관 이름 입력',
+                    isDense: true,
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                  ),
+                  style: const TextStyle(fontSize: 13),
+                ),
               ]),
             ),
             actions: [
@@ -587,7 +614,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                 style: ElevatedButton.styleFrom(backgroundColor: _primary, foregroundColor: Colors.white,
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
                 onPressed: selMonth != null && selWeek != null
-                    ? () => Navigator.pop(ctx, {'month': selMonth!, 'week': selWeek!})
+                    ? () => Navigator.pop(ctx, {'month': selMonth!, 'week': selWeek!, '검사관': inspectorCtrl.text.trim()})
                     : null,
                 child: const Text('저장'),
               ),
@@ -596,8 +623,10 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
         );
       },
     );
+    inspectorCtrl.dispose();
     if (result == null) return;
     final weekStr = '${result['month']}월 ${result['week']}주차';
+    final inspector = result['검사관'] as String? ?? '';
 
     int successCount = 0, failCount = 0;
     await _withLoading('일정 등록 중... (${targetItems.length}건)', () async {
@@ -614,6 +643,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
           '수검시작일': '',
           '수검종료일': '',
           '지역': '',
+          '검사관': inspector,
         }).then((_) => true).catchError((_) => false)),
       );
       successCount = results.where((r) => r).length;

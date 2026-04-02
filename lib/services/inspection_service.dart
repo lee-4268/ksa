@@ -304,12 +304,23 @@ class InspectionService {
     return resp.bodyBytes;
   }
 
-  Future<List<Map<String, dynamic>>> getMyList(int year) async {
+  Future<List<Map<String, dynamic>>> getMyList(int year, {String week = ''}) async {
     final uri = Uri.parse('$_baseUrl/inspection/my-list').replace(
-        queryParameters: {'year': '$year'});
+        queryParameters: {
+          'year': '$year',
+          if (week.isNotEmpty) 'week': week,
+        });
     final resp = await http.get(uri, headers: _headers).timeout(_apiTimeout);
     final body = json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
     return List<Map<String, dynamic>>.from(body['items'] ?? []);
+  }
+
+  Future<List<String>> getMyListWeeks(int year) async {
+    final uri = Uri.parse('$_baseUrl/inspection/my-list/weeks').replace(
+        queryParameters: {'year': '$year'});
+    final resp = await http.get(uri, headers: _headers).timeout(_apiTimeout);
+    final body = json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+    return List<String>.from(body['weeks'] ?? []);
   }
 
   Future<List<Map<String, dynamic>>> getProgress(int year) async {
@@ -371,6 +382,130 @@ class InspectionService {
     final body = json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
     if (resp.statusCode != 200) throw Exception(body['detail'] ?? '추가 실패');
     return body['item'] as Map<String, dynamic>;
+  }
+
+  // ── 실적 결과장 ──────────────────────────────────────────
+
+  /// 실적 결과장 업로드
+  Future<Map<String, dynamic>> uploadResults(Uint8List bytes, String filename) async {
+    final uri = Uri.parse('$_baseUrl/inspection-results/upload');
+    final req = http.MultipartRequest('POST', uri)
+      ..headers['Authorization'] = 'Bearer ${_authToken ?? ''}'
+      ..files.add(http.MultipartFile.fromBytes('file', bytes, filename: filename));
+    final streamed = await req.send().timeout(const Duration(minutes: 5));
+    final body = json.decode(await streamed.stream.bytesToString());
+    if (streamed.statusCode != 200) throw Exception(body['detail'] ?? '업로드 실패');
+    return body as Map<String, dynamic>;
+  }
+
+  /// 대시보드 통계
+  Future<Map<String, dynamic>> getResultsDashboard(int year, {String region = ''}) async {
+    final uri = Uri.parse('$_baseUrl/inspection-results/dashboard')
+        .replace(queryParameters: {
+      'year': '$year',
+      if (region.isNotEmpty) 'region': region,
+    });
+    final resp = await http.get(uri, headers: _headers).timeout(_apiTimeout);
+    return json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+  }
+
+  /// 월별 대시보드
+  Future<Map<String, dynamic>> getResultsMonthly(int year, String month, {String region = ''}) async {
+    final uri = Uri.parse('$_baseUrl/inspection-results/dashboard/monthly')
+        .replace(queryParameters: {
+      'year': '$year',
+      'month': month,
+      if (region.isNotEmpty) 'region': region,
+    });
+    final resp = await http.get(uri, headers: _headers).timeout(_apiTimeout);
+    return json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+  }
+
+  /// 추이 데이터
+  Future<Map<String, dynamic>> getResultsTrend(int year) async {
+    final uri = Uri.parse('$_baseUrl/inspection-results/trend')
+        .replace(queryParameters: {'year': '$year'});
+    final resp = await http.get(uri, headers: _headers).timeout(_apiTimeout);
+    return json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+  }
+
+  /// RAW DATA 목록
+  Future<Map<String, dynamic>> getResultsRaw(int year, {
+    String region = '',
+    String month = '',
+    int page = 1,
+    int pageSize = 100,
+  }) async {
+    final uri = Uri.parse('$_baseUrl/inspection-results/raw')
+        .replace(queryParameters: {
+      'year': '$year',
+      if (region.isNotEmpty) 'region': region,
+      if (month.isNotEmpty) 'month': month,
+      'page': '$page',
+      'page_size': '$pageSize',
+    });
+    final resp = await http.get(uri, headers: _headers).timeout(_apiTimeout);
+    return json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> getResultsAnalysis(int year, {String region = ''}) async {
+    final uri = Uri.parse('$_baseUrl/inspection-results/analysis')
+        .replace(queryParameters: {
+      'year': '$year',
+      if (region.isNotEmpty) 'region': region,
+    });
+    final resp = await http.get(uri, headers: _headers).timeout(_apiTimeout);
+    if (resp.statusCode != 200) throw Exception('분석 조회 실패');
+    return json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> getResultsWeeklyTrendByRegion(int year, {String region = ''}) async {
+    final uri = Uri.parse('$_baseUrl/inspection-results/weekly-trend-by-region')
+        .replace(queryParameters: {
+      'year': '$year',
+      if (region.isNotEmpty) 'region': region,
+    });
+    final resp = await http.get(uri, headers: _headers).timeout(_apiTimeout);
+    if (resp.statusCode != 200) throw Exception('본부별 주차별 추이 조회 실패');
+    return json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> getResultsWeeklyTrend(int year, {String region = ''}) async {
+    final uri = Uri.parse('$_baseUrl/inspection-results/weekly-trend')
+        .replace(queryParameters: {
+      'year': '$year',
+      if (region.isNotEmpty) 'region': region,
+    });
+    final resp = await http.get(uri, headers: _headers).timeout(_apiTimeout);
+    if (resp.statusCode != 200) throw Exception('주차별 추이 조회 실패');
+    return json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> getResultsSummaryReport(int year, {String region = ''}) async {
+    final uri = Uri.parse('$_baseUrl/inspection-results/summary-report')
+        .replace(queryParameters: {
+      'year': '$year',
+      if (region.isNotEmpty) 'region': region,
+    });
+    final resp = await http.get(uri, headers: _headers).timeout(_apiTimeout);
+    if (resp.statusCode != 200) throw Exception('리포트 조회 실패');
+    return json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+  }
+
+  Future<Uint8List> exportResultsXlsx(int year, {
+    String region = '', String progress = '', String status = '',
+    String perfDoc = '', String week = '',
+  }) async {
+    final resp = await http.post(
+      Uri.parse('$_baseUrl/inspection-results/export-xlsx'),
+      headers: _headers,
+      body: json.encode({
+        'year': year, '본부': region, '진행여부': progress,
+        'status': status, '성능서류': perfDoc, '주차별': week,
+      }),
+    ).timeout(const Duration(minutes: 5));
+    if (resp.statusCode != 200) throw Exception('엑셀 다운로드 실패');
+    return resp.bodyBytes;
   }
 
   Future<String> buildDsDetail(String divisionId, String importDate) async {

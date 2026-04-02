@@ -1,3 +1,6 @@
+import 'dart:convert';
+
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -6,7 +9,8 @@ import '../services/community_service.dart';
 
 /// 요청사항 게시판 화면
 class RequestBoardScreen extends StatefulWidget {
-  const RequestBoardScreen({super.key});
+  final bool showHeader;
+  const RequestBoardScreen({super.key, this.showHeader = true});
 
   @override
   State<RequestBoardScreen> createState() => _RequestBoardScreenState();
@@ -46,6 +50,8 @@ class _RequestBoardScreenState extends State<RequestBoardScreen> {
   final _contentController = TextEditingController();
   bool _isSecret = false;
   final _passwordController = TextEditingController();
+  List<String> _images = [];
+  bool _uploading = false;
 
   @override
   void initState() {
@@ -134,7 +140,49 @@ class _RequestBoardScreenState extends State<RequestBoardScreen> {
     _contentController.text = (editItem?['content'] as String?) ?? '';
     _isSecret = editItem?['is_secret'] == true || editItem?['is_secret'] == 1;
     _passwordController.clear();
+    _images = _parseImages(editItem?['images']);
     setState(() => _viewMode = _ViewMode.write);
+  }
+
+  List<String> _parseImages(dynamic raw) {
+    if (raw is List) return raw.cast<String>();
+    if (raw is String && raw.isNotEmpty) {
+      try {
+        final decoded = json.decode(raw);
+        if (decoded is List) return decoded.cast<String>();
+      } catch (_) {}
+    }
+    return [];
+  }
+
+  Future<void> _pickImage() async {
+    if (_images.length >= 5) {
+      _showSnack('이미지는 최대 5개까지 첨부할 수 있습니다.');
+      return;
+    }
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.image,
+      withData: true,
+    );
+    if (result == null || result.files.isEmpty) return;
+    final file = result.files.first;
+    if (file.bytes == null) return;
+    if (file.bytes!.length > 5 * 1024 * 1024) {
+      _showSnack('이미지 크기는 5MB 이하만 가능합니다.');
+      return;
+    }
+    setState(() => _uploading = true);
+    try {
+      final res = await _svc.uploadImage(file.bytes!, file.name);
+      final url = res['url'] as String? ?? '';
+      if (url.isNotEmpty) {
+        setState(() => _images.add(url));
+      }
+    } catch (e) {
+      _showSnack('이미지 업로드 실패: $e');
+    } finally {
+      setState(() => _uploading = false);
+    }
   }
 
   Future<void> _savePost() async {
@@ -147,10 +195,10 @@ class _RequestBoardScreenState extends State<RequestBoardScreen> {
     setState(() => _loading = true);
     try {
       if (_editId != null) {
-        await _svc.updateRequest(_editId!, title, content);
+        await _svc.updateRequest(_editId!, title, content, images: _images);
         _showSnack('수정되었습니다.');
       } else {
-        await _svc.createRequest(title, content, isSecret: _isSecret, secretPassword: _passwordController.text.trim());
+        await _svc.createRequest(title, content, isSecret: _isSecret, secretPassword: _passwordController.text.trim(), images: _images);
         _showSnack('등록되었습니다.');
       }
       _page = 1;
@@ -271,12 +319,14 @@ class _RequestBoardScreenState extends State<RequestBoardScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           // 타이틀
-          const Text('요청사항',
-              style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
-          const SizedBox(height: 4),
-          Text('문의 및 요청사항을 등록합니다.',
-              style: TextStyle(fontSize: 13, color: Colors.grey.shade600)),
-          const SizedBox(height: 20),
+          if (widget.showHeader) ...[
+            const Text('요청사항',
+                style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 4),
+            Text('문의 및 요청사항을 등록합니다.',
+                style: TextStyle(fontSize: 13, color: Colors.grey.shade600)),
+            const SizedBox(height: 20),
+          ],
 
           // 툴바
           _buildToolbar(),
@@ -719,6 +769,49 @@ class _RequestBoardScreenState extends State<RequestBoardScreen> {
                     // 본문
                     SelectableText(content,
                         style: const TextStyle(fontSize: 14, height: 1.7)),
+
+                    // 첨부 이미지
+                    if (_parseImages(_detail!['images']).isNotEmpty) ...[
+                      const SizedBox(height: 24),
+                      const Divider(),
+                      const SizedBox(height: 12),
+                      Text('첨부 이미지', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Colors.grey.shade700)),
+                      const SizedBox(height: 10),
+                      Wrap(
+                        spacing: 12,
+                        runSpacing: 12,
+                        children: _parseImages(_detail!['images']).map((key) {
+                          return ClipRRect(
+                            borderRadius: BorderRadius.circular(8),
+                            child: Image.network(
+                              _svc.getImageUrl(key),
+                              width: 240,
+                              fit: BoxFit.cover,
+                              loadingBuilder: (_, child, progress) {
+                                if (progress == null) return child;
+                                return SizedBox(
+                                  width: 240,
+                                  height: 160,
+                                  child: Center(child: CircularProgressIndicator(
+                                    value: progress.expectedTotalBytes != null
+                                        ? progress.cumulativeBytesLoaded / progress.expectedTotalBytes!
+                                        : null,
+                                    color: _primaryColor,
+                                    strokeWidth: 2,
+                                  )),
+                                );
+                              },
+                              errorBuilder: (_, __, ___) => Container(
+                                width: 240,
+                                height: 160,
+                                color: Colors.grey.shade100,
+                                child: Icon(Icons.broken_image, size: 40, color: Colors.grey.shade400),
+                              ),
+                            ),
+                          );
+                        }).toList(),
+                      ),
+                    ],
                     const SizedBox(height: 32),
 
                     // 관리자 상태 변경
@@ -1051,6 +1144,73 @@ class _RequestBoardScreenState extends State<RequestBoardScreen> {
                         ),
                       ),
                     ),
+                    const SizedBox(height: 16),
+
+                    // 이미지 첨부
+                    const Text('이미지 첨부',
+                        style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                    const SizedBox(height: 6),
+                    Row(
+                      children: [
+                        OutlinedButton.icon(
+                          onPressed: (_uploading || _images.length >= 5) ? null : _pickImage,
+                          icon: _uploading
+                              ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: _primaryColor))
+                              : const Icon(Icons.add_photo_alternate_outlined, size: 18),
+                          label: Text(_uploading ? '업로드 중...' : '이미지 추가', style: const TextStyle(fontSize: 13)),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: _primaryColor,
+                            side: const BorderSide(color: _primaryColor),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Text('${_images.length}/5', style: TextStyle(fontSize: 12, color: Colors.grey.shade500)),
+                      ],
+                    ),
+                    if (_images.isNotEmpty) ...[
+                      const SizedBox(height: 10),
+                      Wrap(
+                        spacing: 10,
+                        runSpacing: 10,
+                        children: List.generate(_images.length, (i) {
+                          return Stack(
+                            children: [
+                              ClipRRect(
+                                borderRadius: BorderRadius.circular(8),
+                                child: Image.network(
+                                  _svc.getImageUrl(_images[i]),
+                                  width: 120,
+                                  height: 90,
+                                  fit: BoxFit.cover,
+                                  errorBuilder: (_, __, ___) => Container(
+                                    width: 120, height: 90,
+                                    color: Colors.grey.shade100,
+                                    child: Icon(Icons.broken_image, color: Colors.grey.shade400),
+                                  ),
+                                ),
+                              ),
+                              Positioned(
+                                top: 2,
+                                right: 2,
+                                child: InkWell(
+                                  onTap: () => setState(() => _images.removeAt(i)),
+                                  child: Container(
+                                    decoration: const BoxDecoration(
+                                      color: Colors.black54,
+                                      shape: BoxShape.circle,
+                                    ),
+                                    padding: const EdgeInsets.all(3),
+                                    child: const Icon(Icons.close, size: 14, color: Colors.white),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          );
+                        }),
+                      ),
+                    ],
                     const SizedBox(height: 12),
 
                     // 비밀글 (신규 작성 시만)

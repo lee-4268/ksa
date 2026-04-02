@@ -36,7 +36,7 @@ import numpy as np
 from fastapi import FastAPI, File, UploadFile, HTTPException, Query, Form, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.gzip import GZipMiddleware
-from fastapi.responses import JSONResponse, Response, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse, RedirectResponse
 from pydantic import BaseModel
 from ultralytics import YOLO
 
@@ -239,7 +239,7 @@ CALLNAME_CSV_PREFIX = "callname-db/"
 CALLNAME_CACHE_TTL = 86400  # 24시간
 CALLNAME_SESSION_TTL = 1800  # 30분
 CALLNAME_MAX_SESSIONS = 3
-CALLNAME_USE_COLS = ["zpwina", "zpwino", "zpwiadr", "zpcode", "zpcname", "area_hdofc_nm", "ons_team_nm", "zpirty3", "eqp_ser_no", "zpprac1"]
+CALLNAME_USE_COLS = ["zpwina", "zpwino", "zpwiadr", "zpcode", "zpcname", "area_hdofc_nm", "ons_team_nm", "zpirty3", "eqp_ser_no", "zpprac1", "eqp_type"]
 CALLNAME_POSSIBLE_CALLNAME_COLS = ["호출명칭", "callname", "CALLNAME", "호출명", "call_name"]
 CALLNAME_POSSIBLE_TONGSI_COLS = ["통시", "통합시설코드", "zpcode"]
 CALLNAME_POSSIBLE_ZPWINA_COLS = ["zpwina", "ZPWINA", "Zpwina", "호출명칭", "호출명"]
@@ -250,6 +250,293 @@ CALLNAME_DB_TO_EXCEL_MAP = {
     "area_hdofc_nm": CALLNAME_POSSIBLE_ACCESS_COLS,
     "ons_team_nm": CALLNAME_POSSIBLE_QUALITY_COLS,
     "zpcode": CALLNAME_POSSIBLE_TONGSI_COLS,
+}
+
+# 장비Type 간소화 매핑 (v6 기준 283개)
+_EQP_TYPE_SIMPLIFY = {
+    "0x2a": "MIBOS",
+    "800-SHRFW20-S1R": "SRF-W",
+    "AAU10-3.5G-32T(EL)": "RRU",
+    "AAU10-3.5G-32T(SS)": "AAU",
+    "AAU20-3.5G-32T(EL)": "AAU",
+    "AAU20-3.5G-32T(SS)": "AAU",
+    "AAU20-3.5G-64T(EL)": "RRU",
+    "AAU20-3.5G-64T(SS)": "AAU",
+    "AAU21-3.5G-32T(SS)": "AAU",
+    "ARRU_L(SS)": "RRU",
+    "ARRU_WL(SS)": "RRU",
+    "Airscale 5G MAA_AVQL": "AAU",
+    "Airscale 5G MAA_Band n78_AEQY": "AAU",
+    "Airscale 5G MAA_Band n78_AQQL": "AAU",
+    "CRU_L10(NSN)": "RRU",
+    "CRU_L10(SS)": "RRU",
+    "CSW-4903-RRFU": "OMW-DUO",
+    "DBRRU(SS)-WL": "RRU",
+    "DR-NODEB(외)": "W기지국",
+    "DUO-IBSF": "DUO-IBS",
+    "E3-NODEB(내)": "W기지국",
+    "E3-NODEB(외)": "W기지국",
+    "ERRHS": "ERRH",
+    "ERRUP": "ERRU",
+    "FX-NODEB": "W기지국",
+    "Flexi Multiradio BTS": "RRU",
+    "Flexi Multiradio RRH_Band 1_3": "RRU",
+    "Flexi Multiradio RRH_Band 3": "RRU",
+    "Flexi Multiradio RRH_Band 7": "RRU",
+    "Flexi Multiradio RRH_Band n78": "AAU",
+    "GST-SF-W15": "SF중계기",
+    "ICS-W1": "ICS",
+    "ICS-W20": "ICS",
+    "ICS-W5": "ICS",
+    "ICS-WN20": "ICS",
+    "IMT1050026": "SF중계기",
+    "IMT1050028": "SF중계기",
+    "KCC-CRI-LE1-RRUS11B5": "RRU",
+    "KCC-CRI-LE1-RRUS11B5-40W": "RRU",
+    "KCC-CRM-CSW-1SFF-B707": "RHU",
+    "LR-DUO2": "LR-DUO",
+    "LR-DUO5": "LR-DUO",
+    "LR-DUOF6": "LR-DUO",
+    "LR-DUON5": "LR-DUO",
+    "MIBOS-T-L60 RO-세로형": "MIBOS",
+    "MIBOS-WL-L10": "WLME",
+    "MPR-DUOF0530_IBS": "MPR-DUO",
+    "MPR-DUOF6_IBS": "MPR-DUO",
+    "MPR-DUON0520_IBS": "MPR",
+    "MPR-RHU-W5,MPR-RHU-WN5": "RHU",
+    "MPR-RHU-WN20": "RHU",
+    "MPRDN-RHUW": "RHU",
+    "MPRDUO-RHU-R,MPRDN-RHU": "RHU",
+    "MRRU_L10(ELG)": "RRU",
+    "MSIP-CRI-LE1-RRU22F1B3D": "RRU",
+    "MSIP-CRI-LE1-RRUS12B1": "RRH",
+    "MSIP-CRI-LE1-RRUS12B3-20M": "RRU",
+    "MSIP-CRI-LE1-RRUS13B1": "RRU",
+    "MSIP-CRI-LE1-Radio2212B7": "RRU",
+    "MSIP-CRI-LE1-Radio2217B7": "RRU",
+    "MSIP-CRM-800-SHTLHD-S1": "MIBOS",
+    "MSIP-CRM-CSW-1SFA-T802TL60": "MIBOS",
+    "MSIP-CRM-CSW-RROIROT80W6RLD": "IRO",
+    "MSIP-CRM-GST-MIBOS-T-L60R-S": "MIBOS",
+    "MSIP-CRM-GST-MIBOS-T-L60ROR": "MIBOS",
+    "MSIP-CRM-STC-MIBOS-Ad-L60LW": "MIBOS",
+    "MSIP-CRM-STC-MiBOS-Ad-L0LW": "MIBOS",
+    "MSIP-CRM-STC-MiBOS-Ad-L26LO": "MIBOS",
+    "MSIP-CRM-STC-MiBOS-Ad-L60LW": "MIBOS",
+    "MSIP-CRM-STC-RMIBQROTL": "MIBOS",
+    "MSIP-CRM-STC-RMIBTROLD60": "MIBOS",
+    "MSIP-CRM-STC-RMiBLROLO25": "MIBOS",
+    "MSIP-CRM-STC-RMiBQROTL": "MIBOS",
+    "MSIP-CRM-STC-RMiBTROLD60": "MIBOS",
+    "MSIP-CRM-STC-RMiBWMCL05": "MIBOS",
+    "MSIP-CRM-STC-RROIROQ8126RLD": "IRO",
+    "MSIP-CRM-STC-RROIROT8120LD": "IRO",
+    "MSIP-CRM-TSK-MIBOS-TF-L60-A": "MIBOS",
+    "MSIP-CRM-TSK-MIBOS-TF-L60-B": "MIBOS",
+    "MSIP-CRM-TSK-MiBOS-DF-L60-A": "MIBOS",
+    "MSIP-CRM-TSK-MiBOS-QF-L60-B": "MIBOS",
+    "MSIP-CRM-TSK-MiBOS-TF-L60-A": "MIBOS",
+    "MSIP-CRM-TSK-MiBOS-TF-L60-B": "MIBOS",
+    "MSIP-CRM-TSK-MiBOS-TSF-L60": "MIBOS",
+    "MiBOS-Ad-L26": "MIBOS",
+    "MiBOS-Ad-L60": "MIBOS",
+    "MiBOS-T-L60-AH": "MIBOS",
+    "MiBOS-T-L60-BH": "MIBOS",
+    "MiBOS-TS-L60-H": "MIBOS",
+    "MiBOS-WL-L10": "WLME",
+    "NLG-iBTSOutdoorS": "W기지국",
+    "NLG-iBTSOutdoorSH": "W기지국",
+    "OR-DUO2": "OR-DUO",
+    "OR-DUO5": "OR-DUO",
+    "OR-DUON5": "OR-DUO",
+    "OR-DUOR2": "OR-DUO",
+    "OR-DUOR5": "OR-DUO",
+    "OR-DUORC6": "OR-DUO",
+    "OTTA-W20": "TTA",
+    "PRU10-3.5G-4T": "PRU",
+    "PRU10-3.5G-4T(EL)": "PRU",
+    "PRU10-3.5G-8T(SS)": "PRU",
+    "R-C-CSW-ROIRODS8100LO": "IRO",
+    "R-C-Hfr-PRU10-3-5G-4T": "PRU",
+    "R-C-LE1-AIR3227B43": "AAU",
+    "R-C-LE1-AIR3239B78C": "AAU",
+    "R-C-LE1-AIR6419B78Y": "AAU",
+    "R-C-LE1-AIR6488B43": "AAU",
+    "R-C-LE1-Radi2242B1B3": "RRU",
+    "R-C-LE1-Radio4422B78C": "PRU",
+    "R-C-STC-ROIROD0120RLW": "IRO",
+    "R-C-STC-ROIRODS0120LW": "IRO",
+    "R-C-STC-ROIROTS8120LD": "IRO",
+    "R-C-STC-ROgIRODS0120": "GIRO",
+    "R-C-STC-ROgIRODS8100": "GIRO",
+    "R-C-STC-ROgIROTS8120": "GIRO",
+    "R-IMT1-05-0028": "SF중계기",
+    "RAU-DUO5": "RAU",
+    "RAU-DUON5": "RAU",
+    "RHU-DUO0520": "RHU",
+    "RHU-DUO0520-MHU": "RHU",
+    "RHU-DUO0520-OMHU": "RHU",
+    "RHU-DUO0530-OMHU": "RHU",
+    "RHU-DUO20-MHU": "RHU",
+    "RHU-DUO20-OMHU": "RHU",
+    "RHU-DUO5": "RHU",
+    "RHU-DUO5-MHU": "RHU",
+    "RHU-DUOC0520": "RHU",
+    "RHU-DUOC0520-OMHU": "RHU",
+    "RHU-DUOC0530": "RHU",
+    "RHU-DUOF30-MHU": "RHU",
+    "RHU-DUOF30-OMHU": "RHU",
+    "RHU-DUOF6": "RHU",
+    "RHU-DUOF6-MHU": "RHU",
+    "RHU-DUON20": "RHU",
+    "RHU-DUON20-MHU": "RHU",
+    "RHU-DUON20-OMHU": "RHU",
+    "RHU-DUON30": "PRU",
+    "RHU-DUON30-OMHU": "RHU",
+    "RHU-DUON5": "RHU",
+    "RHU-DUON5-MHU": "RHU",
+    "RHU-DUON5-OMHU": "RHU",
+    "RHU-DUON6": "RHU",
+    "RHU-DUON6-OMHU": "RHU",
+    "RHU-DUONC20-MHU": "RHU",
+    "RHU-DUONC5-OMHU": "RHU",
+    "RHU-WF30-MHU": "RHU",
+    "RHU-WF30-OMHU": "RHU",
+    "RHU-WF6-OMHU": "RHU",
+    "RHU-WN20": "RHU",
+    "RHU-WN20-OMHU": "RHU",
+    "RHU-WN30": "RHU",
+    "RHU-WN5-MHU": "RHU",
+    "RHU-WN5-OMHU": "RHU",
+    "RMiBLRO": "MIBOS",
+    "RMiBTRO": "MIBOS",
+    "RMiBTSRO": "MIBOS",
+    "RMiBWM": "MIBOS",
+    "RO-DUO-AA2020": "RO-DUO",
+    "RO-DUO-AA2020-CMHU": "RO-DUO",
+    "RO-DUO-AA2030": "RO-DUO",
+    "RO-DUO-AA2030-CMHU": "RO-DUO",
+    "RO-DUO-DD4060": "RO-DUO",
+    "RO-DUO-DD4060-CMHU": "RO-DUO",
+    "RO-DUON5": "RO-DUO",
+    "RO-DUON5-MHU": "RO-DUO",
+    "RO-DUON5-MOU": "RO-DUO",
+    "RO-DUONC5-MOU": "RO-DUO",
+    "RO-GIRO-DS(0120)": "GIRO",
+    "RO-GIRO-T(8120)": "GIRO",
+    "RO-GIRO-TS(8120)": "GIRO",
+    "RO-IRO-D(0120)": "IRO",
+    "RO-IRO-D(8020)-SMHS(1C)": "IRO",
+    "RO-IRO-D(8100)": "IRO",
+    "RO-IRO-D(8100)-IMHS": "IRO",
+    "RO-IRO-D(8100)-QMHS": "IRO",
+    "RO-IRO-D(8100)-SMHS(1C)": "IRO",
+    "RO-IRO-DS(0120)": "IRO",
+    "RO-IRO-DS(8020)": "IRO",
+    "RO-IRO-DS(8020)-SMHS(1C)": "IRO",
+    "RO-IRO-DS(80W0)": "IRO",
+    "RO-IRO-DS(8100)-SMHS(1C)": "IRO",
+    "RO-IRO-Q(8126)": "IRO",
+    "RO-IRO-Q(8126)-IMHS": "IRO",
+    "RO-IRO-Q(8126)-SMHS(1C)": "IRO",
+    "RO-IRO-Q(81W6)": "IRO",
+    "RO-IRO-Q(81W6)-IMHS": "IRO",
+    "RO-IRO-QS(8126)-SMHS(2C)": "IRO",
+    "RO-IRO-QS(81W6)": "IRO",
+    "RO-IRO-SS(0020)": "IRO",
+    "RO-IRO-T(01W6)": "IRO",
+    "RO-IRO-T(80W6)": "IRO",
+    "RO-IRO-T(80W6)-IMHS": "IRO",
+    "RO-IRO-T(8120)": "IRO",
+    "RO-IRO-T(8120)-IMHS": "IRO",
+    "RO-IRO-T(8120)-SMHS(1C)": "IRO",
+    "RO-IRO-T(81W0)": "IRO",
+    "RO-IRO-T(81W0)-IMHS": "IRO",
+    "RO-IRO-T(81W0)-SMHS(1C)": "IRO",
+    "RO-IRO-TS(8120)": "IRO",
+    "RO-IRO-TS(8120)-SMHS(1C)": "IRO",
+    "RO-IRO-TS(81W0)": "IRO",
+    "RO-IRO-TS(81W0)-SMHS(1C)": "IRO",
+    "RO-IRO_SLIM-Q(8126)": "IRO",
+    "RO-MBS-T-L60-SMHS-3C": "MIBOS",
+    "RO-MBS-TS-L60-SMHS-3C": "MIBOS",
+    "RO-MIBOS-AD-L0": "MIBOS",
+    "RO-MIBOS-AD-L0(2.6)": "MIBOS",
+    "RO-MIBOS-AD-L60": "MIBOS",
+    "RO-MIBOS-AD-L60-AMHS": "MIBOS",
+    "RO-MIBOS-CL-L60": "MIBOS",
+    "RO-MIBOS-CL-L60-QMHS": "MIBOS",
+    "RO-MIBOS-D-L60": "MIBOS",
+    "RO-MIBOS-D-L60-QMHS": "MIBOS",
+    "RO-MIBOS-Q-L60": "MIBOS",
+    "RO-MIBOS-Q-L60-QMHS": "MIBOS",
+    "RO-MIBOS-T-L0-QMHS": "MIBOS",
+    "RO-MIBOS-T-L60": "MIBOS",
+    "RO-MIBOS-T-L60-QMHS": "MIBOS",
+    "RO-MIBOS-TS-L60": "MIBOS",
+    "RO-MIBOS-TS-L60-QMHS": "MIBOS",
+    "RO-MIBOS-WL(ME)-L05": "MIBOS",
+    "RO-MIBOS-WL(ME)-L05-QMHS": "WLME",
+    "RO-MIBOS-WL-L10": "MIBOS",
+    "RO-MIBOS-WL-L10-QMHS": "MIBOS",
+    "RO-PRU-3.5G-4T": "PRU",
+    "RO-PRU-3.5G-4T-LSH310(EL)": "PRU",
+    "RO-PRU-3.5G-4T-LSH310(SS)": "PRU",
+    "RO-W-D60": "WRO",
+    "RO-W-D60-CMHU": "DDR",
+    "ROIRODS8020": "IRO",
+    "ROIROTS8120": "IRO",
+    "RRH_L(ELG)-WL": "RRH",
+    "RRH_L(LGE)": "RRU",
+    "RRH_L(NSN)": "RRU",
+    "RROIROQ8126R": "IRO",
+    "RROIROQ81W6R": "IRO",
+    "RROIROT8120": "IRO",
+    "RRU(0120)_AHEGA(NSN)": "RRU",
+    "RRU(0120)_AHEGA(NSN)-WL": "RRU",
+    "RRU(0120)_R2242(ELG)": "RRU",
+    "RRU(0120)_R2242(ELG)-WL": "RRU",
+    "RRUS12(ELG)-WL": "RRU",
+    "RRUS13(ELG)": "RRU",
+    "RRUS13(ELG)-WL": "RRU",
+    "RRU_1.8G_FHEA(NSN)": "RRU",
+    "RRU_2.6G_ARRU(SS)": "RRU",
+    "RRU_2.6G_FRHG(NSN)": "RRU",
+    "RRU_2.6G_R2212(ELG)": "RRU",
+    "RRU_2.6G_R2217(ELG)": "RRU",
+    "RRU_2.6G_R4415(ELG)": "RRU",
+    "RRU_800M_R2212(ELG)": "RRU",
+    "RRU_FHEB(NSN)": "RRU",
+    "RRU_FRGT(NSN)-WL": "RRU",
+    "RRU_L(SS)": "RRU",
+    "RU(NSN)": "RRU",
+    "RU_FXEB(NSN)": "RRU",
+    "SF-DUO": "SF중계기",
+    "SF-DUO20": "SF중계기",
+    "SF-DUOR": "SF중계기",
+    "SF-TF433": "SF중계기",
+    "SF-TMF463": "SF중계기",
+    "SF-W15": "SF중계기",
+    "SF-W20": "SF중계기",
+    "SF-WIMF33": "SF중계기",
+    "SF-WN20": "SF중계기",
+    "SF-WR15": "SF중계기",
+    "SF-WR20": "SF중계기",
+    "SFDUO-R(C60W20)": "SF중계기",
+    "SHTLHD-S1": "TRIO",
+    "SPSFFRTTS0": "SF중계기",
+    "SRF-W15": "SF중계기",
+    "SRF-W20": "SF중계기",
+    "SRRU(SS)": "RRU",
+    "SRRU_D(SS)": "RRU",
+    "SS E3NODEB": "W기지국",
+    "SS-E3NODEB": "W기지국",
+    "STC-SFW-R15": "SF중계기",
+    "TRIO-LH": "TRIO",
+    "WAFMCA": "WAFMC",
+    "WAFMCB": "WAFMC",
+    "WINS PLUSF": "WINS",
+    "etr-SF-W15-REMOTE": "SF중계기",
 }
 
 # Logger setup
@@ -415,6 +702,19 @@ def _verify_token(token: str) -> str | None:
         return None
 
 
+# ── 일일 접속자 카운트 (메모리 기반) ──
+_daily_visitors: set = set()
+_daily_visitors_date: str = ""
+
+def _track_daily_visitor(empno: str):
+    global _daily_visitors, _daily_visitors_date
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    if _daily_visitors_date != today:
+        _daily_visitors = set()
+        _daily_visitors_date = today
+    _daily_visitors.add(empno)
+
+
 async def _verify_auth(request: Request) -> str:
     """Bearer 토큰 검증. 실패 시 401.
     토큰 잔여 수명이 절반 이하이면 request.state.refreshed_token에 새 토큰 저장.
@@ -424,6 +724,7 @@ async def _verify_auth(request: Request) -> str:
         token = auth_header[7:]
         empno = _verify_token(token)
         if empno:
+            _track_daily_visitor(empno)
             # 토큰 잔여 수명 체크 → 절반 이하면 갱신
             try:
                 decoded = base64.urlsafe_b64decode(token.encode()).decode()
@@ -6096,7 +6397,7 @@ def _cert_cache_load():
         conn.execute("""CREATE TABLE IF NOT EXISTS cert (
             zpwino TEXT, zpwina TEXT, zpwiadr TEXT,
             zpcode TEXT, zpcname TEXT, area_hdofc_nm TEXT, ons_team_nm TEXT, zpirty3 TEXT,
-            eqp_ser_no TEXT, zpprac1 TEXT
+            eqp_ser_no TEXT, zpprac1 TEXT, eqp_type TEXT
         )""")
         conn.execute("DELETE FROM cert")
 
@@ -6109,14 +6410,14 @@ def _cert_cache_load():
                 row.get("zpcname", ""),
                 row.get("area_hdofc_nm", ""), row.get("ons_team_nm", ""),
                 row.get("zpirty3", ""), row.get("eqp_ser_no", ""),
-                row.get("zpprac1", ""),
+                row.get("zpprac1", ""), row.get("eqp_type", ""),
             ))
             if len(batch) >= 5000:
-                conn.executemany("INSERT INTO cert VALUES (?,?,?,?,?,?,?,?,?,?)", batch)
+                conn.executemany("INSERT INTO cert VALUES (?,?,?,?,?,?,?,?,?,?,?)", batch)
                 total += len(batch)
                 batch.clear()
         if batch:
-            conn.executemany("INSERT INTO cert VALUES (?,?,?,?,?,?,?,?,?,?)", batch)
+            conn.executemany("INSERT INTO cert VALUES (?,?,?,?,?,?,?,?,?,?,?)", batch)
             total += len(batch)
 
         conn.execute("CREATE INDEX IF NOT EXISTS idx_zpwino ON cert(zpwino)")
@@ -8908,72 +9209,52 @@ def _erp_ds_compare_sync(
     division_code: str,
     import_date: str,
 ) -> dict:
-    """ERP vs DS 비교 동기 처리."""
+    """ERP vs DS 비교 동기 처리 — ds_detail.db 활용 (메모리 절약)."""
     import sqlite3
 
     # 1) ERP 데이터 조회
     erp_data = _cert_batch_lookup_cached(zpwino_list)
 
-    # 2) DS ZIP 파일 확보
-    zip_path = _get_cached_file(division_id, division_code, import_date, "zip")
-    if not zip_path:
-        s3_key = f"ds-raw/{division_id}/{division_code}_{import_date}.zip"
-        cache_path = _get_cache_path(division_id, division_code, import_date, "zip")
-        os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+    # 2) DS 데이터: ds_detail.db에서 직접 조회 (ZIP 파싱 불필요)
+    ds_device = {}   # {zpwino: [serial, ...]}
+    ds_antenna = {}  # {zpwino: tower_type}
+    warnings = []
+    BATCH = 900
+
+    if os.path.exists(_DS_DETAIL_DB):
         try:
-            get_s3_client().download_file(S3_BUCKET_NAME, s3_key, cache_path)
-            zip_path = cache_path
+            conn = sqlite3.connect(_DS_DETAIL_DB, timeout=30)
+            conn.row_factory = sqlite3.Row
+            # 양쪽 형식(하이픈 유/무) 모두 포함
+            all_nos = list({n for raw in zpwino_list for n in (raw, raw.replace('-', ''))})
+
+            # 장치: 허가번호별 일련번호 목록
+            for i in range(0, len(all_nos), BATCH):
+                batch = all_nos[i:i + BATCH]
+                ph = ','.join('?' * len(batch))
+                for row in conn.execute(f"SELECT 허가번호, 기기일련번호 FROM ds_장치 WHERE 허가번호 IN ({ph})", batch):
+                    z = row['허가번호'].replace('-', '')
+                    sn = str(row['기기일련번호'] or '').strip()
+                    if z not in ds_device:
+                        ds_device[z] = []
+                    if sn and sn not in ds_device[z]:
+                        ds_device[z].append(sn)
+
+            # 안테나: 허가번호별 설치형태
+            for i in range(0, len(all_nos), BATCH):
+                batch = all_nos[i:i + BATCH]
+                ph = ','.join('?' * len(batch))
+                for row in conn.execute(f"SELECT 허가번호, 공중선주설치형태명 FROM ds_안테나 WHERE 허가번호 IN ({ph})", batch):
+                    z = row['허가번호'].replace('-', '')
+                    if z not in ds_antenna:
+                        ds_antenna[z] = str(row['공중선주설치형태명'] or '').strip()
+
+            conn.close()
         except Exception as e:
-            logger.warning(f"DS ZIP 다운로드 실패 ({s3_key}): {e}")
-            # ZIP 없이 ERP 데이터만 반환
-            items = []
-            for z in zpwino_list:
-                erp = erp_data.get(z)
-                items.append({
-                    "zpwino": z,
-                    "zpwina": erp.get("zpwina", "") if erp else "",
-                    "area_hdofc_nm": erp.get("area_hdofc_nm", "") if erp else "",
-                    "erp_found": bool(erp),
-                    "erp_zpirty3": erp.get("zpirty3", "") if erp else "",
-                    "erp_serial": erp.get("eqp_ser_no", "") if erp else "",
-                    "ds_tower_type": "",
-                    "ds_serial": "",
-                    "tower_match": "확인필요",
-                    "serial_match": "확인필요",
-                })
-            return {
-                "success": True, "total": len(items),
-                "erp_found": sum(1 for it in items if it["erp_found"]),
-                "ds_device_found": 0, "ds_antenna_found": 0,
-                "warnings": [f"DS ZIP 파일을 찾을 수 없습니다: {s3_key}"],
-                "summary": {"tower_match": 0, "tower_mismatch": 0, "tower_check": len(items),
-                             "serial_match": 0, "serial_mismatch": 0, "serial_check": len(items)},
-                "items": items,
-            }
-
-    # 3) DynamoDB에서 fileManifest 조회
-    dynamodb = get_dynamodb_resource()
-    uploads_table = dynamodb.Table(DYNAMODB_TABLES["ds_uploads"])
-    upload_sk = f"{division_code}#{import_date}" if division_code else import_date
-    resp = uploads_table.get_item(
-        Key={"divisionId": division_id, "importDate": upload_sk},
-        ProjectionExpression="fileManifest",
-    )
-    upload_rec = resp.get("Item")
-    file_manifest = upload_rec.get("fileManifest", {}) if upload_rec else {}
-
-    if not file_manifest:
-        logger.warning(f"DS fileManifest 없음: {division_id}/{upload_sk}")
-
-    # 4) DS 시트 스캔 (SQLite 캐시 활용)
-    target_set = set(zpwino_list)
-    ds_data = _scan_ds_sheets_by_zpwino(
-        zip_path, file_manifest, target_set,
-        division_id, division_code, import_date)
-
-    ds_device = ds_data["장치"]    # {zpwino: [serial, ...]}
-    ds_antenna = ds_data["안테나"]  # {zpwino: tower_type}
-    warnings = ds_data["warnings"]
+            logger.warning(f"ds_detail.db 비교 조회 실패: {e}")
+            warnings.append(f"DS 데이터 조회 실패: {e}")
+    else:
+        warnings.append("DS 데이터가 아직 빌드되지 않았습니다. DS 파일을 업로드해주세요.")
 
     # 5) 비교 결과 생성
     items = []
@@ -8988,8 +9269,9 @@ def _erp_ds_compare_sync(
         erp = erp_data.get(z)
         erp_zpirty3 = erp.get("zpirty3", "") if erp else ""
         erp_serial = erp.get("eqp_ser_no", "") if erp else ""
-        ds_tower = ds_antenna.get(z, "")
-        ds_serials = ds_device.get(z, [])
+        z_clean = z.replace('-', '')
+        ds_tower = ds_antenna.get(z_clean, "") or ds_antenna.get(z, "")
+        ds_serials = ds_device.get(z_clean, []) or ds_device.get(z, [])
         ds_serial_str = ", ".join(ds_serials) if ds_serials else ""
 
         # 철탑형태 비교
@@ -9417,6 +9699,13 @@ def _init_inspection_db():
     # 마이그레이션: 기존 스테이징에 검사종류 추가
     try: conn.execute("ALTER TABLE inspection_targets_staging ADD COLUMN 검사종류 TEXT DEFAULT ''")
     except Exception: pass
+    # 스테이징 인덱스
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_stg_year ON inspection_targets_staging(year)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_stg_access ON inspection_targets_staging(access담당)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_stg_team ON inspection_targets_staging(품질개선팀)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_stg_quarter ON inspection_targets_staging(분기)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_stg_nation ON inspection_targets_staging(국종군)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_stg_허가번호 ON inspection_targets_staging(허가번호)')
     conn.execute('''CREATE TABLE IF NOT EXISTS inspection_meta (
         year INTEGER PRIMARY KEY,
         sheet TEXT, total_skt INTEGER, total_sheet1 INTEGER,
@@ -9441,6 +9730,11 @@ def _init_inspection_db():
     )''')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_is_year ON inspection_schedules(year)')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_is_access ON inspection_schedules(year, access담당)')
+    # 마이그레이션: inspection_schedules 확장 컬럼
+    try:
+        conn.execute("ALTER TABLE inspection_schedules ADD COLUMN 검사관 TEXT DEFAULT ''")
+    except Exception:
+        pass
     conn.execute('''CREATE TABLE IF NOT EXISTS inspection_results (
         pk TEXT PRIMARY KEY,
         year INTEGER NOT NULL,
@@ -9451,6 +9745,81 @@ def _init_inspection_db():
     )''')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_ir_year ON inspection_results(year)')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_ir_status ON inspection_results(year, status)')
+    # 마이그레이션: inspection_results 확장 컬럼
+    for col, dflt in [
+        ('진행여부', "''"),
+        ('성능서류', "''"),
+        ('불합격내용', "''"),
+        ('불합격상세', "''"),
+        ('공용화대상', "''"),
+        ('간략불합격', "''"),
+        ('기타사항', "''"),
+        ('five_g_path', "''"),
+        ('수검자', "''"),
+        ('시스템', "''"),
+        ('기지국구분', "''"),
+        ('전파진흥원', "''"),
+        ('검사관', "''"),
+        ('주차별', "''"),
+    ]:
+        try:
+            conn.execute(f"ALTER TABLE inspection_results ADD COLUMN {col} TEXT DEFAULT {dflt}")
+        except Exception:
+            pass
+    # ── inspection_results_raw 테이블 (검사실적 RAW DATA) ──
+    conn.execute('''CREATE TABLE IF NOT EXISTS inspection_results_raw (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        year INTEGER,
+        region TEXT,
+        skt본부 TEXT,
+        주차별 TEXT,
+        월 TEXT,
+        허가번호 TEXT,
+        통합시설코드 TEXT,
+        호출명칭 TEXT,
+        주소 TEXT,
+        기지국구분 TEXT,
+        시스템 TEXT,
+        검사년도 TEXT,
+        검사종류 TEXT,
+        검사일자 TEXT,
+        ons팀 TEXT,
+        수검자 TEXT,
+        전파진흥원 TEXT,
+        검사관 TEXT,
+        진행여부 TEXT,
+        합불여부 TEXT,
+        성능서류 TEXT,
+        불합격내용 TEXT,
+        불합격상세 TEXT,
+        공용화대상 TEXT,
+        기타사항 TEXT,
+        간략불합격 TEXT,
+        five_g_path TEXT,
+        장비타입 TEXT,
+        허가번호2 TEXT,
+        허가번호text TEXT,
+        제조주소명 TEXT,
+        제조정보명 TEXT,
+        검사지표정보명 TEXT,
+        제조Type TEXT,
+        장비명 TEXT,
+        NAMS기타정보 TEXT,
+        장비Type공용화 TEXT,
+        NAMS설명정보 TEXT,
+        장비Type2 TEXT,
+        uploaded_by TEXT,
+        uploaded_at TEXT
+    )''')
+    # 마이그레이션: 장비타입간소화 컬럼 추가
+    try:
+        conn.execute("ALTER TABLE inspection_results_raw ADD COLUMN 장비타입간소화 TEXT DEFAULT ''")
+    except Exception:
+        pass
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_irr_year ON inspection_results_raw(year)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_irr_region ON inspection_results_raw(region)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_irr_hn ON inspection_results_raw(허가번호)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_irr_month ON inspection_results_raw(월)')
     # 24시간 지난 완료/에러 잡 정리
     conn.execute(
         "DELETE FROM inspection_jobs WHERE status IN ('complete','error') "
@@ -10078,6 +10447,7 @@ class InspectionScheduleReq(BaseModel):
     수검시작일: str = ""
     수검종료일: str = ""
     지역: str = ""
+    검사관: str = ""
 
 class InspectionResultReq(BaseModel):
     year: int
@@ -10894,11 +11264,11 @@ async def inspection_schedule_upsert(request: Request, req: InspectionScheduleRe
         c = sqlite3.connect(_INSP_DB, timeout=60)
         c.execute('''INSERT OR REPLACE INTO inspection_schedules
             (pk, year, 허가번호, 호출명칭, 분기, skt본부, access담당, 품질개선팀,
-             수검예정주차, 수검시작일, 수검종료일, 지역, 등록자, 등록일시)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+             수검예정주차, 수검시작일, 수검종료일, 지역, 등록자, 등록일시, 검사관)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
             (pk, req.year, req.허가번호, req.호출명칭, req.분기, req.skt본부,
              req.access담당, req.품질개선팀, req.수검예정주차,
-             req.수검시작일, req.수검종료일, req.지역, empno, now))
+             req.수검시작일, req.수검종료일, req.지역, empno, now, req.검사관))
         c.commit(); c.close()
     await asyncio.to_thread(_write)
     await asyncio.to_thread(_record_audit_log_sync, "inspection_schedule_upsert", "inspection_schedule", pk, empno)
@@ -11078,8 +11448,45 @@ async def inspection_result_photo_data(request: Request, s3_key: str):
     except Exception as e:
         raise HTTPException(404, f"사진을 찾을 수 없습니다: {e}")
 
+@app.get("/inspection/my-list/weeks")
+async def inspection_my_list_weeks(request: Request, year: int):
+    """내 팀 수검예정주차 목록."""
+    empno = await _verify_auth(request)
+    dynamodb = get_dynamodb_resource()
+    users_table = dynamodb.Table(DYNAMODB_TABLES["users"])
+    user_item = await asyncio.to_thread(lambda: users_table.get_item(
+        Key={"user_id": empno},
+        ProjectionExpression="#r, team",
+        ExpressionAttributeNames={"#r": "region"},
+    ))
+    user_data = user_item.get("Item", {})
+    access_team = user_data.get("region", "").replace("Access담당", "").strip()
+    품질팀 = user_data.get("team", "")
+    if not access_team and not 품질팀:
+        return {"weeks": []}
+
+    def _read_weeks():
+        c = sqlite3.connect(_INSP_DB, timeout=60)
+        if access_team and 품질팀:
+            rows = c.execute(
+                'SELECT DISTINCT 수검예정주차 FROM inspection_schedules WHERE year=? AND (access담당=? OR 품질개선팀=?) AND 수검예정주차 != "" ORDER BY 수검예정주차',
+                (year, access_team, 품질팀)).fetchall()
+        elif access_team:
+            rows = c.execute(
+                'SELECT DISTINCT 수검예정주차 FROM inspection_schedules WHERE year=? AND access담당=? AND 수검예정주차 != "" ORDER BY 수검예정주차',
+                (year, access_team)).fetchall()
+        else:
+            rows = c.execute(
+                'SELECT DISTINCT 수검예정주차 FROM inspection_schedules WHERE year=? AND 품질개선팀=? AND 수검예정주차 != "" ORDER BY 수검예정주차',
+                (year, 품질팀)).fetchall()
+        c.close()
+        return [r[0] for r in rows]
+    weeks = await asyncio.to_thread(_read_weeks)
+    return {"weeks": weeks}
+
+
 @app.get("/inspection/my-list")
-async def inspection_my_list(request: Request, year: int):
+async def inspection_my_list(request: Request, year: int, week: str = ""):
     """내 팀 배정 수검 목록 (팀원용)."""
     empno = await _verify_auth(request)
     # Users 테이블에서 region(본부=access담당), team(품질개선팀) 조회
@@ -11107,18 +11514,22 @@ async def inspection_my_list(request: Request, year: int):
                 'FROM inspection_schedules s '
                 'LEFT JOIN inspection_targets t ON s.허가번호=t.허가번호 AND t.year=s.year '
                 'LEFT JOIN inspection_results r ON s.pk=r.pk ')
+        params = []
+        where_parts = []
         if access_team and 품질팀:
-            rows = c.execute(
-                _sel + 'WHERE s.year=? AND (s.access담당=? OR s.품질개선팀=?)',
-                (year, access_team, 품질팀)).fetchall()
+            where_parts.append('s.year=? AND (s.access담당=? OR s.품질개선팀=?)')
+            params.extend([year, access_team, 품질팀])
         elif access_team:
-            rows = c.execute(
-                _sel + 'WHERE s.year=? AND s.access담당=?',
-                (year, access_team)).fetchall()
+            where_parts.append('s.year=? AND s.access담당=?')
+            params.extend([year, access_team])
         else:
-            rows = c.execute(
-                _sel + 'WHERE s.year=? AND s.품질개선팀=?',
-                (year, 품질팀)).fetchall()
+            where_parts.append('s.year=? AND s.품질개선팀=?')
+            params.extend([year, 품질팀])
+        if week:
+            where_parts.append('s.수검예정주차=?')
+            params.append(week)
+        rows = c.execute(
+            _sel + 'WHERE ' + ' AND '.join(where_parts), params).fetchall()
         c.close()
         items = []
         for row in rows:
@@ -11145,20 +11556,16 @@ async def inspection_progress(request: Request, year: int):
         total_rows = c.execute(
             'SELECT access담당, COUNT(*) as cnt FROM inspection_targets WHERE year=? GROUP BY access담당',
             (year,)).fetchall()
-        # 본부별 완료(합격+불합격) 건수 — inspection_targets JOIN inspection_results
+        # 본부별 실적 업로드 건수
         done_rows = c.execute(
-            '''SELECT t.access담당, COUNT(*) as cnt
-               FROM inspection_results r
-               JOIN inspection_targets t ON t.허가번호=r.허가번호 AND t.year=r.year
-               WHERE r.year=? AND r.status IN ('합격','불합격')
-               GROUP BY t.access담당''',
+            'SELECT region, COUNT(*) as cnt FROM inspection_results_raw WHERE year=? GROUP BY region',
             (year,)).fetchall()
         c.close()
         return total_rows, done_rows
 
     total_rows, done_rows = await asyncio.to_thread(_query)
     total_map = {(r['access담당'] or '미배정'): r['cnt'] for r in total_rows}
-    done_map  = {(r['access담당'] or '미배정'): r['cnt'] for r in done_rows}
+    done_map = {(r['region'] or '미배정'): r['cnt'] for r in done_rows}
 
     items = []
     for hdqt, total in sorted(total_map.items()):
@@ -11304,7 +11711,11 @@ async def inspection_export_report(request: Request, req: InspectionReportReq):
                     parts = []
                     if tx_vals: parts.append(f"TX : {','.join(tx_vals)}")
                     if rx_vals: parts.append(f"RX : {','.join(rx_vals)}")
-                    ds_주파수_map[hn] = '\n'.join(parts)
+                    # TX 1개 + RX 1개면 한 줄로 표시
+                    if len(tx_vals) <= 1 and len(rx_vals) <= 1:
+                        ds_주파수_map[hn] = '  '.join(parts)
+                    else:
+                        ds_주파수_map[hn] = '\n'.join(parts)
 
             conn_d.close()
 
@@ -11439,10 +11850,9 @@ async def inspection_export_report(request: Request, req: InspectionReportReq):
             return hn_raw  # 형식 안 맞으면 원본 그대로
 
         # ── 데이터 행 ────────────────────────────────────────
-        DATA_ROW_HEIGHT = 71.25
+        _LINE_HEIGHT = 13.5  # 1줄 높이
         for seq, t in enumerate(targets, 1):
             r = seq + 3
-            ws.row_dimensions[r].height = DATA_ROW_HEIGHT
             hn = t['허가번호']
 
             # DS 데이터 조합
@@ -11579,6 +11989,15 @@ async def inspection_export_report(request: Request, req: InspectionReportReq):
                 검사지,                    # S: 검사지
                 설치장소,                  # T: 설치장소
             ]
+            # 행높이: 모든 셀 중 최대 줄 수 × 13.5
+            max_lines = 1
+            for _v in row_data:
+                if isinstance(_v, str) and '\n' in _v:
+                    _lc = _v.count('\n') + 1
+                    if _lc > max_lines:
+                        max_lines = _lc
+            ws.row_dimensions[r].height = _LINE_HEIGHT * max_lines
+
             for c_idx, val in enumerate(row_data, 1):
                 if c_idx == 2:  # B열: 빨간 글씨 + 노란 배경 + 셀에 맞춤
                     _set(r, c_idx, val, font=_font_red, fill=_fill_yellow,
@@ -11714,6 +12133,1059 @@ async def inspection_add_from_staging(request: Request, req: InspAddFromStagingR
 
 
 # ============================================================
+# Inspection Results RAW DATA (검사실적 RAW 데이터 관리)
+# ============================================================
+
+# Excel 헤더 → DB 컬럼 매핑
+_IRR_HEADER_MAP = {
+    # Col 0: 주차 (변형: 주차별, 주별)
+    "주차": "주차별",
+    "주차별": "주차별",
+    "주별": "주차별",
+    "주차구별": "주차별",
+    # Col 1
+    "월": "월",
+    # Col 2
+    "구분": None,  # skip
+    # (강남 전용) 연도 컬럼 — skip
+    "연도": None,
+    # Col 3-4
+    "SKT본부": "skt본부",
+    "ONS 본부": "_ons본부",
+    "ONS본부": "_ons본부",
+    # Col 5-8
+    "허가번호": "허가번호",
+    "통합시설코드": "통합시설코드",
+    "통합시설코": "통합시설코드",  # 인천 (잘림)
+    "호출명칭": "호출명칭",
+    "주소": "주소",
+    # Col 9-12
+    "기지국/중계기 여부": "기지국구분",
+    "시스템": "시스템",
+    "정기검사 년도": "검사년도",
+    "정기검사년도": "검사년도",
+    "검사년도": "검사년도",
+    "검사년도": "검사년도",
+    "정기/시기조정": "검사종류",
+    "정기/이월구분": "_이월구분_auto",  # 데이터 값으로 검사년도/검사종류 자동 판별
+    "검사일자": "검사일자",
+    # Col 13-18
+    "1. ONS(팀)": "ons팀",
+    "수검자": "수검자",
+    "입회자": "수검자",  # 강북 변형
+    "전파진흥원": "전파진흥원",
+    "진흥원본부": "전파진흥원",  # 경남 변형
+    "검사관": "검사관",
+    "진행여부": "진행여부",
+    "합격,불합격여부": "합불여부",
+    # Col 19-25
+    "성능/서류": "성능서류",
+    "불합격내용": "불합격내용",
+    "불합격상세사유": "불합격상세",
+    "공용화 정비대상 유/무": "공용화대상",
+    "기타사항": "기타사항",
+    "기타사항(폐국 및 대개체국소)": "기타사항",
+    "간략불합격내역": "간략불합격",
+    "간략 불합격 내역": "간략불합격",  # 띄어쓰기 변형
+    "간략불합격내역": "간략불합격",
+    # Col 26-27
+    "5G Path 확인 방법": "five_g_path",
+    "허가번호 장비 Type": "장비타입",
+}
+
+# ONS 본부 → region 매핑
+_ONS_REGION_MAP = {
+    "경북": "경북", "경남": "경남",
+    "강원": "강원", "강원Access": "강원",
+    "강남": "강남", "강남본부": "강남",
+    "강북": "강북", "강북본부": "강북",
+    "경기": "경기",
+    "인천": "인천", "인천본부": "인천",
+    "충청": "충청", "충남": "충청", "충북": "충청", "충청본부": "충청",
+    "서부": "서부", "서부본부": "서부", "전북": "서부", "전남": "서부",
+    "수도권": "수도권",
+}
+
+
+def _parse_irr_xlsx_sync(file_bytes: bytes, year_hint: int, uploaded_by: str):
+    """검사실적 RAW DATA xlsx 파싱 → (rows, region, year) 반환."""
+    wb = openpyxl.load_workbook(io.BytesIO(file_bytes), read_only=True, data_only=True)
+    # RAW DATA 시트 찾기
+    target_ws = None
+    for name in wb.sheetnames:
+        if "RAW" in name.upper():
+            target_ws = wb[name]
+            break
+    # RAW 시트 못 찾으면 허가번호 헤더가 있는 첫 번째 시트 사용
+    if target_ws is None:
+        for name in wb.sheetnames:
+            ws = wb[name]
+            for row in ws.iter_rows(min_row=1, max_row=2, values_only=True):
+                if any('허가번호' in str(c or '') for c in row):
+                    target_ws = wb[name]
+                    break
+            if target_ws is not None:
+                break
+    if target_ws is None:
+        wb.close()
+        raise ValueError("RAW DATA 시트를 찾을 수 없습니다")
+
+    rows_iter = target_ws.iter_rows(values_only=True)
+    # 헤더 행 찾기 (첫 행 or 둘째 행에 '허가번호' 포함)
+    header_row = next(rows_iter, None)
+    if header_row is None:
+        wb.close()
+        raise ValueError("빈 시트입니다")
+
+    headers = [str(h).strip().split('\n')[0].strip() if h else "" for h in header_row]
+    # 허가번호가 헤더에 없으면 다음 행 시도
+    if not any('허가번호' in hh for hh in headers):
+        header_row = next(rows_iter, None)
+        if header_row is None:
+            wb.close()
+            raise ValueError("헤더를 찾을 수 없습니다")
+        headers = [str(h).strip().split('\n')[0].strip() if h else "" for h in header_row]
+
+    # 헤더 인덱스 매핑
+    col_map = {}  # db_col -> excel_col_index
+    ons_idx = -1
+    year_idx = -1
+    # 허가번호 컬럼이 두 번 나올 수 있음 — 두 번째는 허가번호2
+    hn_count = 0
+    for i, h in enumerate(headers):
+        if not h:
+            continue
+        # 허가번호 특수 처리 (두 번째 출현)
+        if h == "허가번호":
+            hn_count += 1
+            if hn_count == 1:
+                col_map["허가번호"] = i
+            else:
+                col_map["허가번호2"] = i
+            continue
+        # 검사지표 특수 처리: 원본에 Ʈ문자가 있을 수 있음
+        h_clean = h.replace("\u01ae", "T").replace("Ʈ", "T")
+        h_nospace = h_clean.replace(" ", "")
+        matched = False
+        for excel_h, db_col in _IRR_HEADER_MAP.items():
+            if db_col is None:
+                continue
+            excel_h_clean = excel_h.replace("\u01ae", "T").replace("Ʈ", "T")
+            excel_h_nospace = excel_h_clean.replace(" ", "")
+            if h == excel_h or h_clean == excel_h_clean or h_nospace == excel_h_nospace:
+                if db_col == "_ons본부":
+                    ons_idx = i
+                elif db_col == "검사년도":
+                    year_idx = i
+                    col_map[db_col] = i
+                else:
+                    col_map[db_col] = i
+                matched = True
+                break
+
+    now_str = datetime.now(timezone.utc).isoformat()
+    db_rows = []
+    region_set = set()
+
+    # cert_cache.db에서 zpcode→eqp_type 매핑 프리로드 (장비타입간소화 파생용)
+    _zpcode_eqp_map = {}
+    if _cert_cache_db_path and os.path.exists(_cert_cache_db_path):
+        try:
+            cc = sqlite3.connect(_cert_cache_db_path, timeout=10)
+            for _r in cc.execute("SELECT zpcode, eqp_type FROM cert WHERE eqp_type IS NOT NULL AND eqp_type != '' AND zpcode IS NOT NULL AND zpcode != ''"):
+                _zpcode_eqp_map[str(_r[0]).strip()] = str(_r[1]).strip()
+            cc.close()
+        except Exception:
+            pass
+
+    for row in rows_iter:
+        if row is None or all(c is None or str(c).strip() == "" for c in row):
+            continue
+
+        rec = {}
+        for db_col, ci in col_map.items():
+            if ci < len(row):
+                val = row[ci]
+                rec[db_col] = str(val).strip() if val is not None else ""
+            else:
+                rec[db_col] = ""
+
+        # region 결정 (ONS 본부)
+        region = ""
+        if ons_idx >= 0 and ons_idx < len(row) and row[ons_idx]:
+            ons_val = str(row[ons_idx]).strip()
+            for k, v in _ONS_REGION_MAP.items():
+                if k in ons_val:
+                    region = v
+                    break
+            if not region:
+                # "본부", "Access" 등 접미사 제거 후 재시도
+                cleaned = ons_val.replace("본부", "").replace("Access", "").replace("access", "").strip()
+                region = _ONS_REGION_MAP.get(cleaned, cleaned)
+        rec["region"] = region
+        region_set.add(region)
+
+        # _이월구분_auto: 데이터 값으로 검사년도/검사종류 자동 판별
+        auto_val = rec.pop("_이월구분_auto", "")
+        if auto_val:
+            # 숫자(년도)인지 텍스트(정기/이월)인지 판별
+            cleaned = auto_val.replace("년", "").replace("년도", "").strip()
+            try:
+                int(float(cleaned))
+                # 숫자 → 검사년도
+                if not rec.get("검사년도"):
+                    rec["검사년도"] = auto_val
+            except (ValueError, TypeError):
+                # 텍스트 → 검사종류
+                if not rec.get("검사종류"):
+                    rec["검사종류"] = auto_val
+
+        # year: 당해년도 실적만 관리 — 항상 업로드 시점 year 사용
+        rec["year"] = year_hint
+
+        # 검사종류 자동 결정: 검사년도 > 올해 → 시기조정, 그 외 → 정기
+        if not rec.get("검사종류"):
+            try:
+                raw_yr = rec.get("검사년도", "").replace("년", "").replace("년도", "").strip()
+                insp_yr = int(float(raw_yr))
+                # 202601 같은 6자리 → 앞 4자리만 추출
+                if insp_yr > 9999:
+                    insp_yr = int(str(insp_yr)[:4])
+                rec["검사종류"] = "시기조정" if insp_yr > year_hint else "정기"
+            except (ValueError, TypeError):
+                rec["검사종류"] = "정기"
+
+        # 주차별 정규화: "n월n주" 형식으로 통일
+        import re as _re_wk
+        week = rec.get("주차별", "").strip().replace(" ", "")
+
+        # 1) "n월n주" 패턴 추출 (뒤에 붙은 메모/특수문자 제거)
+        _wk_match = _re_wk.search(r'(\d{1,2})월(\d)주', week)
+        if _wk_match:
+            week = f"{_wk_match.group(1)}월{_wk_match.group(2)}주"
+        elif week and '주' in week and '월' not in week:
+            # 2) "n주"만 있는 경우 → 월 컬럼 또는 검사일자에서 월 추출
+            _jw_match = _re_wk.search(r'(\d)주', week)
+            if _jw_match:
+                ju = _jw_match.group(1)
+                month = ""
+                # 월 컬럼 우선
+                월_val = rec.get("월", "").strip().replace("월", "").strip()
+                if 월_val:
+                    try:
+                        month = str(int(월_val))
+                    except Exception:
+                        pass
+                # 월 컬럼 없으면 검사일자
+                if not month:
+                    date_str = str(rec.get("검사일자", "")).strip()
+                    try:
+                        if '-' in date_str:
+                            month = str(int(date_str.split('-')[1]))
+                        elif '/' in date_str:
+                            month = str(int(date_str.split('/')[1]))
+                    except Exception:
+                        pass
+                if month:
+                    week = f"{month}월{ju}주"
+                else:
+                    week = ""
+        else:
+            # 패턴 매칭 안 되면 빈값
+            if week and not _re_wk.match(r'^\d{1,2}월\d주$', week):
+                week = ""
+        rec["주차별"] = week
+
+        # 장비타입간소화 파생
+        raw_eqp = rec.get("장비타입", "").strip()
+        simplified = _EQP_TYPE_SIMPLIFY.get(raw_eqp, "")
+        if not simplified:
+            zpcode = rec.get("통합시설코드", "").strip()
+            eqp_from_cert = _zpcode_eqp_map.get(zpcode, "")
+            if eqp_from_cert:
+                simplified = _EQP_TYPE_SIMPLIFY.get(eqp_from_cert, "")
+                if not simplified:
+                    # Fallback: prefix 매칭
+                    for k, v in _EQP_TYPE_SIMPLIFY.items():
+                        if eqp_from_cert.startswith(k) or k.startswith(eqp_from_cert):
+                            simplified = v
+                            break
+        rec["장비타입간소화"] = simplified
+
+        rec["uploaded_by"] = uploaded_by
+        rec["uploaded_at"] = now_str
+
+        db_rows.append(rec)
+
+    wb.close()
+    # 대표 region (가장 많은 것)
+    if region_set:
+        primary_region = max(region_set, key=lambda r: sum(1 for d in db_rows if d.get("region") == r))
+    else:
+        primary_region = ""
+
+    return db_rows, primary_region, year_hint
+
+
+_IRR_DB_COLS = [
+    "year", "region", "skt본부", "주차별", "월", "허가번호", "통합시설코드", "호출명칭",
+    "주소", "기지국구분", "시스템", "검사년도", "검사종류", "검사일자", "ons팀", "수검자",
+    "전파진흥원", "검사관", "진행여부", "합불여부", "성능서류", "불합격내용", "불합격상세",
+    "공용화대상", "기타사항", "간략불합격", "five_g_path", "장비타입", "허가번호2",
+    "허가번호text", "제조주소명", "제조정보명", "검사지표정보명", "제조Type", "장비명",
+    "NAMS기타정보", "장비Type공용화", "NAMS설명정보", "장비Type2", "장비타입간소화", "uploaded_by", "uploaded_at",
+]
+
+
+@app.post("/inspection-results/upload")
+async def inspection_results_upload(request: Request, file: UploadFile = File(...)):
+    """검사실적 RAW DATA xlsx 업로드 (admin/manager)."""
+    empno = await _verify_auth(request)
+    role = await asyncio.to_thread(_get_user_role_sync, empno)
+    if role not in {"admin", "manager"}:
+        raise HTTPException(403, "관리자/매니저만 가능")
+
+    if not HAS_OPENPYXL:
+        raise HTTPException(500, "openpyxl 미설치")
+
+    fname = file.filename or ""
+    if fname.lower().endswith('.xls') and not fname.lower().endswith('.xlsx'):
+        raise HTTPException(400, ".xls 형식은 지원하지 않습니다. xlsx 파일로 변환 후 업로드해주세요.")
+
+    file_bytes = await file.read()
+    if not file_bytes:
+        raise HTTPException(400, "빈 파일입니다")
+
+    year_hint = datetime.now().year
+
+    try:
+        db_rows, primary_region, year = await asyncio.to_thread(
+            _parse_irr_xlsx_sync, file_bytes, year_hint, empno
+        )
+    except ValueError as ve:
+        raise HTTPException(400, str(ve))
+    finally:
+        del file_bytes
+
+    if not db_rows:
+        raise HTTPException(400, "파싱된 데이터가 없습니다")
+
+    def _insert_sync():
+        _init_inspection_db()
+        conn = sqlite3.connect(_INSP_DB, timeout=60)
+        try:
+            # 같은 region+year 기존 데이터 삭제
+            regions = set(r.get("region", "") for r in db_rows)
+            years = set(r.get("year", year) for r in db_rows)
+            for rg in regions:
+                for yr in years:
+                    conn.execute(
+                        'DELETE FROM inspection_results_raw WHERE region=? AND year=?',
+                        (rg, yr)
+                    )
+            # batch INSERT
+            placeholders = ','.join(['?'] * len(_IRR_DB_COLS))
+            sql = f'INSERT INTO inspection_results_raw ({",".join(_IRR_DB_COLS)}) VALUES ({placeholders})'
+            batch = []
+            for rec in db_rows:
+                vals = tuple(rec.get(c, "") for c in _IRR_DB_COLS)
+                batch.append(vals)
+            conn.executemany(sql, batch)
+            conn.commit()
+            return len(batch)
+        finally:
+            conn.close()
+
+    count = await asyncio.to_thread(_insert_sync)
+    return {"success": True, "count": count, "region": primary_region}
+
+
+def _irr_dashboard_calc_sync(year: int, region: str = "", month: str = ""):
+    """검사실적 대시보드 집계 (동기)."""
+    conn = sqlite3.connect(_INSP_DB, timeout=60)
+    conn.row_factory = sqlite3.Row
+    try:
+        base_where = "year=?"
+        params: list = [year]
+        if region:
+            base_where += " AND region=?"
+            params.append(region)
+        if month:
+            base_where += " AND 월=?"
+            params.append(month)
+
+        # 지역 목록
+        regions = [r[0] for r in conn.execute(
+            f'SELECT DISTINCT region FROM inspection_results_raw WHERE {base_where} ORDER BY region',
+            params
+        ).fetchall()]
+
+        result_regions = []
+        for rg in regions:
+            rg_where = base_where + (" AND region=?" if not region else "")
+            rg_params = params + ([rg] if not region else [])
+            if region:
+                rg_where = base_where
+                rg_params = list(params)
+            else:
+                rg_where = "year=? AND region=?"
+                rg_params = [year, rg]
+                if month:
+                    rg_where += " AND 월=?"
+                    rg_params.append(month)
+
+            수검국소 = conn.execute(
+                f'SELECT COUNT(*) FROM inspection_results_raw WHERE {rg_where}', rg_params
+            ).fetchone()[0]
+
+            시기조정 = conn.execute(
+                f"SELECT COUNT(*) FROM inspection_results_raw WHERE {rg_where} AND 검사종류 LIKE '%시기조정%'",
+                rg_params
+            ).fetchone()[0]
+
+            폐 = conn.execute(
+                f"SELECT COUNT(*) FROM inspection_results_raw WHERE {rg_where} AND 기타사항 LIKE '%폐국%'",
+                rg_params
+            ).fetchone()[0]
+
+            성능불합격 = conn.execute(
+                f"SELECT COUNT(*) FROM inspection_results_raw WHERE {rg_where} AND 성능서류='성능'",
+                rg_params
+            ).fetchone()[0]
+
+            서류불합격 = conn.execute(
+                f"SELECT COUNT(*) FROM inspection_results_raw WHERE {rg_where} AND 성능서류='서류'",
+                rg_params
+            ).fetchone()[0]
+
+            완료 = 수검국소 - 시기조정
+            성능합격 = 수검국소 - 성능불합격
+            서류합격 = 수검국소 - 서류불합격
+
+            result_regions.append({
+                "name": rg,
+                "수검국소": 수검국소,
+                "완료": 완료,
+                "시기조정": 시기조정,
+                "폐": 폐,
+                "성능합격": 성능합격,
+                "성능불합격": 성능불합격,
+                "서류검사": 수검국소,
+                "서류합격": 서류합격,
+                "서류불합격": 서류불합격,
+                "성능합격율": round(성능합격 / 수검국소, 4) if 수검국소 > 0 else 0,
+                "성능불합격율": round(성능불합격 / 수검국소, 4) if 수검국소 > 0 else 0,
+                "서류합격율": round(서류합격 / 수검국소, 4) if 수검국소 > 0 else 0,
+                "서류불합격율": round(서류불합격 / 수검국소, 4) if 수검국소 > 0 else 0,
+            })
+
+        # 합계
+        t_수검 = sum(r["수검국소"] for r in result_regions)
+        t_시기 = sum(r["시기조정"] for r in result_regions)
+        t_폐 = sum(r["폐"] for r in result_regions)
+        t_성능불 = sum(r["성능불합격"] for r in result_regions)
+        t_서류불 = sum(r["서류불합격"] for r in result_regions)
+        t_완료 = t_수검 - t_시기
+        t_성능합 = t_수검 - t_성능불
+        t_서류합 = t_수검 - t_서류불
+
+        total = {
+            "name": "합계",
+            "수검국소": t_수검,
+            "완료": t_완료,
+            "시기조정": t_시기,
+            "폐": t_폐,
+            "성능합격": t_성능합,
+            "성능불합격": t_성능불,
+            "서류검사": t_수검,
+            "서류합격": t_서류합,
+            "서류불합격": t_서류불,
+            "성능합격율": round(t_성능합 / t_수검, 4) if t_수검 > 0 else 0,
+            "성능불합격율": round(t_성능불 / t_수검, 4) if t_수검 > 0 else 0,
+            "서류합격율": round(t_서류합 / t_수검, 4) if t_수검 > 0 else 0,
+            "서류불합격율": round(t_서류불 / t_수검, 4) if t_수검 > 0 else 0,
+        }
+
+        # target (inspection_targets 기준 전체 대상 수)
+        try:
+            target_전체 = conn.execute('SELECT COUNT(*) FROM inspection_targets WHERE year=?', (year,)).fetchone()[0]
+        except Exception:
+            target_전체 = 0
+        target = {
+            "전체": target_전체,
+            "정기검사": target_전체,
+            "시기조정": 0,
+            "미이행": max(0, target_전체 - t_수검),
+        }
+
+        return {"regions": result_regions, "total": total, "target": target}
+    finally:
+        conn.close()
+
+
+@app.get("/inspection-results/dashboard")
+async def inspection_results_dashboard(request: Request, year: int = Query(...), region: str = Query("")):
+    """검사실적 대시보드 — 지역별 합격/불합격 집계."""
+    await _verify_auth(request)
+    if not os.path.exists(_INSP_DB):
+        return {"regions": [], "total": {}, "target": {}}
+    return await asyncio.to_thread(_irr_dashboard_calc_sync, year, region=region)
+
+
+@app.get("/inspection-results/dashboard/monthly")
+async def inspection_results_dashboard_monthly(
+    request: Request, year: int = Query(...), month: str = Query("")
+):
+    """검사실적 월별 대시보드."""
+    await _verify_auth(request)
+    if not os.path.exists(_INSP_DB):
+        return {"regions": [], "total": {}, "target": {}}
+    return await asyncio.to_thread(_irr_dashboard_calc_sync, year, month=month)
+
+
+@app.get("/inspection-results/trend")
+async def inspection_results_trend(request: Request, year: int = Query(...)):
+    """검사실적 월별 트렌드 (차트용)."""
+    await _verify_auth(request)
+
+    def _trend_sync():
+        if not os.path.exists(_INSP_DB):
+            return {"months": []}
+        conn = sqlite3.connect(_INSP_DB, timeout=60)
+        try:
+            rows = conn.execute(
+                "SELECT 월, COUNT(*) as cnt, "
+                "SUM(CASE WHEN 성능서류='성능' THEN 1 ELSE 0 END) as 성능불, "
+                "SUM(CASE WHEN 성능서류='서류' THEN 1 ELSE 0 END) as 서류불 "
+                "FROM inspection_results_raw WHERE year=? AND 월 IS NOT NULL AND 월 != '' "
+                "GROUP BY 월 ORDER BY 월",
+                (year,)
+            ).fetchall()
+            months = []
+            for r in rows:
+                월, cnt, 성능불, 서류불 = r
+                성능합 = cnt - 성능불
+                서류합 = cnt - 서류불
+                months.append({
+                    "월": 월,
+                    "수검국소": cnt,
+                    "성능합격율": round(성능합 / cnt, 4) if cnt > 0 else 0,
+                    "서류합격율": round(서류합 / cnt, 4) if cnt > 0 else 0,
+                })
+            return {"months": months}
+        finally:
+            conn.close()
+
+    return await asyncio.to_thread(_trend_sync)
+
+
+@app.get("/inspection-results/raw")
+async def inspection_results_raw_list(
+    request: Request,
+    year: int = Query(...),
+    region: str = Query(""),
+    월: str = Query(""),
+    page: int = Query(1),
+    pageSize: int = Query(100),
+):
+    """검사실적 RAW DATA 목록 (페이징)."""
+    await _verify_auth(request)
+
+    def _list_sync():
+        if not os.path.exists(_INSP_DB):
+            return {"items": [], "total": 0}
+        conn = sqlite3.connect(_INSP_DB, timeout=60)
+        conn.row_factory = sqlite3.Row
+        try:
+            where = "year=?"
+            params: list = [year]
+            if region:
+                where += " AND region=?"
+                params.append(region)
+            if 월:
+                where += " AND 월=?"
+                params.append(월)
+
+            total = conn.execute(
+                f'SELECT COUNT(*) FROM inspection_results_raw WHERE {where}', params
+            ).fetchone()[0]
+
+            offset = (max(1, page) - 1) * pageSize
+            items = conn.execute(
+                f'SELECT * FROM inspection_results_raw WHERE {where} ORDER BY id LIMIT ? OFFSET ?',
+                params + [pageSize, offset]
+            ).fetchall()
+
+            return {
+                "items": [dict(r) for r in items],
+                "total": total,
+            }
+        finally:
+            conn.close()
+
+    return await asyncio.to_thread(_list_sync)
+
+
+@app.get("/inspection-results/analysis")
+async def inspection_results_analysis(request: Request, year: int = Query(...), region: str = Query("")):
+    """불합격 사유 분석 (성능/서류/장비타입별)."""
+    await _verify_auth(request)
+
+    def _analysis():
+        if not os.path.exists(_INSP_DB):
+            return {"성능불합격": [], "서류불합격": [], "장비타입별": []}
+        conn = sqlite3.connect(_INSP_DB, timeout=60)
+        try:
+            rgn_filter = " AND region=?" if region else ""
+            rgn_params = (year, region) if region else (year,)
+
+            perf_rows = conn.execute(
+                "SELECT 불합격내용, COUNT(*) as cnt FROM inspection_results_raw "
+                f"WHERE year=?{rgn_filter} AND 성능서류='성능' AND 불합격내용 IS NOT NULL AND 불합격내용 != '' "
+                "GROUP BY 불합격내용 ORDER BY cnt DESC",
+                rgn_params
+            ).fetchall()
+            perf_total = sum(r[1] for r in perf_rows) or 1
+            성능불합격 = [{"사유": r[0], "건수": r[1], "비율": round(r[1]/perf_total, 4)} for r in perf_rows]
+
+            doc_rows = conn.execute(
+                "SELECT 간략불합격, COUNT(*) as cnt FROM inspection_results_raw "
+                f"WHERE year=?{rgn_filter} AND 성능서류='서류' AND 간략불합격 IS NOT NULL AND 간략불합격 != '' "
+                "GROUP BY 간략불합격 ORDER BY cnt DESC",
+                rgn_params
+            ).fetchall()
+            doc_total = sum(r[1] for r in doc_rows) or 1
+            서류불합격 = [{"사유": r[0], "건수": r[1], "비율": round(r[1]/doc_total, 4)} for r in doc_rows]
+
+            equip_rows = conn.execute(
+                "SELECT 장비타입간소화, COUNT(*) as cnt FROM inspection_results_raw "
+                f"WHERE year=?{rgn_filter} AND 성능서류='성능' AND 장비타입간소화 IS NOT NULL AND 장비타입간소화 != '' "
+                "GROUP BY 장비타입간소화 ORDER BY cnt DESC",
+                rgn_params
+            ).fetchall()
+            equip_total = sum(r[1] for r in equip_rows) or 1
+            장비타입별 = [{"타입": r[0], "건수": r[1], "비율": round(r[1]/equip_total, 4)} for r in equip_rows]
+
+            # 장비타입별 × 본부 크로스탭 (Top3 장비타입간소화)
+            top3_types = [r["타입"] for r in 장비타입별[:3]]
+            crosstab = []
+            if top3_types:
+                placeholders = ",".join("?" for _ in top3_types)
+                ct_params = list(rgn_params) + top3_types
+                ct_rows = conn.execute(
+                    f"SELECT 장비타입간소화, region, COUNT(*) as cnt FROM inspection_results_raw "
+                    f"WHERE year=?{rgn_filter} AND 성능서류='성능' AND 장비타입간소화 IN ({placeholders}) "
+                    f"AND 장비타입간소화 IS NOT NULL AND 장비타입간소화 != '' "
+                    f"GROUP BY 장비타입간소화, region ORDER BY 장비타입간소화",
+                    ct_params
+                ).fetchall()
+                # pivot: {type: {region: cnt, ...}}
+                pivot: Dict[str, Dict[str, int]] = {}
+                for typ, reg, cnt in ct_rows:
+                    pivot.setdefault(typ, {})[reg or "기타"] = cnt
+                # 전체 본부 목록
+                all_regions = [r[0] for r in conn.execute(
+                    "SELECT DISTINCT region FROM inspection_results_raw WHERE year=? AND region != ''", (year,)).fetchall()]
+                for typ in top3_types:
+                    row_data = {rg: pivot.get(typ, {}).get(rg, 0) for rg in all_regions}
+                    total_ct = sum(row_data.values())
+                    crosstab.append({"타입": typ, "본부별": row_data, "총합계": total_ct})
+                # 성능불합격(건) 합계 행
+                total_row: Dict[str, int] = {}
+                for ct in crosstab:
+                    for rg, cnt in ct["본부별"].items():
+                        total_row[rg] = total_row.get(rg, 0) + cnt
+                crosstab.append({"타입": "성능불합격(건)", "본부별": total_row, "총합계": sum(total_row.values())})
+
+            return {"성능불합격": 성능불합격, "서류불합격": 서류불합격, "장비타입별": 장비타입별, "장비타입별_크로스탭": crosstab}
+        finally:
+            conn.close()
+
+    return await asyncio.to_thread(_analysis)
+
+
+@app.get("/inspection-results/weekly-trend")
+async def inspection_results_weekly_trend(request: Request, year: int = Query(...), region: str = Query("")):
+    """주차별 합격율 추이."""
+    await _verify_auth(request)
+
+    def _weekly():
+        if not os.path.exists(_INSP_DB):
+            return {"weeks": []}
+        conn = sqlite3.connect(_INSP_DB, timeout=60)
+        try:
+            rgn_f = " AND region=?" if region else ""
+            rgn_p = (year, region) if region else (year,)
+            rows = conn.execute(
+                "SELECT 주차별, COUNT(*) as cnt, "
+                "SUM(CASE WHEN 성능서류='성능' THEN 1 ELSE 0 END) as 성능불 "
+                f"FROM inspection_results_raw WHERE year=?{rgn_f} AND 주차별 IS NOT NULL AND 주차별 != '' "
+                "GROUP BY 주차별 ORDER BY 주차별",
+                rgn_p
+            ).fetchall()
+            weeks = []
+            for r in rows:
+                주차, cnt, 성능불 = r
+                weeks.append({
+                    "주차": 주차,
+                    "수검": cnt,
+                    "불합격": 성능불,
+                    "합격율": round((cnt - 성능불) / cnt, 4) if cnt > 0 else 0,
+                })
+            return {"weeks": weeks}
+        finally:
+            conn.close()
+
+    return await asyncio.to_thread(_weekly)
+
+
+@app.get("/inspection-results/weekly-trend-by-region")
+async def inspection_results_weekly_trend_by_region(request: Request, year: int = Query(...)):
+    """본부별 주차별 합격율 추이 (9개 소형 차트용)."""
+    await _verify_auth(request)
+
+    def _by_region():
+        if not os.path.exists(_INSP_DB):
+            return {"regions": {}}
+        conn = sqlite3.connect(_INSP_DB, timeout=60)
+        try:
+            rows = conn.execute(
+                "SELECT region, 주차별, COUNT(*) as cnt, "
+                "SUM(CASE WHEN 성능서류='성능' THEN 1 ELSE 0 END) as 성능불 "
+                "FROM inspection_results_raw "
+                "WHERE year=? AND 주차별 IS NOT NULL AND 주차별 != '' AND region IS NOT NULL AND region != '' "
+                "GROUP BY region, 주차별 ORDER BY region, 주차별",
+                (year,)
+            ).fetchall()
+            regions: Dict[str, list] = {}
+            for region, 주차, cnt, 성능불 in rows:
+                regions.setdefault(region, []).append({
+                    "주차": 주차,
+                    "합격율": round((cnt - 성능불) / cnt, 4) if cnt > 0 else 0,
+                })
+            return {"regions": regions}
+        finally:
+            conn.close()
+
+    return await asyncio.to_thread(_by_region)
+
+
+@app.get("/inspection-results/summary-report")
+async def inspection_results_summary_report(request: Request, year: int = Query(...), region: str = Query("")):
+    """실적 현황 리포트 자동 생성."""
+    await _verify_auth(request)
+
+    def _build_report():
+        if not os.path.exists(_INSP_DB):
+            return {"lines": []}
+        conn = sqlite3.connect(_INSP_DB, timeout=60)
+        try:
+            # 1. 전사 집계
+            rgn_f = " AND region=?" if region else ""
+            rgn_p = (year, region) if region else (year,)
+            total = conn.execute(f"SELECT COUNT(*) FROM inspection_results_raw WHERE year=?{rgn_f}", rgn_p).fetchone()[0]
+            if total == 0:
+                return {"lines": ["데이터가 없습니다."]}
+
+            perf_fail = conn.execute(f"SELECT COUNT(*) FROM inspection_results_raw WHERE year=?{rgn_f} AND 성능서류='성능'", rgn_p).fetchone()[0]
+            doc_fail = conn.execute(f"SELECT COUNT(*) FROM inspection_results_raw WHERE year=?{rgn_f} AND 성능서류='서류'", rgn_p).fetchone()[0]
+            perf_pass = total - perf_fail
+            doc_pass = total - doc_fail
+            perf_rate = round(perf_pass / total * 100, 2) if total > 0 else 0
+            doc_rate = round(doc_pass / total * 100, 2) if total > 0 else 0
+            perf_target = 98.5
+            doc_target = 85.5
+            perf_diff = round(perf_rate - perf_target, 2)
+            doc_diff = round(doc_rate - doc_target, 2)
+
+            lines = []
+
+            # Line 1: 전사 합격율 요약
+            perf_status = "달성중" if perf_diff >= 0 else "미달성중"
+            doc_status = "달성중" if doc_diff >= 0 else "미달성중"
+            perf_arrow = "↑" if perf_diff >= 0 else "↓"
+            doc_arrow = "↑" if doc_diff >= 0 else "↓"
+            lines.append({
+                "type": "header",
+                "text": f"○ '{year % 100}년 무선국 합격율 실적(누적) : 성능 {perf_rate}% (목표 대비 {abs(perf_diff)}%{perf_arrow})로 {perf_status} / 서류 {doc_rate}%(목표 대비 {abs(doc_diff)}%{doc_arrow}) {doc_status}"
+            })
+
+            # 2. 주별 추이 (최근 2주)
+            weeks = conn.execute(
+                "SELECT 주차별, COUNT(*) as cnt, SUM(CASE WHEN 성능서류='성능' THEN 1 ELSE 0 END) as fail "
+                "FROM inspection_results_raw WHERE year=? AND 주차별 IS NOT NULL AND 주차별 != '' "
+                "GROUP BY 주차별 ORDER BY 주차별",
+                (year,)
+            ).fetchall()
+
+            if len(weeks) >= 2:
+                curr_week = weeks[-1]
+                prev_week = weeks[-2]
+                curr_rate = round((curr_week[1] - curr_week[2]) / curr_week[1] * 100, 2) if curr_week[1] > 0 else 0
+                prev_rate = round((prev_week[1] - prev_week[2]) / prev_week[1] * 100, 2) if prev_week[1] > 0 else 0
+                diff = round(curr_rate - prev_rate, 2)
+                direction = "상승" if diff >= 0 else "하락"
+                lines.append({
+                    "type": "detail",
+                    "text": f" - 성능합격율 : {curr_week[0]} {curr_rate}%로 전주대비 {abs(diff)}% {direction}({prev_rate}% → {curr_rate}%)"
+                })
+
+            # 3. 본부별 전주 대비 하락 분석
+            if len(weeks) >= 2:
+                curr_wk_name = weeks[-1][0]
+                prev_wk_name = weeks[-2][0]
+
+                regions_curr = conn.execute(
+                    "SELECT region, COUNT(*) as cnt, SUM(CASE WHEN 성능서류='성능' THEN 1 ELSE 0 END) as fail "
+                    "FROM inspection_results_raw WHERE year=? AND 주차별=? GROUP BY region",
+                    (year, curr_wk_name)
+                ).fetchall()
+                regions_prev = conn.execute(
+                    "SELECT region, COUNT(*) as cnt, SUM(CASE WHEN 성능서류='성능' THEN 1 ELSE 0 END) as fail "
+                    "FROM inspection_results_raw WHERE year=? AND 주차별=? GROUP BY region",
+                    (year, prev_wk_name)
+                ).fetchall()
+
+                prev_map = {r[0]: (r[1], r[2]) for r in regions_prev}
+                drops = []
+                for r in regions_curr:
+                    rg, cnt, fail = r
+                    curr_r = round((cnt - fail) / cnt * 100, 2) if cnt > 0 else 0
+                    if rg in prev_map:
+                        p_cnt, p_fail = prev_map[rg]
+                        prev_r = round((p_cnt - p_fail) / p_cnt * 100, 2) if p_cnt > 0 else 0
+                        d = round(curr_r - prev_r, 2)
+                        if d < 0:
+                            drops.append((rg, curr_r, abs(d), fail))
+
+                if drops:
+                    drops.sort(key=lambda x: -x[2])  # 하락폭 큰 순
+                    drop_texts = [f"{rg} {rate}% {drop}%하락(성능불합격 {fail}국)" for rg, rate, drop, fail in drops[:3]]
+                    lines.append({
+                        "type": "sub",
+                        "text": f"   → 전주대비 하락 Acc.담당 : {', '.join(drop_texts)}"
+                    })
+
+            # 4. 동작 불능 건수
+            동작불능 = conn.execute(
+                "SELECT region, COUNT(*) FROM inspection_results_raw WHERE year=? AND 불합격내용 LIKE '%동작불능%' GROUP BY region",
+                (year,)
+            ).fetchall()
+            if 동작불능:
+                total_불능 = sum(r[1] for r in 동작불능)
+                detail = ', '.join(f"{r[0]} {r[1]}국" for r in 동작불능)
+                lines.append({
+                    "type": "sub",
+                    "text": f"   → 동작 불능 {total_불능}국 발생 : {detail}"
+                })
+
+            # 5. 본부별 누적 실적 순위
+            region_stats = conn.execute(
+                "SELECT region, COUNT(*) as cnt, SUM(CASE WHEN 성능서류='성능' THEN 1 ELSE 0 END) as fail "
+                "FROM inspection_results_raw WHERE year=? AND region != '' GROUP BY region ORDER BY region",
+                (year,)
+            ).fetchall()
+
+            ranked = []
+            for r in region_stats:
+                rg, cnt, fail = r
+                rate = round((cnt - fail) / cnt * 100, 2) if cnt > 0 else 0
+                ranked.append((rg, rate))
+            ranked.sort(key=lambda x: x[1])  # 합격율 오름차순
+
+            if ranked:
+                rank_text = " > ".join(f"{rg} {rate}%" for rg, rate in ranked)
+                lines.append({
+                    "type": "detail",
+                    "text": f" - Acc.담당 누적 실적\n   → {rank_text}순"
+                })
+
+            # 6. 목표 달성 전망
+            if perf_rate < perf_target and len(weeks) > 0:
+                remaining_weeks = 52 - len(weeks)  # rough estimate
+                if remaining_weeks > 0:
+                    needed_rate = round(perf_target + (perf_target - perf_rate) * len(weeks) / remaining_weeks, 1)
+                    needed_max_fail = max(0, int(total / len(weeks) * (1 - needed_rate / 100)))
+                    lines.append({
+                        "type": "highlight",
+                        "text": f"   ☞ 목표 달성 위해 주단위 {min(needed_rate, 99.9)}%이상 달성시 (주단위 불합격 {needed_max_fail}국 이하) 달성으로 전환 가능"
+                    })
+
+            return {"lines": lines}
+        finally:
+            conn.close()
+
+    return await asyncio.to_thread(_build_report)
+
+
+class InspectionResultsExportReq(BaseModel):
+    year: int
+    본부: str = ""
+    진행여부: str = ""
+    status: str = ""
+    성능서류: str = ""
+    주차별: str = ""
+
+
+@app.post("/inspection-results/export-xlsx")
+async def inspection_results_export_xlsx(request: Request, req: InspectionResultsExportReq):
+    """실적 결과장 RAW DATA Excel 내보내기."""
+    await _verify_auth(request)
+    if not HAS_OPENPYXL:
+        raise HTTPException(503, "openpyxl 미설치")
+    if not os.path.exists(_INSP_DB):
+        raise HTTPException(404, "데이터 없음")
+
+    def _build():
+        import openpyxl
+        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+        from openpyxl.utils import get_column_letter
+
+        c = sqlite3.connect(_INSP_DB, timeout=60); c.row_factory = sqlite3.Row
+        _sel = (
+            'SELECT r.* '
+            'FROM inspection_results_raw r '
+        )
+        where_parts = ['r.year=?']
+        params = [req.year]
+        if req.본부:
+            where_parts.append('r.region=?'); params.append(req.본부)
+        if req.진행여부:
+            where_parts.append('r.진행여부=?'); params.append(req.진행여부)
+        if req.status:
+            where_parts.append('r.합불여부=?'); params.append(req.status)
+        if req.성능서류:
+            where_parts.append('r.성능서류=?'); params.append(req.성능서류)
+        if req.주차별:
+            where_parts.append('r.주차별=?'); params.append(req.주차별)
+        where_sql = ' AND '.join(where_parts)
+        rows = c.execute(_sel + f'WHERE {where_sql} ORDER BY r.id', params).fetchall()
+        c.close()
+
+        if not rows:
+            raise ValueError("조회된 실적 데이터가 없습니다")
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "RAW DATA"
+
+        _thin_side = Side(style='thin')
+        _thin_border = Border(left=_thin_side, right=_thin_side,
+                              top=_thin_side, bottom=_thin_side)
+        _hdr_fill = PatternFill('solid', fgColor='FFBFBFBF')
+        _hdr_font = Font(name='맑은 고딕', size=10, bold=True)
+        _data_font = Font(name='맑은 고딕', size=10)
+        _center = Alignment(horizontal='center', vertical='center', wrap_text=False)
+        _left = Alignment(horizontal='left', vertical='center', wrap_text=False)
+        _hdr_wrap = Alignment(horizontal='center', vertical='center', wrap_text=True)
+        _hdr_left_wrap = Alignment(horizontal='left', vertical='center', wrap_text=True)
+        _LINE_H = 16.5
+
+        headers = [
+            '주차', '월', '구분', 'SKT본부', 'ONS 본부', '허가번호',
+            '통합시설코드', '호출명칭', '주소', '기지국/중계기 여부', '시스템',
+            '정기검사 년도', '정기/시기조정', '검사일자', '1. ONS(팀)', '수검자',
+            '전파진흥원\n(예. 서울본부/북서울본부/경인본부 등)',
+            '검사관\n(검사관 이름)', '진행여부', '합격,불합격여부', '성능/서류', '불합격내용',
+            '불합격상세사유', '공용화 정비대상 유/무', '기타사항(폐국 및 대개체국소)', '간략불합격내역',
+            '5G Path 확인 방법\n1. 전체 Path\n2. 부분 Path\n3. 1개 Path \n4. Total Power',
+            '허가번호 장비 Type\n\n1. MIBOS(SMHS 등등)\n2. RRU\n3. AAU20-5G-AAU3.5G-64T\nAAU21-5G-AAU3.5G-32T 등\n4. 광급중계기(DDR,MPR 등)',
+            '장비타입간소화',
+        ]
+
+        # 왼쪽 정렬 컬럼: 주소(9), 불합격상세(23), 허가번호 장비 Type(28)
+        _left_cols = {9, 23, 28}
+        _hdr_left_cols = {28}
+
+        # 헤더 행 높이
+        _hdr_max_lines = 1
+        for h in headers:
+            _lc = h.count('\n') + 1
+            if _lc > _hdr_max_lines:
+                _hdr_max_lines = _lc
+        ws.row_dimensions[1].height = _LINE_H * _hdr_max_lines
+
+        for ci, h in enumerate(headers, 1):
+            cell = ws.cell(row=1, column=ci, value=h)
+            cell.font = _hdr_font
+            cell.fill = _hdr_fill
+            cell.border = _thin_border
+            cell.alignment = _hdr_left_wrap if ci in _hdr_left_cols else _hdr_wrap
+
+        # DB 컬럼 → Excel 컬럼 매핑
+        db_cols = [
+            '주차별', '월', None, 'skt본부', 'region', '허가번호',
+            '통합시설코드', '호출명칭', '주소', '기지국구분', '시스템',
+            '검사년도', '검사종류', '검사일자', 'ons팀', '수검자',
+            '전파진흥원', '검사관', '진행여부', '합불여부', '성능서류', '불합격내용',
+            '불합격상세', '공용화대상', '기타사항', '간략불합격',
+            'five_g_path', '장비타입', '장비타입간소화',
+        ]
+
+        for ri, row in enumerate(rows, 2):
+            d = dict(row)
+            values = []
+            for i, db_col in enumerate(db_cols):
+                if db_col is None:
+                    values.append(ri - 1)  # 구분(순번)
+                else:
+                    values.append(d.get(db_col) or '')
+
+            # 행높이
+            max_lines = 1
+            for _v in values:
+                if isinstance(_v, str) and '\n' in _v:
+                    _lc = _v.count('\n') + 1
+                    if _lc > max_lines:
+                        max_lines = _lc
+            ws.row_dimensions[ri].height = _LINE_H * max_lines
+
+            for ci, v in enumerate(values, 1):
+                cell = ws.cell(row=ri, column=ci, value=v)
+                cell.font = _data_font
+                cell.border = _thin_border
+                cell.alignment = _left if ci in _left_cols else _center
+
+        # 컬럼 너비: 데이터 기준 자동
+        def _col_width(s):
+            w = 0.0
+            for ch in str(s):
+                w += 2.2 if ord(ch) > 127 else 1.1
+            return w
+
+        for ci in range(1, len(headers) + 1):
+            best = 0
+            for ri2 in range(2, min(len(rows) + 2, 202)):
+                val = ws.cell(row=ri2, column=ci).value
+                if val is not None:
+                    for line in str(val).split('\n'):
+                        best = max(best, _col_width(line))
+            ws.column_dimensions[get_column_letter(ci)].width = max(min(best + 1, 80), 12.25)
+
+        # 틀 고정: 1행(헤더) + A~H열
+        ws.freeze_panes = 'I2'
+
+        buf = io.BytesIO()
+        wb.save(buf)
+        wb.close()
+        buf.seek(0)
+        return buf.getvalue()
+
+    try:
+        data = await asyncio.to_thread(_build)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+
+    filename = f"inspection_results_{req.year}.xlsx"
+    from urllib.parse import quote as _q
+    return Response(
+        content=data,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{_q(filename)}"}
+    )
+
+
+# ============================================================
 # Community Board (공지사항/요청사항)
 # ============================================================
 
@@ -11770,6 +13242,13 @@ def _init_community_db():
             conn.execute(f"ALTER TABLE requests ADD COLUMN {col} TEXT DEFAULT {default}")
         except Exception:
             pass
+    # images, author_role 컬럼 추가
+    for tbl in ('notices', 'requests'):
+        for col, dflt in [("images", "'[]'"), ("author_role", "''")]:
+            try:
+                conn.execute(f"ALTER TABLE {tbl} ADD COLUMN {col} TEXT DEFAULT {dflt}")
+            except Exception:
+                pass
     conn.execute('PRAGMA foreign_keys = ON')
     conn.commit()
     conn.close()
@@ -11782,12 +13261,14 @@ class NoticeCreate(BaseModel):
     title: str
     content: str
     division: str = "전체"
+    images: list = []
 
 
 class NoticeUpdate(BaseModel):
     title: str
     content: str
     division: str = "전체"
+    images: list = []
 
 
 class RequestCreate(BaseModel):
@@ -11795,11 +13276,13 @@ class RequestCreate(BaseModel):
     content: str
     is_secret: bool = False
     secret_password: str = ''
+    images: list = []
 
 
 class RequestUpdate(BaseModel):
     title: str
     content: str
+    images: list = []
 
 
 class RequestStatusUpdate(BaseModel):
@@ -11832,6 +13315,76 @@ def _get_user_info_for_community(empno: str) -> dict:
     except Exception as e:
         logger.warning(f"community user info 조회 실패 ({empno}): {e}")
         return {"name": empno, "org": ""}
+
+
+# ── 커뮤니티 이미지 업로드/조회 ──
+
+_COMMUNITY_IMAGE_ALLOWED_EXT = {'.jpg', '.jpeg', '.png', '.gif', '.webp'}
+_COMMUNITY_IMAGE_MAX_SIZE = 5 * 1024 * 1024  # 5MB
+
+
+@app.post("/community/upload-image")
+async def community_upload_image(request: Request, file: UploadFile = File(...)):
+    """커뮤니티 게시판 이미지 업로드 → S3"""
+    await _verify_auth(request)
+
+    # 확장자 검증
+    original_filename = file.filename or "image.jpg"
+    ext = os.path.splitext(original_filename)[1].lower()
+    if ext not in _COMMUNITY_IMAGE_ALLOWED_EXT:
+        raise HTTPException(400, f"허용되지 않는 파일 형식입니다. ({', '.join(_COMMUNITY_IMAGE_ALLOWED_EXT)})")
+
+    # 파일 읽기 + 크기 검증
+    data = await file.read()
+    if len(data) > _COMMUNITY_IMAGE_MAX_SIZE:
+        raise HTTPException(400, f"파일 크기가 5MB를 초과합니다. ({len(data) / (1024*1024):.1f}MB)")
+
+    # S3 업로드
+    safe_name = re.sub(r'[^a-zA-Z0-9._-]', '_', original_filename)
+    s3_key = f"community-images/{uuid.uuid4().hex}_{safe_name}"
+
+    content_type_map = {
+        '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png',
+        '.gif': 'image/gif', '.webp': 'image/webp',
+    }
+    content_type = content_type_map.get(ext, 'image/jpeg')
+
+    try:
+        s3_client = get_s3_client()
+        s3_client.put_object(
+            Bucket=S3_BUCKET_NAME,
+            Key=s3_key,
+            Body=data,
+            ContentType=content_type,
+        )
+        logger.info(f"Community image uploaded: s3://{S3_BUCKET_NAME}/{s3_key} ({len(data)} bytes)")
+    except Exception as e:
+        logger.error(f"Community image upload failed: {e}")
+        raise HTTPException(500, "이미지 업로드에 실패했습니다")
+
+    return {"url": s3_key, "filename": original_filename}
+
+
+@app.get("/community/images/{image_key:path}")
+async def community_serve_image(image_key: str):
+    """커뮤니티 이미지 조회 — S3에서 직접 스트리밍 (인증 불필요, UUID 키로 보호)"""
+    # image_key가 이미 community-images/ 포함이면 그대로, 아니면 추가
+    if not image_key.startswith("community-images/"):
+        image_key = f"community-images/{image_key}"
+
+    ext = os.path.splitext(image_key)[1].lower()
+    ct_map = {'.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png',
+              '.gif': 'image/gif', '.webp': 'image/webp'}
+    content_type = ct_map.get(ext, 'image/jpeg')
+
+    try:
+        s3_client = get_s3_client()
+        obj = s3_client.get_object(Bucket=S3_BUCKET_NAME, Key=image_key)
+        data = obj['Body'].read()
+        return Response(content=data, media_type=content_type)
+    except Exception as e:
+        logger.error(f"Community image presign failed: {e}")
+        raise HTTPException(500, "이미지를 불러올 수 없습니다")
 
 
 # ── 공지사항 endpoints ──
@@ -11933,9 +13486,9 @@ async def create_notice(body: NoticeCreate, request: Request):
         conn.row_factory = sqlite3.Row
         try:
             cur = conn.execute(
-                "INSERT INTO notices (title, content, division, author_empno, author_name, author_org, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (body.title, body.content, body.division, empno, user_info["name"], user_info["org"], now, now),
+                "INSERT INTO notices (title, content, division, author_empno, author_name, author_org, author_role, images, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (body.title, body.content, body.division, empno, user_info["name"], user_info["org"], role, json.dumps(body.images), now, now),
             )
             conn.commit()
             row = conn.execute("SELECT * FROM notices WHERE id = ?", (cur.lastrowid,)).fetchone()
@@ -11962,8 +13515,8 @@ async def update_notice(notice_id: int, body: NoticeUpdate, request: Request):
             if row["author_empno"] != empno:
                 raise HTTPException(403, "작성자만 수정할 수 있습니다")
             conn.execute(
-                "UPDATE notices SET title = ?, content = ?, division = ?, updated_at = ? WHERE id = ?",
-                (body.title, body.content, body.division, now, notice_id),
+                "UPDATE notices SET title = ?, content = ?, division = ?, images = ?, updated_at = ? WHERE id = ?",
+                (body.title, body.content, body.division, json.dumps(body.images), now, notice_id),
             )
             conn.commit()
             updated = conn.execute("SELECT * FROM notices WHERE id = ?", (notice_id,)).fetchone()
@@ -11996,6 +13549,41 @@ async def delete_notice(notice_id: int, request: Request):
 
     await asyncio.to_thread(_do)
     return {"success": True}
+
+
+# ── 커뮤니티 통계 ──
+
+
+@app.get("/community/stats")
+async def community_stats(request: Request):
+    """커뮤니티 요약 통계 (개인별 + 전체 요청 + 공지)"""
+    empno = await _verify_auth(request)
+
+    def _do():
+        conn = sqlite3.connect(_COMMUNITY_DB, timeout=30)
+        try:
+            # 개인별 요청
+            my_total = conn.execute("SELECT COUNT(*) FROM requests WHERE author_empno=?", (empno,)).fetchone()[0]
+            my_접수 = conn.execute("SELECT COUNT(*) FROM requests WHERE author_empno=? AND status='접수'", (empno,)).fetchone()[0]
+            my_처리중 = conn.execute("SELECT COUNT(*) FROM requests WHERE author_empno=? AND status='처리중'", (empno,)).fetchone()[0]
+            my_완료 = conn.execute("SELECT COUNT(*) FROM requests WHERE author_empno=? AND status='완료'", (empno,)).fetchone()[0]
+            # 전체 요청
+            all_total = conn.execute("SELECT COUNT(*) FROM requests").fetchone()[0]
+            all_접수 = conn.execute("SELECT COUNT(*) FROM requests WHERE status='접수'").fetchone()[0]
+            all_처리중 = conn.execute("SELECT COUNT(*) FROM requests WHERE status='처리중'").fetchone()[0]
+            all_완료 = conn.execute("SELECT COUNT(*) FROM requests WHERE status='완료'").fetchone()[0]
+            # 공지
+            notice_total = conn.execute("SELECT COUNT(*) FROM notices").fetchone()[0]
+            return {
+                "my": {"total": my_total, "접수": my_접수, "처리중": my_처리중, "완료": my_완료},
+                "all": {"total": all_total, "접수": all_접수, "처리중": all_처리중, "완료": all_완료},
+                "notices": notice_total,
+                "daily_visitors": len(_daily_visitors),
+            }
+        finally:
+            conn.close()
+
+    return await asyncio.to_thread(_do)
 
 
 # ── 요청사항 endpoints ──
@@ -12093,6 +13681,7 @@ async def increment_request_view(req_id: int, request: Request):
 @app.post("/community/requests")
 async def create_request(body: RequestCreate, request: Request):
     empno = await _verify_auth(request)
+    role = await asyncio.to_thread(_get_user_role_sync, empno)
     user_info = await asyncio.to_thread(_get_user_info_for_community, empno)
     now = datetime.now(timezone.utc).isoformat()
 
@@ -12101,9 +13690,9 @@ async def create_request(body: RequestCreate, request: Request):
         conn.row_factory = sqlite3.Row
         try:
             cur = conn.execute(
-                "INSERT INTO requests (title, content, is_secret, secret_password, author_empno, author_name, author_org, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (body.title, body.content, 1 if body.is_secret else 0, body.secret_password, empno, user_info["name"], user_info["org"], now, now),
+                "INSERT INTO requests (title, content, is_secret, secret_password, author_empno, author_name, author_org, author_role, images, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (body.title, body.content, 1 if body.is_secret else 0, body.secret_password, empno, user_info["name"], user_info["org"], role, json.dumps(body.images), now, now),
             )
             conn.commit()
             row = conn.execute("SELECT * FROM requests WHERE id = ?", (cur.lastrowid,)).fetchone()
@@ -12130,8 +13719,8 @@ async def update_request(req_id: int, body: RequestUpdate, request: Request):
             if row["author_empno"] != empno:
                 raise HTTPException(403, "작성자만 수정할 수 있습니다")
             conn.execute(
-                "UPDATE requests SET title = ?, content = ?, updated_at = ? WHERE id = ?",
-                (body.title, body.content, now, req_id),
+                "UPDATE requests SET title = ?, content = ?, images = ?, updated_at = ? WHERE id = ?",
+                (body.title, body.content, json.dumps(body.images), now, req_id),
             )
             conn.commit()
             updated = conn.execute("SELECT * FROM requests WHERE id = ?", (req_id,)).fetchone()
