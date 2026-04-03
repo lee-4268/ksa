@@ -62,6 +62,7 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
   List<Map<String, dynamic>> _reportLines = [];
 
   String _selectedRegion = '';
+  int _selectedQuarter = 0; // 0=전체, 1=1Q, 2=2Q, 3=3Q, 4=4Q
   late bool _isAdmin;
 
   @override
@@ -260,7 +261,7 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
     if (v == null) return '-';
     final n = v is num ? v.toDouble() : double.tryParse(v.toString()) ?? 0;
     final pct = n <= 1.0 ? n * 100 : n;
-    return '${pct.toStringAsFixed(1)}%';
+    return '${pct.toStringAsFixed(2)}%';
   }
 
   double _toDouble(dynamic v) {
@@ -504,7 +505,7 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
     );
   }
 
-  // ── Summary Report (yellow box) ──
+  // ── Summary Report ──
 
   Widget _buildSummaryReport() {
     return Container(
@@ -512,46 +513,80 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
       margin: const EdgeInsets.fromLTRB(20, 0, 20, 8),
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: const Color(0xFFFFFDE7),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: const Color(0xFFFFEB3B), width: 0.5),
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFE5E7EB)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.04),
+            blurRadius: 6,
+            offset: const Offset(0, 2),
+          ),
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
-        children: _reportLines.map((line) {
-          final type = line['type'] ?? 'detail';
-          final text = line['text'] ?? '';
-          if (type == 'header') {
-            return Padding(
-              padding: const EdgeInsets.only(bottom: 6),
-              child: Text(text,
-                  style: const TextStyle(
-                      fontSize: 12,
+        children: [
+          // 타이틀
+          Row(
+            children: [
+              Icon(Icons.summarize, size: 18, color: _orange),
+              const SizedBox(width: 6),
+              const Text('현황 리포트',
+                  style: TextStyle(
+                      fontSize: 16,
                       fontWeight: FontWeight.w700,
-                      color: Color(0xFF333333),
-                      height: 1.5)),
-            );
-          } else if (type == 'highlight') {
-            return Padding(
-              padding: const EdgeInsets.only(top: 4),
-              child: Text(text,
-                  style: const TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600,
-                      color: Color(0xFFE53935),
-                      height: 1.5)),
-            );
-          } else {
-            return Text(text,
-                style: TextStyle(
-                  fontSize: 11,
-                  color: type == 'sub'
-                      ? const Color(0xFF555555)
-                      : const Color(0xFF333333),
-                  height: 1.5,
-                ));
-          }
-        }).toList(),
+                      color: Color(0xFF111827))),
+            ],
+          ),
+          const SizedBox(height: 12),
+          // 리포트 라인들
+          ..._reportLines.map((line) {
+            final type = line['type'] ?? 'detail';
+            final text = line['text'] ?? '';
+            if (type == 'header') {
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 4, top: 8),
+                child: Text(text,
+                    style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w800,
+                        color: Color(0xFF111827),
+                        height: 1.5)),
+              );
+            } else if (type == 'highlight') {
+              return Padding(
+                padding: const EdgeInsets.only(top: 4, left: 4),
+                child: Text(text,
+                    style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                        color: Color(0xFFDC2626),
+                        height: 1.6)),
+              );
+            } else if (type == 'sub') {
+              return Padding(
+                padding: const EdgeInsets.only(left: 12),
+                child: Text(text,
+                    style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w400,
+                        color: Color(0xFF9CA3AF),
+                        height: 1.6)),
+              );
+            } else {
+              return Padding(
+                padding: const EdgeInsets.only(left: 4),
+                child: Text(text,
+                    style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
+                        color: Color(0xFF374151),
+                        height: 1.6)),
+              );
+            }
+          }),
+        ],
       ),
     );
   }
@@ -616,24 +651,27 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
           padding: const EdgeInsets.all(16),
           child: Column(
             children: [
-              // ── Row 1: 본부별 실적 + 파이차트 (좌) | 본부별 목표 대비 (우) ──
-              if (isWide)
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(
-                      flex: 5,
-                      child: Column(children: [
-                        _buildDataTable(),
-                        const SizedBox(height: 14),
-                        _buildFailureDonutSection(),
-                      ]),
-                    ),
-                    const SizedBox(width: 14),
-                    Expanded(flex: 5, child: _buildRegionBarChart()),
-                  ],
-                )
-              else ...[
+              if (isWide) ...[
+                // ── Row 1: 본부별 실적 + 파이차트 (좌) | 본부별 목표 대비 (우) ──
+                IntrinsicHeight(
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Expanded(
+                        flex: 5,
+                        child: Column(children: [
+                          _buildDataTable(),
+                          const SizedBox(height: 14),
+                          Expanded(child: _buildFailureDonutSection()),
+                        ]),
+                      ),
+                      const SizedBox(width: 14),
+                      Expanded(flex: 5, child: _buildRegionBarChart()),
+                    ],
+                  ),
+                ),
+              ] else ...[
+                // Single column layout for narrow screens
                 _buildDataTable(),
                 const SizedBox(height: 14),
                 _buildFailureDonutSection(),
@@ -650,8 +688,28 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
               _buildRegionWeeklyGrid(),
               const SizedBox(height: 14),
 
-              // ── F. 장비 Type별 불합격 현황 크로스탭 ──
-              _buildEquipTypeCrosstab(),
+              // ── F. 장비 Type별 불합격 현황 크로스탭 + 요약 ──
+              if (isWide)
+                Builder(
+                  builder: (context) {
+                    final summaryWidget = _buildEquipTypeSummary();
+                    return IntrinsicHeight(
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Expanded(flex: 5, child: _buildEquipTypeCrosstab()),
+                          const SizedBox(width: 14),
+                          Expanded(flex: 5, child: summaryWidget),
+                        ],
+                      ),
+                    );
+                  },
+                )
+              else ...[
+                _buildEquipTypeCrosstab(),
+                const SizedBox(height: 14),
+                _buildEquipTypeSummary(),
+              ],
             ],
           ),
         );
@@ -709,90 +767,122 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
   Widget _buildDataTable() {
     final regionData =
         List<Map<String, dynamic>>.from(_monthlyData['regions'] ?? []);
-    final totals =
-        _monthlyData['totals'] as Map<String, dynamic>? ?? {};
+    Map<String, dynamic> totals =
+        Map<String, dynamic>.from(_monthlyData['totals'] ?? {});
+
+    // 서버에서 합계 데이터를 주지 않은 경우 클라이언트에서 직접 계산하여 표시
+    if (totals.isEmpty && regionData.isNotEmpty) {
+      double totalS = 0, comp = 0, adj = 0, cls = 0;
+      double pPass = 0, pFail = 0, dPass = 0, dFail = 0;
+
+      for (var r in regionData) {
+        totalS += _toDouble(r['수검국소'] ?? r['total']);
+        comp += _toDouble(r['완료'] ?? r['completed']);
+        adj += _toDouble(r['시기조정'] ?? r['adjusted']);
+        cls += _toDouble(r['폐국'] ?? r['폐'] ?? r['closed']);
+        pPass += _toDouble(r['성능합격'] ?? r['perf_pass']);
+        pFail += _toDouble(r['성능불합격'] ?? r['perf_fail']);
+        dPass += _toDouble(r['서류합격'] ?? r['doc_pass']);
+        dFail += _toDouble(r['서류불합격'] ?? r['doc_fail']);
+      }
+
+      totals = {
+        'name': '합계',
+        '수검국소': totalS,
+        '완료': comp,
+        '시기조정': adj,
+        '폐국': cls,
+        '성능합격': pPass,
+        '성능불합격': pFail,
+        '서류합격': dPass,
+        '서류불합격': dFail,
+        '성능합격율': (pPass + pFail) > 0 ? (pPass / (pPass + pFail)) : 0.0,
+        '서류합격율': (dPass + dFail) > 0 ? (dPass / (dPass + dFail)) : 0.0,
+      };
+    }
+
+    final allRows = [
+      ...regionData,
+      if (totals.isNotEmpty) totals,
+    ];
 
     return _chartSection(
       title: '본부별 실적',
       icon: Icons.table_chart,
       iconColor: _blue,
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
+      child: ClipRect(
         child: DataTable(
           headingRowColor:
               WidgetStateProperty.all(const Color(0xFFF3F4F6)),
-          headingRowHeight: 36,
-          dataRowMinHeight: 32,
-          dataRowMaxHeight: 32,
-          columnSpacing: 12,
+          headingRowHeight: 38,
+          dataRowMinHeight: 36,
+          dataRowMaxHeight: 36,
+          columnSpacing: 20,
           horizontalMargin: 12,
+          border: TableBorder.all(
+            color: const Color(0xFFE5E7EB),
+            width: 0.5,
+            borderRadius: BorderRadius.circular(8),
+          ),
           headingTextStyle: const TextStyle(
               fontSize: 11,
-              fontWeight: FontWeight.w600,
+              fontWeight: FontWeight.w700,
               color: Color(0xFF374151)),
           dataTextStyle:
               const TextStyle(fontSize: 11, color: Color(0xFF111827)),
           columns: const [
-            DataColumn(label: Text('본부')),
-            DataColumn(label: Text('수검국소'), numeric: true),
-            DataColumn(label: Text('완료'), numeric: true),
-            DataColumn(label: Text('시기조정'), numeric: true),
-            DataColumn(label: Text('폐'), numeric: true),
-            DataColumn(label: Text('성능합격'), numeric: true),
-            DataColumn(label: Text('성능불합'), numeric: true),
-            DataColumn(label: Text('서류합격'), numeric: true),
-            DataColumn(label: Text('서류불합'), numeric: true),
-            DataColumn(label: Text('성능합격율'), numeric: true),
-            DataColumn(label: Text('서류합격율'), numeric: true),
+            DataColumn(label: Center(child: Text('본부')), headingRowAlignment: MainAxisAlignment.center),
+            DataColumn(label: Center(child: Text('수검국소')), numeric: true, headingRowAlignment: MainAxisAlignment.center),
+            DataColumn(label: Center(child: Text('완료')), numeric: true, headingRowAlignment: MainAxisAlignment.center),
+            DataColumn(label: Center(child: Text('시기조정')), numeric: true, headingRowAlignment: MainAxisAlignment.center),
+            DataColumn(label: Center(child: Text('폐국')), numeric: true, headingRowAlignment: MainAxisAlignment.center),
+            DataColumn(label: Center(child: Text('성능합격')), numeric: true, headingRowAlignment: MainAxisAlignment.center),
+            DataColumn(label: Center(child: Text('성능불합')), numeric: true, headingRowAlignment: MainAxisAlignment.center),
+            DataColumn(label: Center(child: Text('서류합격')), numeric: true, headingRowAlignment: MainAxisAlignment.center),
+            DataColumn(label: Center(child: Text('서류불합')), numeric: true, headingRowAlignment: MainAxisAlignment.center),
+            DataColumn(label: Center(child: Text('성능합격율')), numeric: true, headingRowAlignment: MainAxisAlignment.center),
+            DataColumn(label: Center(child: Text('서류합격율')), numeric: true, headingRowAlignment: MainAxisAlignment.center),
           ],
-          rows: [
-            ...regionData.map((r) => _buildDataRow(r, isBold: false)),
-            if (totals.isNotEmpty)
-              _buildDataRow(totals, isBold: true),
-          ],
+          rows: allRows.asMap().entries.map((entry) {
+            final i = entry.key;
+            final r = entry.value;
+            final isTotalRow = i == allRows.length - 1 && totals.isNotEmpty;
+            final isEven = i.isEven;
+            final perfRate = _asPercent(r['성능합격율'] ?? r['perf_pass_rate']);
+            final docRate = _asPercent(r['서류합격율'] ?? r['doc_pass_rate']);
+            final style = TextStyle(
+              fontSize: 11,
+              fontWeight: isTotalRow ? FontWeight.w700 : FontWeight.w400,
+              color: const Color(0xFF111827),
+            );
+
+            return DataRow(
+              color: WidgetStateProperty.all(
+                isTotalRow
+                    ? const Color(0xFFEEF2FF)
+                    : isEven
+                        ? Colors.white
+                        : const Color(0xFFFAFAFB),
+              ),
+              cells: [
+                DataCell(Center(child: Text(
+                    _regionName(r, fallback: isTotalRow ? '합계' : '-'),
+                    style: style))),
+                DataCell(Center(child: Text(_fmt(r['수검국소'] ?? r['total']), style: style))),
+                DataCell(Center(child: Text(_fmt(r['완료'] ?? r['completed']), style: style))),
+                DataCell(Center(child: Text(_fmt(r['시기조정'] ?? r['adjusted']), style: style))),
+                DataCell(Center(child: Text(_fmt(r['폐국'] ?? r['폐'] ?? r['closed']), style: style))),
+                DataCell(Center(child: Text(_fmt(r['성능합격'] ?? r['perf_pass']), style: style))),
+                DataCell(Center(child: Text(_fmt(r['성능불합격'] ?? r['perf_fail']), style: style))),
+                DataCell(Center(child: Text(_fmt(r['서류합격'] ?? r['doc_pass']), style: style))),
+                DataCell(Center(child: Text(_fmt(r['서류불합격'] ?? r['doc_fail']), style: style))),
+                DataCell(Center(child: _buildRateCell(perfRate, isPerfRate: true, isBold: isTotalRow))),
+                DataCell(Center(child: _buildRateCell(docRate, isPerfRate: false, isBold: isTotalRow))),
+              ],
+            );
+          }).toList(),
         ),
       ),
-    );
-  }
-
-  DataRow _buildDataRow(Map<String, dynamic> r, {required bool isBold}) {
-    final style = TextStyle(
-      fontSize: 11,
-      fontWeight: isBold ? FontWeight.w700 : FontWeight.w400,
-      color: const Color(0xFF111827),
-    );
-
-    final perfRate = _asPercent(r['성능합격율'] ?? r['perf_pass_rate']);
-    final docRate = _asPercent(r['서류합격율'] ?? r['doc_pass_rate']);
-
-    return DataRow(
-      color: isBold
-          ? WidgetStateProperty.all(const Color(0xFFFFF8E1))
-          : null,
-      cells: [
-        DataCell(Text(
-            _regionName(r, fallback: isBold ? '합계' : '-'),
-            style: style)),
-        DataCell(
-            Text(_fmt(r['수검국소'] ?? r['total']), style: style)),
-        DataCell(
-            Text(_fmt(r['완료'] ?? r['completed']), style: style)),
-        DataCell(
-            Text(_fmt(r['시기조정'] ?? r['adjusted']), style: style)),
-        DataCell(Text(_fmt(r['폐'] ?? r['closed']), style: style)),
-        DataCell(
-            Text(_fmt(r['성능합격'] ?? r['perf_pass']), style: style)),
-        DataCell(Text(
-            _fmt(r['성능불합격'] ?? r['perf_fail']), style: style)),
-        DataCell(
-            Text(_fmt(r['서류합격'] ?? r['doc_pass']), style: style)),
-        DataCell(Text(
-            _fmt(r['서류불합격'] ?? r['doc_fail']), style: style)),
-        DataCell(
-            _buildRateCell(perfRate, isPerfRate: true, isBold: isBold)),
-        DataCell(
-            _buildRateCell(docRate, isPerfRate: false, isBold: isBold)),
-      ],
     );
   }
 
@@ -803,36 +893,37 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
 
     if (isPerfRate) {
       if (rate >= 98) {
-        bgColor = const Color(0xFFE8F5E9);
-        textColor = const Color(0xFF2E7D32);
+        bgColor = const Color(0xFFDCFCE7);
+        textColor = const Color(0xFF16A34A);
       } else if (rate >= 95) {
-        bgColor = const Color(0xFFFFF8E1);
-        textColor = const Color(0xFFF57F17);
+        bgColor = const Color(0xFFFEF9C3);
+        textColor = const Color(0xFFCA8A04);
       } else {
-        bgColor = const Color(0xFFFFEBEE);
-        textColor = const Color(0xFFC62828);
+        bgColor = const Color(0xFFFEE2E2);
+        textColor = const Color(0xFFDC2626);
       }
     } else {
       if (rate >= 85) {
-        bgColor = const Color(0xFFE8F5E9);
-        textColor = const Color(0xFF2E7D32);
+        bgColor = const Color(0xFFDCFCE7);
+        textColor = const Color(0xFF16A34A);
       } else if (rate >= 80) {
-        bgColor = const Color(0xFFFFF8E1);
-        textColor = const Color(0xFFF57F17);
+        bgColor = const Color(0xFFFEF9C3);
+        textColor = const Color(0xFFCA8A04);
       } else {
-        bgColor = const Color(0xFFFFEBEE);
-        textColor = const Color(0xFFC62828);
+        bgColor = const Color(0xFFFEE2E2);
+        textColor = const Color(0xFFDC2626);
       }
     }
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(
         color: bgColor,
-        borderRadius: BorderRadius.circular(4),
+        borderRadius: BorderRadius.circular(6),
       ),
       child: Text(
-        '${rate.toStringAsFixed(1)}%',
+        '${rate.toStringAsFixed(2)}%',
+        textAlign: TextAlign.center,
         style: TextStyle(
           fontSize: 11,
           fontWeight: isBold ? FontWeight.w700 : FontWeight.w600,
@@ -943,44 +1034,38 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
                 color: Color(0xFF374151))),
         const SizedBox(height: 8),
         SizedBox(
-          width: 130,
-          height: 130,
+          width: 200,
+          height: 200,
           child: CustomPaint(
             painter: _DonutPainter(slices: slices, total: total),
           ),
         ),
         const SizedBox(height: 10),
         ...slices.map((s) {
-          final pctVal = total > 0 ? (s.value / total * 100) : 0.0;
           return Padding(
-            padding: const EdgeInsets.only(bottom: 3),
+            padding: const EdgeInsets.only(bottom: 4),
             child: Row(
               children: [
                 Container(
-                  width: 10,
-                  height: 10,
+                  width: 12,
+                  height: 12,
                   decoration: BoxDecoration(
                     color: s.color,
-                    borderRadius: BorderRadius.circular(2),
+                    borderRadius: BorderRadius.circular(3),
                   ),
                 ),
-                const SizedBox(width: 6),
+                const SizedBox(width: 8),
                 Expanded(
                   child: Text(s.name,
                       style: const TextStyle(
-                          fontSize: 10, color: Color(0xFF374151)),
+                          fontSize: 12, color: Color(0xFF374151)),
                       overflow: TextOverflow.ellipsis),
                 ),
                 Text('${s.value.toInt()}건',
                     style: const TextStyle(
-                        fontSize: 10,
-                        color: Color(0xFF6B7280))),
-                const SizedBox(width: 6),
-                Text('${pctVal.toStringAsFixed(1)}%',
-                    style: const TextStyle(
-                        fontSize: 10,
+                        fontSize: 12,
                         fontWeight: FontWeight.w600,
-                        color: Color(0xFF374151))),
+                        color: Color(0xFF6B7280))),
               ],
             ),
           );
@@ -1003,7 +1088,19 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
     const Color perfColor = Color(0xFF4CAF50);
     const Color docColor = Color(0xFF2196F3);
     const Color missColor = Color(0xFFE53935);
-    final Color barBg = Colors.grey.shade100;
+
+    // 전사 합격율: regions에서 직접 계산
+    double pPass = 0, pFail = 0, dPass = 0, dFail = 0;
+    for (var r in regionData) {
+      pPass += _toDouble(r['성능합격'] ?? r['perf_pass']);
+      pFail += _toDouble(r['성능불합격'] ?? r['perf_fail']);
+      dPass += _toDouble(r['서류합격'] ?? r['doc_pass']);
+      dFail += _toDouble(r['서류불합격'] ?? r['doc_fail']);
+    }
+    final totalPerf = (pPass + pFail) > 0 ? (pPass / (pPass + pFail)) * 100 : 0.0;
+    final totalDoc = (dPass + dFail) > 0 ? (dPass / (dPass + dFail)) * 100 : 0.0;
+    final totalPerfPass = totalPerf >= perfTarget;
+    final totalDocPass = totalDoc >= docTarget;
 
     return _chartSection(
       title: '본부별 목표 대비 합격율',
@@ -1012,59 +1109,88 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // 범례
           Row(
             children: [
               _legendDot(perfColor, '성능 (목표 $perfTarget%)'),
-              const SizedBox(width: 16),
+              const SizedBox(width: 12),
               _legendDot(docColor, '서류 (목표 $docTarget%)'),
-              const SizedBox(width: 16),
+              const SizedBox(width: 12),
               _legendDot(missColor, '미달'),
+              const SizedBox(width: 12),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(width: 12, height: 2, color: const Color(0xFF333333)),
+                  const SizedBox(width: 4),
+                  const Text('목표', style: TextStyle(fontSize: 10, color: Color(0xFF6B7280))),
+                ],
+              ),
             ],
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 14),
+          // 본부별 바 차트 행
           ...regionData.map((r) {
             final name = _regionName(r);
-            final perf =
-                _asPercent(r['성능합격율'] ?? r['perf_pass_rate']);
-            final doc =
-                _asPercent(r['서류합격율'] ?? r['doc_pass_rate']);
-            return Padding(
-              padding: const EdgeInsets.only(bottom: 10),
+            final perf = _asPercent(r['성능합격율'] ?? r['perf_pass_rate']);
+            final doc = _asPercent(r['서류합격율'] ?? r['doc_pass_rate']);
+            final perfPass = perf >= perfTarget;
+            final docPass = doc >= docTarget;
+
+            return Container(
+              margin: const EdgeInsets.only(bottom: 22),
+              padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 10),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF9FAFB),
+                borderRadius: BorderRadius.circular(8),
+              ),
               child: Row(
                 children: [
                   SizedBox(
-                    width: 52,
+                    width: 36,
                     child: Text(name,
                         style: const TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w600,
-                            color: Color(0xFF374151))),
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                            color: Color(0xFF1F2937))),
                   ),
-                  const SizedBox(width: 6),
+                  const SizedBox(width: 8),
                   Expanded(
                     child: Column(
                       children: [
-                        _horizontalBar(
+                        _regionBar(
                           value: perf,
-                          maxValue: 100,
-                          color: perf >= perfTarget
-                              ? perfColor
-                              : missColor,
-                          bgColor: barBg,
-                          label: '${perf.toStringAsFixed(1)}%',
+                          color: perfPass ? perfColor : missColor,
                           targetPct: perfTarget / 100,
+                          height: 20,
                         ),
-                        const SizedBox(height: 3),
-                        _horizontalBar(
+                        const SizedBox(height: 4),
+                        _regionBar(
                           value: doc,
-                          maxValue: 100,
-                          color: doc >= docTarget
-                              ? docColor
-                              : missColor,
-                          bgColor: barBg,
-                          label: '${doc.toStringAsFixed(1)}%',
+                          color: docPass ? docColor : missColor,
                           targetPct: docTarget / 100,
+                          height: 20,
                         ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  SizedBox(
+                    width: 50,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Text('${perf.toStringAsFixed(2)}%',
+                            style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700,
+                                color: perfPass ? perfColor : missColor)),
+                        const SizedBox(height: 6),
+                        Text('${doc.toStringAsFixed(2)}%',
+                            style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700,
+                                color: docPass ? docColor : missColor)),
                       ],
                     ),
                   ),
@@ -1072,78 +1198,119 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
               ),
             );
           }),
+          // ── 합계 행 ──
+          Container(
+            margin: const EdgeInsets.only(top: 2),
+            padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 10),
+            decoration: BoxDecoration(
+              color: const Color(0xFFEEF2FF),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: const Color(0xFFC7D2FE)),
+            ),
+            child: Row(
+              children: [
+                const SizedBox(
+                  width: 36,
+                  child: Text('합계',
+                      style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w800,
+                          color: Color(0xFF1F2937))),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Column(
+                    children: [
+                      _regionBar(
+                        value: totalPerf,
+                        color: totalPerfPass ? perfColor : missColor,
+                        targetPct: perfTarget / 100,
+                        height: 22,
+                      ),
+                      const SizedBox(height: 4),
+                      _regionBar(
+                        value: totalDoc,
+                        color: totalDocPass ? docColor : missColor,
+                        targetPct: docTarget / 100,
+                        height: 22,
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 6),
+                SizedBox(
+                  width: 50,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      Text('${totalPerf.toStringAsFixed(2)}%',
+                          style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w800,
+                              color: totalPerfPass ? perfColor : missColor)),
+                      const SizedBox(height: 6),
+                      Text('${totalDoc.toStringAsFixed(2)}%',
+                          style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w800,
+                              color: totalDocPass ? docColor : missColor)),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
         ],
       ),
     );
   }
 
-  Widget _legendDot(Color color, String label) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Container(
-          width: 10,
-          height: 10,
-          decoration: BoxDecoration(
-            color: color,
-            borderRadius: BorderRadius.circular(2),
-          ),
-        ),
-        const SizedBox(width: 4),
-        Text(label,
-            style:
-                const TextStyle(fontSize: 11, color: Color(0xFF6B7280))),
-      ],
-    );
-  }
-
-  Widget _horizontalBar({
+  /// 본부별 목표 대비 합격율 개별 바
+  Widget _regionBar({
     required double value,
-    required double maxValue,
     required Color color,
-    required Color bgColor,
-    required String label,
-    double? targetPct,
+    required double targetPct,
+    required double height,
   }) {
-    final fraction = (value / maxValue).clamp(0.0, 1.0);
+    final fraction = (value / 100).clamp(0.0, 1.0);
     return SizedBox(
-      height: 16,
+      height: height,
       child: LayoutBuilder(
         builder: (context, constraints) {
           final totalWidth = constraints.maxWidth;
           return Stack(
             children: [
+              // 배경
               Container(
                 width: totalWidth,
-                height: 16,
+                height: height,
                 decoration: BoxDecoration(
-                  color: bgColor,
-                  borderRadius: BorderRadius.circular(4),
+                  color: const Color(0xFFE5E7EB),
+                  borderRadius: BorderRadius.circular(5),
                 ),
               ),
-              Container(
+              // 값 바
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 400),
+                curve: Curves.easeOutCubic,
                 width: totalWidth * fraction,
-                height: 16,
+                height: height,
                 decoration: BoxDecoration(
-                  color: color,
-                  borderRadius: BorderRadius.circular(4),
+                  gradient: LinearGradient(
+                    colors: [color, color.withValues(alpha: 0.75)],
+                  ),
+                  borderRadius: BorderRadius.circular(5),
                 ),
               ),
-              if (targetPct != null)
-                Positioned(
-                  left: totalWidth * targetPct.clamp(0.0, 1.0) - 1,
-                  top: 0,
-                  bottom: 0,
-                  child: Container(width: 2, color: const Color(0xFF333333)),
-                ),
+              // 목표선
               Positioned(
-                right: 4,
-                top: 1,
-                child: Text(label,
-                    style: const TextStyle(
-                        fontSize: 9,
-                        fontWeight: FontWeight.w600,
-                        color: Color(0xFF374151))),
+                left: (totalWidth * targetPct.clamp(0.0, 1.0) - 1),
+                top: 0,
+                bottom: 0,
+                child: Container(
+                  width: 2,
+                  color: const Color(0xFF333333),
+                ),
               ),
             ],
           );
@@ -1152,14 +1319,32 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
     );
   }
 
+
+  Widget _legendDot(Color color, String label) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 10,
+          height: 10,
+          decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(2)),
+        ),
+        const SizedBox(width: 4),
+        Text(label, style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280))),
+      ],
+    );
+  }
+
   // ══════════════════════════════════════════════════════════
   // D. 성능 합격율 주별 Trend — COMBO CHART (bars + line + table)
   // ══════════════════════════════════════════════════════════
 
   Widget _buildWeeklyTrendCombo() {
-    final weeks =
+    final allWeeks =
         List<Map<String, dynamic>>.from(_weeklyTrend['weeks'] ?? []);
-    if (weeks.isEmpty) return const SizedBox.shrink();
+    if (allWeeks.isEmpty) return const SizedBox.shrink();
+
+    final weeks = _filterByQuarter(allWeeks);
 
     return _chartSection(
       title: '성능 합격율 주별 Trend',
@@ -1168,13 +1353,15 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // 범례
+          // 분기 선택 + 범례
           Row(
             children: [
+              _buildQuarterSelector(),
+              const Spacer(),
               _legendDot(const Color(0xFF90CAF9), '대상 건수'),
-              const SizedBox(width: 16),
+              const SizedBox(width: 12),
               _legendDot(_primary, '합격율 (%)'),
-              const SizedBox(width: 16),
+              const SizedBox(width: 12),
               _legendDot(
                   _primary.withValues(alpha: 0.5), '목표 98.5%'),
             ],
@@ -1196,67 +1383,162 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
             ),
           ),
           const SizedBox(height: 12),
-          // Data table — 월별 가로 배치
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: _groupWeeksByMonth(weeks).entries.map((entry) {
-                final month = entry.key;
-                final monthWeeks = entry.value;
-                return Padding(
-                  padding: const EdgeInsets.only(right: 8),
-                  child: DataTable(
-                    headingRowColor: WidgetStateProperty.all(const Color(0xFFF3F4F6)),
-                    headingRowHeight: 28,
-                    dataRowMinHeight: 26,
-                    dataRowMaxHeight: 26,
-                    columnSpacing: 10,
-                    horizontalMargin: 6,
-                    headingTextStyle: const TextStyle(fontSize: 9, fontWeight: FontWeight.w600, color: Color(0xFF374151)),
-                    dataTextStyle: const TextStyle(fontSize: 9, color: Color(0xFF111827)),
-                    columns: [
-                      DataColumn(label: Text('$month')),
-                      const DataColumn(label: Text('대상'), numeric: true),
-                      const DataColumn(label: Text('불합'), numeric: true),
-                      const DataColumn(label: Text('합격율'), numeric: true),
-                    ],
-                    rows: monthWeeks.map((w) {
-                      final rate = _asPercent(w['합격율'] ?? 0);
-                      final weekLabel = (w['주차'] ?? '-').toString().replaceAll(RegExp(r'^\d+월'), '');
-                      return DataRow(cells: [
-                        DataCell(Text(weekLabel, style: const TextStyle(fontSize: 9))),
-                        DataCell(Text(_fmt(w['수검'] ?? 0), style: const TextStyle(fontSize: 9))),
-                        DataCell(Text(_fmt(w['불합격'] ?? 0), style: const TextStyle(fontSize: 9))),
-                        DataCell(Text('${rate.toStringAsFixed(1)}%',
-                            style: TextStyle(fontSize: 9, fontWeight: FontWeight.w600,
-                                color: rate >= 98.5 ? const Color(0xFF2E7D32) : _primary))),
-                      ]);
-                    }).toList(),
-                  ),
-                );
-              }).toList(),
-            ),
-          ),
+          // Data table — 월별 배치 (분기 선택 시 균등 분배)
+          _buildMonthlyTables(weeks),
         ],
       ),
     );
   }
 
-  /// 주차를 월별로 그룹핑 (1월~12월 전부 포함)
+  Widget _buildMonthlyTables(List<Map<String, dynamic>> weeks) {
+    final monthGroups = _groupWeeksByMonth(weeks);
+    final isQuarter = _selectedQuarter > 0;
+
+    // 전체: 빈 달 포함, 분기: 데이터 있는 달만
+    final entries = isQuarter
+        ? monthGroups.entries.where((e) => e.value.isNotEmpty).toList()
+        : monthGroups.entries.toList();
+    if (entries.isEmpty) return const SizedBox.shrink();
+
+    final double fontSize = isQuarter ? 12 : 9;
+    final double headingH = isQuarter ? 40 : 28;
+    final double rowH = isQuarter ? 38 : 26;
+    final double colSpacing = isQuarter ? 20 : 10;
+    final double margin = isQuarter ? 12 : 6;
+
+    Widget buildTable(String month, List<Map<String, dynamic>> monthWeeks) {
+      return DataTable(
+        headingRowColor: WidgetStateProperty.all(const Color(0xFFF3F4F6)),
+        headingRowHeight: headingH,
+        dataRowMinHeight: rowH,
+        dataRowMaxHeight: rowH,
+        columnSpacing: colSpacing,
+        horizontalMargin: margin,
+        border: TableBorder.all(
+          color: const Color(0xFFE5E7EB),
+          width: 0.5,
+          borderRadius: BorderRadius.circular(6),
+        ),
+        headingTextStyle: TextStyle(fontSize: fontSize, fontWeight: FontWeight.w700, color: const Color(0xFF374151)),
+        dataTextStyle: TextStyle(fontSize: fontSize, color: const Color(0xFF111827)),
+        columns: [
+          DataColumn(label: Center(child: Text(month)), numeric: isQuarter, headingRowAlignment: MainAxisAlignment.center),
+          const DataColumn(label: Center(child: Text('대상')), numeric: true, headingRowAlignment: MainAxisAlignment.center),
+          const DataColumn(label: Center(child: Text('불합')), numeric: true, headingRowAlignment: MainAxisAlignment.center),
+          const DataColumn(label: Center(child: Text('합격율')), numeric: true, headingRowAlignment: MainAxisAlignment.center),
+        ],
+        rows: monthWeeks.map((w) {
+          final rate = _asPercent(w['합격율'] ?? 0);
+          final weekLabel = (w['주차'] ?? '-').toString().replaceAll(RegExp(r'^\d+월'), '');
+          return DataRow(cells: [
+            DataCell(Center(child: Text(weekLabel, style: TextStyle(fontSize: fontSize)))),
+            DataCell(Center(child: Text(_fmt(w['수검'] ?? 0), style: TextStyle(fontSize: fontSize)))),
+            DataCell(Center(child: Text(_fmt(w['불합격'] ?? 0), style: TextStyle(fontSize: fontSize)))),
+            DataCell(Center(child: Text('${rate.toStringAsFixed(2)}%',
+                style: TextStyle(fontSize: fontSize, fontWeight: FontWeight.w600,
+                    color: rate >= 98.5 ? const Color(0xFF2E7D32) : _primary)))),
+          ]);
+        }).toList(),
+      );
+    }
+
+    // 분기 선택 시 (3개월) → Expanded로 균등 배분 + 크게
+    if (isQuarter) {
+      return Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: entries.map((e) {
+          return Expanded(
+            child: Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: ClipRect(
+                child: buildTable(e.key, e.value),
+              ),
+            ),
+          );
+        }).toList(),
+      );
+    }
+
+    // 전체 선택 시 → 스크롤 + 컴팩트
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: entries.map((e) {
+          return Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: buildTable(e.key, e.value),
+          );
+        }).toList(),
+      ),
+    );
+  }
+
+  /// 주차를 월별로 그룹핑 (분기 필터 반영)
   Map<String, List<Map<String, dynamic>>> _groupWeeksByMonth(List<Map<String, dynamic>> weeks) {
     final grouped = <String, List<Map<String, dynamic>>>{};
-    // 1~12월 빈 리스트 초기화
-    for (int m = 1; m <= 12; m++) {
+    // 분기에 맞는 월만 초기화
+    final int startMonth = _selectedQuarter == 0 ? 1 : (_selectedQuarter - 1) * 3 + 1;
+    final int endMonth = _selectedQuarter == 0 ? 12 : _selectedQuarter * 3;
+    for (int m = startMonth; m <= endMonth; m++) {
       grouped['$m월'] = [];
     }
     for (final w in weeks) {
       final wk = (w['주차'] ?? '').toString();
       final match = RegExp(r'^(\d{1,2})월').firstMatch(wk);
       final month = match != null ? '${match.group(1)}월' : '기타';
-      grouped.putIfAbsent(month, () => []).add(w);
+      if (grouped.containsKey(month)) {
+        grouped[month]!.add(w);
+      }
     }
     return grouped;
+  }
+
+  /// 주차 데이터를 분기로 필터링 (0=전체)
+  List<Map<String, dynamic>> _filterByQuarter(List<Map<String, dynamic>> weeks) {
+    if (_selectedQuarter == 0) return weeks;
+    final startMonth = (_selectedQuarter - 1) * 3 + 1;
+    final endMonth = _selectedQuarter * 3;
+    return weeks.where((w) {
+      final wk = (w['주차'] ?? '').toString();
+      final match = RegExp(r'^(\d{1,2})월').firstMatch(wk);
+      if (match == null) return false;
+      final month = int.tryParse(match.group(1)!) ?? 0;
+      return month >= startMonth && month <= endMonth;
+    }).toList();
+  }
+
+  /// 분기 선택 버튼
+  Widget _buildQuarterSelector() {
+    const labels = ['전체', '1Q', '2Q', '3Q', '4Q'];
+    return Row(
+      children: labels.asMap().entries.map((entry) {
+        final idx = entry.key;
+        final label = entry.value;
+        final isSelected = _selectedQuarter == idx;
+        return Padding(
+          padding: const EdgeInsets.only(right: 4),
+          child: GestureDetector(
+            onTap: () => setState(() => _selectedQuarter = idx),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(
+                color: isSelected ? _primary : Colors.white,
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(
+                  color: isSelected ? _primary : const Color(0xFFD1D5DB),
+                ),
+              ),
+              child: Text(label,
+                  style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: isSelected ? Colors.white : const Color(0xFF6B7280))),
+            ),
+          ),
+        );
+      }).toList(),
+    );
   }
 
   // ══════════════════════════════════════════════════════════
@@ -1274,7 +1556,7 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
     for (final rName in _regionOrder) {
       final data = regionsMap[rName];
       final weekList = data != null
-          ? List<Map<String, dynamic>>.from(data as List)
+          ? _filterByQuarter(List<Map<String, dynamic>>.from(data as List))
           : <Map<String, dynamic>>[];
       charts.add(_smallLineChart(rName, weekList));
     }
@@ -1282,7 +1564,7 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
     for (final key in regionsMap.keys) {
       if (!_regionOrder.contains(key)) {
         final weekList =
-            List<Map<String, dynamic>>.from(regionsMap[key] as List);
+            _filterByQuarter(List<Map<String, dynamic>>.from(regionsMap[key] as List));
         charts.add(_smallLineChart(key, weekList));
       }
     }
@@ -1309,12 +1591,11 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
     );
   }
 
-  /// 주차 라벨을 "1-1", "1-2" 등으로 축약
-  static String _abbreviateWeekLabel(String raw) {
-    // "1월1주" → "1-1", "12월4주" → "12-4"
+  /// 주차 라벨을 "1월1주" 형식으로
+  static String _formatWeekLabel(String raw) {
     final m = RegExp(r'(\d+)월(\d+)주').firstMatch(raw);
-    if (m != null) return '${m[1]}-${m[2]}';
-    return raw.length > 3 ? raw.substring(0, 3) : raw;
+    if (m != null) return '${m[1]}월${m[2]}주';
+    return raw;
   }
 
   Widget _smallLineChart(
@@ -1322,44 +1603,114 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
     final values =
         weekData.map((w) => _asPercent(w['합격율'] ?? 0)).toList();
     final labels = weekData
-        .map((w) => _abbreviateWeekLabel((w['주차'] ?? '').toString()))
+        .map((w) => _formatWeekLabel((w['주차'] ?? '').toString()))
         .toList();
 
-    return Container(
-      height: 160,
-      padding: const EdgeInsets.all(8),
-      decoration: BoxDecoration(
-        color: const Color(0xFFFAFAFB),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: const Color(0xFFE5E7EB)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(regionName,
-              style: const TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w700,
-                  color: Color(0xFF374151))),
-          const SizedBox(height: 4),
-          Expanded(
-            child: values.isEmpty
-                ? const Center(
-                    child: Text('데이터 없음',
-                        style: TextStyle(
-                            fontSize: 10,
-                            color: Color(0xFF9CA3AF))))
-                : CustomPaint(
-                    size: Size.infinite,
-                    painter: _SmallLineChartPainter(
-                      values: values,
-                      labels: labels,
-                      target: 98.5,
-                      lineColor: _primary,
+    return GestureDetector(
+      onTap: () => _showExpandedChart(regionName, values, labels),
+      child: Container(
+        height: 200,
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: const Color(0xFFFAFAFB),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: const Color(0xFFE5E7EB)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Text(regionName,
+                    style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        color: Color(0xFF374151))),
+                const Spacer(),
+                Icon(Icons.open_in_full, size: 14, color: Colors.grey.shade400),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Expanded(
+              child: values.isEmpty
+                  ? const Center(
+                      child: Text('데이터 없음',
+                          style: TextStyle(
+                              fontSize: 10,
+                              color: Color(0xFF9CA3AF))))
+                  : CustomPaint(
+                      size: Size.infinite,
+                      painter: _SmallLineChartPainter(
+                        values: values,
+                        labels: labels,
+                        target: 98.5,
+                        lineColor: _primary,
+                      ),
                     ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showExpandedChart(String regionName, List<double> values, List<String> labels) {
+    showDialog(
+      context: context,
+      builder: (ctx) => Dialog(
+        backgroundColor: Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        insetPadding: const EdgeInsets.symmetric(horizontal: 40, vertical: 60),
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(Icons.timeline, size: 20, color: _primary),
+                  const SizedBox(width: 8),
+                  Text('$regionName 주별 Trend',
+                      style: const TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w700,
+                          color: Color(0xFF111827))),
+                  const Spacer(),
+                  IconButton(
+                    onPressed: () => Navigator.pop(ctx),
+                    icon: const Icon(Icons.close, size: 20),
+                    splashRadius: 18,
                   ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  _legendDot(_primary, '합격율 (%)'),
+                  const SizedBox(width: 16),
+                  _legendDot(_primary.withValues(alpha: 0.5), '목표 98.5%'),
+                ],
+              ),
+              const SizedBox(height: 16),
+              SizedBox(
+                height: 350,
+                child: values.isEmpty
+                    ? const Center(child: Text('데이터 없음'))
+                    : CustomPaint(
+                        size: Size.infinite,
+                        painter: _SmallLineChartPainter(
+                          values: values,
+                          labels: labels,
+                          target: 98.5,
+                          lineColor: _primary,
+                          fontSize: 13,
+                        ),
+                      ),
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }
@@ -1397,64 +1748,212 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
       title: '장비 Type별 불합격 현황 (Top3)',
       icon: Icons.router,
       iconColor: _orange,
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
+      child: ClipRect(
         child: DataTable(
           headingRowColor:
               WidgetStateProperty.all(const Color(0xFFF3F4F6)),
-          headingRowHeight: 34,
-          dataRowMinHeight: 30,
-          dataRowMaxHeight: 30,
-          columnSpacing: 14,
-          horizontalMargin: 10,
+          headingRowHeight: 44,
+          dataRowMinHeight: 48,
+          dataRowMaxHeight: 48,
+          columnSpacing: 24,
+          horizontalMargin: 12,
+          border: TableBorder.all(
+            color: const Color(0xFFE5E7EB),
+            width: 0.5,
+            borderRadius: BorderRadius.circular(8),
+          ),
           headingTextStyle: const TextStyle(
-              fontSize: 10,
-              fontWeight: FontWeight.w600,
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
               color: Color(0xFF374151)),
           dataTextStyle:
-              const TextStyle(fontSize: 10, color: Color(0xFF111827)),
+              const TextStyle(fontSize: 11, color: Color(0xFF111827)),
           columns: [
-            const DataColumn(label: Text('구분')),
+            const DataColumn(label: Center(child: Text('구분')), headingRowAlignment: MainAxisAlignment.center),
             ...orderedRegions
-                .map((r) => DataColumn(label: Text(r), numeric: true)),
-            const DataColumn(label: Text('총합계'), numeric: true),
-            const DataColumn(label: Text('비율'), numeric: true),
+                .map((r) => DataColumn(label: Center(child: Text(r)), numeric: true, headingRowAlignment: MainAxisAlignment.center)),
+            const DataColumn(label: Center(child: Text('총합계')), numeric: true, headingRowAlignment: MainAxisAlignment.center),
+            const DataColumn(label: Center(child: Text('비율')), numeric: true, headingRowAlignment: MainAxisAlignment.center),
           ],
-          rows: crosstab.map((row) {
+          rows: crosstab.asMap().entries.map((entry) {
+            final i = entry.key;
+            final row = entry.value;
             final typeName = row['타입'] ?? '-';
             final byRegion =
                 (row['본부별'] as Map<String, dynamic>?) ?? {};
             final total = _toDouble(row['총합계'] ?? 0);
-            final isTotal = typeName == '성능불합격(건)';
+            final isTotalRow = typeName == '성능불합격(건)';
+            final isEven = i.isEven;
             final ratio =
                 grandTotal > 0 ? (total / grandTotal * 100) : 0.0;
             final style = TextStyle(
-              fontSize: 10,
-              fontWeight: isTotal ? FontWeight.w700 : FontWeight.w400,
+              fontSize: 11,
+              fontWeight: isTotalRow ? FontWeight.w700 : FontWeight.w400,
               color: const Color(0xFF111827),
             );
 
             return DataRow(
-              color: isTotal
-                  ? WidgetStateProperty.all(
-                      const Color(0xFFFFF8E1))
-                  : null,
+              color: WidgetStateProperty.all(
+                isTotalRow
+                    ? const Color(0xFFEEF2FF)
+                    : isEven
+                        ? Colors.white
+                        : const Color(0xFFFAFAFB),
+              ),
               cells: [
-                DataCell(Text(typeName, style: style)),
+                DataCell(Center(child: Text(typeName, style: style))),
                 ...orderedRegions.map((r) {
                   final v = byRegion[r];
-                  return DataCell(
-                      Text(v != null ? _fmt(v) : '-', style: style));
+                  return DataCell(Center(child:
+                      Text(v != null ? _fmt(v) : '-', style: style)));
                 }),
-                DataCell(Text(_fmt(total.toInt()),
-                    style: style.copyWith(fontWeight: FontWeight.w700))),
-                DataCell(Text(
-                    isTotal ? '100%' : '${ratio.toStringAsFixed(1)}%',
-                    style: style)),
+                DataCell(Center(child: Text(_fmt(total.toInt()),
+                    style: style.copyWith(fontWeight: FontWeight.w700)))),
+                DataCell(Center(child: Text(
+                    isTotalRow ? '100%' : '${ratio.toStringAsFixed(2)}%',
+                    style: style))),
               ],
             );
           }).toList(),
         ),
+      ),
+    );
+  }
+
+  // ══════════════════════════════════════════════════════════
+  // F-2. 장비 Type별 불합격 요약 (비율 바 + 본부별 분포)
+  // ══════════════════════════════════════════════════════════
+
+  Widget _buildEquipTypeSummary() {
+    final crosstab = List<Map<String, dynamic>>.from(
+        _analysis['장비타입별_크로스탭'] ?? []);
+    // 합계 행 제외
+    final items = crosstab.where((r) => r['타입'] != '성능불합격(건)').toList();
+    if (items.isEmpty) return const SizedBox.shrink();
+
+    final grandTotal = items.fold<double>(
+        0, (sum, r) => sum + _toDouble(r['총합계'] ?? 0));
+
+    const colors = [
+      Color(0xFFE53935), Color(0xFFFF7043), Color(0xFFFFA726),
+      Color(0xFFAB47BC), Color(0xFF42A5F5), Color(0xFF66BB6A),
+      Color(0xFF78909C), Color(0xFFEC407A), Color(0xFF26A69A),
+    ];
+
+    return _chartSection(
+      title: '장비 Type별 불합격 비율',
+      icon: Icons.donut_small,
+      iconColor: _primary,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // 비율 스택 바
+          ClipRRect(
+            borderRadius: BorderRadius.circular(6),
+            child: SizedBox(
+              height: 28,
+              child: Row(
+                children: items.asMap().entries.map((entry) {
+                  final i = entry.key;
+                  final r = entry.value;
+                  final total = _toDouble(r['총합계'] ?? 0);
+                  final ratio = grandTotal > 0 ? total / grandTotal : 0.0;
+                  if (ratio <= 0) return const SizedBox.shrink();
+                  return Expanded(
+                    flex: (ratio * 1000).round().clamp(1, 1000),
+                    child: Container(
+                      color: colors[i % colors.length],
+                      alignment: Alignment.center,
+                      child: ratio >= 0.08
+                          ? Text('${(ratio * 100).toStringAsFixed(1)}%',
+                              style: const TextStyle(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w700,
+                                  color: Colors.white))
+                          : null,
+                    ),
+                  );
+                }).toList(),
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+          // 각 장비별 상세
+          ...items.asMap().entries.map((entry) {
+            final i = entry.key;
+            final r = entry.value;
+            final typeName = r['타입'] ?? '-';
+            final total = _toDouble(r['총합계'] ?? 0);
+            final ratio = grandTotal > 0 ? (total / grandTotal * 100) : 0.0;
+            final color = colors[i % colors.length];
+
+            // 본부별 데이터에서 최다 본부 찾기
+            final byRegion = (r['본부별'] as Map<String, dynamic>?) ?? {};
+            String topRegion = '-';
+            double topVal = 0;
+            byRegion.forEach((k, v) {
+              final val = _toDouble(v);
+              if (val > topVal) {
+                topVal = val;
+                topRegion = k;
+              }
+            });
+
+            return Container(
+              margin: const EdgeInsets.only(bottom: 8),
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF9FAFB),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    width: 4,
+                    height: 36,
+                    decoration: BoxDecoration(
+                      color: color,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(typeName,
+                            style: const TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w700,
+                                color: Color(0xFF1F2937))),
+                        const SizedBox(height: 2),
+                        Text('최다 본부: $topRegion (${topVal.toInt()}건)',
+                            style: const TextStyle(
+                                fontSize: 11,
+                                color: Color(0xFF6B7280))),
+                      ],
+                    ),
+                  ),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      Text('${total.toInt()}건',
+                          style: const TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w800,
+                              color: Color(0xFF1F2937))),
+                      Text('${ratio.toStringAsFixed(1)}%',
+                          style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: color)),
+                    ],
+                  ),
+                ],
+              ),
+            );
+          }),
+        ],
       ),
     );
   }
@@ -1488,33 +1987,172 @@ class _DonutPainter extends CustomPainter {
     if (total <= 0 || slices.isEmpty) return;
 
     final center = Offset(size.width / 2, size.height / 2);
-    final radius = math.min(size.width, size.height) / 2 - 4;
-    final innerRadius = radius * 0.55;
+    final labelMargin = math.min(size.width, size.height) * 0.18;
+    final outerRadius = math.min(size.width, size.height) / 2 - labelMargin;
+    final innerRadius = outerRadius * 0.45;
+
     double startAngle = -math.pi / 2;
 
-    for (final slice in slices) {
+    // 1단계: 슬라이스를 filled arc로 그리기
+    final sliceAngles = <double>[];
+    for (int i = 0; i < slices.length; i++) {
+      final slice = slices[i];
       final sweepAngle = 2 * math.pi * (slice.value / total);
-      final paint = Paint()
-        ..color = slice.color
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = radius - innerRadius
-        ..strokeCap = StrokeCap.butt;
-      canvas.drawArc(
-        Rect.fromCircle(
-            center: center,
-            radius: (radius + innerRadius) / 2),
-        startAngle,
-        sweepAngle,
-        false,
-        paint,
-      );
+
+      // 외부 arc path
+      final path = Path()
+        ..moveTo(
+          center.dx + innerRadius * math.cos(startAngle),
+          center.dy + innerRadius * math.sin(startAngle),
+        )
+        ..lineTo(
+          center.dx + outerRadius * math.cos(startAngle),
+          center.dy + outerRadius * math.sin(startAngle),
+        )
+        ..arcTo(
+          Rect.fromCircle(center: center, radius: outerRadius),
+          startAngle,
+          sweepAngle,
+          false,
+        )
+        ..lineTo(
+          center.dx + innerRadius * math.cos(startAngle + sweepAngle),
+          center.dy + innerRadius * math.sin(startAngle + sweepAngle),
+        )
+        ..arcTo(
+          Rect.fromCircle(center: center, radius: innerRadius),
+          startAngle + sweepAngle,
+          -sweepAngle,
+          false,
+        )
+        ..close();
+
+      canvas.drawPath(path, Paint()..color = slice.color);
+
+      sliceAngles.add(startAngle + sweepAngle / 2);
       startAngle += sweepAngle;
+    }
+
+    // 2단계: 슬라이스 경계에 흰색 구분선
+    startAngle = -math.pi / 2;
+    final dividerPaint = Paint()
+      ..color = Colors.white
+      ..strokeWidth = 2.5
+      ..style = PaintingStyle.stroke;
+    for (int i = 0; i < slices.length; i++) {
+      final sweepAngle = 2 * math.pi * (slices[i].value / total);
+      startAngle += sweepAngle;
+      final innerPt = Offset(
+        center.dx + innerRadius * math.cos(startAngle),
+        center.dy + innerRadius * math.sin(startAngle),
+      );
+      final outerPt = Offset(
+        center.dx + outerRadius * math.cos(startAngle),
+        center.dy + outerRadius * math.sin(startAngle),
+      );
+      canvas.drawLine(innerPt, outerPt, dividerPaint);
+    }
+
+    // 2단계: 라벨 Y좌표 겹침 방지
+    const minLabelGap = 16.0;
+    final labelInfos = <_LabelInfo>[];
+    for (int i = 0; i < slices.length; i++) {
+      final pct = slices[i].value / total * 100;
+      if (pct < 1) continue;
+      final midAngle = sliceAngles[i];
+      final cosA = math.cos(midAngle);
+      final sinA = math.sin(midAngle);
+      final rawY = center.dy + (outerRadius + labelMargin * 0.7) * sinA;
+      labelInfos.add(_LabelInfo(
+        index: i,
+        midAngle: midAngle,
+        cosA: cosA,
+        sinA: sinA,
+        isRight: cosA >= 0,
+        rawY: rawY,
+        adjustedY: rawY,
+      ));
+    }
+
+    // 좌/우 각각 Y좌표 겹침 해소
+    for (final isRight in [true, false]) {
+      final group = labelInfos.where((l) => l.isRight == isRight).toList();
+      group.sort((a, b) => a.rawY.compareTo(b.rawY));
+      for (int j = 1; j < group.length; j++) {
+        if (group[j].adjustedY - group[j - 1].adjustedY < minLabelGap) {
+          group[j].adjustedY = group[j - 1].adjustedY + minLabelGap;
+        }
+      }
+    }
+
+    // 3단계: 연결선 + 라벨 그리기
+    for (final info in labelInfos) {
+      final slice = slices[info.index];
+      final pct = slice.value / total * 100;
+
+      final lineStart = Offset(
+        center.dx + (outerRadius + 3) * info.cosA,
+        center.dy + (outerRadius + 3) * info.sinA,
+      );
+      final elbowX = center.dx + (outerRadius + labelMargin * 0.5) * info.cosA;
+      final elbow = Offset(elbowX, info.adjustedY);
+      final hEndX = info.isRight
+          ? elbowX + labelMargin * 0.4
+          : elbowX - labelMargin * 0.4;
+      final hEnd = Offset(hEndX, info.adjustedY);
+
+      final linePaint = Paint()
+        ..color = const Color(0xFFBBBBBB)
+        ..strokeWidth = 1.0
+        ..style = PaintingStyle.stroke;
+      canvas.drawLine(lineStart, elbow, linePaint);
+      canvas.drawLine(elbow, hEnd, linePaint);
+
+      // 컬러 점
+      final dotX = info.isRight ? hEnd.dx + 5 : hEnd.dx - 5;
+      canvas.drawCircle(Offset(dotX, hEnd.dy), 3.5, Paint()..color = slice.color);
+
+      // 퍼센트 텍스트
+      final tp = TextPainter(
+        text: TextSpan(
+          text: '${pct.toStringAsFixed(pct >= 10 ? 0 : 1)}%',
+          style: const TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.w700,
+            color: Color(0xFF374151),
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout();
+
+      final textX = info.isRight ? dotX + 7 : dotX - 7 - tp.width;
+      tp.paint(canvas, Offset(textX, hEnd.dy - tp.height / 2));
     }
   }
 
   @override
   bool shouldRepaint(covariant _DonutPainter old) =>
       old.slices != slices || old.total != total;
+}
+
+class _LabelInfo {
+  final int index;
+  final double midAngle;
+  final double cosA;
+  final double sinA;
+  final bool isRight;
+  final double rawY;
+  double adjustedY;
+
+  _LabelInfo({
+    required this.index,
+    required this.midAngle,
+    required this.cosA,
+    required this.sinA,
+    required this.isRight,
+    required this.rawY,
+    required this.adjustedY,
+  });
 }
 
 /// Combo chart: vertical bars (대상건수) + line (합격율) + target dashed line
@@ -1653,7 +2291,7 @@ class _ComboChartPainter extends CustomPainter {
       final val = rateMax - (rateMax - rateMin) * (i / 4);
       final label = val == val.toInt().toDouble()
           ? '${val.toInt()}%'
-          : '${val.toStringAsFixed(1)}%';
+          : '${val.toStringAsFixed(2)}%';
       _drawText(
           canvas,
           label,
@@ -1710,12 +2348,14 @@ class _SmallLineChartPainter extends CustomPainter {
   final List<String> labels;
   final double target;
   final Color lineColor;
+  final double fontSize;
 
   _SmallLineChartPainter({
     required this.values,
     this.labels = const [],
     required this.target,
     required this.lineColor,
+    this.fontSize = 9,
   });
 
   @override
@@ -1723,7 +2363,7 @@ class _SmallLineChartPainter extends CustomPainter {
     if (values.isEmpty) return;
 
     const double pad = 4;
-    const double bottomPad = 14; // extra space for X-axis labels
+    const double bottomPad = 40; // extra space for rotated X-axis labels
     final chartW = size.width - pad * 2;
     final chartH = size.height - pad - bottomPad;
 
@@ -1763,8 +2403,8 @@ class _SmallLineChartPainter extends CustomPainter {
     // Target label
     final tp = TextPainter(
       text: TextSpan(
-          text: '${target.toStringAsFixed(1)}%',
-          style: TextStyle(fontSize: 8, color: lineColor.withValues(alpha: 0.6))),
+          text: '${target.toStringAsFixed(2)}%',
+          style: TextStyle(fontSize: fontSize, color: lineColor.withValues(alpha: 0.6))),
       textDirection: TextDirection.ltr,
     )..layout();
     tp.paint(canvas, Offset(size.width - pad - tp.width, targetY - tp.height - 1));
@@ -1801,20 +2441,24 @@ class _SmallLineChartPainter extends CustomPainter {
             ..style = PaintingStyle.fill);
     }
 
-    // X-axis labels (abbreviated)
+    // X-axis labels (45° rotated)
     if (labels.isNotEmpty) {
-      // Show every Nth label to avoid overlap
-      final step = values.length > 8 ? 2 : 1;
+      final step = values.length > 12 ? 2 : 1;
       for (int i = 0; i < values.length && i < labels.length; i += step) {
         final ltp = TextPainter(
           text: TextSpan(
               text: labels[i],
-              style: const TextStyle(fontSize: 7, color: Color(0xFF9CA3AF))),
+              style: TextStyle(fontSize: fontSize, color: const Color(0xFF6B7280))),
           textAlign: TextAlign.center,
           textDirection: TextDirection.ltr,
         )..layout();
-        final lx = xFor(i) - ltp.width / 2;
-        ltp.paint(canvas, Offset(lx.clamp(0, size.width - ltp.width), pad + chartH + 2));
+        final lx = xFor(i);
+        final ly = pad + chartH + 4;
+        canvas.save();
+        canvas.translate(lx, ly);
+        canvas.rotate(0.785); // 45°
+        ltp.paint(canvas, Offset.zero);
+        canvas.restore();
       }
     }
 
@@ -1824,9 +2468,9 @@ class _SmallLineChartPainter extends CustomPainter {
       final lastPt = points.last;
       final valTp = TextPainter(
         text: TextSpan(
-            text: '${lastVal.toStringAsFixed(1)}%',
+            text: '${lastVal.toStringAsFixed(2)}%',
             style: TextStyle(
-                fontSize: 8,
+                fontSize: fontSize + 1,
                 fontWeight: FontWeight.w700,
                 color: lastVal >= target
                     ? const Color(0xFF2E7D32)
@@ -1844,5 +2488,5 @@ class _SmallLineChartPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _SmallLineChartPainter old) =>
-      old.values != values || old.target != target;
+      old.values != values || old.target != target || old.fontSize != fontSize;
 }
