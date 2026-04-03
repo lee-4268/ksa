@@ -398,21 +398,25 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
                     width: 20,
                     height: 20,
                     child: CircularProgressIndicator(strokeWidth: 2))
-                : IconButton(
+                : TextButton.icon(
                     onPressed: _pickAndUpload,
-                    icon: const Icon(Icons.upload_file, size: 20),
-                    tooltip: '실적 결과장 업로드',
-                    color: _primary,
-                    splashRadius: 20,
+                    icon: const Icon(Icons.upload_file, size: 18),
+                    label: const Text('결과장 업로드', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+                    style: TextButton.styleFrom(
+                      foregroundColor: _primary,
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    ),
                   ),
             const SizedBox(width: 4),
           ],
-          IconButton(
+          TextButton.icon(
             onPressed: _downloadExcel,
-            icon: const Icon(Icons.download, size: 20),
-            tooltip: 'Excel 다운로드',
-            color: _green,
-            splashRadius: 20,
+            icon: const Icon(Icons.file_download, size: 18),
+            label: const Text('Excel 다운로드', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+            style: TextButton.styleFrom(
+              foregroundColor: _green,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            ),
           ),
         ],
       ),
@@ -1655,60 +1659,76 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
   }
 
   void _showExpandedChart(String regionName, List<double> values, List<String> labels) {
-    showDialog(
+    showGeneralDialog(
       context: context,
-      builder: (ctx) => Dialog(
-        backgroundColor: Colors.white,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        insetPadding: const EdgeInsets.symmetric(horizontal: 40, vertical: 60),
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Icon(Icons.timeline, size: 20, color: _primary),
-                  const SizedBox(width: 8),
-                  Text('$regionName 주별 Trend',
-                      style: const TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w700,
-                          color: Color(0xFF111827))),
-                  const Spacer(),
-                  IconButton(
-                    onPressed: () => Navigator.pop(ctx),
-                    icon: const Icon(Icons.close, size: 20),
-                    splashRadius: 18,
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              Row(
-                children: [
-                  _legendDot(_primary, '합격율 (%)'),
-                  const SizedBox(width: 16),
-                  _legendDot(_primary.withValues(alpha: 0.5), '목표 98.5%'),
-                ],
-              ),
-              const SizedBox(height: 16),
-              SizedBox(
-                height: 350,
-                child: values.isEmpty
-                    ? const Center(child: Text('데이터 없음'))
-                    : CustomPaint(
-                        size: Size.infinite,
-                        painter: _SmallLineChartPainter(
-                          values: values,
-                          labels: labels,
-                          target: 98.5,
-                          lineColor: _primary,
-                          fontSize: 13,
+      barrierDismissible: true,
+      barrierLabel: '',
+      barrierColor: Colors.black54,
+      transitionDuration: const Duration(milliseconds: 300),
+      transitionBuilder: (ctx, anim, secondaryAnim, child) {
+        final curved = CurvedAnimation(parent: anim, curve: Curves.easeOutBack);
+        return FadeTransition(
+          opacity: anim,
+          child: ScaleTransition(
+            scale: Tween<double>(begin: 0.8, end: 1.0).animate(curved),
+            child: child,
+          ),
+        );
+      },
+      pageBuilder: (ctx, anim, secondaryAnim) => Center(
+        child: Dialog(
+          backgroundColor: Colors.white,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          insetPadding: const EdgeInsets.symmetric(horizontal: 40, vertical: 60),
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(Icons.timeline, size: 20, color: _primary),
+                    const SizedBox(width: 8),
+                    Text('$regionName 주별 Trend',
+                        style: const TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w700,
+                            color: Color(0xFF111827))),
+                    const Spacer(),
+                    IconButton(
+                      onPressed: () => Navigator.pop(ctx),
+                      icon: const Icon(Icons.close, size: 20),
+                      splashRadius: 18,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    _legendDot(_primary, '합격율 (%)'),
+                    const SizedBox(width: 16),
+                    _legendDot(_primary.withValues(alpha: 0.5), '목표 98.5%'),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                SizedBox(
+                  height: 350,
+                  child: values.isEmpty
+                      ? const Center(child: Text('데이터 없음'))
+                      : CustomPaint(
+                          size: Size.infinite,
+                          painter: _SmallLineChartPainter(
+                            values: values,
+                            labels: labels,
+                            target: 98.5,
+                            lineColor: _primary,
+                            fontSize: 13,
+                          ),
                         ),
-                      ),
-              ),
-            ],
+                ),
+              ],
+            ),
           ),
         ),
       ),
