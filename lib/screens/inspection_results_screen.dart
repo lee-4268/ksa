@@ -9,6 +9,7 @@ import 'dart:html' as html;
 
 import '../services/auth_service.dart';
 import '../services/inspection_service.dart';
+import '../widgets/progress_dialog.dart';
 import 'dashboard_screen.dart';
 
 /// 실적 관리 대시보드 (v6 PDF 리포트 레이아웃 재현)
@@ -172,6 +173,7 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
     final files = result.files.where((f) => f.bytes != null).toList();
     if (files.isEmpty) return;
 
+    final dialog = ProgressDialog(context);
     setState(() => _uploading = true);
     int totalCount = 0;
     int successCount = 0;
@@ -181,29 +183,29 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
       for (int i = 0; i < files.length; i++) {
         final file = files[i];
         try {
-          _snack('업로드 중... (${i + 1}/${files.length}) ${file.name}');
+          dialog.show(message: '업로드 중...\n(${i + 1}/${files.length})\n${file.name}');
           final resp = await _svc.uploadResults(
             Uint8List.fromList(file.bytes!),
             file.name,
           );
           totalCount += (resp['count'] as int?) ?? 0;
           successCount++;
+          dialog.dismiss();
         } catch (e) {
+          dialog.dismiss();
           errors.add('${file.name}: $e');
         }
       }
       if (!mounted) return;
       if (errors.isEmpty) {
-        _snack('전체 업로드 완료: ${files.length}개 파일, $totalCount건 처리');
+        await dialog.complete(message: '업로드 완료\n${files.length}개 파일\n$totalCount건 처리');
       } else {
-        _snack(
-            '$successCount/${files.length}개 성공 ($totalCount건), 실패: ${errors.length}개',
-            isError: true);
+        await dialog.error(message: '$successCount/${files.length}개 성공\n실패: ${errors.length}개');
       }
       _loadData();
     } catch (e) {
       if (!mounted) return;
-      _snack('업로드 실패: $e', isError: true);
+      await dialog.error(message: '업로드 실패');
     } finally {
       if (mounted) setState(() => _uploading = false);
     }
@@ -212,7 +214,8 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
   // ── Excel 다운로드 ──
 
   Future<void> _downloadExcel() async {
-    _snack('Excel 다운로드 준비 중...');
+    final dialog = ProgressDialog(context);
+    dialog.show(message: 'Excel 다운로드\n준비 중...');
     try {
       final tab = _tabCtrl.index == 0 ? 'acc' : '${_tabCtrl.index}월';
       final week = _tabCtrl.index == 0 ? '' : '${_tabCtrl.index}월';
@@ -229,10 +232,10 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
       anchor.click();
       html.document.body?.children.remove(anchor);
       html.Url.revokeObjectUrl(url);
-      _snack('다운로드 완료');
+      await dialog.complete(message: '다운로드 완료');
     } catch (e) {
       if (!mounted) return;
-      _snack('다운로드 실패: $e', isError: true);
+      await dialog.error(message: '다운로드 실패');
     }
   }
 
@@ -496,11 +499,25 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
                         color: Color(0xFF6B7280),
                         fontWeight: FontWeight.w500)),
                 const SizedBox(height: 2),
-                Text(value,
-                    style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w700,
-                        color: color)),
+                AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 400),
+                  transitionBuilder: (child, anim) => FadeTransition(
+                    opacity: anim,
+                    child: SlideTransition(
+                      position: Tween<Offset>(
+                        begin: const Offset(0, 0.3),
+                        end: Offset.zero,
+                      ).animate(anim),
+                      child: child,
+                    ),
+                  ),
+                  child: Text(value,
+                      key: ValueKey(value),
+                      style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w700,
+                          color: color)),
+                ),
               ],
             ),
           ),
@@ -1522,22 +1539,28 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
         final isSelected = _selectedQuarter == idx;
         return Padding(
           padding: const EdgeInsets.only(right: 4),
-          child: GestureDetector(
-            onTap: () => setState(() => _selectedQuarter = idx),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-              decoration: BoxDecoration(
-                color: isSelected ? _primary : Colors.white,
-                borderRadius: BorderRadius.circular(6),
-                border: Border.all(
-                  color: isSelected ? _primary : const Color(0xFFD1D5DB),
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              borderRadius: BorderRadius.circular(6),
+              onTap: () => setState(() => _selectedQuarter = idx),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                curve: Curves.easeOut,
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: isSelected ? _primary : Colors.white,
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(
+                    color: isSelected ? _primary : const Color(0xFFD1D5DB),
+                  ),
                 ),
+                child: Text(label,
+                    style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: isSelected ? Colors.white : const Color(0xFF6B7280))),
               ),
-              child: Text(label,
-                  style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600,
-                      color: isSelected ? Colors.white : const Color(0xFF6B7280))),
             ),
           ),
         );

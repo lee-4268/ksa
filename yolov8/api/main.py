@@ -12903,11 +12903,14 @@ async def inspection_results_analysis(request: Request, year: int = Query(...), 
                     row_data = {rg: pivot.get(typ, {}).get(rg, 0) for rg in all_regions}
                     total_ct = sum(row_data.values())
                     crosstab.append({"타입": typ, "본부별": row_data, "총합계": total_ct})
-                # 성능불합격(건) 합계 행
-                total_row: Dict[str, int] = {}
-                for ct in crosstab:
-                    for rg, cnt in ct["본부별"].items():
-                        total_row[rg] = total_row.get(rg, 0) + cnt
+                # 성능불합격(건) 합계 행 — 전체 성능 불합격 건수 (Top3 합이 아닌 전체)
+                total_rows = conn.execute(
+                    f"SELECT region, COUNT(*) FROM inspection_results_raw "
+                    f"WHERE year=?{rgn_filter} AND 성능서류='성능' AND region != '' "
+                    f"GROUP BY region",
+                    rgn_params
+                ).fetchall()
+                total_row = {rg: cnt for rg, cnt in total_rows}
                 crosstab.append({"타입": "성능불합격(건)", "본부별": total_row, "총합계": sum(total_row.values())})
 
             return {"성능불합격": 성능불합격, "서류불합격": 서류불합격, "장비타입별": 장비타입별, "장비타입별_크로스탭": crosstab}
