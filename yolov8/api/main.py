@@ -539,6 +539,34 @@ _EQP_TYPE_SIMPLIFY = {
     "etr-SF-W15-REMOTE": "SF중계기",
 }
 
+# 키워드 기반 장비타입 간소화 fallback (딕셔너리 매칭 실패 시)
+_EQP_KEYWORD_RULES = [
+    # (키워드 패턴, 간소화명) — 순서 중요: 구체적인 것 먼저
+    ("GIRO", "GIRO"),
+    ("IRO", "IRO"),
+    ("MIBOS", "MIBOS"), ("MiBOS", "MIBOS"), ("MBS", "MIBOS"),
+    ("AAU", "AAU"),
+    ("PRU", "PRU"),
+    ("ARRU", "RRU"), ("MRRU", "RRU"), ("SRRU", "RRU"), ("DBRRU", "RRU"),
+    ("ERRU", "ERRU"), ("RRU", "RRU"), ("RRH", "RRH"),
+    ("RHU", "RHU"),
+    ("TRIO", "TRIO"),
+    ("WAFMC", "WAFMC"), ("WINS", "WINS"), ("WLME", "WLME"),
+    ("ICS", "ICS"),
+    ("LR-DUO", "LR-DUO"), ("OR-DUO", "OR-DUO"), ("RO-DUO", "RO-DUO"),
+    ("SF-DUO", "SF중계기"), ("SF-W", "SF중계기"), ("SF-", "SF중계기"), ("SRF-W", "SF중계기"),
+    ("DUO", "DUO"),
+    ("NODEB", "W기지국"), ("iBTS", "W기지국"),
+]
+
+def _simplify_eqp_by_keyword(raw: str) -> str:
+    """딕셔너리 매칭 실패 시 키워드 기반으로 장비타입 간소화."""
+    upper = raw.upper()
+    for keyword, simplified in _EQP_KEYWORD_RULES:
+        if keyword.upper() in upper:
+            return simplified
+    return ""
+
 # Logger setup
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -12287,18 +12315,61 @@ def _parse_irr_xlsx_sync(file_bytes: bytes, year_hint: int, uploaded_by: str):
                 matched = True
                 break
 
+    # 장비타입 컬럼 fallback: 헤더 매핑 실패 시 데이터 패턴으로 자동 감지
+    if "장비타입" not in col_map:
+        # 매핑된 컬럼 인덱스 집합
+        _mapped_indices = set(col_map.values())
+        if ons_idx >= 0:
+            _mapped_indices.add(ons_idx)
+        # 장비타입 패턴 (일반적인 장비명 키워드)
+        _eqp_keywords = {"MIBOS", "RRU", "AAU", "IRO", "RHU", "RHH", "PRU", "DUO", "SF-", "RO-", "GIRO", "WAFMC"}
+        # 첫 몇 행 데이터를 읽어서 패턴 매칭
+        _probe_rows = []
+        for _pr in rows_iter:
+            if _pr is None or all(c is None or str(c).strip() == "" for c in _pr):
+                continue
+            _probe_rows.append(_pr)
+            if len(_probe_rows) >= 5:
+                break
+        # 매핑 안 된 컬럼 중 장비타입 패턴이 있는 컬럼 찾기
+        for ci in range(len(headers)):
+            if ci in _mapped_indices:
+                continue
+            hits = 0
+            for _pr in _probe_rows:
+                if ci < len(_pr) and _pr[ci]:
+                    val = str(_pr[ci]).strip().upper()
+                    if any(kw in val for kw in _eqp_keywords):
+                        hits += 1
+            if hits >= 2:  # 5개 중 2개 이상 매칭
+                col_map["장비타입"] = ci
+                logger.info(f"장비타입 컬럼 자동감지: Col {ci} (헤더: '{headers[ci] if ci < len(headers) else ''}')")
+                break
+        # probe_rows를 다시 처리하기 위해 체인
+        import itertools
+        rows_iter = itertools.chain(_probe_rows, rows_iter)
+
     now_str = datetime.now(timezone.utc).isoformat()
     db_rows = []
     region_set = set()
 
-    # cert_cache.db에서 zpcode→eqp_type 매핑 프리로드 (장비타입간소화 파생용)
+    # cert_cache.db에서 zpcode→eqp_type, zpwino→eqp_type 매핑 프리로드
+    # 허가번호는 하이픈 제거하여 정규화
     _zpcode_eqp_map = {}
+    _permit_eqp_map = {}
     if _cert_cache_db_path and os.path.exists(_cert_cache_db_path):
         try:
             cc = sqlite3.connect(_cert_cache_db_path, timeout=10)
-            for _r in cc.execute("SELECT zpcode, eqp_type FROM cert WHERE eqp_type IS NOT NULL AND eqp_type != '' AND zpcode IS NOT NULL AND zpcode != ''"):
-                _zpcode_eqp_map[str(_r[0]).strip()] = str(_r[1]).strip()
+            for _r in cc.execute("SELECT zpcode, zpwino, eqp_type FROM cert WHERE eqp_type IS NOT NULL AND eqp_type != ''"):
+                eqp = str(_r[2]).strip()
+                zp = str(_r[0] or "").strip()
+                permit = str(_r[1] or "").strip().replace("-", "")
+                if zp:
+                    _zpcode_eqp_map[zp] = eqp
+                if permit:
+                    _permit_eqp_map[permit] = eqp
             cc.close()
+            logger.info(f"장비타입 매핑 로드: zpcode={len(_zpcode_eqp_map)}, permit={len(_permit_eqp_map)}")
         except Exception:
             pass
 
@@ -12400,20 +12471,62 @@ def _parse_irr_xlsx_sync(file_bytes: bytes, year_hint: int, uploaded_by: str):
                 week = ""
         rec["주차별"] = week
 
-        # 장비타입간소화 파생
+        # 장비타입간소화 파생 (5단계 fallback)
         raw_eqp = rec.get("장비타입", "").strip()
-        simplified = _EQP_TYPE_SIMPLIFY.get(raw_eqp, "")
+        simplified = ""
+        eqp_from_cert = ""
+        eqp_from_permit = ""
+
+        # 1) 결과장 장비타입 직접 매칭
+        if raw_eqp:
+            simplified = _EQP_TYPE_SIMPLIFY.get(raw_eqp, "")
+            if not simplified:
+                for k, v in _EQP_TYPE_SIMPLIFY.items():
+                    if raw_eqp.startswith(k) or k.startswith(raw_eqp):
+                        simplified = v
+                        break
+
+        # 2) 통시코드로 ERP DB 조회
         if not simplified:
             zpcode = rec.get("통합시설코드", "").strip()
-            eqp_from_cert = _zpcode_eqp_map.get(zpcode, "")
+            eqp_from_cert = _zpcode_eqp_map.get(zpcode, "") if zpcode else ""
             if eqp_from_cert:
                 simplified = _EQP_TYPE_SIMPLIFY.get(eqp_from_cert, "")
                 if not simplified:
-                    # Fallback: prefix 매칭
                     for k, v in _EQP_TYPE_SIMPLIFY.items():
                         if eqp_from_cert.startswith(k) or k.startswith(eqp_from_cert):
                             simplified = v
                             break
+
+        # 3) 허가번호로 ERP DB 조회 (하이픈 제거하여 정규화)
+        if not simplified:
+            permit = rec.get("허가번호", "").strip().replace("-", "")
+            eqp_from_permit = _permit_eqp_map.get(permit, "") if permit else ""
+            if eqp_from_permit:
+                simplified = _EQP_TYPE_SIMPLIFY.get(eqp_from_permit, "")
+                if not simplified:
+                    for k, v in _EQP_TYPE_SIMPLIFY.items():
+                        if eqp_from_permit.startswith(k) or k.startswith(eqp_from_permit):
+                            simplified = v
+                            break
+                # 장비타입 필드도 채워주기 (결과장에 없었던 경우)
+                if not raw_eqp:
+                    rec["장비타입"] = eqp_from_permit
+
+        # 4) 키워드 기반 fallback
+        if not simplified:
+            for candidate in [raw_eqp, eqp_from_cert, eqp_from_permit]:
+                if candidate:
+                    simplified = _simplify_eqp_by_keyword(candidate)
+                    if simplified:
+                        break
+
+        # 5) 최종 실패 로깅
+        if not simplified:
+            permit = rec.get("허가번호", "").strip()
+            zpcode = rec.get("통합시설코드", "").strip()
+            logger.warning(f"장비타입간소화 최종 실패: 허가번호='{permit}', zpcode='{zpcode}', raw_eqp='{raw_eqp}'")
+
         rec["장비타입간소화"] = simplified
 
         rec["uploaded_by"] = uploaded_by
@@ -12794,11 +12907,14 @@ async def inspection_results_analysis(request: Request, year: int = Query(...), 
                     row_data = {rg: pivot.get(typ, {}).get(rg, 0) for rg in all_regions}
                     total_ct = sum(row_data.values())
                     crosstab.append({"타입": typ, "본부별": row_data, "총합계": total_ct})
-                # 성능불합격(건) 합계 행
-                total_row: Dict[str, int] = {}
-                for ct in crosstab:
-                    for rg, cnt in ct["본부별"].items():
-                        total_row[rg] = total_row.get(rg, 0) + cnt
+                # 성능불합격(건) 합계 행 — 전체 성능 불합격 건수 (Top3 합이 아닌 전체)
+                total_rows = conn.execute(
+                    f"SELECT region, COUNT(*) FROM inspection_results_raw "
+                    f"WHERE year=?{rgn_filter} AND 성능서류='성능' AND region != '' "
+                    f"GROUP BY region",
+                    rgn_params
+                ).fetchall()
+                total_row = {rg: cnt for rg, cnt in total_rows}
                 crosstab.append({"타입": "성능불합격(건)", "본부별": total_row, "총합계": sum(total_row.values())})
 
             return {"성능불합격": 성능불합격, "서류불합격": 서류불합격, "장비타입별": 장비타입별, "장비타입별_크로스탭": crosstab}
@@ -12855,17 +12971,19 @@ async def inspection_results_weekly_trend_by_region(request: Request, year: int 
         try:
             rows = conn.execute(
                 "SELECT region, 주차별, COUNT(*) as cnt, "
-                "SUM(CASE WHEN 성능서류='성능' THEN 1 ELSE 0 END) as 성능불 "
+                "SUM(CASE WHEN 성능서류='성능' THEN 1 ELSE 0 END) as 성능불, "
+                "SUM(CASE WHEN 성능서류='서류' THEN 1 ELSE 0 END) as 서류불 "
                 "FROM inspection_results_raw "
                 "WHERE year=? AND 주차별 IS NOT NULL AND 주차별 != '' AND region IS NOT NULL AND region != '' "
                 "GROUP BY region, 주차별 ORDER BY region, 주차별",
                 (year,)
             ).fetchall()
             regions: Dict[str, list] = {}
-            for region, 주차, cnt, 성능불 in rows:
+            for region, 주차, cnt, 성능불, 서류불 in rows:
                 regions.setdefault(region, []).append({
                     "주차": 주차,
                     "합격율": round((cnt - 성능불) / cnt, 4) if cnt > 0 else 0,
+                    "서류합격율": round((cnt - 서류불) / cnt, 4) if cnt > 0 else 0,
                 })
             return {"regions": regions}
         finally:
@@ -13081,6 +13199,7 @@ async def inspection_results_export_xlsx(request: Request, req: InspectionResult
         _data_font = Font(name='맑은 고딕', size=10)
         _center = Alignment(horizontal='center', vertical='center', wrap_text=False)
         _left = Alignment(horizontal='left', vertical='center', wrap_text=False)
+        _left_wrap = Alignment(horizontal='left', vertical='center', wrap_text=True)
         _hdr_wrap = Alignment(horizontal='center', vertical='center', wrap_text=True)
         _hdr_left_wrap = Alignment(horizontal='left', vertical='center', wrap_text=True)
         _LINE_H = 16.5
@@ -13099,6 +13218,7 @@ async def inspection_results_export_xlsx(request: Request, req: InspectionResult
 
         # 왼쪽 정렬 컬럼: 주소(9), 불합격상세(23), 허가번호 장비 Type(28)
         _left_cols = {9, 23, 28}
+        _left_wrap_cols = {9, 23}  # wrap_text 적용 컬럼
         _hdr_left_cols = {28}
 
         # 헤더 행 높이
@@ -13148,7 +13268,7 @@ async def inspection_results_export_xlsx(request: Request, req: InspectionResult
                 cell = ws.cell(row=ri, column=ci, value=v)
                 cell.font = _data_font
                 cell.border = _thin_border
-                cell.alignment = _left if ci in _left_cols else _center
+                cell.alignment = _left_wrap if ci in _left_wrap_cols else (_left if ci in _left_cols else _center)
 
         # 컬럼 너비: 데이터 기준 자동
         def _col_width(s):
@@ -13164,7 +13284,8 @@ async def inspection_results_export_xlsx(request: Request, req: InspectionResult
                 if val is not None:
                     for line in str(val).split('\n'):
                         best = max(best, _col_width(line))
-            ws.column_dimensions[get_column_letter(ci)].width = max(min(best + 1, 80), 12.25)
+            max_w = 40 if ci in _left_wrap_cols else 80
+            ws.column_dimensions[get_column_letter(ci)].width = max(min(best + 1, max_w), 12.25)
 
         # 틀 고정: 1행(헤더) + A~H열
         ws.freeze_panes = 'I2'
