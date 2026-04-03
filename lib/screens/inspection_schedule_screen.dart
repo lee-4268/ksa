@@ -1302,8 +1302,8 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     final someChecked = !allChecked &&
         checkableItems.any((item) => _selectedLicenseNos.contains('${item['허가번호'] ?? ''}'));
 
-    const headerStyle = TextStyle(
-      fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF374151),
+    final headerStyle = TextStyle(
+      fontSize: 12, fontWeight: FontWeight.w700, color: Colors.black87,
     );
     const cellStyle = TextStyle(fontSize: 12, color: Color(0xFF374151));
 
@@ -1329,7 +1329,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                 scrollDirection: Axis.horizontal,
                 child: SingleChildScrollView(
                   child: DataTable(
-                    headingRowColor: WidgetStateProperty.all(const Color(0xFFF9FAFB)),
+                    headingRowColor: WidgetStateProperty.all(_primary.withValues(alpha: 0.12)),
                     headingRowHeight: 44,
                     dataRowMinHeight: 42,
                     dataRowMaxHeight: 46,
@@ -1362,26 +1362,26 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                               },
                             )
                           : const SizedBox(width: 24)),
-                      const DataColumn(label: Text('수검일정', style: headerStyle)),
-                      const DataColumn(label: Text('허가번호', style: headerStyle)),
-                      const DataColumn(label: Text('호출명칭', style: headerStyle)),
-                      const DataColumn(label: Text('국종군', style: headerStyle)),
-                      const DataColumn(label: Text('부서', style: headerStyle)),
-                      const DataColumn(label: Text('분기', style: headerStyle)),
-                      const DataColumn(label: Text('연도주기', style: headerStyle)),
-                      const DataColumn(label: Text('검사주기', style: headerStyle)),
-                      const DataColumn(label: Text('허가상태', style: headerStyle)),
-                      const DataColumn(label: Text('설치장소', style: headerStyle)),
-                      const DataColumn(label: Text('도로명주소', style: headerStyle)),
-                      const DataColumn(label: Text('장치수', style: headerStyle)),
-                      const DataColumn(label: Text('통시', style: headerStyle)),
-                      const DataColumn(label: Text('공대', style: headerStyle)),
-                      const DataColumn(label: Text('KCA검토결과', style: headerStyle)),
-                      const DataColumn(label: Text('시기조정', style: headerStyle)),
-                      const DataColumn(label: Text('기준연도', style: headerStyle)),
-                      const DataColumn(label: Text('SKT본부', style: headerStyle)),
-                      const DataColumn(label: Text('Access담당', style: headerStyle)),
-                      const DataColumn(label: Text('품질개선팀', style: headerStyle)),
+                      DataColumn(label: Text('수검일정', style: headerStyle)),
+                      DataColumn(label: Text('허가번호', style: headerStyle)),
+                      DataColumn(label: Text('호출명칭', style: headerStyle)),
+                      DataColumn(label: Text('국종군', style: headerStyle)),
+                      DataColumn(label: Text('부서', style: headerStyle)),
+                      DataColumn(label: Text('분기', style: headerStyle)),
+                      DataColumn(label: Text('연도주기', style: headerStyle)),
+                      DataColumn(label: Text('검사주기', style: headerStyle)),
+                      DataColumn(label: Text('허가상태', style: headerStyle)),
+                      DataColumn(label: Text('설치장소', style: headerStyle)),
+                      DataColumn(label: Text('도로명주소', style: headerStyle)),
+                      DataColumn(label: Text('장치수', style: headerStyle)),
+                      DataColumn(label: Text('통시', style: headerStyle)),
+                      DataColumn(label: Text('공대', style: headerStyle)),
+                      DataColumn(label: Text('KCA검토결과', style: headerStyle)),
+                      DataColumn(label: Text('시기조정', style: headerStyle)),
+                      DataColumn(label: Text('기준연도', style: headerStyle)),
+                      DataColumn(label: Text('SKT본부', style: headerStyle)),
+                      DataColumn(label: Text('Access담당', style: headerStyle)),
+                      DataColumn(label: Text('품질개선팀', style: headerStyle)),
                       
                     ],
                     rows: _items.asMap().entries.map((entry) {

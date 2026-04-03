@@ -1,11 +1,14 @@
 import 'dart:async';
 import 'dart:typed_data';
+// ignore: avoid_web_libraries_in_flutter
+import 'dart:html' as html;
+import 'dart:ui_web' as ui_web;
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:url_launcher/url_launcher.dart';
 import '../services/auth_service.dart';
 import '../services/inspection_service.dart';
+import '../services/kakao_geocoding_web.dart';
 import 'tower_classification_screen.dart';
 
 class InspectionResultScreen extends StatefulWidget {
@@ -136,13 +139,58 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
 
   // ── 로드뷰 ─────────────────────────────────────────────
 
-  Future<void> _openRoadview(String address) async {
-    if (address.isEmpty) return;
-    final uri = Uri.parse(
-        'https://map.naver.com/v5/search/${Uri.encodeComponent(address)}');
-    if (await canLaunchUrl(uri)) {
-      await launchUrl(uri, mode: LaunchMode.externalApplication);
+  Future<void> _openRoadview({
+    double? lat,
+    double? lng,
+    required String address,
+    required String title,
+  }) async {
+    double? resolvedLat = lat;
+    double? resolvedLng = lng;
+
+    // 위경도가 없으면 주소로 지오코딩
+    if ((resolvedLat == null || resolvedLng == null) && address.isNotEmpty) {
+      if (!mounted) return;
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => const Center(
+          child: Card(
+            child: Padding(
+              padding: EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                CircularProgressIndicator(strokeWidth: 2),
+                SizedBox(width: 16),
+                Text('위치 검색 중...'),
+              ]),
+            ),
+          ),
+        ),
+      );
+
+      final result = await KakaoAddressGeocoder.addressToCoords(address);
+      if (mounted) Navigator.of(context).pop(); // 로딩 닫기
+
+      if (result != null) {
+        resolvedLat = result.lat;
+        resolvedLng = result.lng;
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('주소로 위치를 찾을 수 없습니다.'),
+            backgroundColor: Colors.red,
+          ));
+        }
+        return;
+      }
     }
+
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      barrierDismissible: true,
+      builder: (_) => _RoadviewDialog(lat: resolvedLat!, lng: resolvedLng!, title: title),
+    );
   }
 
   // ── 철탑형태 AI 분류 ────────────────────────────────────
@@ -276,6 +324,10 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
     final name    = target?['호출명칭']?.toString() ?? widget.callname;
     final address = target?['도로명주소']?.toString()
                  ?? target?['설치장소']?.toString() ?? '';
+    final latStr  = target?['위도']?.toString() ?? '';
+    final lngStr  = target?['경도']?.toString() ?? '';
+    final lat     = double.tryParse(latStr);
+    final lng     = double.tryParse(lngStr);
 
     // 통합시설명칭: DS 일반사항에서 통합시설명칭 → 무선국명 순서로 fallback
     final dsGeneral      = ds?['일반사항'] as Map<String, dynamic>?;
@@ -335,8 +387,9 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
           icon: const Icon(Icons.streetview, size: 16),
           label: const Text('로드뷰',
               style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-          onPressed:
-              address.isNotEmpty ? () => _openRoadview(address) : null,
+          onPressed: (lat != null && lng != null) || address.isNotEmpty
+              ? () => _openRoadview(lat: lat, lng: lng, address: address, title: name)
+              : null,
         ),
       ]),
       const SizedBox(height: 10),
@@ -926,6 +979,205 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
         ),
         Expanded(child: Text(value, style: const TextStyle(fontSize: 13))),
       ]),
+    );
+  }
+}
+
+// ── 로드뷰 다이얼로그 ──────────────────────────────────────────
+
+class _RoadviewDialog extends StatefulWidget {
+  final double lat;
+  final double lng;
+  final String title;
+
+  const _RoadviewDialog({
+    required this.lat,
+    required this.lng,
+    required this.title,
+  });
+
+  @override
+  State<_RoadviewDialog> createState() => _RoadviewDialogState();
+}
+
+class _RoadviewDialogState extends State<_RoadviewDialog> {
+  static const Color _primary = Color(0xFFE53935);
+  late final String _viewId;
+  late final String _rvId;   // 로드뷰 div id
+  late final String _mapId;  // 미니맵 div id
+  late final String _noId;   // 미제공 안내 div id
+
+  @override
+  void initState() {
+    super.initState();
+    final ts = DateTime.now().millisecondsSinceEpoch;
+    _viewId = 'rv-wrap-$ts';
+    _rvId   = 'rv-$ts';
+    _mapId  = 'rv-map-$ts';
+    _noId   = 'rv-no-$ts';
+    _registerView();
+  }
+
+  void _registerView() {
+    ui_web.platformViewRegistry.registerViewFactory(_viewId, (int viewId) {
+      // 최상위 컨테이너
+      final wrap = html.DivElement()
+        ..id = _viewId
+        ..style.position = 'relative'
+        ..style.width = '100%'
+        ..style.height = '100%'
+        ..style.background = '#1a1a1a';
+
+      // 로드뷰 영역
+      final rvDiv = html.DivElement()
+        ..id = _rvId
+        ..style.width = '100%'
+        ..style.height = '100%';
+
+      // 미니맵 영역
+      final mapDiv = html.DivElement()
+        ..id = _mapId
+        ..style.position = 'absolute'
+        ..style.bottom = '16px'
+        ..style.right = '16px'
+        ..style.width = '180px'
+        ..style.height = '140px'
+        ..style.border = '2px solid #fff'
+        ..style.borderRadius = '8px'
+        ..style.boxShadow = '0 2px 8px rgba(0,0,0,0.4)'
+        ..style.zIndex = '10';
+
+      // 로드뷰 미제공 안내
+      final noDiv = html.DivElement()
+        ..id = _noId
+        ..style.display = 'none'
+        ..style.position = 'absolute'
+        ..style.top = '0'
+        ..style.left = '0'
+        ..style.right = '0'
+        ..style.bottom = '0'
+        ..style.background = '#1a1a1a'
+        ..style.color = '#fff'
+        ..style.flexDirection = 'column'
+        ..style.alignItems = 'center'
+        ..style.justifyContent = 'center'
+        ..style.gap = '12px'
+        ..style.fontFamily = 'sans-serif'
+        ..innerHtml = '<div style="font-size:48px;opacity:0.5">🚫</div>'
+                      '<p style="font-size:14px;opacity:0.7">이 위치에서는 로드뷰를 제공하지 않습니다.</p>';
+
+      wrap..append(rvDiv)..append(mapDiv)..append(noDiv);
+
+      // 부모 document의 kakao SDK를 그대로 사용해 초기화
+      Future.delayed(const Duration(milliseconds: 150), () => _initRoadview());
+
+      return wrap;
+    });
+  }
+
+  void _initRoadview() {
+    final lat = widget.lat;
+    final lng = widget.lng;
+    final jsCode = '''
+(function() {
+  var rvEl  = document.getElementById('$_rvId');
+  var mapEl = document.getElementById('$_mapId');
+  var noEl  = document.getElementById('$_noId');
+  if (!rvEl || !mapEl || typeof kakao === 'undefined') return;
+
+  var position = new kakao.maps.LatLng($lat, $lng);
+
+  var roadview = new kakao.maps.Roadview(rvEl);
+  var rvClient = new kakao.maps.RoadviewClient();
+
+  var map = new kakao.maps.Map(mapEl, { center: position, level: 3 });
+  var marker = new kakao.maps.Marker({ position: position, map: map });
+
+  var personIcon = '<div style="width:28px;height:28px;background:#E53935;border:2px solid #fff;'
+    + 'border-radius:50%;display:flex;align-items:center;justify-content:center;'
+    + 'color:#fff;font-size:14px;box-shadow:0 2px 4px rgba(0,0,0,0.5);">&#x1F464;</div>';
+
+  var overlay = new kakao.maps.CustomOverlay({
+    position: position, content: personIcon, map: map, yAnchor: 1.0
+  });
+
+  rvClient.getNearestPanoId(position, 300, function(panoId) {
+    if (panoId !== null) {
+      roadview.setPanoId(panoId, position);
+
+      kakao.maps.event.addListener(roadview, 'viewpoint_changed', function() {
+        var vp = roadview.getViewpoint();
+        overlay.setContent(
+          '<div style="width:28px;height:28px;background:#E53935;border:2px solid #fff;'
+          + 'border-radius:50%;display:flex;align-items:center;justify-content:center;'
+          + 'color:#fff;font-size:14px;box-shadow:0 2px 4px rgba(0,0,0,0.5);'
+          + 'transform:rotate(' + vp.pan + 'deg);">&#x1F464;</div>'
+        );
+      });
+
+      kakao.maps.event.addListener(roadview, 'position_changed', function() {
+        var p = roadview.getPosition();
+        map.setCenter(p);
+        marker.setPosition(p);
+        overlay.setPosition(p);
+      });
+    } else {
+      noEl.style.display = 'flex';
+    }
+  });
+})();
+''';
+
+    html.document.body?.append(
+      html.ScriptElement()..text = jsCode,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final screenSize = MediaQuery.of(context).size;
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      insetPadding: const EdgeInsets.all(16),
+      child: Container(
+        width: screenSize.width * 0.85,
+        height: screenSize.height * 0.80,
+        decoration: BoxDecoration(
+          color: Colors.black,
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.4), blurRadius: 24)],
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(16),
+          child: Column(children: [
+            // 헤더
+            Container(
+              padding: const EdgeInsets.fromLTRB(16, 12, 8, 12),
+              color: const Color(0xFF1C1C1E),
+              child: Row(children: [
+                const Icon(Icons.streetview, color: Color(0xFFE53935), size: 20),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    widget.title,
+                    style: const TextStyle(
+                        color: Colors.white, fontSize: 15, fontWeight: FontWeight.w600),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.close, color: Colors.white70, size: 20),
+                  onPressed: () => Navigator.of(context).pop(),
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                ),
+              ]),
+            ),
+            // 로드뷰 iframe
+            Expanded(child: HtmlElementView(viewType: _viewId)),
+          ]),
+        ),
+      ),
     );
   }
 }
