@@ -539,6 +539,34 @@ _EQP_TYPE_SIMPLIFY = {
     "etr-SF-W15-REMOTE": "SF중계기",
 }
 
+# 키워드 기반 장비타입 간소화 fallback (딕셔너리 매칭 실패 시)
+_EQP_KEYWORD_RULES = [
+    # (키워드 패턴, 간소화명) — 순서 중요: 구체적인 것 먼저
+    ("GIRO", "GIRO"),
+    ("IRO", "IRO"),
+    ("MIBOS", "MIBOS"), ("MiBOS", "MIBOS"), ("MBS", "MIBOS"),
+    ("AAU", "AAU"),
+    ("PRU", "PRU"),
+    ("ARRU", "RRU"), ("MRRU", "RRU"), ("SRRU", "RRU"), ("DBRRU", "RRU"),
+    ("ERRU", "ERRU"), ("RRU", "RRU"), ("RRH", "RRH"),
+    ("RHU", "RHU"),
+    ("TRIO", "TRIO"),
+    ("WAFMC", "WAFMC"), ("WINS", "WINS"), ("WLME", "WLME"),
+    ("ICS", "ICS"),
+    ("LR-DUO", "LR-DUO"), ("OR-DUO", "OR-DUO"), ("RO-DUO", "RO-DUO"),
+    ("SF-DUO", "SF중계기"), ("SF-W", "SF중계기"), ("SF-", "SF중계기"), ("SRF-W", "SF중계기"),
+    ("DUO", "DUO"),
+    ("NODEB", "W기지국"), ("iBTS", "W기지국"),
+]
+
+def _simplify_eqp_by_keyword(raw: str) -> str:
+    """딕셔너리 매칭 실패 시 키워드 기반으로 장비타입 간소화."""
+    upper = raw.upper()
+    for keyword, simplified in _EQP_KEYWORD_RULES:
+        if keyword.upper() in upper:
+            return simplified
+    return ""
+
 # Logger setup
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -12322,6 +12350,7 @@ def _parse_irr_xlsx_sync(file_bytes: bytes, year_hint: int, uploaded_by: str):
     region_set = set()
 
     # cert_cache.db에서 zpcode→eqp_type, zpwino→eqp_type 매핑 프리로드
+    # 허가번호는 하이픈 제거하여 정규화
     _zpcode_eqp_map = {}
     _permit_eqp_map = {}
     if _cert_cache_db_path and os.path.exists(_cert_cache_db_path):
@@ -12330,7 +12359,7 @@ def _parse_irr_xlsx_sync(file_bytes: bytes, year_hint: int, uploaded_by: str):
             for _r in cc.execute("SELECT zpcode, zpwino, eqp_type FROM cert WHERE eqp_type IS NOT NULL AND eqp_type != ''"):
                 eqp = str(_r[2]).strip()
                 zp = str(_r[0] or "").strip()
-                permit = str(_r[1] or "").strip()
+                permit = str(_r[1] or "").strip().replace("-", "")
                 if zp:
                     _zpcode_eqp_map[zp] = eqp
                 if permit:
@@ -12438,9 +12467,11 @@ def _parse_irr_xlsx_sync(file_bytes: bytes, year_hint: int, uploaded_by: str):
                 week = ""
         rec["주차별"] = week
 
-        # 장비타입간소화 파생 (4단계 fallback)
+        # 장비타입간소화 파생 (5단계 fallback)
         raw_eqp = rec.get("장비타입", "").strip()
         simplified = ""
+        eqp_from_cert = ""
+        eqp_from_permit = ""
 
         # 1) 결과장 장비타입 직접 매칭
         if raw_eqp:
@@ -12463,9 +12494,9 @@ def _parse_irr_xlsx_sync(file_bytes: bytes, year_hint: int, uploaded_by: str):
                             simplified = v
                             break
 
-        # 3) 허가번호로 ERP DB 조회
+        # 3) 허가번호로 ERP DB 조회 (하이픈 제거하여 정규화)
         if not simplified:
-            permit = rec.get("허가번호", "").strip()
+            permit = rec.get("허가번호", "").strip().replace("-", "")
             eqp_from_permit = _permit_eqp_map.get(permit, "") if permit else ""
             if eqp_from_permit:
                 simplified = _EQP_TYPE_SIMPLIFY.get(eqp_from_permit, "")
@@ -12478,7 +12509,15 @@ def _parse_irr_xlsx_sync(file_bytes: bytes, year_hint: int, uploaded_by: str):
                 if not raw_eqp:
                     rec["장비타입"] = eqp_from_permit
 
-        # 4) 매핑 실패 로깅
+        # 4) 키워드 기반 fallback
+        if not simplified:
+            for candidate in [raw_eqp, eqp_from_cert, eqp_from_permit]:
+                if candidate:
+                    simplified = _simplify_eqp_by_keyword(candidate)
+                    if simplified:
+                        break
+
+        # 5) 최종 실패 로깅
         if not simplified:
             permit = rec.get("허가번호", "").strip()
             zpcode = rec.get("통합시설코드", "").strip()
@@ -12925,17 +12964,19 @@ async def inspection_results_weekly_trend_by_region(request: Request, year: int 
         try:
             rows = conn.execute(
                 "SELECT region, 주차별, COUNT(*) as cnt, "
-                "SUM(CASE WHEN 성능서류='성능' THEN 1 ELSE 0 END) as 성능불 "
+                "SUM(CASE WHEN 성능서류='성능' THEN 1 ELSE 0 END) as 성능불, "
+                "SUM(CASE WHEN 성능서류='서류' THEN 1 ELSE 0 END) as 서류불 "
                 "FROM inspection_results_raw "
                 "WHERE year=? AND 주차별 IS NOT NULL AND 주차별 != '' AND region IS NOT NULL AND region != '' "
                 "GROUP BY region, 주차별 ORDER BY region, 주차별",
                 (year,)
             ).fetchall()
             regions: Dict[str, list] = {}
-            for region, 주차, cnt, 성능불 in rows:
+            for region, 주차, cnt, 성능불, 서류불 in rows:
                 regions.setdefault(region, []).append({
                     "주차": 주차,
                     "합격율": round((cnt - 성능불) / cnt, 4) if cnt > 0 else 0,
+                    "서류합격율": round((cnt - 서류불) / cnt, 4) if cnt > 0 else 0,
                 })
             return {"regions": regions}
         finally:

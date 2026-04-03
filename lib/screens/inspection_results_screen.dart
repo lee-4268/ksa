@@ -1577,7 +1577,22 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
       title: 'Acc.담당별 주별 Trend',
       icon: Icons.grid_view,
       iconColor: _primary,
-      child: LayoutBuilder(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              _legendDot(_primary, '성능 합격율'),
+              const SizedBox(width: 12),
+              _legendDot(const Color(0xFF2196F3), '서류 합격율'),
+              const SizedBox(width: 12),
+              _legendDot(_primary.withValues(alpha: 0.4), '성능 목표 98.5%'),
+              const SizedBox(width: 12),
+              _legendDot(const Color(0xFF2196F3).withValues(alpha: 0.4), '서류 목표 85.5%'),
+            ],
+          ),
+          const SizedBox(height: 12),
+          LayoutBuilder(
         builder: (context, constraints) {
           final cols = constraints.maxWidth >= 900
               ? 3
@@ -1592,6 +1607,8 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
           );
         },
       ),
+        ],
+      ),
     );
   }
 
@@ -1604,14 +1621,16 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
 
   Widget _smallLineChart(
       String regionName, List<Map<String, dynamic>> weekData) {
-    final values =
+    final perfValues =
         weekData.map((w) => _asPercent(w['합격율'] ?? 0)).toList();
+    final docValues =
+        weekData.map((w) => _asPercent(w['서류합격율'] ?? 0)).toList();
     final labels = weekData
         .map((w) => _formatWeekLabel((w['주차'] ?? '').toString()))
         .toList();
 
     return GestureDetector(
-      onTap: () => _showExpandedChart(regionName, values, labels),
+      onTap: () => _showExpandedChart(regionName, perfValues, docValues, labels),
       child: Container(
         height: 200,
         padding: const EdgeInsets.all(10),
@@ -1636,7 +1655,7 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
             ),
             const SizedBox(height: 6),
             Expanded(
-              child: values.isEmpty
+              child: perfValues.isEmpty
                   ? const Center(
                       child: Text('데이터 없음',
                           style: TextStyle(
@@ -1645,10 +1664,12 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
                   : CustomPaint(
                       size: Size.infinite,
                       painter: _SmallLineChartPainter(
-                        values: values,
+                        values: perfValues,
+                        values2: docValues,
                         labels: labels,
                         target: 98.5,
                         lineColor: _primary,
+                        line2Color: const Color(0xFF2196F3),
                       ),
                     ),
             ),
@@ -1658,7 +1679,7 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
     );
   }
 
-  void _showExpandedChart(String regionName, List<double> values, List<String> labels) {
+  void _showExpandedChart(String regionName, List<double> perfValues, List<double> docValues, List<String> labels) {
     showGeneralDialog(
       context: context,
       barrierDismissible: true,
@@ -1706,23 +1727,27 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
                 const SizedBox(height: 8),
                 Row(
                   children: [
-                    _legendDot(_primary, '합격율 (%)'),
-                    const SizedBox(width: 16),
+                    _legendDot(_primary, '성능 합격율'),
+                    const SizedBox(width: 12),
+                    _legendDot(const Color(0xFF2196F3), '서류 합격율'),
+                    const SizedBox(width: 12),
                     _legendDot(_primary.withValues(alpha: 0.5), '목표 98.5%'),
                   ],
                 ),
                 const SizedBox(height: 16),
                 SizedBox(
                   height: 350,
-                  child: values.isEmpty
+                  child: perfValues.isEmpty
                       ? const Center(child: Text('데이터 없음'))
                       : CustomPaint(
                           size: Size.infinite,
                           painter: _SmallLineChartPainter(
-                            values: values,
+                            values: perfValues,
+                            values2: docValues,
                             labels: labels,
                             target: 98.5,
                             lineColor: _primary,
+                            line2Color: const Color(0xFF2196F3),
                             fontSize: 13,
                           ),
                         ),
@@ -2365,16 +2390,20 @@ class _ComboChartPainter extends CustomPainter {
 /// Small line chart for per-region weekly trend
 class _SmallLineChartPainter extends CustomPainter {
   final List<double> values;
+  final List<double> values2;
   final List<String> labels;
   final double target;
   final Color lineColor;
+  final Color line2Color;
   final double fontSize;
 
   _SmallLineChartPainter({
     required this.values,
+    this.values2 = const [],
     this.labels = const [],
     required this.target,
     required this.lineColor,
+    this.line2Color = const Color(0xFF2196F3),
     this.fontSize = 9,
   });
 
@@ -2383,13 +2412,16 @@ class _SmallLineChartPainter extends CustomPainter {
     if (values.isEmpty) return;
 
     const double pad = 4;
-    const double bottomPad = 40; // extra space for rotated X-axis labels
+    const double bottomPad = 40;
     final chartW = size.width - pad * 2;
     final chartH = size.height - pad - bottomPad;
 
-    // Y range: auto from min value, at least 90-100
-    final dataMin = values.fold<double>(100, math.min);
-    final yMin = math.min(dataMin - 2, 90.0).floorToDouble();
+    // Y range: 성능 + 서류 모두 고려
+    double dataMin = values.fold<double>(100, math.min);
+    if (values2.isNotEmpty) {
+      dataMin = math.min(dataMin, values2.fold<double>(100, math.min));
+    }
+    final yMin = math.min(dataMin - 2, 80.0).floorToDouble();
     const yMax = 100.0;
     final yRange = yMax - yMin;
 
@@ -2403,63 +2435,72 @@ class _SmallLineChartPainter extends CustomPainter {
       return pad + chartW * i / (values.length - 1);
     }
 
-    // Target dashed line
-    final targetY = yFor(target);
-    final dashedPaint = Paint()
-      ..color = lineColor.withValues(alpha: 0.4)
-      ..strokeWidth = 1.0;
-    const dw = 4.0;
-    const ds = 2.0;
-    double dx = pad;
-    while (dx < size.width - pad) {
-      canvas.drawLine(
-        Offset(dx, targetY),
-        Offset(math.min(dx + dw, size.width - pad), targetY),
-        dashedPaint,
-      );
-      dx += dw + ds;
-    }
-
-    // Target label
-    final tp = TextPainter(
-      text: TextSpan(
-          text: '${target.toStringAsFixed(2)}%',
-          style: TextStyle(fontSize: fontSize, color: lineColor.withValues(alpha: 0.6))),
-      textDirection: TextDirection.ltr,
-    )..layout();
-    tp.paint(canvas, Offset(size.width - pad - tp.width, targetY - tp.height - 1));
-
-    // Data line
-    final linePaint = Paint()
-      ..color = lineColor
-      ..strokeWidth = 1.5
-      ..style = PaintingStyle.stroke;
-    final dotPaint = Paint()
-      ..color = lineColor
-      ..style = PaintingStyle.fill;
-
-    final points = <Offset>[];
-    for (int i = 0; i < values.length; i++) {
-      points.add(Offset(xFor(i), yFor(values[i])));
-    }
-
-    if (points.length >= 2) {
-      final path = Path()..moveTo(points[0].dx, points[0].dy);
-      for (int i = 1; i < points.length; i++) {
-        path.lineTo(points[i].dx, points[i].dy);
+    // 목표선 그리기 헬퍼
+    void drawTarget(double targetVal, Color color) {
+      final ty = yFor(targetVal);
+      final dp = Paint()
+        ..color = color.withValues(alpha: 0.4)
+        ..strokeWidth = 1.0;
+      const dw = 4.0;
+      const ds = 2.0;
+      double dx2 = pad;
+      while (dx2 < size.width - pad) {
+        canvas.drawLine(
+          Offset(dx2, ty),
+          Offset(math.min(dx2 + dw, size.width - pad), ty),
+          dp,
+        );
+        dx2 += dw + ds;
       }
-      canvas.drawPath(path, linePaint);
+      final tlp = TextPainter(
+        text: TextSpan(
+            text: '${targetVal.toStringAsFixed(1)}%',
+            style: TextStyle(fontSize: fontSize, color: color.withValues(alpha: 0.6))),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      tlp.paint(canvas, Offset(size.width - pad - tlp.width, ty - tlp.height - 1));
     }
 
-    for (final p in points) {
-      canvas.drawCircle(p, 3, dotPaint);
-      canvas.drawCircle(
-          p,
-          1.5,
-          Paint()
-            ..color = Colors.white
-            ..style = PaintingStyle.fill);
+    // 성능 목표선 (98.5%)
+    drawTarget(target, lineColor);
+    // 서류 목표선 (85.5%)
+    if (values2.isNotEmpty) {
+      drawTarget(85.5, line2Color);
     }
+
+    void _drawLine(List<double> vals, Color color) {
+      final paint = Paint()
+        ..color = color
+        ..strokeWidth = 1.5
+        ..style = PaintingStyle.stroke;
+      final dot = Paint()
+        ..color = color
+        ..style = PaintingStyle.fill;
+
+      final pts = <Offset>[];
+      for (int i = 0; i < vals.length; i++) {
+        pts.add(Offset(xFor(i), yFor(vals[i])));
+      }
+      if (pts.length >= 2) {
+        final path = Path()..moveTo(pts[0].dx, pts[0].dy);
+        for (int i = 1; i < pts.length; i++) {
+          path.lineTo(pts[i].dx, pts[i].dy);
+        }
+        canvas.drawPath(path, paint);
+      }
+      for (final p in pts) {
+        canvas.drawCircle(p, 3, dot);
+        canvas.drawCircle(p, 1.5, Paint()..color = Colors.white..style = PaintingStyle.fill);
+      }
+    }
+
+    // 서류 라인 (뒤에 먼저 그리기)
+    if (values2.isNotEmpty) {
+      _drawLine(values2, line2Color);
+    }
+
+    // 성능 라인
+    _drawLine(values, lineColor);
 
     // X-axis labels (45° rotated)
     if (labels.isNotEmpty) {
@@ -2476,37 +2517,49 @@ class _SmallLineChartPainter extends CustomPainter {
         final ly = pad + chartH + 4;
         canvas.save();
         canvas.translate(lx, ly);
-        canvas.rotate(0.785); // 45°
+        canvas.rotate(0.785);
         ltp.paint(canvas, Offset.zero);
         canvas.restore();
       }
     }
 
-    // Last value label
+    // Last value labels (성능 + 서류)
     if (values.isNotEmpty) {
       final lastVal = values.last;
-      final lastPt = points.last;
+      final lastPt = Offset(xFor(values.length - 1), yFor(lastVal));
       final valTp = TextPainter(
         text: TextSpan(
             text: '${lastVal.toStringAsFixed(2)}%',
             style: TextStyle(
                 fontSize: fontSize + 1,
                 fontWeight: FontWeight.w700,
-                color: lastVal >= target
-                    ? const Color(0xFF2E7D32)
-                    : lineColor)),
+                color: lastVal >= target ? const Color(0xFF2E7D32) : lineColor)),
         textDirection: TextDirection.ltr,
       )..layout();
       double labelX = lastPt.dx - valTp.width / 2;
-      if (labelX + valTp.width > size.width) {
-        labelX = size.width - valTp.width;
-      }
-      if (labelX < 0) labelX = 0;
+      labelX = labelX.clamp(0, size.width - valTp.width);
       valTp.paint(canvas, Offset(labelX, lastPt.dy - valTp.height - 3));
+    }
+    if (values2.isNotEmpty) {
+      final lastVal2 = values2.last;
+      final lastPt2 = Offset(xFor(values2.length - 1), yFor(lastVal2));
+      final valTp2 = TextPainter(
+        text: TextSpan(
+            text: '${lastVal2.toStringAsFixed(2)}%',
+            style: TextStyle(
+                fontSize: fontSize + 1,
+                fontWeight: FontWeight.w700,
+                color: line2Color)),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      double labelX2 = lastPt2.dx - valTp2.width / 2;
+      labelX2 = labelX2.clamp(0, size.width - valTp2.width);
+      // 성능 라벨과 겹치지 않도록 아래쪽에 표시
+      valTp2.paint(canvas, Offset(labelX2, lastPt2.dy + 4));
     }
   }
 
   @override
   bool shouldRepaint(covariant _SmallLineChartPainter old) =>
-      old.values != values || old.target != target || old.fontSize != fontSize;
+      old.values != values || old.values2 != values2 || old.target != target || old.fontSize != fontSize;
 }
