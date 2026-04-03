@@ -713,7 +713,7 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
         _monthlyData['totals'] as Map<String, dynamic>? ?? {};
 
     return _chartSection(
-      title: '본부별 실적',
+      title: '본부별 현황',
       icon: Icons.table_chart,
       iconColor: _blue,
       child: SingleChildScrollView(

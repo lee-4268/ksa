@@ -16,19 +16,6 @@ class RadioStationAdapter extends TypeAdapter<RadioStation> {
     final fields = <int, dynamic>{
       for (int i = 0; i < numOfFields; i++) reader.readByte(): reader.read(),
     };
-
-    // 기존 bool 데이터와의 호환성 처리 (마이그레이션)
-    InspectionStatus inspectionStatus;
-    final field11 = fields[11];
-    if (field11 is InspectionStatus) {
-      inspectionStatus = field11;
-    } else if (field11 is bool) {
-      // 기존 isInspected boolean -> InspectionStatus 변환
-      inspectionStatus = field11 ? InspectionStatus.passed : InspectionStatus.pending;
-    } else {
-      inspectionStatus = InspectionStatus.pending;
-    }
-
     return RadioStation(
       id: fields[0] as String,
       stationName: fields[1] as String,
@@ -41,7 +28,7 @@ class RadioStationAdapter extends TypeAdapter<RadioStation> {
       stationType: fields[8] as String?,
       owner: fields[9] as String?,
       inspectionDate: fields[10] as DateTime?,
-      inspectionStatus: inspectionStatus,
+      inspectionStatus: fields[11] as InspectionStatus,
       createdAt: fields[12] as DateTime?,
       updatedAt: fields[13] as DateTime?,
       callSign: fields[14] as String?,
