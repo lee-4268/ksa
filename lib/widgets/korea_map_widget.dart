@@ -350,7 +350,8 @@ class _KoreaMapWidgetState extends State<KoreaMapWidget> {
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 200),
             curve: Curves.easeOutCubic,
-            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+            width: 80,
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 5),
             decoration: BoxDecoration(
             color: isHovered
                 ? progressColor.withValues(alpha: 0.08)
@@ -377,7 +378,7 @@ class _KoreaMapWidgetState extends State<KoreaMapWidget> {
               AnimatedDefaultTextStyle(
                 duration: const Duration(milliseconds: 200),
                 style: TextStyle(
-                  fontSize: isHighlighted ? 11 : 10,
+                  fontSize: 11,
                   fontWeight: FontWeight.bold,
                   color: isHighlighted ? progressColor : Colors.grey.shade800,
                 ),
@@ -387,17 +388,21 @@ class _KoreaMapWidgetState extends State<KoreaMapWidget> {
               AnimatedDefaultTextStyle(
                 duration: const Duration(milliseconds: 200),
                 style: TextStyle(
-                  fontSize: isHighlighted ? 13 : 12,
+                  fontSize: 13,
                   fontWeight: FontWeight.bold,
                   color: progressColor,
                 ),
                 child: Text('${data.progressPercent}%'),
               ),
-              Text(
-                '${data.completed}/${data.total}',
-                style: TextStyle(
-                  fontSize: 8,
-                  color: Colors.grey.shade600,
+              FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Text(
+                  '${data.completed}/${data.total}',
+                  maxLines: 1,
+                  style: TextStyle(
+                    fontSize: 9,
+                    color: Colors.grey.shade600,
+                  ),
                 ),
               ),
             ],
