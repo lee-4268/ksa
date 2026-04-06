@@ -425,6 +425,7 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
                           height: 550,
                           child: DashboardScreen(
                             showStats: false,
+                            selectedRegion: _selectedRegion,
                             onRegionSelected: (region) {
                               if (_selectedRegion != region) {
                                 setState(() => _selectedRegion = region);

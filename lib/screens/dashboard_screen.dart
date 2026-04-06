@@ -8,7 +8,8 @@ import '../services/inspection_service.dart';
 class DashboardScreen extends StatefulWidget {
   final bool showStats;
   final void Function(String region)? onRegionSelected;
-  const DashboardScreen({super.key, this.showStats = true, this.onRegionSelected});
+  final String? selectedRegion; // 외부에서 선택 상태 동기화
+  const DashboardScreen({super.key, this.showStats = true, this.onRegionSelected, this.selectedRegion});
 
   @override
   State<DashboardScreen> createState() => _DashboardScreenState();
@@ -48,6 +49,10 @@ class _DashboardScreenState extends State<DashboardScreen>
   @override
   void initState() {
     super.initState();
+    // 외부에서 초기 선택 본부가 주어진 경우 반영
+    if (widget.selectedRegion != null && widget.selectedRegion!.isNotEmpty) {
+      _selectedRegion = _shortNameToKey(widget.selectedRegion!);
+    }
     _animationController = AnimationController(
       duration: const Duration(milliseconds: 800),
       vsync: this,
@@ -56,6 +61,29 @@ class _DashboardScreenState extends State<DashboardScreen>
       CurvedAnimation(parent: _animationController, curve: Curves.easeOut),
     );
     _animationController.forward();
+  }
+
+  @override
+  void didUpdateWidget(DashboardScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.selectedRegion != widget.selectedRegion) {
+      final key = widget.selectedRegion != null && widget.selectedRegion!.isNotEmpty
+          ? _shortNameToKey(widget.selectedRegion!)
+          : null;
+      if (key != _selectedRegion) {
+        setState(() => _selectedRegion = key);
+      }
+    }
+  }
+
+  /// shortName('강남') → map key('gangnam')
+  static String? _shortNameToKey(String shortName) {
+    const m = {
+      '강남': 'gangnam', '강북': 'gangbuk', '인천': 'incheon',
+      '경기': 'gyeonggi', '강원': 'gangwon', '충청': 'chungcheong',
+      '경북': 'gyeongbuk', '경남': 'gyeongnam', '서부': 'seobu',
+    };
+    return m[shortName];
   }
 
   @override
