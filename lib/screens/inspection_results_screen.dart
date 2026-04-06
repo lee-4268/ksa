@@ -213,20 +213,117 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
 
   // ── Excel 다운로드 ──
 
+  static const _divisions = ['', '강남', '강북', '인천', '경기', '강원', '충청', '경북', '경남', '서부'];
+
   Future<void> _downloadExcel() async {
+    // 옵션 팝업 표시
+    final result = await showDialog<Map<String, String>>(
+      context: context,
+      builder: (ctx) {
+        String selDivision = '';
+        String selWeek = '';
+        final weekOptions = ['', ...List.generate(12, (i) => '${i + 1}월')];
+        return StatefulBuilder(builder: (ctx, setDlgState) {
+          return AlertDialog(
+            backgroundColor: Colors.white,
+            surfaceTintColor: Colors.white,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            title: const Text('Excel 다운로드 옵션', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('본부', style: TextStyle(fontSize: 13, color: Colors.grey.shade600)),
+                const SizedBox(height: 6),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    border: Border.all(color: Colors.grey.shade300),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: DropdownButtonHideUnderline(
+                    child: DropdownButton<String>(
+                      isExpanded: true,
+                      isDense: true,
+                      value: selDivision,
+                      icon: Icon(Icons.arrow_drop_down, color: _primary, size: 20),
+                      dropdownColor: Colors.white,
+                      borderRadius: BorderRadius.circular(12),
+                      style: const TextStyle(color: Colors.black87, fontSize: 13),
+                      items: _divisions.map((d) => DropdownMenuItem(
+                        value: d,
+                        child: Text(d.isEmpty ? '전체' : d),
+                      )).toList(),
+                      onChanged: (v) => setDlgState(() => selDivision = v ?? ''),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Text('주차', style: TextStyle(fontSize: 13, color: Colors.grey.shade600)),
+                const SizedBox(height: 6),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    border: Border.all(color: Colors.grey.shade300),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: DropdownButtonHideUnderline(
+                    child: DropdownButton<String>(
+                      isExpanded: true,
+                      isDense: true,
+                      value: selWeek,
+                      icon: Icon(Icons.arrow_drop_down, color: _primary, size: 20),
+                      dropdownColor: Colors.white,
+                      borderRadius: BorderRadius.circular(12),
+                      style: const TextStyle(color: Colors.black87, fontSize: 13),
+                      items: weekOptions.map((w) => DropdownMenuItem(
+                        value: w,
+                        child: Text(w.isEmpty ? '전체' : w),
+                      )).toList(),
+                      onChanged: (v) => setDlgState(() => selWeek = v ?? ''),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('취소')),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: _green,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                ),
+                onPressed: () => Navigator.pop(ctx, {'region': selDivision, 'week': selWeek}),
+                child: const Text('다운로드'),
+              ),
+            ],
+          );
+        });
+      },
+    );
+    if (result == null) return;
+
     final dialog = ProgressDialog(context);
     dialog.show(message: 'Excel 다운로드\n준비 중...');
     try {
-      final tab = _tabCtrl.index == 0 ? 'acc' : '${_tabCtrl.index}월';
-      final week = _tabCtrl.index == 0 ? '' : '${_tabCtrl.index}월';
-      final bytes = await _svc.exportResultsXlsx(_year, week: week);
+      final region = result['region'] ?? '';
+      final week = result['week'] ?? '';
+      final bytes = await _svc.exportResultsXlsx(_year, region: region, week: week);
       if (!mounted) return;
+      final fileSuffix = [
+        if (region.isNotEmpty) region,
+        if (week.isNotEmpty) week,
+        if (region.isEmpty && week.isEmpty) '전체',
+      ].join('_');
       final blob = html.Blob([bytes],
           'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
       final url = html.Url.createObjectUrlFromBlob(blob);
       final anchor = html.AnchorElement()
         ..href = url
-        ..download = '실적_결과장_${_year}_$tab.xlsx'
+        ..download = '실적_결과장_${_year}_$fileSuffix.xlsx'
         ..style.display = 'none';
       html.document.body?.children.add(anchor);
       anchor.click();
@@ -576,47 +673,59 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
                         height: 1.5)),
               );
             } else if (type == 'perf_ok' || type == 'doc_ok') {
-              return Container(
-                margin: const EdgeInsets.only(top: 4, left: 4),
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFDCFCE7),
-                  borderRadius: BorderRadius.circular(6),
-                ),
+              return Padding(
+                padding: const EdgeInsets.only(top: 4, left: 4),
                 child: Row(
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    const Icon(Icons.check_circle, size: 16, color: Color(0xFF16A34A)),
-                    const SizedBox(width: 6),
-                    Expanded(
-                      child: Text(text,
-                          style: const TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w700,
-                              color: Color(0xFF16A34A),
-                              height: 1.5)),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFDCFCE7),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(Icons.check_circle, size: 16, color: Color(0xFF16A34A)),
+                          const SizedBox(width: 6),
+                          Text(text,
+                              style: const TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w700,
+                                  color: Color(0xFF16A34A),
+                                  height: 1.5)),
+                        ],
+                      ),
                     ),
                   ],
                 ),
               );
             } else if (type == 'perf_fail' || type == 'doc_fail') {
-              return Container(
-                margin: const EdgeInsets.only(top: 4, left: 4),
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFFEE2E2),
-                  borderRadius: BorderRadius.circular(6),
-                ),
+              return Padding(
+                padding: const EdgeInsets.only(top: 4, left: 4),
                 child: Row(
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    const Icon(Icons.warning_amber_rounded, size: 16, color: Color(0xFFDC2626)),
-                    const SizedBox(width: 6),
-                    Expanded(
-                      child: Text(text,
-                          style: const TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w700,
-                              color: Color(0xFFDC2626),
-                              height: 1.5)),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFEE2E2),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(Icons.warning_amber_rounded, size: 16, color: Color(0xFFDC2626)),
+                          const SizedBox(width: 6),
+                          Text(text,
+                              style: const TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w700,
+                                  color: Color(0xFFDC2626),
+                                  height: 1.5)),
+                        ],
+                      ),
                     ),
                   ],
                 ),

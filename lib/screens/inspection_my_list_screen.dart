@@ -286,15 +286,14 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
       padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
       child: Row(
         children: [
-          IconButton(
-            icon: const Icon(Icons.arrow_back_ios_new, color: Colors.black54, size: 20),
-            onPressed: () => Navigator.pop(context),
-          ),
+          if (Navigator.canPop(context))
+            IconButton(
+              icon: const Icon(Icons.arrow_back_ios_new, color: Colors.black54, size: 20),
+              onPressed: () => Navigator.pop(context),
+            ),
           const Text('수검 관리',
               style: TextStyle(color: Colors.black87, fontSize: 17, fontWeight: FontWeight.w600)),
           const SizedBox(width: 12),
-          _buildYearChips(),
-          const SizedBox(width: 8),
           if (_weekOptions.isNotEmpty) _buildWeekDropdown(),
           const Spacer(),
           if (_loadingInsp)
@@ -436,18 +435,29 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
                     ],
                   ),
                 ),
-                PopupMenuButton<String>(
-                  onSelected: (v) => setState(() => _sortOrder = v),
-                  itemBuilder: (_) => [
-                    const PopupMenuItem(value: '최신순', child: Text('최신순')),
-                    const PopupMenuItem(value: '주차순', child: Text('주차순')),
-                  ],
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(_sortOrder, style: TextStyle(fontSize: 13, color: Colors.grey[600])),
-                      Icon(Icons.keyboard_arrow_down, size: 18, color: Colors.grey[600]),
-                    ],
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    border: Border.all(color: Colors.grey.shade300),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: DropdownButtonHideUnderline(
+                    child: DropdownButton<String>(
+                      isDense: true,
+                      value: _sortOrder,
+                      icon: Icon(Icons.arrow_drop_down, color: const Color(0xFFE53935), size: 20),
+                      dropdownColor: Colors.white,
+                      borderRadius: BorderRadius.circular(12),
+                      style: const TextStyle(color: Colors.black87, fontSize: 13),
+                      items: const [
+                        DropdownMenuItem(value: '최신순', child: Text('최신순')),
+                        DropdownMenuItem(value: '주차순', child: Text('주차순')),
+                      ],
+                      onChanged: (v) {
+                        if (v != null) setState(() => _sortOrder = v);
+                      },
+                    ),
                   ),
                 ),
               ],

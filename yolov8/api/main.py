@@ -853,6 +853,35 @@ def _get_user_role_sync(empno: str) -> str:
     return "member"
 
 
+def _get_last_login(empno: str) -> str:
+    """kca-user-roles 테이블에서 last_login 조회."""
+    return _get_user_role_info(empno)["last_login"]
+
+
+def _get_user_role_info(empno: str) -> dict:
+    """kca-user-roles 테이블에서 role + last_login + is_dormant 한 번에 조회."""
+    try:
+        dynamodb = get_dynamodb_resource()
+        table = dynamodb.Table(DYNAMODB_TABLES["user_roles"])
+        resp = table.get_item(
+            Key={"user_id": empno},
+            ProjectionExpression="#r, last_login, is_dormant",
+            ExpressionAttributeNames={"#r": "role"},
+        )
+        item = resp.get("Item", {})
+        role = item.get("role", "member")
+        if role not in VALID_ROLES:
+            role = "member"
+        return {
+            "role": role,
+            "last_login": item.get("last_login", ""),
+            "is_dormant": bool(item.get("is_dormant", False)),
+        }
+    except Exception as e:
+        logger.warning(f"user_role_info 조회 실패 ({empno}): {e}")
+        return {"role": "member", "last_login": "", "is_dormant": False}
+
+
 def _ensure_user_roles_table():
     """서버 시작 시 kca-user-roles 테이블 자동 생성"""
     try:
@@ -1267,6 +1296,9 @@ async def startup_event():
 
     # SQLite DB 매일 03:00 KST S3 자동 백업
     asyncio.create_task(_sqlite_backup_daily_scheduler())
+
+    # 휴면계정 처리 매일 09:00 KST 실행 (예고 메일 + 자동 전환)
+    asyncio.create_task(_dormant_account_daily_scheduler())
 
     # Rate limiter + 호출명칭 세션 5분 주기 정리
     async def _rl_cleanup():
@@ -1814,8 +1846,16 @@ async def proxy_sso_login(req: LoginRequest, request: Request):
         sso_data = response.json()
 
         if response.status_code == 200 and sso_data.get("result") == "ok":
+            # 휴면계정 차단
+            role_info = await asyncio.to_thread(_get_user_role_info, req.username)
+            if role_info["is_dormant"]:
+                return JSONResponse(
+                    status_code=403,
+                    content={"result": "fail", "message": "휴면 계정입니다. 관리자에게 문의하거나 이메일 인증을 진행해 주세요."},
+                )
             token = _generate_token(req.username)
             await asyncio.to_thread(_ensure_user_in_roles_sync, req.username)
+            await asyncio.to_thread(_update_last_login, req.username)
             return JSONResponse(
                 status_code=200,
                 content={**sso_data, "token": token, "expiresIn": AUTH_TOKEN_EXPIRY},
@@ -2364,6 +2404,21 @@ def _ensure_user_in_roles_sync(empno: str):
         logger.warning(f"kca-user-roles 자동 등록 실패 ({empno}): {e}")
 
 
+def _update_last_login(empno: str):
+    """로그인 시 last_login 업데이트 (kca-user-roles 테이블)"""
+    try:
+        from datetime import datetime, timezone
+        dynamodb = get_dynamodb_resource()
+        table = dynamodb.Table(DYNAMODB_TABLES["user_roles"])
+        table.update_item(
+            Key={"user_id": empno},
+            UpdateExpression="SET last_login = :ts",
+            ExpressionAttributeValues={":ts": datetime.now(timezone.utc).isoformat()},
+        )
+    except Exception as e:
+        logger.warning(f"last_login 업데이트 실패 ({empno}): {e}")
+
+
 @app.get("/users/{empno}")
 async def get_user_by_empno(empno: str, request: Request = None):
     """
@@ -2394,8 +2449,11 @@ async def get_user_by_empno(empno: str, request: Request = None):
         # kca-user-roles 테이블에 자동 등록 (없으면 member로)
         await asyncio.to_thread(_ensure_user_in_roles_sync, empno)
 
-        # role은 kca-user-roles에서 조회
-        role = await asyncio.to_thread(_get_user_role_sync, empno)
+        # role + last_login + is_dormant은 kca-user-roles에서 조회
+        role_info = await asyncio.to_thread(_get_user_role_info, empno)
+        role       = role_info["role"]
+        last_login = role_info["last_login"]
+        is_dormant = role_info["is_dormant"]
 
         return {
             "success": True,
@@ -2406,6 +2464,8 @@ async def get_user_by_empno(empno: str, request: Request = None):
             "email": user.get("email"),
             "phone": user.get("phone_number"),
             "role": role,
+            "last_login": last_login,
+            "is_dormant": is_dormant,
         }
     except ClientError as e:
         logger.error(f"DynamoDB error: {e}")
@@ -2478,6 +2538,31 @@ async def set_user_role(req: SetRoleRequest, request: Request):
         return {"success": True, "empno": req.empno, "role": req.role}
     except Exception as e:
         logger.error(f"role 설정 실패: {e}")
+        raise HTTPException(status_code=500, detail="서버 내부 오류")
+
+
+@app.post("/admin/undormant/{empno}")
+async def admin_undormant(empno: str, request: Request):
+    """휴면계정 해제 — admin 전용"""
+    caller_id = await _verify_auth(request)
+    caller_role = await asyncio.to_thread(_get_user_role_sync, caller_id)
+    if caller_role != "admin":
+        raise HTTPException(status_code=403, detail="admin 권한 필요")
+    try:
+        dynamodb = get_dynamodb_resource()
+        table = dynamodb.Table(DYNAMODB_TABLES["user_roles"])
+        table.update_item(
+            Key={"user_id": empno},
+            UpdateExpression="SET is_dormant = :f, last_login = :now REMOVE notified_d7, notified_d3, notified_d1",
+            ExpressionAttributeValues={
+                ":f": False,
+                ":now": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+        logger.info(f"휴면 해제: {empno} (by {caller_id})")
+        return {"success": True, "empno": empno, "message": "휴면 해제 완료"}
+    except Exception as e:
+        logger.error(f"휴면 해제 실패 ({empno}): {e}")
         raise HTTPException(status_code=500, detail="서버 내부 오류")
 
 
@@ -6603,6 +6688,220 @@ def _backup_sqlite_to_s3_sync():
         finally:
             if os.path.exists(tmp):
                 os.remove(tmp)
+
+
+# ── 휴면계정 관리 ──────────────────────────────────────────────────────────────
+
+# 환경변수
+_SES_FROM_EMAIL = os.getenv("SES_FROM_EMAIL", "noreply@ksa.skons.net")
+_DORMANT_DAYS = int(os.getenv("DORMANT_DAYS", "30"))   # 휴면 전환 기준 (일)
+_SERVICE_NAME = os.getenv("SERVICE_NAME", "KSA 무선국 정기검사 관리 시스템")
+_SERVICE_URL  = os.getenv("SERVICE_URL",  "https://ksa.skons.net")
+
+
+def _send_ses_email(to_address: str, subject: str, body_html: str) -> bool:
+    """AWS SES 로 HTML 메일 발송. 성공 True, 실패 False."""
+    try:
+        ses = boto3.client("ses", region_name=S3_REGION)
+        ses.send_email(
+            Source=_SES_FROM_EMAIL,
+            Destination={"ToAddresses": [to_address]},
+            Message={
+                "Subject": {"Data": subject, "Charset": "UTF-8"},
+                "Body": {"Html": {"Data": body_html, "Charset": "UTF-8"}},
+            },
+        )
+        return True
+    except Exception as e:
+        logger.error(f"SES 메일 발송 실패 ({to_address}): {e}")
+        return False
+
+
+def _dormant_email_html(name: str, days_left: int, last_login_str: str) -> str:
+    """휴면 예고 메일 HTML 본문 생성."""
+    color = "#E53935" if days_left == 1 else ("#FF7043" if days_left == 3 else "#FFA726")
+    return f"""
+<!DOCTYPE html>
+<html lang="ko">
+<head><meta charset="UTF-8"></head>
+<body style="font-family:'Apple SD Gothic Neo',sans-serif;background:#f5f5f5;padding:0;margin:0;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#f5f5f5;padding:30px 0;">
+    <tr><td align="center">
+      <table width="600" cellpadding="0" cellspacing="0"
+             style="background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,.1);">
+        <!-- 헤더 -->
+        <tr>
+          <td style="background:{color};padding:28px 32px;">
+            <p style="margin:0;color:#fff;font-size:20px;font-weight:700;">{_SERVICE_NAME}</p>
+            <p style="margin:6px 0 0;color:rgba(255,255,255,.85);font-size:13px;">휴면계정 전환 예정 안내</p>
+          </td>
+        </tr>
+        <!-- 본문 -->
+        <tr>
+          <td style="padding:32px 32px 24px;">
+            <p style="margin:0 0 16px;font-size:15px;color:#111827;">
+              안녕하세요, <strong>{name}</strong>님.
+            </p>
+            <p style="margin:0 0 16px;font-size:14px;color:#374151;line-height:1.7;">
+              마지막 로그인 일시(<strong>{last_login_str}</strong>) 기준으로<br>
+              미접속 기간이 <strong>{_DORMANT_DAYS}일</strong>에 가까워지고 있습니다.<br>
+              <strong style="color:{color};">{days_left}일 후</strong> 계정이 자동으로 <strong>휴면 상태</strong>로 전환됩니다.
+            </p>
+            <div style="background:#FFF3E0;border-left:4px solid {color};
+                        padding:14px 16px;border-radius:4px;margin:0 0 24px;">
+              <p style="margin:0;font-size:13px;color:#374151;">
+                휴면 전환 후에는 로그인이 제한되며, 재활성화를 위해 관리자에게 문의하거나<br>
+                아래 시스템에 접속하여 이메일 인증을 진행해야 합니다.
+              </p>
+            </div>
+            <p style="margin:0 0 24px;font-size:14px;color:#374151;">
+              계속 서비스를 이용하시려면 아래 버튼을 클릭하여 로그인해 주세요.
+            </p>
+            <table cellpadding="0" cellspacing="0">
+              <tr>
+                <td style="background:{color};border-radius:8px;padding:12px 28px;">
+                  <a href="{_SERVICE_URL}" style="color:#fff;text-decoration:none;
+                     font-size:14px;font-weight:700;">지금 로그인하기</a>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+        <!-- 푸터 -->
+        <tr>
+          <td style="padding:16px 32px;border-top:1px solid #E5E7EB;
+                     background:#FAFAFA;font-size:12px;color:#9CA3AF;">
+            본 메일은 발신 전용입니다. 문의는 시스템 관리자에게 연락해 주세요.<br>
+            ⓒ {_SERVICE_NAME}
+          </td>
+        </tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>"""
+
+
+def _run_dormant_job_sync():
+    """
+    휴면계정 배치 (동기, 스레드에서 실행):
+    - kca-user-roles 전체 scan
+    - last_login 기준으로
+        · 30일 초과  → is_dormant=true 마킹
+        · 23일 경과 (D-7) / 27일 경과 (D-3) / 29일 경과 (D-1) → 예고 메일
+    """
+    from datetime import datetime, timezone, timedelta
+
+    try:
+        dynamodb = get_dynamodb_resource()
+        roles_table  = dynamodb.Table(DYNAMODB_TABLES["user_roles"])
+        users_table  = dynamodb.Table(DYNAMODB_TABLES["users"])
+
+        now = datetime.now(timezone.utc)
+        dormant_cutoff    = now - timedelta(days=_DORMANT_DAYS)
+        notify_days = [7, 3, 1]
+
+        # kca-user-roles 전체 scan (소규모 테이블)
+        items = []
+        resp = roles_table.scan(ProjectionExpression="user_id, #r, last_login, is_dormant",
+                                ExpressionAttributeNames={"#r": "role"})
+        items.extend(resp.get("Items", []))
+        while "LastEvaluatedKey" in resp:
+            resp = roles_table.scan(
+                ProjectionExpression="user_id, #r, last_login, is_dormant",
+                ExpressionAttributeNames={"#r": "role"},
+                ExclusiveStartKey=resp["LastEvaluatedKey"],
+            )
+            items.extend(resp.get("Items", []))
+
+        converted, notified = 0, 0
+        for item in items:
+            empno       = item.get("user_id", "")
+            last_login  = item.get("last_login", "")
+            is_dormant  = item.get("is_dormant", False)
+
+            if not last_login or is_dormant:
+                continue  # 로그인 이력 없거나 이미 휴면이면 스킵
+
+            try:
+                last_dt = datetime.fromisoformat(last_login)
+                if last_dt.tzinfo is None:
+                    last_dt = last_dt.replace(tzinfo=timezone.utc)
+            except ValueError:
+                continue
+
+            elapsed_days = (now - last_dt).days
+
+            # 휴면 전환
+            if elapsed_days >= _DORMANT_DAYS:
+                roles_table.update_item(
+                    Key={"user_id": empno},
+                    UpdateExpression="SET is_dormant = :v",
+                    ExpressionAttributeValues={":v": True},
+                )
+                logger.info(f"휴면 전환: {empno} (미접속 {elapsed_days}일)")
+                converted += 1
+                continue
+
+            # 예고 메일 (D-7, D-3, D-1)
+            days_left = _DORMANT_DAYS - elapsed_days
+            if days_left not in notify_days:
+                continue
+
+            # 이미 해당 days_left 메일을 보냈는지 확인
+            notified_key = f"notified_d{days_left}"
+            if item.get(notified_key):
+                continue
+
+            # users 테이블에서 이름 + 이메일 조회
+            try:
+                user_resp = users_table.get_item(
+                    Key={"user_id": empno},
+                    ProjectionExpression="#n, email",
+                    ExpressionAttributeNames={"#n": "name"},
+                )
+                user = user_resp.get("Item", {})
+                email = user.get("email", "")
+                name  = user.get("name", empno)
+            except Exception:
+                continue
+
+            if not email:
+                continue
+
+            last_login_kst = (last_dt + timedelta(hours=9)).strftime("%Y-%m-%d %H:%M")
+            subject = f"[{_SERVICE_NAME}] 휴면계정 전환 {days_left}일 전 안내"
+            html    = _dormant_email_html(name, days_left, last_login_kst)
+
+            if _send_ses_email(email, subject, html):
+                # 발송 성공 플래그 저장 (중복 발송 방지)
+                roles_table.update_item(
+                    Key={"user_id": empno},
+                    UpdateExpression=f"SET {notified_key} = :v",
+                    ExpressionAttributeValues={":v": True},
+                )
+                logger.info(f"휴면 예고 메일 발송: {empno} → {email} (D-{days_left})")
+                notified += 1
+
+        logger.info(f"휴면계정 배치 완료 — 전환: {converted}명, 예고 메일: {notified}건")
+
+    except Exception as e:
+        logger.error(f"휴면계정 배치 오류: {e}")
+
+
+async def _dormant_account_daily_scheduler():
+    """매일 09:00 KST 휴면계정 처리 실행."""
+    from datetime import datetime, timezone, timedelta
+    KST = timezone(timedelta(hours=9))
+    while True:
+        now = datetime.now(KST)
+        next_run = now.replace(hour=9, minute=0, second=0, microsecond=0)
+        if now >= next_run:
+            next_run += timedelta(days=1)
+        wait_seconds = (next_run - now).total_seconds()
+        logger.info(f"휴면계정 배치 다음 실행: {next_run.strftime('%Y-%m-%d %H:%M')} KST ({wait_seconds:.0f}초 후)")
+        await asyncio.sleep(wait_seconds)
+        await asyncio.to_thread(_run_dormant_job_sync)
 
 
 async def _sqlite_backup_daily_scheduler():
@@ -11631,7 +11930,7 @@ async def inspection_my_list_weeks(request: Request, year: int):
         c = sqlite3.connect(_INSP_DB, timeout=60)
         if access_team and 품질팀:
             rows = c.execute(
-                'SELECT DISTINCT 수검예정주차 FROM inspection_schedules WHERE year=? AND (access담당=? OR 품질개선팀=?) AND 수검예정주차 != "" ORDER BY 수검예정주차',
+                'SELECT DISTINCT 수검예정주차 FROM inspection_schedules WHERE year=? AND access담당=? AND 품질개선팀=? AND 수검예정주차 != "" ORDER BY 수검예정주차',
                 (year, access_team, 품질팀)).fetchall()
         elif access_team:
             rows = c.execute(
@@ -11684,7 +11983,7 @@ async def inspection_my_list(request: Request, year: int, week: str = ""):
         params = []
         where_parts = []
         if access_team and 품질팀:
-            where_parts.append('s.year=? AND (s.access담당=? OR s.품질개선팀=?)')
+            where_parts.append('s.year=? AND s.access담당=? AND s.품질개선팀=?')
             params.extend([year, access_team, 품질팀])
         elif access_team:
             where_parts.append('s.year=? AND s.access담당=?')
@@ -13246,23 +13545,32 @@ async def inspection_results_summary_report(request: Request, year: int = Query(
 
             # 5. 본부별 누적 실적 순위
             region_stats = conn.execute(
-                "SELECT region, COUNT(*) as cnt, SUM(CASE WHEN 성능서류='성능' THEN 1 ELSE 0 END) as fail "
+                "SELECT region, COUNT(*) as cnt, "
+                "SUM(CASE WHEN 성능서류='성능' THEN 1 ELSE 0 END) as perf_fail, "
+                "SUM(CASE WHEN 성능서류='서류' THEN 1 ELSE 0 END) as doc_fail "
                 "FROM inspection_results_raw WHERE year=? AND region != '' GROUP BY region ORDER BY region",
                 (year,)
             ).fetchall()
 
             ranked = []
             for r in region_stats:
-                rg, cnt, fail = r
-                rate = round((cnt - fail) / cnt * 100, 2) if cnt > 0 else 0
-                ranked.append((rg, rate))
-            ranked.sort(key=lambda x: x[1], reverse=True)  # 합격율 내림차순 (높은 순)
+                rg, cnt, pf, df = r
+                p_rate = round((cnt - pf) / cnt * 100, 2) if cnt > 0 else 0
+                d_rate = round((cnt - df) / cnt * 100, 2) if cnt > 0 else 0
+                ranked.append((rg, p_rate, d_rate))
+            ranked.sort(key=lambda x: x[1], reverse=True)  # 성능 합격율 내림차순
 
             if ranked:
-                rank_text = " > ".join(f"{rg} {rate}%" for rg, rate in ranked)
+                perf_text = " > ".join(f"{rg} {pr}%" for rg, pr, _ in ranked)
                 lines.append({
                     "type": "detail",
-                    "text": f" - Acc.담당 누적 실적\n   → {rank_text}순"
+                    "text": f" - Acc.담당 누적 실적 (성능)\n   → {perf_text}순"
+                })
+                doc_ranked = sorted(ranked, key=lambda x: x[2], reverse=True)
+                doc_text = " > ".join(f"{rg} {dr}%" for rg, _, dr in doc_ranked)
+                lines.append({
+                    "type": "detail",
+                    "text": f" - Acc.담당 누적 실적 (서류)\n   → {doc_text}순"
                 })
 
             # 6. 목표 달성 전망

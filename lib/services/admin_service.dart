@@ -148,6 +148,29 @@ class AdminService extends ChangeNotifier {
     }
   }
 
+  // ── 휴면 해제 ─────────────────────────────────────────
+  Future<bool> undormantUser(String empno) async {
+    try {
+      final response = await http.post(
+        Uri.parse('$_baseUrl/admin/undormant/$empno'),
+        headers: {
+          if (_authToken != null) 'Authorization': 'Bearer $_authToken',
+        },
+      );
+      if (response.statusCode == 200) {
+        await loadAllUsers();
+        return true;
+      }
+      _errorMessage = '휴면 해제 실패 (${response.statusCode})';
+      notifyListeners();
+      return false;
+    } catch (e) {
+      _errorMessage = '휴면 해제 오류: $e';
+      notifyListeners();
+      return false;
+    }
+  }
+
   // ── i-NET에서 불필요한 stub (인터페이스 유지) ──────────
   Future<void> loadPendingUsers() async {}
 

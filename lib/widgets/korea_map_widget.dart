@@ -108,9 +108,11 @@ class _KoreaMapWidgetState extends State<KoreaMapWidget> {
     final isHighlighted = isSelected || isHovered;
     final baseColor = _getProgressColor(data.progressRate);
 
-    return isHighlighted
-        ? baseColor.withValues(alpha: 0.95)
-        : baseColor.withValues(alpha: 0.65);
+    if (isHighlighted) {
+      return baseColor;
+    }
+    // 비선택 지역은 회색빛으로 처리하여 차이를 극대화
+    return Color.lerp(baseColor, Colors.grey.shade300, 0.5)!;
   }
 
   void _handleProvinceTap(String provinceCode, String provinceName, TapUpDetails details) {
@@ -237,6 +239,7 @@ class _KoreaMapWidgetState extends State<KoreaMapWidget> {
                 children: [
                   // 지도
                   SimpleMap(
+                    key: ValueKey('map_${widget.selectedRegion}_${_hoveredRegion}'),
                     instructions: SMapSouthKorea.instructions,
                     defaultColor: Colors.grey.shade300,
                     countryBorder: CountryBorder(color: const Color(0xFF455A64), width: 1),

@@ -89,6 +89,8 @@ class AppUserProfile {
   final DateTime? approvedAt;
   final String? rejectionReason;
   final Team? team;
+  final String? lastLogin;
+  final bool isDormant;
 
   AppUserProfile({
     required this.id,
@@ -104,6 +106,8 @@ class AppUserProfile {
     this.approvedAt,
     this.rejectionReason,
     this.team,
+    this.lastLogin,
+    this.isDormant = false,
   });
 
   factory AppUserProfile.fromJson(Map<String, dynamic> json) {
@@ -131,6 +135,8 @@ class AppUserProfile {
       team: json['team'] != null
           ? Team.fromJson(json['team'] as Map<String, dynamic>)
           : null,
+      lastLogin: json['last_login'] as String?,
+      isDormant: json['is_dormant'] as bool? ?? false,
     );
   }
 

@@ -349,21 +349,6 @@ class _RequestBoardScreenState extends State<RequestBoardScreen> {
         // 총 N건
         Text('총 $_total건',
             style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-        const SizedBox(width: 12),
-        // 새 글쓰기
-        ElevatedButton.icon(
-          onPressed: () => _openWrite(),
-          icon: const Icon(Icons.edit, size: 16),
-          label: const Text('새 글쓰기'),
-          style: ElevatedButton.styleFrom(
-            backgroundColor: _primaryColor,
-            foregroundColor: Colors.white,
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-            shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(8)),
-            textStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
-          ),
-        ),
         const Spacer(),
         // 상태 필터
         Container(
@@ -432,6 +417,23 @@ class _RequestBoardScreenState extends State<RequestBoardScreen> {
               _page = 1;
               _fetchList();
             },
+          ),
+        ),
+        const SizedBox(width: 8),
+        // 글쓰기
+        SizedBox(
+          height: 36,
+          child: ElevatedButton.icon(
+            onPressed: () => _openWrite(),
+            icon: const Icon(Icons.edit, size: 16),
+            label: const Text('글쓰기', style: TextStyle(fontSize: 13)),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _primaryColor,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8)),
+              elevation: 0,
+            ),
           ),
         ),
       ],

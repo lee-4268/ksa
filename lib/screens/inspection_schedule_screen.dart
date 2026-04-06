@@ -2161,27 +2161,29 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
             _sectionHeader('수검 결과', Icons.assignment_turned_in_outlined, _green),
             _buildResultSection(result, callname),
 
-            const SizedBox(height: 16),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton.icon(
-                icon: const Icon(Icons.open_in_new, size: 16),
-                label: const Text('수검 관리 화면으로', style: TextStyle(fontSize: 13)),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: _primary,
-                  foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                ),
-                onPressed: () => Navigator.push(context, MaterialPageRoute(
-                  builder: (_) => InspectionResultScreen(
-                    year: _year,
-                    licenseNo: licenseNo,
-                    callname: callname,
-                    initialData: d,
+            if (_isAdmin) ...[
+              const SizedBox(height: 16),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  icon: const Icon(Icons.open_in_new, size: 16),
+                  label: const Text('수검 관리 화면으로', style: TextStyle(fontSize: 13)),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: _primary,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                   ),
-                )).then((_) { if (_detailLicenseNo != null) _loadDetail(_detailLicenseNo!); }),
+                  onPressed: () => Navigator.push(context, MaterialPageRoute(
+                    builder: (_) => InspectionResultScreen(
+                      year: _year,
+                      licenseNo: licenseNo,
+                      callname: callname,
+                      initialData: d,
+                    ),
+                  )).then((_) { if (_detailLicenseNo != null) _loadDetail(_detailLicenseNo!); }),
+                ),
               ),
-            ),
+            ],
           ]),
         ),
       ),

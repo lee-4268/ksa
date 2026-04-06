@@ -613,13 +613,60 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
               ),
             ],
 
+            // 마지막 로그인 + 휴면 배지
+            const SizedBox(height: 6),
+            Row(
+              children: [
+                if (user.lastLogin != null && user.lastLogin!.isNotEmpty) ...[
+                  Icon(Icons.access_time, size: 16, color: Colors.grey[500]),
+                  const SizedBox(width: 4),
+                  Text(
+                    '마지막 로그인: ${_formatLoginTime(user.lastLogin!)}',
+                    style: TextStyle(color: Colors.grey[600], fontSize: 12),
+                  ),
+                ],
+                const Spacer(),
+                if (user.isDormant)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: Colors.orange.shade100,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.orange.shade400),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.bedtime_outlined, size: 13, color: Colors.orange.shade700),
+                        const SizedBox(width: 4),
+                        Text('휴면', style: TextStyle(
+                            fontSize: 12, fontWeight: FontWeight.w600,
+                            color: Colors.orange.shade700)),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+
             const Divider(height: 24),
 
-            // 권한 변경 버튼 (권한이 있는 경우에만 표시)
+            // 권한 변경 + 휴면 해제 버튼
             if (canChangeRole)
               Row(
                 mainAxisAlignment: MainAxisAlignment.end,
                 children: [
+                  if (user.isDormant) ...[
+                    OutlinedButton.icon(
+                      onPressed: () => _undormantUser(user),
+                      icon: const Icon(Icons.lock_open_outlined, size: 18),
+                      label: const Text('휴면 해제'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.orange,
+                        side: const BorderSide(color: Colors.orange),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                  ],
                   OutlinedButton.icon(
                     onPressed: () => _showRoleChangeDialog(user),
                     icon: const Icon(Icons.admin_panel_settings, size: 18),
@@ -861,6 +908,25 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
       if (success) {
         _applyFilters();
       }
+    }
+  }
+
+  Future<void> _undormantUser(AppUserProfile user) async {
+    final ok = await context.read<AdminService>().undormantUser(user.id);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(ok ? '${user.name ?? user.id} 휴면 해제 완료' : '휴면 해제 실패'),
+      backgroundColor: ok ? Colors.green.shade700 : Colors.red.shade700,
+    ));
+  }
+
+  String _formatLoginTime(String isoStr) {
+    try {
+      final dt = DateTime.parse(isoStr).toLocal();
+      return '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')} '
+          '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+    } catch (_) {
+      return isoStr;
     }
   }
 

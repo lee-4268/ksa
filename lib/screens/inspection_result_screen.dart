@@ -10,6 +10,7 @@ import '../services/auth_service.dart';
 import '../services/inspection_service.dart';
 import '../services/kakao_geocoding_web.dart';
 import 'tower_classification_screen.dart';
+import '../widgets/progress_dialog.dart';
 
 class InspectionResultScreen extends StatefulWidget {
   final int year;
@@ -101,6 +102,8 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
 
   Future<void> _save() async {
     setState(() => _saving = true);
+    final dialog = ProgressDialog(context);
+    dialog.show(message: '저장 중...');
     try {
       // 합격/불합격 저장 시 검사일 자동 세팅
       if (_status == '합격' || _status == '불합격') {
@@ -119,10 +122,10 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
         '메모'   : _memoCtrl.text,
         '검사일' : _inspDateCtrl.text,
       });
-      _showSnack('저장되었습니다.');
+      await dialog.complete(message: '저장 완료');
       await _loadData();
     } catch (e) {
-      _showSnack('저장 실패: $e', isError: true);
+      await dialog.error(message: '저장 실패: $e');
     } finally {
       setState(() => _saving = false);
     }
@@ -479,6 +482,11 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
     final lng  = target?['경도']?.toString() ?? '';
     final coord = (lat.isNotEmpty && lng.isNotEmpty) ? '$lat, $lng' : '';
 
+    final installAddr = target?['설치장소']?.toString()
+        ?? target?['도로명주소']?.toString() ?? '';
+    final navLat = double.tryParse(lat);
+    final navLng = double.tryParse(lng);
+
     return _card(
       title: '기본 정보',
       icon: Icons.info_outline,
@@ -486,9 +494,25 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
       child: Column(children: [
         _infoRow('허가번호',
             target?['허가번호']?.toString() ?? widget.licenseNo),
-        _infoRow('설치장소',
-            target?['설치장소']?.toString()
-                ?? target?['도로명주소']?.toString() ?? ''),
+        // 설치장소 + 내비게이션 버튼
+        if (installAddr.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              SizedBox(
+                width: 80,
+                child: Text('설치장소',
+                    style: TextStyle(fontSize: 13, color: Colors.grey.shade600)),
+              ),
+              Expanded(child: Text(installAddr, style: const TextStyle(fontSize: 13))),
+              if (navLat != null && navLng != null) ...[
+                _naviButton('Tmap', const Color(0xFF005BAC), () => _openTmap(navLat, navLng, installAddr)),
+                const SizedBox(width: 4),
+                _naviButton('카카오', const Color(0xFFFEE500), () => _openKakaoNavi(navLat, navLng, installAddr),
+                    textColor: Colors.black87),
+              ],
+            ]),
+          ),
         _infoRow('호출명칭',
             target?['호출명칭']?.toString() ?? widget.callname),
         if (gain.isNotEmpty)      _infoRow('이득(dB)', gain),
@@ -870,19 +894,36 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
         ),
         Padding(
           padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
-          child: OutlinedButton.icon(
-            style: OutlinedButton.styleFrom(
-              foregroundColor: _primary,
-              side: BorderSide(color: _primary.withValues(alpha: 0.5)),
-              minimumSize: const Size(double.infinity, 44),
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(10)),
-            ),
-            icon: const Icon(Icons.delete_outline, size: 18),
-            label: const Text('삭제',
-                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500)),
-            onPressed: _delete,
-          ),
+          child: (context.read<AuthService>().isSuperAdmin || context.read<AuthService>().isDivisionAdmin)
+            ? OutlinedButton.icon(
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: _primary,
+                  side: BorderSide(color: _primary.withValues(alpha: 0.5)),
+                  minimumSize: const Size(double.infinity, 44),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10)),
+                ),
+                icon: const Icon(Icons.delete_outline, size: 18),
+                label: const Text('삭제',
+                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500)),
+                onPressed: _delete,
+              )
+            : ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: _primary,
+                  foregroundColor: Colors.white,
+                  minimumSize: const Size(double.infinity, 44),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10)),
+                ),
+                icon: _saving
+                    ? const SizedBox(width: 18, height: 18,
+                        child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                    : const Icon(Icons.save_outlined, size: 18),
+                label: Text(_saving ? '저장 중...' : '저장',
+                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500)),
+                onPressed: _saving ? null : _save,
+              ),
         ),
       ]),
     );
@@ -964,6 +1005,37 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
         const SizedBox(height: 14),
         child,
       ]),
+    );
+  }
+
+  Widget _naviButton(String label, Color bgColor, VoidCallback onTap, {Color textColor = Colors.white}) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(6),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: bgColor,
+          borderRadius: BorderRadius.circular(6),
+        ),
+        child: Text(label, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: textColor)),
+      ),
+    );
+  }
+
+  void _openTmap(double lat, double lng, String name) {
+    final encoded = Uri.encodeComponent(name);
+    html.window.open(
+      'https://apis.openapi.sk.com/tmap/app/routes?goalx=$lng&goaly=$lat&goalname=$encoded',
+      '_blank',
+    );
+  }
+
+  void _openKakaoNavi(double lat, double lng, String name) {
+    final encoded = Uri.encodeComponent(name);
+    html.window.open(
+      'https://map.kakao.com/link/to/$encoded,$lat,$lng',
+      '_blank',
     );
   }
 

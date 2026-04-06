@@ -124,64 +124,68 @@ class _AuditLogScreenState extends State<AuditLogScreen> {
             const SizedBox(height: 16),
 
             // 엔티티 타입 필터
-            DropdownButtonFormField<String>(
-              value: _filterEntityType,
-              dropdownColor: Colors.white,
-
-              borderRadius: BorderRadius.circular(12),
-              style: const TextStyle(color: Colors.black87, fontSize: 13),
-              icon: Icon(Icons.arrow_drop_down, color: Colors.grey.shade600, size: 20),
-              decoration: InputDecoration(
-                labelText: '엔티티 타입',
-                labelStyle: const TextStyle(fontSize: 13),
-                isDense: true,
-                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-                enabledBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(10),
-                  borderSide: BorderSide(color: Colors.grey.shade300),
+            Text('엔티티 타입', style: TextStyle(fontSize: 13, color: Colors.grey.shade600)),
+            const SizedBox(height: 6),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                border: Border.all(color: Colors.grey.shade300),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: DropdownButtonHideUnderline(
+                child: DropdownButton<String?>(
+                  isExpanded: true,
+                  isDense: true,
+                  value: _filterEntityType,
+                  icon: Icon(Icons.arrow_drop_down, color: Colors.grey.shade600, size: 20),
+                  dropdownColor: Colors.white,
+                  borderRadius: BorderRadius.circular(12),
+                  style: const TextStyle(color: Colors.black87, fontSize: 13),
+                  items: const [
+                    DropdownMenuItem(value: null, child: Text('전체')),
+                    DropdownMenuItem(value: 'User', child: Text('사용자')),
+                    DropdownMenuItem(value: 'DSData', child: Text('DS 데이터')),
+                  ],
+                  onChanged: (value) {
+                    setState(() => _filterEntityType = value);
+                  },
                 ),
               ),
-              items: const [
-                DropdownMenuItem(value: null, child: Text('전체')),
-                DropdownMenuItem(value: 'User', child: Text('사용자')),
-                DropdownMenuItem(value: 'DSData', child: Text('DS 데이터')),
-              ],
-              onChanged: (value) {
-                setState(() => _filterEntityType = value);
-              },
             ),
             const SizedBox(height: 12),
 
             // 액션 필터
-            DropdownButtonFormField<AuditAction?>(
-              value: _filterAction,
-              dropdownColor: Colors.white,
-
-              borderRadius: BorderRadius.circular(12),
-              style: const TextStyle(color: Colors.black87, fontSize: 13),
-              icon: Icon(Icons.arrow_drop_down, color: Colors.grey.shade600, size: 20),
-              decoration: InputDecoration(
-                labelText: '작업 유형',
-                labelStyle: const TextStyle(fontSize: 13),
-                isDense: true,
-                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-                enabledBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(10),
-                  borderSide: BorderSide(color: Colors.grey.shade300),
+            Text('작업 유형', style: TextStyle(fontSize: 13, color: Colors.grey.shade600)),
+            const SizedBox(height: 6),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                border: Border.all(color: Colors.grey.shade300),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: DropdownButtonHideUnderline(
+                child: DropdownButton<AuditAction?>(
+                  isExpanded: true,
+                  isDense: true,
+                  value: _filterAction,
+                  icon: Icon(Icons.arrow_drop_down, color: Colors.grey.shade600, size: 20),
+                  dropdownColor: Colors.white,
+                  borderRadius: BorderRadius.circular(12),
+                  style: const TextStyle(color: Colors.black87, fontSize: 13),
+                  items: [
+                    const DropdownMenuItem(value: null, child: Text('전체')),
+                    ...AuditAction.values.map((action) => DropdownMenuItem(
+                          value: action,
+                          child: Text(_getActionName(action)),
+                        )),
+                  ],
+                  onChanged: (value) {
+                    setState(() => _filterAction = value);
+                  },
                 ),
               ),
-              items: [
-                const DropdownMenuItem(value: null, child: Text('전체')),
-                ...AuditAction.values.map((action) => DropdownMenuItem(
-                      value: action,
-                      child: Text(_getActionName(action)),
-                    )),
-              ],
-              onChanged: (value) {
-                setState(() => _filterAction = value);
-              },
             ),
             const SizedBox(height: 16),
 

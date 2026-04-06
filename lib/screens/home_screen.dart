@@ -62,7 +62,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _MenuItem('홈', Icons.home_outlined, const Color(0xFF374151), description: '메인 화면'),
       _MenuItem('현장 수검 Map', Icons.map_outlined, const Color(0xFF3B82F6), description: '수검 대상 지도 및 관리'),
       _MenuItem('일정 및 통계', Icons.event_note_outlined, const Color(0xFF10B981), description: '수검 일정 조회 및 통계'),
-      _MenuItem('수검 현황', Icons.bar_chart_outlined, const Color(0xFFE53935), description: '본부별 수검 실적 현황'),
+      _MenuItem('실적 관리', Icons.bar_chart_outlined, const Color(0xFFE53935), description: '본부별 수검 실적 현황'),
       _MenuItem('DS 데이터', Icons.storage_outlined, const Color(0xFF8B5CF6), description: 'DS 데이터 조회 및 분석'),
       _MenuItem('DS 병합', Icons.merge_outlined, const Color(0xFFF59E0B), description: 'DS 데이터 병합 처리'),
       _MenuItem('호출명칭', Icons.sync_alt_outlined, const Color(0xFFEF4444), description: '호출명칭 검색 및 비교'),
@@ -76,7 +76,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   // 아코디언 그룹 정의
   static const _menuGroups = [
-    _MenuGroup('수검 관리', Icons.map_outlined, Color(0xFF3B82F6), ['수검 현황', '일정 및 통계', '현장 수검 Map']),
+    _MenuGroup('수검 관리', Icons.map_outlined, Color(0xFF3B82F6), ['실적 관리', '일정 및 통계', '현장 수검 Map']),
     _MenuGroup('허가현황 관리', Icons.storage_outlined, Color(0xFF8B5CF6), ['DS 데이터', 'DS 병합']),
     _MenuGroup('서류 관리', Icons.folder_outlined, Color(0xFFEF4444), ['호출명칭', '설치확인서', '전산비교']),
   ];
@@ -89,7 +89,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
     switch (title) {
       case '홈': return _HomeContent(onNavigate: (i) => setState(() => _selectedIndex = i), menuItems: items);
-      case '수검 현황': return const InspectionResultsScreen();
+      case '실적 관리': return const InspectionResultsScreen();
       case '일정 및 통계': return const InspectionScheduleScreen();
       case '현장 수검 Map': return const InspectionMyListScreen();
       case 'DS 데이터': return const DsDashboardScreen();
