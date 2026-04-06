@@ -652,31 +652,6 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
                       fontSize: 13, color: Colors.grey.shade400)),
             ),
           ),
-        const SizedBox(height: 16),
-
-        // 저장 버튼
-        SizedBox(
-          width: double.infinity,
-          child: ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: _primary,
-              foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(10)),
-              padding: const EdgeInsets.symmetric(vertical: 14),
-              elevation: 0,
-            ),
-            onPressed: _saving ? null : _save,
-            child: _saving
-                ? const SizedBox(
-                    width: 20, height: 20,
-                    child: CircularProgressIndicator(
-                        color: Colors.white, strokeWidth: 2))
-                : const Text('저장',
-                    style: TextStyle(
-                        fontSize: 15, fontWeight: FontWeight.w600)),
-          ),
-        ),
       ]),
     );
   }

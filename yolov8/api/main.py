@@ -11931,8 +11931,12 @@ async def inspection_my_list_weeks(request: Request, year: int):
 
     def _read_weeks():
         c = sqlite3.connect(_INSP_DB, timeout=60)
-        if is_dev:
-            # 테스트 계정: 팀 상관없이 전체 주차 조회
+        if is_dev and access_team:
+            # 테스트 계정: 소속 본부 전체 주차 (팀 무관), 타 본부 제외
+            rows = c.execute(
+                'SELECT DISTINCT 수검예정주차 FROM inspection_schedules WHERE year=? AND access담당=? AND 수검예정주차 != "" ORDER BY 수검예정주차',
+                (year, access_team)).fetchall()
+        elif is_dev:
             rows = c.execute(
                 'SELECT DISTINCT 수검예정주차 FROM inspection_schedules WHERE year=? AND 수검예정주차 != "" ORDER BY 수검예정주차',
                 (year,)).fetchall()
@@ -11991,8 +11995,12 @@ async def inspection_my_list(request: Request, year: int, week: str = ""):
                 'LEFT JOIN inspection_results r ON s.pk=r.pk ')
         params = []
         where_parts = []
-        if is_dev:
-            # 테스트 계정: 팀 상관없이 전체 조회
+        if is_dev and access_team:
+            # 테스트 계정: 소속 본부 전체 (팀 무관), 타 본부 제외
+            where_parts.append('s.year=? AND s.access담당=?')
+            params.extend([year, access_team])
+        elif is_dev:
+            # 테스트 계정인데 본부 정보도 없으면 전체 (fallback)
             where_parts.append('s.year=?')
             params.extend([year])
         elif access_team and 품질팀:
