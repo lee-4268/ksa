@@ -11069,8 +11069,12 @@ async def inspection_data(request: Request, req: InspectionDataReq):
         c = sqlite3.connect(_INSP_DB, timeout=60); c.row_factory = sqlite3.Row
         total = c.execute(f'SELECT COUNT(*) FROM inspection_targets WHERE {where_sql}', params).fetchone()[0]
         offset = (req.page - 1) * req.page_size
-        rows = c.execute(f'SELECT * FROM inspection_targets WHERE {where_sql} ORDER BY id LIMIT ? OFFSET ?',
-                         params + [req.page_size, offset]).fetchall()
+        rows = c.execute(
+            f'''SELECT t.*, s.수검예정주차
+                FROM (SELECT * FROM inspection_targets WHERE {where_sql} ORDER BY id LIMIT ? OFFSET ?) t
+                LEFT JOIN inspection_schedules s ON s.year = t.year AND s.허가번호 = t.허가번호''',
+            params + [req.page_size, offset]
+        ).fetchall()
         c.close()
         return total, [dict(r) for r in rows]
     total, items = await asyncio.to_thread(_read)

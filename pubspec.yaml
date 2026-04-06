@@ -13,6 +13,10 @@ dependencies:
 
   cupertino_icons: ^1.0.8
 
+  # 구글폰트
+  google_fonts: ^6.1.0
+
+
   # 카카오맵 (모바일: 네이티브 SDK, 웹: 기존 JavaScript SDK 유지)
   kakao_maps_flutter: ^0.1.2
 

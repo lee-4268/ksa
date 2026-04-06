@@ -50,6 +50,8 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
   final _selectedLicenseNos = <String>{};
   // 이미 일정 등록된 허가번호 세트
   Set<String> _scheduledNos = {};
+  // 허가번호 → 수검예정주차 맵
+  Map<String, String> _scheduleWeekMap = {};
 
   List<Map<String, dynamic>> _items = [];
   int _total = 0;
@@ -59,6 +61,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
 
   Map<String, dynamic> _matrix = {};
   List<String> _quarters = [];
+  List<Map<String, dynamic>> _schedules = [];
 
   // 미배정 현황
   int _unassignedTotal = 0;
@@ -146,7 +149,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     final dataRes   = results[0] as Map<String, dynamic>?;
     final summRes   = results[1] as Map<String, dynamic>?;
     final unassRes  = results[2] as Map<String, dynamic>?;
-    final schedNos  = results[3] as Set<String>?;
+    final schedResult = results[3] as ({Set<String> nos, Map<String, String> weekMap, List<Map<String, dynamic>> schedules})?;
     setState(() {
       _loading = false;
       if (dataRes != null) {
@@ -166,7 +169,11 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
         _unassignedItems = List<Map<String, dynamic>>.from(unassRes['items'] ?? []);
         _unassignedCapped = unassRes['items_capped'] == true;
       }
-      if (schedNos != null) _scheduledNos = schedNos;
+      if (schedResult != null) {
+        _scheduledNos = schedResult.nos;
+        _scheduleWeekMap = schedResult.weekMap;
+        _schedules = schedResult.schedules;
+      }
     });
   }
 
@@ -201,21 +208,31 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     } catch (_) { return null; }
   }
 
-  Future<Set<String>?> _fetchScheduledNos() async {
+  Future<({Set<String> nos, Map<String, String> weekMap, List<Map<String, dynamic>> schedules})?> _fetchScheduledNos() async {
     try {
       final schedules = await _svc.getSchedules(_year);
-      return schedules
-          .map((s) => (s['허가번호'] as String? ?? '').trim())
-          .where((s) => s.isNotEmpty)
-          .toSet();
+      final nos = <String>{};
+      final weekMap = <String, String>{};
+      for (final s in schedules) {
+        final no = (s['허가번호'] as String? ?? '').trim();
+        if (no.isEmpty) continue;
+        nos.add(no);
+        final week = (s['수검예정주차'] as String? ?? '').trim();
+        if (week.isNotEmpty) weekMap[no] = week;
+      }
+      return (nos: nos, weekMap: weekMap, schedules: schedules);
     } catch (_) { return null; }
   }
 
   // 일정 등록/수정/삭제 후 목록만 갱신
   Future<void> _loadScheduledNos() async {
-    final nos = await _fetchScheduledNos();
-    if (!mounted || nos == null) return;
-    setState(() => _scheduledNos = nos);
+    final result = await _fetchScheduledNos();
+    if (!mounted || result == null) return;
+    setState(() {
+      _scheduledNos = result.nos;
+      _scheduleWeekMap = result.weekMap;
+      _schedules = result.schedules;
+    });
   }
 
   // 페이지 이동 시 데이터만 갱신
@@ -431,6 +448,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
       }));
       _showSnack('일정이 저장되었습니다.');
       await Future.wait([
+        _loadData(),
         if (_detailLicenseNo != null) _loadDetail(_detailLicenseNo!),
         _loadScheduledNos(),
       ]);
@@ -469,6 +487,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
       await _withLoading('일정 삭제 중...', () => _svc.deleteSchedule(_year, licenseNo));
       _showSnack('일정이 제거되었습니다.');
       await Future.wait([
+        _loadData(),
         if (_detailLicenseNo != null) _loadDetail(_detailLicenseNo!),
         _loadScheduledNos(),
       ]);
@@ -650,7 +669,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
       failCount = results.where((r) => !r).length;
     });
     setState(() => _selectedLicenseNos.clear());
-    await _loadScheduledNos();
+    await Future.wait([_loadData(), _loadScheduledNos()]);
     if (failCount == 0) {
       _showSnack('$successCount건 일정이 저장되었습니다.');
     } else {
@@ -720,7 +739,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
       failCount = results.where((r) => !r).length;
     });
     setState(() => _selectedLicenseNos.clear());
-    await _loadScheduledNos();
+    await Future.wait([_loadData(), _loadScheduledNos()]);
     if (failCount == 0) {
       _showSnack('$successCount건 일정이 제거되었습니다.');
     } else {
@@ -997,7 +1016,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                   (v) => setState(() => _pKcaResults = v)),
               _filterDropdown('일정등록', _pScheduled, const ['', 'Y', 'N'],
                   (v) => setState(() => _pScheduled = v ?? ''),
-                  displayMap: const {'Y': '등록됨', 'N': '미등록'}),
+                  displayMap: const {'Y': '등록', 'N': '미등록'}),
               const SizedBox(width: 4),
               ElevatedButton(
                 style: ElevatedButton.styleFrom(
@@ -1283,8 +1302,8 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     final someChecked = !allChecked &&
         checkableItems.any((item) => _selectedLicenseNos.contains('${item['허가번호'] ?? ''}'));
 
-    const headerStyle = TextStyle(
-      fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF374151),
+    final headerStyle = TextStyle(
+      fontSize: 12, fontWeight: FontWeight.w700, color: Colors.black87,
     );
     const cellStyle = TextStyle(fontSize: 12, color: Color(0xFF374151));
 
@@ -1310,7 +1329,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                 scrollDirection: Axis.horizontal,
                 child: SingleChildScrollView(
                   child: DataTable(
-                    headingRowColor: WidgetStateProperty.all(const Color(0xFFF9FAFB)),
+                    headingRowColor: WidgetStateProperty.all(_primary.withValues(alpha: 0.12)),
                     headingRowHeight: 44,
                     dataRowMinHeight: 42,
                     dataRowMaxHeight: 46,
@@ -1343,25 +1362,27 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                               },
                             )
                           : const SizedBox(width: 24)),
-                      const DataColumn(label: Text('허가번호', style: headerStyle)),
-                      const DataColumn(label: Text('호출명칭', style: headerStyle)),
-                      const DataColumn(label: Text('국종군', style: headerStyle)),
-                      const DataColumn(label: Text('부서', style: headerStyle)),
-                      const DataColumn(label: Text('분기', style: headerStyle)),
-                      const DataColumn(label: Text('연도주기', style: headerStyle)),
-                      const DataColumn(label: Text('검사주기', style: headerStyle)),
-                      const DataColumn(label: Text('허가상태', style: headerStyle)),
-                      const DataColumn(label: Text('설치장소', style: headerStyle)),
-                      const DataColumn(label: Text('도로명주소', style: headerStyle)),
-                      const DataColumn(label: Text('장치수', style: headerStyle)),
-                      const DataColumn(label: Text('통시', style: headerStyle)),
-                      const DataColumn(label: Text('공대', style: headerStyle)),
-                      const DataColumn(label: Text('KCA검토결과', style: headerStyle)),
-                      const DataColumn(label: Text('시기조정', style: headerStyle)),
-                      const DataColumn(label: Text('기준연도', style: headerStyle)),
-                      const DataColumn(label: Text('SKT본부', style: headerStyle)),
-                      const DataColumn(label: Text('Access담당', style: headerStyle)),
-                      const DataColumn(label: Text('품질개선팀', style: headerStyle)),
+                      DataColumn(label: Text('수검일정', style: headerStyle)),
+                      DataColumn(label: Text('허가번호', style: headerStyle)),
+                      DataColumn(label: Text('호출명칭', style: headerStyle)),
+                      DataColumn(label: Text('국종군', style: headerStyle)),
+                      DataColumn(label: Text('부서', style: headerStyle)),
+                      DataColumn(label: Text('분기', style: headerStyle)),
+                      DataColumn(label: Text('연도주기', style: headerStyle)),
+                      DataColumn(label: Text('검사주기', style: headerStyle)),
+                      DataColumn(label: Text('허가상태', style: headerStyle)),
+                      DataColumn(label: Text('설치장소', style: headerStyle)),
+                      DataColumn(label: Text('도로명주소', style: headerStyle)),
+                      DataColumn(label: Text('장치수', style: headerStyle)),
+                      DataColumn(label: Text('통시', style: headerStyle)),
+                      DataColumn(label: Text('공대', style: headerStyle)),
+                      DataColumn(label: Text('KCA검토결과', style: headerStyle)),
+                      DataColumn(label: Text('시기조정', style: headerStyle)),
+                      DataColumn(label: Text('기준연도', style: headerStyle)),
+                      DataColumn(label: Text('SKT본부', style: headerStyle)),
+                      DataColumn(label: Text('Access담당', style: headerStyle)),
+                      DataColumn(label: Text('품질개선팀', style: headerStyle)),
+                      
                     ],
                     rows: _items.asMap().entries.map((entry) {
                       final idx = entry.key;
@@ -1379,8 +1400,9 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                         onSelectChanged: (_) => _loadDetail(licenseNo),
                         cells: [
                           DataCell(_buildRowCheckbox(item, licenseNo, isChecked)),
+                          DataCell(Text(_scheduleWeekMap[licenseNo] ?? '', style: cellStyle)),
                           DataCell(Text(licenseNo, style: cellStyle)),
-                          DataCell(SizedBox(width: 180, child: Text('${item['호출명칭'] ?? ''}', style: cellStyle, overflow: TextOverflow.ellipsis))),
+                          DataCell(SizedBox(width: 180, child: Text('${item['호출명칭'] ?? ''}', style: cellStyle.copyWith(fontWeight: FontWeight.w600), overflow: TextOverflow.ellipsis))),
                           DataCell(Text('${item['국종군'] ?? ''}', style: cellStyle)),
                           DataCell(Text('${item['부서'] ?? ''}', style: cellStyle)),
                           DataCell(Text('${item['분기'] ?? ''}', style: cellStyle)),
@@ -1398,6 +1420,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                           DataCell(Text('${item['skt본부'] ?? ''}', style: cellStyle)),
                           DataCell(Text('${item['access담당'] ?? ''}', style: cellStyle)),
                           DataCell(Text('${item['품질개선팀'] ?? ''}', style: cellStyle)),
+                          
                         ],
                       );
                     }).toList(),
@@ -1580,6 +1603,11 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
             _buildUnassignedBanner(),
             const SizedBox(height: 16),
           ],
+          // 수검일정별 현황 카드
+          if (_schedules.isNotEmpty) ...[
+            _buildScheduleStatusSection(),
+            const SizedBox(height: 16),
+          ],
           // 매트릭스 테이블
           Container(
             decoration: BoxDecoration(
@@ -1600,6 +1628,157 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
           ),
         ),
       ]),
+    );
+  }
+
+  // ── 수검일정별 현황 (본부/팀별) ────────────────────────────
+
+  Widget _buildScheduleStatusSection() {
+    // 수검예정주차 → 본부 → 건수
+    final weekMap = <String, Map<String, int>>{};
+    for (final s in _schedules) {
+      final week = (s['수검예정주차'] as String? ?? '').trim();
+      if (week.isEmpty) continue;
+      final hdqt = (s['access담당'] as String? ?? '').trim();
+      final hdqtKey = hdqt.isEmpty ? '미지정' : hdqt;
+      weekMap.putIfAbsent(week, () => {});
+      weekMap[week]![hdqtKey] = (weekMap[week]![hdqtKey] ?? 0) + 1;
+    }
+
+    // 주차 정렬: 숫자 파싱 후 정렬
+    final weeks = weekMap.keys.toList()
+      ..sort((a, b) {
+        final na = int.tryParse(a.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0;
+        final nb = int.tryParse(b.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0;
+        return na.compareTo(nb);
+      });
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(bottom: 10),
+          child: Row(
+            children: [
+              Container(
+                width: 3, height: 16,
+                decoration: BoxDecoration(
+                  color: _primary,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const SizedBox(width: 8),
+              const Text(
+                '수검일정별 현황 (본부별)',
+                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF111827)),
+              ),
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                decoration: BoxDecoration(
+                  color: _primary.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Text(
+                  '${_schedules.length}건',
+                  style: TextStyle(fontSize: 11, color: _primary, fontWeight: FontWeight.w600),
+                ),
+              ),
+            ],
+          ),
+        ),
+        Wrap(
+          spacing: 12,
+          runSpacing: 12,
+          children: weeks.map((week) => _buildWeekCard(week, weekMap[week]!)).toList(),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildWeekCard(String week, Map<String, int> hdqtData) {
+    final totalCount = hdqtData.values.fold<int>(0, (s, c) => s + c);
+    final hdqts = hdqtData.keys.toList()..sort();
+
+    return Container(
+      width: 200,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFE5E7EB)),
+        boxShadow: [
+          BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 8, offset: const Offset(0, 2)),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // 카드 헤더
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            decoration: BoxDecoration(
+              color: _blue.withValues(alpha: 0.08),
+              borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
+              border: Border(bottom: BorderSide(color: _blue.withValues(alpha: 0.15))),
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.calendar_today_outlined, size: 14, color: _blue),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    week,
+                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _blue),
+                  ),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: _blue,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Text(
+                    '$totalCount건',
+                    style: const TextStyle(fontSize: 11, color: Colors.white, fontWeight: FontWeight.w600),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          // 본부별 목록
+          Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: hdqts.map((hdqt) => Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 6, height: 6,
+                      decoration: BoxDecoration(
+                        color: _primary,
+                        borderRadius: BorderRadius.circular(3),
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        hdqt,
+                        style: const TextStyle(fontSize: 12, color: Color(0xFF374151)),
+                      ),
+                    ),
+                    Text(
+                      '${hdqtData[hdqt]}건',
+                      style: TextStyle(fontSize: 12, color: _primary, fontWeight: FontWeight.w600),
+                    ),
+                  ],
+                ),
+              )).toList(),
+            ),
+          ),
+        ],
+      ),
     );
   }
 

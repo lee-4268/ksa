@@ -56,6 +56,44 @@ class KakaoGeocodingWeb {
   }
 }
 
+/// 주소 → 좌표 변환 (정지오코딩)
+class KakaoAddressGeocoder {
+  static Future<({double lat, double lng})?> addressToCoords(String address) async {
+    if (!kIsWeb || address.isEmpty) return null;
+
+    try {
+      final completer = Completer<({double lat, double lng})?>();
+
+      void callback(JSAny? latVal, JSAny? lngVal) {
+        try {
+          final lat = (latVal as JSNumber?)?.toDartDouble;
+          final lng = (lngVal as JSNumber?)?.toDartDouble;
+          if (lat != null && lng != null) {
+            completer.complete((lat: lat, lng: lng));
+          } else {
+            completer.complete(null);
+          }
+        } catch (e) {
+          completer.complete(null);
+        }
+      }
+
+      _callKakaoAddressSearch(address, callback.toJS);
+
+      return await completer.future.timeout(
+        const Duration(seconds: 8),
+        onTimeout: () => null,
+      );
+    } catch (e) {
+      debugPrint('주소 지오코딩 오류: $e');
+      return null;
+    }
+  }
+}
+
+@JS('_callKakaoAddressSearchFromDart')
+external void _callKakaoAddressSearch(String address, JSFunction callback);
+
 /// JavaScript에서 카카오 Geocoder 호출
 @JS('_callKakaoGeocoderFromDart')
 external void _callKakaoGeocoder(double lat, double lon, JSFunction callback);
