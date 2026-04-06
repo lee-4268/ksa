@@ -362,6 +362,8 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
           isDense: true,
           icon: const Icon(Icons.arrow_drop_down, color: primaryColor, size: 20),
           dropdownColor: Colors.white,
+
+          borderRadius: BorderRadius.circular(12),
           style: const TextStyle(color: Colors.black87, fontSize: 13),
           value: _selectedWeek,
           items: items,

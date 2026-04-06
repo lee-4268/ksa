@@ -411,6 +411,8 @@ class _IndividualTabState extends State<_IndividualTab>
                 isDense: true,
                 icon: const Icon(Icons.arrow_drop_down, color: Color(0xFFE53935), size: 20),
                 dropdownColor: Colors.white,
+
+                borderRadius: BorderRadius.circular(12),
                 style: const TextStyle(color: Colors.black87, fontSize: 13),
                 items: _antennaFrameOptions.map((e) => DropdownMenuItem(value: e, child: Text(e))).toList(),
                 onChanged: (v) => setState(() => _antennaFrameType = v ?? '-'),
@@ -462,6 +464,8 @@ class _IndividualTabState extends State<_IndividualTab>
                 isDense: true,
                 icon: const Icon(Icons.arrow_drop_down, color: Color(0xFFE53935), size: 20),
                 dropdownColor: Colors.white,
+
+                borderRadius: BorderRadius.circular(12),
                 style: const TextStyle(color: Colors.black87, fontSize: 13),
                 items: _sharingOptions.map((e) => DropdownMenuItem(value: e, child: Text(e))).toList(),
                 onChanged: (v) => setState(() => _sharingType = v ?? '-'),

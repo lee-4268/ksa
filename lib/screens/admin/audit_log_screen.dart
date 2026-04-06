@@ -127,6 +127,8 @@ class _AuditLogScreenState extends State<AuditLogScreen> {
             DropdownButtonFormField<String>(
               value: _filterEntityType,
               dropdownColor: Colors.white,
+
+              borderRadius: BorderRadius.circular(12),
               style: const TextStyle(color: Colors.black87, fontSize: 13),
               icon: Icon(Icons.arrow_drop_down, color: Colors.grey.shade600, size: 20),
               decoration: InputDecoration(
@@ -155,6 +157,8 @@ class _AuditLogScreenState extends State<AuditLogScreen> {
             DropdownButtonFormField<AuditAction?>(
               value: _filterAction,
               dropdownColor: Colors.white,
+
+              borderRadius: BorderRadius.circular(12),
               style: const TextStyle(color: Colors.black87, fontSize: 13),
               icon: Icon(Icons.arrow_drop_down, color: Colors.grey.shade600, size: 20),
               decoration: InputDecoration(

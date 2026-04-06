@@ -293,6 +293,8 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
                   isExpanded: true,
                   isDense: true,
                   dropdownColor: Colors.white,
+
+                  borderRadius: BorderRadius.circular(12),
                   style: const TextStyle(
                     color: Colors.black87,
                     fontSize: 13,
@@ -391,6 +393,8 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
                     isExpanded: true,
                     isDense: true,
                     dropdownColor: Colors.white,
+
+                    borderRadius: BorderRadius.circular(12),
                     style: const TextStyle(
                       color: Colors.black87,
                       fontSize: 13,

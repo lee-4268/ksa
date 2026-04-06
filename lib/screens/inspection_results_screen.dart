@@ -575,6 +575,52 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
                         color: Color(0xFF111827),
                         height: 1.5)),
               );
+            } else if (type == 'perf_ok' || type == 'doc_ok') {
+              return Container(
+                margin: const EdgeInsets.only(top: 4, left: 4),
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFDCFCE7),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.check_circle, size: 16, color: Color(0xFF16A34A)),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(text,
+                          style: const TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w700,
+                              color: Color(0xFF16A34A),
+                              height: 1.5)),
+                    ),
+                  ],
+                ),
+              );
+            } else if (type == 'perf_fail' || type == 'doc_fail') {
+              return Container(
+                margin: const EdgeInsets.only(top: 4, left: 4),
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFEE2E2),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.warning_amber_rounded, size: 16, color: Color(0xFFDC2626)),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(text,
+                          style: const TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w700,
+                              color: Color(0xFFDC2626),
+                              height: 1.5)),
+                    ),
+                  ],
+                ),
+              );
             } else if (type == 'highlight') {
               return Padding(
                 padding: const EdgeInsets.only(top: 4, left: 4),

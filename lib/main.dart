@@ -13,7 +13,6 @@ import 'services/team_context_service.dart';
 import 'services/admin_service.dart';
 import 'services/division_data_service.dart';
 import 'services/photo_storage_service.dart';
-import 'package:google_fonts/google_fonts.dart';
 
 // 모바일용 조건부 import
 import 'main_init_stub.dart' if (dart.library.io) 'main_init_mobile.dart'
@@ -67,8 +66,7 @@ class MyApp extends StatelessWidget {
             brightness: Brightness.light,
           ),
           useMaterial3: true,
-          // fontFamily: 'SamsungOne',
-          textTheme: GoogleFonts.ibmPlexSansKrTextTheme(),
+          fontFamily: 'SamsungOne',
           scaffoldBackgroundColor: Colors.white,
           appBarTheme: const AppBarTheme(
             centerTitle: true,

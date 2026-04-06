@@ -862,6 +862,8 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
           value: value,
           icon: Icon(Icons.arrow_drop_down, color: _blue, size: 20),
           dropdownColor: Colors.white,
+
+          borderRadius: BorderRadius.circular(12),
           style: const TextStyle(color: Colors.black87, fontSize: 13),
           items: items.map((v) => DropdownMenuItem(value: v, child: Text(label(v)))).toList(),
           onChanged: onChanged,
@@ -1085,6 +1087,8 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
           isDense: true,
           icon: Icon(Icons.arrow_drop_down, color: _primary, size: 20),
           dropdownColor: Colors.white,
+
+          borderRadius: BorderRadius.circular(12),
           style: const TextStyle(color: Colors.black87, fontSize: 13),
           items: List.generate(5, (i) => DateTime.now().year - 1 + i)
               .map((y) => DropdownMenuItem(value: y, child: Text('$y년')))
@@ -1122,6 +1126,8 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
           isDense: true,
           icon: Icon(Icons.arrow_drop_down, color: _primary, size: 20),
           dropdownColor: Colors.white,
+
+          borderRadius: BorderRadius.circular(12),
           style: const TextStyle(color: Colors.black87, fontSize: 13),
           items: const [
             DropdownMenuItem(value: 'all', child: Text('전체')),
@@ -1158,6 +1164,8 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
           icon: Icon(Icons.arrow_drop_down,
               color: value.isNotEmpty ? _primary : Colors.grey, size: 20),
           dropdownColor: Colors.white,
+
+          borderRadius: BorderRadius.circular(12),
           style: const TextStyle(color: Colors.black87, fontSize: 13),
           items: options
               .map((v) => DropdownMenuItem(
@@ -2789,6 +2797,8 @@ class _InspectionReportDialogState extends State<_InspectionReportDialog> {
           value: value?.isEmpty == true ? null : value,
           icon: const Icon(Icons.arrow_drop_down, size: 18),
           dropdownColor: Colors.white,
+
+          borderRadius: BorderRadius.circular(12),
           style: const TextStyle(fontSize: 12, color: Colors.black87),
           items: [
             DropdownMenuItem(value: '', child: Text('전체', style: TextStyle(color: Colors.grey.shade500))),
@@ -3291,6 +3301,8 @@ class _AddFromStagingDialogState extends State<_AddFromStagingDialog> {
           value: value?.isEmpty == true ? null : value,
           icon: const Icon(Icons.arrow_drop_down, size: 18),
           dropdownColor: Colors.white,
+
+          borderRadius: BorderRadius.circular(12),
           style: const TextStyle(fontSize: 12, color: Colors.black87),
           items: [
             DropdownMenuItem(value: '', child: Text('전체', style: TextStyle(color: Colors.grey.shade500))),

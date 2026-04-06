@@ -391,6 +391,8 @@ class _DivisionManagementScreenState extends State<DivisionManagementScreen>
                   isDense: true,
                   icon: Icon(Icons.arrow_drop_down, color: _primaryColor, size: 20),
                   dropdownColor: Colors.white,
+
+                  borderRadius: BorderRadius.circular(12),
                   style: const TextStyle(color: Colors.black87, fontSize: 13),
                   items: [
                     const DropdownMenuItem(value: null, child: Text('전체')),

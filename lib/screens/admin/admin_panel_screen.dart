@@ -1281,6 +1281,8 @@ class _KcaStagingFilterDialogState extends State<_KcaStagingFilterDialog> {
                             isDense: true,
                             icon: Icon(Icons.arrow_drop_down, color: _primary, size: 20),
                             dropdownColor: Colors.white,
+
+                            borderRadius: BorderRadius.circular(12),
                             style: const TextStyle(color: Colors.black87, fontSize: 13),
                             hint: const Text('필터 추가할 컬럼 선택...', style: TextStyle(fontSize: 13)),
                             value: _selectedFilterCol,

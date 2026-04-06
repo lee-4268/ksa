@@ -13029,7 +13029,15 @@ async def inspection_results_summary_report(request: Request, year: int = Query(
             doc_arrow = "↑" if doc_diff >= 0 else "↓"
             lines.append({
                 "type": "header",
-                "text": f"○ '{year % 100}년 무선국 합격율 실적(누적) : 성능 {perf_rate}% (목표 대비 {abs(perf_diff)}%{perf_arrow})로 {perf_status} / 서류 {doc_rate}%(목표 대비 {abs(doc_diff)}%{doc_arrow}) {doc_status}"
+                "text": f"○ '{year % 100}년 무선국 합격율 실적(누적)"
+            })
+            lines.append({
+                "type": "perf_ok" if perf_diff >= 0 else "perf_fail",
+                "text": f"   성능 {perf_rate}% (목표 대비 {abs(perf_diff)}%{perf_arrow}) {perf_status}"
+            })
+            lines.append({
+                "type": "doc_ok" if doc_diff >= 0 else "doc_fail",
+                "text": f"   서류 {doc_rate}% (목표 대비 {abs(doc_diff)}%{doc_arrow}) {doc_status}"
             })
 
             # 2. 주별 추이 (최근 2주)
@@ -13113,7 +13121,7 @@ async def inspection_results_summary_report(request: Request, year: int = Query(
                 rg, cnt, fail = r
                 rate = round((cnt - fail) / cnt * 100, 2) if cnt > 0 else 0
                 ranked.append((rg, rate))
-            ranked.sort(key=lambda x: x[1])  # 합격율 오름차순
+            ranked.sort(key=lambda x: x[1], reverse=True)  # 합격율 내림차순 (높은 순)
 
             if ranked:
                 rank_text = " > ".join(f"{rg} {rate}%" for rg, rate in ranked)

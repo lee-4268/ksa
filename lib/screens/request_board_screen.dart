@@ -379,6 +379,8 @@ class _RequestBoardScreenState extends State<RequestBoardScreen> {
               isDense: true,
               icon: Icon(Icons.arrow_drop_down, color: _primaryColor, size: 20),
               dropdownColor: Colors.white,
+
+              borderRadius: BorderRadius.circular(12),
               style: const TextStyle(color: Colors.black87, fontSize: 13),
               value: _statusFilter,
               items: const [
@@ -840,6 +842,8 @@ class _RequestBoardScreenState extends State<RequestBoardScreen> {
                                 icon: Icon(Icons.arrow_drop_down,
                                     color: _primaryColor, size: 20),
                                 dropdownColor: Colors.white,
+
+                                borderRadius: BorderRadius.circular(12),
                                 style: const TextStyle(
                                     color: Colors.black87, fontSize: 13),
                                 value: status,
