@@ -256,6 +256,72 @@ class AuthService extends ChangeNotifier {
     }
   }
 
+  /// 개발용 테스트 로그인 모드 확인
+  Future<bool> isDevLoginEnabled() async {
+    try {
+      final response = await http.get(Uri.parse('$_loginUrl/auth/dev-login/status'));
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        return data['enabled'] == true;
+      }
+    } catch (_) {}
+    return false;
+  }
+
+  /// 개발용 테스트 로그인 (SSO 인증 없이)
+  Future<bool> devLogin({
+    required String empno,
+    required String name,
+    required String region,
+    String team = '테스트팀',
+    String role = 'member',
+  }) async {
+    _isLoading = true;
+    _errorMessage = null;
+    notifyListeners();
+
+    try {
+      final response = await http.post(
+        Uri.parse('$_loginUrl/auth/dev-login'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'empno': empno,
+          'name': name,
+          'region': region,
+          'team': team,
+          'role': role,
+        }),
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        if (data['result'] == 'ok') {
+          _authToken = data['token'] as String?;
+          _isSignedIn = true;
+          _userId = empno;
+          _userName = name;
+          _userDepartment = region;
+          _userTeam = team;
+          _userRoleStr = role;
+          _isLoading = false;
+          notifyListeners();
+          _saveLoginState();
+          _startSessionTimerBackground();
+          return true;
+        }
+      }
+      _errorMessage = '개발 로그인 실패: ${response.statusCode}';
+      _isLoading = false;
+      notifyListeners();
+      return false;
+    } catch (e) {
+      _errorMessage = '개발 로그인 오류: $e';
+      _isLoading = false;
+      notifyListeners();
+      return false;
+    }
+  }
+
   /// FastAPI 서버(EC2)에서 사번으로 사용자 정보 조회
 
   /// 사용자 상세 정보를 비동기로 조회하여 UI 갱신

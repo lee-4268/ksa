@@ -690,6 +690,10 @@ VALID_ROLES = {"admin", "manager", "member"}
 # 부트스트랩 키: 최초 admin 설정 시 사용 (환경변수 필수, 미설정 시 비활성화)
 ADMIN_BOOTSTRAP_KEY = os.environ.get("ADMIN_BOOTSTRAP_KEY")
 
+# 개발용 테스트 로그인 활성화 (환경변수 DEV_LOGIN_ENABLED=1 로 활성화)
+DEV_LOGIN_ENABLED = os.environ.get("DEV_LOGIN_ENABLED", "0") == "1"
+_dev_users: dict = {}  # empno → {name, region, team, role} 메모리 캐시
+
 # ── HMAC 토큰 인증 ─────────────────────────────────────────
 AUTH_TOKEN_SECRET = os.environ.get("AUTH_TOKEN_SECRET", f"dev-fallback-{uuid.uuid4().hex}")
 AUTH_TOKEN_EXPIRY = 2 * 3600  # 2시간
@@ -1831,6 +1835,51 @@ async def proxy_sso_login(req: LoginRequest, request: Request):
         )
 
 
+# ── 개발용 테스트 로그인 ────────────────────────────────────
+class DevLoginRequest(BaseModel):
+    empno: str
+    name: str
+    region: str  # "강남본부", "강북본부" 등
+    team: str = "테스트팀"
+    role: str = "member"  # "admin", "manager", "member"
+
+
+@app.post("/auth/dev-login")
+async def dev_login(req: DevLoginRequest):
+    """개발용 테스트 로그인 (SSO 인증 없이 임의 계정으로 토큰 발급)"""
+    if not DEV_LOGIN_ENABLED:
+        raise HTTPException(403, "개발 모드가 비활성화되어 있습니다")
+    if req.role not in VALID_ROLES:
+        raise HTTPException(400, f"유효하지 않은 역할: {req.role}")
+
+    token = _generate_token(req.empno)
+    _dev_users[req.empno] = {
+        "name": req.name, "region": req.region,
+        "team": req.team, "role": req.role,
+    }
+    logger.info(f"[DEV-LOGIN] empno={req.empno}, name={req.name}, region={req.region}, role={req.role}")
+
+    return {
+        "result": "ok",
+        "token": token,
+        "expiresIn": AUTH_TOKEN_EXPIRY,
+        "dev_mode": True,
+        "user": {
+            "empno": req.empno,
+            "name": req.name,
+            "region": req.region,
+            "team": req.team,
+            "role": req.role,
+        },
+    }
+
+
+@app.get("/auth/dev-login/status")
+async def dev_login_status():
+    """개발 로그인 모드 활성화 여부 확인"""
+    return {"enabled": DEV_LOGIN_ENABLED}
+
+
 @app.get("/users")
 async def list_users_count(request: Request = None):
     """사용자 데이터 통계"""
@@ -2332,6 +2381,14 @@ async def get_user_by_empno(empno: str, request: Request = None):
         user = response.get("Item")
 
         if not user:
+            # dev-login 사용자 fallback
+            dev = _dev_users.get(empno)
+            if dev:
+                return {
+                    "success": True, "empno": empno,
+                    "name": dev["name"], "region": dev["region"],
+                    "team": dev["team"], "role": dev["role"],
+                }
             return {"success": False, "empno": empno, "message": "User not found"}
 
         # kca-user-roles 테이블에 자동 등록 (없으면 member로)
@@ -10878,9 +10935,77 @@ async def inspection_staging_confirm(request: Request, req: InspStagingConfirmRe
     conn.commit()
     conn.close()
 
-    # 지오코딩은 별도 엔드포인트(/inspection/geocode-targets)로 분리
-    # — confirm 자체는 즉시 반환
+    # confirm 후 백그라운드에서 자동 지오코딩 실행
+    asyncio.create_task(_auto_geocode_background(req.year))
+
     return {"success": True, "count": count}
+
+
+async def _auto_geocode_background(year: int):
+    """confirm 후 자동으로 좌표 없는 항목 지오코딩 (백그라운드)."""
+    try:
+        KAKAO_KEY = "cb3f4b95ada5f92fc3924b9685aec16b"
+        CONCURRENCY = 10
+        import requests as _req
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        def _fetch():
+            c = sqlite3.connect(_INSP_DB, timeout=60)
+            rows = c.execute(
+                'SELECT id, 도로명주소, 설치장소 FROM inspection_targets '
+                'WHERE year=? AND (위도 IS NULL OR 위도=0)', (year,)).fetchall()
+            c.close()
+            return rows
+
+        rows = await asyncio.to_thread(_fetch)
+        if not rows:
+            return
+
+        addr_map: dict = {}
+        for rid, road_addr, install_addr in rows:
+            addr = (road_addr or '').strip() or (install_addr or '').strip()
+            if addr:
+                addr_map.setdefault(addr, []).append(rid)
+
+        unique_addrs = list(addr_map.keys())
+        logger.info(f"[auto-geocode] {len(rows)}건 중 고유 주소 {len(unique_addrs)}개 (year={year})")
+
+        def _geocode_one(addr):
+            try:
+                r = _req.get(
+                    'https://dapi.kakao.com/v2/local/search/address.json',
+                    params={'query': addr, 'size': 1},
+                    headers={'Authorization': f'KakaoAK {KAKAO_KEY}'},
+                    timeout=5)
+                if r.status_code == 200:
+                    docs = r.json().get('documents', [])
+                    if docs:
+                        x, y = float(docs[0].get('x', 0)), float(docs[0].get('y', 0))
+                        if x and y:
+                            return addr, (y, x)
+            except Exception:
+                pass
+            return addr, None
+
+        updated = 0
+        for i in range(0, len(unique_addrs), 500):
+            batch = unique_addrs[i:i+500]
+            def _process(ba=batch):
+                results = []
+                with ThreadPoolExecutor(max_workers=CONCURRENCY) as pool:
+                    for fut in as_completed({pool.submit(_geocode_one, a): a for a in ba}):
+                        results.append(fut.result())
+                upd = [(c[0], c[1], rid) for addr, c in results if c for rid in addr_map.get(addr, [])]
+                if upd:
+                    c = sqlite3.connect(_INSP_DB, timeout=60)
+                    c.executemany('UPDATE inspection_targets SET 위도=?, 경도=? WHERE id=?', upd)
+                    c.commit(); c.close()
+                return len(upd)
+            updated += await asyncio.to_thread(_process)
+
+        logger.info(f"[auto-geocode] 완료: {updated}/{len(rows)}건 (year={year})")
+    except Exception as e:
+        logger.error(f"[auto-geocode] 오류: {e}")
 
 
 @app.post("/inspection/geocode-targets")
@@ -11484,14 +11609,19 @@ async def inspection_result_photo_data(request: Request, s3_key: str):
 async def inspection_my_list_weeks(request: Request, year: int):
     """내 팀 수검예정주차 목록."""
     empno = await _verify_auth(request)
-    dynamodb = get_dynamodb_resource()
-    users_table = dynamodb.Table(DYNAMODB_TABLES["users"])
-    user_item = await asyncio.to_thread(lambda: users_table.get_item(
-        Key={"user_id": empno},
-        ProjectionExpression="#r, team",
-        ExpressionAttributeNames={"#r": "region"},
-    ))
-    user_data = user_item.get("Item", {})
+    user_data = {}
+    dev = _dev_users.get(empno)
+    if dev:
+        user_data = {"region": dev["region"], "team": dev["team"]}
+    else:
+        dynamodb = get_dynamodb_resource()
+        users_table = dynamodb.Table(DYNAMODB_TABLES["users"])
+        user_item = await asyncio.to_thread(lambda: users_table.get_item(
+            Key={"user_id": empno},
+            ProjectionExpression="#r, team",
+            ExpressionAttributeNames={"#r": "region"},
+        ))
+        user_data = user_item.get("Item", {})
     access_team = user_data.get("region", "").replace("Access담당", "").strip()
     품질팀 = user_data.get("team", "")
     if not access_team and not 품질팀:
@@ -11522,14 +11652,19 @@ async def inspection_my_list(request: Request, year: int, week: str = ""):
     """내 팀 배정 수검 목록 (팀원용)."""
     empno = await _verify_auth(request)
     # Users 테이블에서 region(본부=access담당), team(품질개선팀) 조회
-    dynamodb = get_dynamodb_resource()
-    users_table = dynamodb.Table(DYNAMODB_TABLES["users"])
-    user_item = await asyncio.to_thread(lambda: users_table.get_item(
-        Key={"user_id": empno},
-        ProjectionExpression="#r, team",
-        ExpressionAttributeNames={"#r": "region"},  # region은 DynamoDB 예약어
-    ))
-    user_data = user_item.get("Item", {})
+    user_data = {}
+    dev = _dev_users.get(empno)
+    if dev:
+        user_data = {"region": dev["region"], "team": dev["team"]}
+    else:
+        dynamodb = get_dynamodb_resource()
+        users_table = dynamodb.Table(DYNAMODB_TABLES["users"])
+        user_item = await asyncio.to_thread(lambda: users_table.get_item(
+            Key={"user_id": empno},
+            ProjectionExpression="#r, team",
+            ExpressionAttributeNames={"#r": "region"},
+        ))
+        user_data = user_item.get("Item", {})
     # region: "경북Access담당" → "경북" (inspection_schedules.access담당과 매칭)
     access_team = user_data.get("region", "").replace("Access담당", "").strip()
     품질팀 = user_data.get("team", "")

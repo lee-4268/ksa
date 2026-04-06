@@ -4,7 +4,6 @@ import '../providers/station_provider.dart';
 import '../services/auth_service.dart';
 import '../services/cloud_data_service.dart';
 import '../services/weather_service.dart';
-import 'division_management_screen.dart';
 import 'admin/admin_panel_screen.dart';
 import 'ds_dashboard_screen.dart';
 import 'ds_merge_screen.dart';
@@ -70,8 +69,6 @@ class _HomeScreenState extends State<HomeScreen> {
       _MenuItem('설치확인서', Icons.description_outlined, const Color(0xFF06B6D4), description: '설치확인서 조회 및 관리'),
       _MenuItem('전산비교', Icons.compare_outlined, const Color(0xFF2563EB), description: 'ERP·DS 전산 데이터 비교'),
       _MenuItem('커뮤니티', Icons.forum_outlined, const Color(0xFFE53935), description: '공지사항 및 요청사항'),
-      if (auth.isDivisionAdmin)
-        _MenuItem('대상 관리', Icons.business_outlined, const Color(0xFF7C3AED), description: '본부별 수검 대상 관리'),
       if (auth.isSuperAdmin)
         _MenuItem('관리자', Icons.settings_outlined, const Color(0xFF6366F1), description: '시스템 설정 및 사용자 관리'),
     ];
@@ -101,7 +98,6 @@ class _HomeScreenState extends State<HomeScreen> {
       case '설치확인서': return const CertificateScreen();
       case '전산비교': return const ErpDsCompareScreen();
       case '커뮤니티': return const CommunityScreen();
-      case '대상 관리': return const DivisionManagementScreen();
       case '관리자': return const AdminPanelScreen();
       default: return _HomeContent(onNavigate: (i) => setState(() => _selectedIndex = i), menuItems: items);
     }

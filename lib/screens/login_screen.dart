@@ -15,9 +15,35 @@ class _LoginScreenState extends State<LoginScreen> {
   final _usernameController = TextEditingController();
   final _passwordController = TextEditingController();
   bool _obscurePassword = true;
+  bool _devLoginEnabled = false;
 
   // 테마 색상 (레드/코랄 계열)
   static const Color _primaryColor = Color(0xFFE53935);
+
+  static const _testAccounts = [
+    {'empno': 'TEST_GN', 'name': '테스트_강남', 'region': '강남Access담당', 'role': 'member'},
+    {'empno': 'TEST_GB', 'name': '테스트_강북', 'region': '강북Access담당', 'role': 'member'},
+    {'empno': 'TEST_IC', 'name': '테스트_인천', 'region': '인천Access담당', 'role': 'member'},
+    {'empno': 'TEST_GG', 'name': '테스트_경기', 'region': '경기Access담당', 'role': 'member'},
+    {'empno': 'TEST_GW', 'name': '테스트_강원', 'region': '강원Access담당', 'role': 'member'},
+    {'empno': 'TEST_CC', 'name': '테스트_충청', 'region': '충청Access담당', 'role': 'member'},
+    {'empno': 'TEST_KB', 'name': '테스트_경북', 'region': '경북Access담당', 'role': 'member'},
+    {'empno': 'TEST_KN', 'name': '테스트_경남', 'region': '경남Access담당', 'role': 'member'},
+    {'empno': 'TEST_SB', 'name': '테스트_서부', 'region': '서부Access담당', 'role': 'member'},
+    {'empno': 'TEST_ADMIN', 'name': '테스트_관리자', 'region': 'AT/DT추진담당', 'role': 'admin'},
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    _checkDevLogin();
+  }
+
+  void _checkDevLogin() async {
+    final auth = context.read<AuthService>();
+    final enabled = await auth.isDevLoginEnabled();
+    if (mounted) setState(() => _devLoginEnabled = enabled);
+  }
 
   @override
   void dispose() {
@@ -320,6 +346,50 @@ class _LoginScreenState extends State<LoginScreen> {
                           );
                         },
                       ),
+
+                      // 개발용 테스트 로그인
+                      if (_devLoginEnabled) ...[
+                        const SizedBox(height: 24),
+                        const Divider(),
+                        const SizedBox(height: 12),
+                        Text(
+                          '개발용 테스트 로그인',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Colors.grey[500],
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Wrap(
+                          spacing: 6,
+                          runSpacing: 6,
+                          alignment: WrapAlignment.center,
+                          children: _testAccounts.map((acc) {
+                            final isAdmin = acc['role'] == 'admin';
+                            return OutlinedButton(
+                              onPressed: () => _handleDevLogin(acc),
+                              style: OutlinedButton.styleFrom(
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                side: BorderSide(
+                                  color: isAdmin ? Colors.orange.shade400 : Colors.grey.shade300,
+                                ),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                              ),
+                              child: Text(
+                                acc['region']!.replaceAll('본부', '').replaceAll('담당', ''),
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: isAdmin ? Colors.orange.shade700 : Colors.grey.shade700,
+                                ),
+                              ),
+                            );
+                          }).toList(),
+                        ),
+                      ],
                     ],
                   ),
                 ),
@@ -329,5 +399,21 @@ class _LoginScreenState extends State<LoginScreen> {
         ),
       ),
     );
+  }
+
+  Future<void> _handleDevLogin(Map<String, String> acc) async {
+    final auth = context.read<AuthService>();
+    final success = await auth.devLogin(
+      empno: acc['empno']!,
+      name: acc['name']!,
+      region: acc['region']!,
+      role: acc['role']!,
+    );
+    if (!mounted) return;
+    if (!success && auth.errorMessage != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(auth.errorMessage!), backgroundColor: Colors.red),
+      );
+    }
   }
 }
