@@ -216,14 +216,60 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
   static const _divisions = ['', '강남', '강북', '인천', '경기', '강원', '충청', '경북', '경남', '서부'];
 
   Future<void> _downloadExcel() async {
-    // 옵션 팝업 표시
+    // 옵션 팝업 표시 (본부→월→주차 3단계)
     final result = await showDialog<Map<String, String>>(
       context: context,
       builder: (ctx) {
         String selDivision = '';
+        String selMonth = '';
         String selWeek = '';
-        final weekOptions = ['', ...List.generate(12, (i) => '${i + 1}월')];
+        List<String> weekOptions = [''];
+        bool weekLoading = false;
+
+        Widget _dropdown(String label, String value, List<String> items,
+            void Function(String) onChanged, {bool loading = false}) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(label, style: TextStyle(fontSize: 13, color: Colors.grey.shade600)),
+              const SizedBox(height: 6),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  border: Border.all(color: Colors.grey.shade300),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: loading
+                    ? const SizedBox(height: 36, child: Center(child: SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))))
+                    : DropdownButtonHideUnderline(
+                        child: DropdownButton<String>(
+                          isExpanded: true,
+                          isDense: true,
+                          value: items.contains(value) ? value : items.first,
+                          icon: Icon(Icons.arrow_drop_down, color: _primary, size: 20),
+                          dropdownColor: Colors.white,
+                          borderRadius: BorderRadius.circular(12),
+                          style: const TextStyle(color: Colors.black87, fontSize: 13),
+                          items: items.map((v) => DropdownMenuItem(
+                            value: v,
+                            child: Text(v.isEmpty ? '전체' : v),
+                          )).toList(),
+                          onChanged: (v) => onChanged(v ?? ''),
+                        ),
+                      ),
+              ),
+            ],
+          );
+        }
+
         return StatefulBuilder(builder: (ctx, setDlgState) {
+          Future<void> loadWeeks() async {
+            setDlgState(() { weekLoading = true; selWeek = ''; weekOptions = ['']; });
+            final weeks = await _svc.getResultsWeeks(_year, month: selMonth, region: selDivision);
+            setDlgState(() { weekLoading = false; weekOptions = ['', ...weeks]; });
+          }
+
           return AlertDialog(
             backgroundColor: Colors.white,
             surfaceTintColor: Colors.white,
@@ -233,59 +279,16 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('본부', style: TextStyle(fontSize: 13, color: Colors.grey.shade600)),
-                const SizedBox(height: 6),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    border: Border.all(color: Colors.grey.shade300),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: DropdownButtonHideUnderline(
-                    child: DropdownButton<String>(
-                      isExpanded: true,
-                      isDense: true,
-                      value: selDivision,
-                      icon: Icon(Icons.arrow_drop_down, color: _primary, size: 20),
-                      dropdownColor: Colors.white,
-                      borderRadius: BorderRadius.circular(12),
-                      style: const TextStyle(color: Colors.black87, fontSize: 13),
-                      items: _divisions.map((d) => DropdownMenuItem(
-                        value: d,
-                        child: Text(d.isEmpty ? '전체' : d),
-                      )).toList(),
-                      onChanged: (v) => setDlgState(() => selDivision = v ?? ''),
-                    ),
-                  ),
+                _dropdown('본부', selDivision, _divisions, (v) {
+                  setDlgState(() { selDivision = v; selMonth = ''; selWeek = ''; weekOptions = ['']; });
+                }),
+                const SizedBox(height: 12),
+                _dropdown('월', selMonth,
+                  ['', ...List.generate(12, (i) => '${i + 1}월')],
+                  (v) { setDlgState(() { selMonth = v; selWeek = ''; }); if (v.isNotEmpty) loadWeeks(); }
                 ),
                 const SizedBox(height: 12),
-                Text('주차', style: TextStyle(fontSize: 13, color: Colors.grey.shade600)),
-                const SizedBox(height: 6),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    border: Border.all(color: Colors.grey.shade300),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: DropdownButtonHideUnderline(
-                    child: DropdownButton<String>(
-                      isExpanded: true,
-                      isDense: true,
-                      value: selWeek,
-                      icon: Icon(Icons.arrow_drop_down, color: _primary, size: 20),
-                      dropdownColor: Colors.white,
-                      borderRadius: BorderRadius.circular(12),
-                      style: const TextStyle(color: Colors.black87, fontSize: 13),
-                      items: weekOptions.map((w) => DropdownMenuItem(
-                        value: w,
-                        child: Text(w.isEmpty ? '전체' : w),
-                      )).toList(),
-                      onChanged: (v) => setDlgState(() => selWeek = v ?? ''),
-                    ),
-                  ),
-                ),
+                _dropdown('주차', selWeek, weekOptions, (v) => setDlgState(() => selWeek = v), loading: weekLoading),
               ],
             ),
             actions: [
@@ -296,7 +299,7 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
                   foregroundColor: Colors.white,
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                 ),
-                onPressed: () => Navigator.pop(ctx, {'region': selDivision, 'week': selWeek}),
+                onPressed: () => Navigator.pop(ctx, {'region': selDivision, 'month': selMonth, 'week': selWeek}),
                 child: const Text('다운로드'),
               ),
             ],
@@ -310,13 +313,15 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
     dialog.show(message: 'Excel 다운로드\n준비 중...');
     try {
       final region = result['region'] ?? '';
+      final month = result['month'] ?? '';
       final week = result['week'] ?? '';
       final bytes = await _svc.exportResultsXlsx(_year, region: region, week: week);
       if (!mounted) return;
       final fileSuffix = [
         if (region.isNotEmpty) region,
+        if (month.isNotEmpty) month,
         if (week.isNotEmpty) week,
-        if (region.isEmpty && week.isEmpty) '전체',
+        if (region.isEmpty && month.isEmpty && week.isEmpty) '전체',
       ].join('_');
       final blob = html.Blob([bytes],
           'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');

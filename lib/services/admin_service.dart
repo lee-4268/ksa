@@ -90,6 +90,8 @@ class AdminService extends ChangeNotifier {
               divisionId: nullIfEmpty(u['region']),
               status: UserStatus.approved,
               role: mapBackendRole(u['role'] as String? ?? 'member'),
+              lastLogin: nullIfEmpty(u['last_login']),
+              isDormant: u['is_dormant'] as bool? ?? false,
             ));
           }
         } else {

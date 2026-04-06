@@ -1025,16 +1025,18 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
 
   void _openTmap(double lat, double lng, String name) {
     final encoded = Uri.encodeComponent(name);
+    // 모바일 브라우저에서는 tmap:// 딥링크로 앱 직접 호출
     html.window.open(
-      'https://apis.openapi.sk.com/tmap/app/routes?goalx=$lng&goaly=$lat&goalname=$encoded',
+      'tmap://route?goalx=$lng&goaly=$lat&goalname=$encoded',
       '_blank',
     );
   }
 
   void _openKakaoNavi(double lat, double lng, String name) {
     final encoded = Uri.encodeComponent(name);
+    // 모바일 브라우저에서는 kakaomap:// 딥링크로 앱 직접 호출
     html.window.open(
-      'https://map.kakao.com/link/to/$encoded,$lat,$lng',
+      'kakaomap://route?ep=$lat,$lng&by=CAR',
       '_blank',
     );
   }

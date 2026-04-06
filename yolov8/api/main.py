@@ -1044,6 +1044,8 @@ def _list_all_users_sync() -> list:
             "email": user_info.get("email") or None,
             "phone": user_info.get("phone_number") or None,
             "role": user_role,
+            "last_login": role_item.get("last_login") or None,
+            "is_dormant": bool(role_item.get("is_dormant", False)),
         })
 
     users.sort(key=lambda u: u.get("name", ""))
@@ -11923,12 +11925,18 @@ async def inspection_my_list_weeks(request: Request, year: int):
         user_data = user_item.get("Item", {})
     access_team = user_data.get("region", "").replace("Access담당", "").strip()
     품질팀 = user_data.get("team", "")
-    if not access_team and not 품질팀:
+    is_dev = _dev_users.get(empno) is not None
+    if not is_dev and not access_team and not 품질팀:
         return {"weeks": []}
 
     def _read_weeks():
         c = sqlite3.connect(_INSP_DB, timeout=60)
-        if access_team and 품질팀:
+        if is_dev:
+            # 테스트 계정: 팀 상관없이 전체 주차 조회
+            rows = c.execute(
+                'SELECT DISTINCT 수검예정주차 FROM inspection_schedules WHERE year=? AND 수검예정주차 != "" ORDER BY 수검예정주차',
+                (year,)).fetchall()
+        elif access_team and 품질팀:
             rows = c.execute(
                 'SELECT DISTINCT 수검예정주차 FROM inspection_schedules WHERE year=? AND access담당=? AND 품질개선팀=? AND 수검예정주차 != "" ORDER BY 수검예정주차',
                 (year, access_team, 품질팀)).fetchall()
@@ -11967,8 +11975,9 @@ async def inspection_my_list(request: Request, year: int, week: str = ""):
     # region: "경북Access담당" → "경북" (inspection_schedules.access담당과 매칭)
     access_team = user_data.get("region", "").replace("Access담당", "").strip()
     품질팀 = user_data.get("team", "")
+    is_dev = _dev_users.get(empno) is not None
 
-    if not access_team and not 품질팀:
+    if not is_dev and not access_team and not 품질팀:
         return {"items": [], "message": "팀 배정 없음"}
 
     # SQLite schedules + results 조인
@@ -11982,7 +11991,11 @@ async def inspection_my_list(request: Request, year: int, week: str = ""):
                 'LEFT JOIN inspection_results r ON s.pk=r.pk ')
         params = []
         where_parts = []
-        if access_team and 품질팀:
+        if is_dev:
+            # 테스트 계정: 팀 상관없이 전체 조회
+            where_parts.append('s.year=?')
+            params.extend([year])
+        elif access_team and 품질팀:
             where_parts.append('s.year=? AND s.access담당=? AND s.품질개선팀=?')
             params.extend([year, access_team, 품질팀])
         elif access_team:
@@ -13598,6 +13611,32 @@ class InspectionResultsExportReq(BaseModel):
     status: str = ""
     성능서류: str = ""
     주차별: str = ""
+
+
+@app.get("/inspection-results/weeks")
+async def inspection_results_weeks(request: Request, year: int, month: str = "", region: str = ""):
+    """실적 업로드된 주차 목록 조회 (월/본부 필터)."""
+    await _verify_auth(request)
+    if not os.path.exists(_INSP_DB):
+        return {"weeks": []}
+
+    def _query():
+        c = sqlite3.connect(_INSP_DB, timeout=60)
+        where_parts = ["year=?", "주차별 IS NOT NULL", "주차별 != ''"]
+        params: list = [year]
+        if month:
+            where_parts.append("월=?"); params.append(month)
+        if region:
+            where_parts.append("region=?"); params.append(region)
+        rows = c.execute(
+            f"SELECT DISTINCT 주차별 FROM inspection_results_raw WHERE {' AND '.join(where_parts)} ORDER BY 주차별",
+            params,
+        ).fetchall()
+        c.close()
+        return [r[0] for r in rows]
+
+    weeks = await asyncio.to_thread(_query)
+    return {"weeks": weeks}
 
 
 @app.post("/inspection-results/export-xlsx")

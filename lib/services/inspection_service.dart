@@ -492,6 +492,18 @@ class InspectionService {
     return json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
   }
 
+  Future<List<String>> getResultsWeeks(int year, {String month = '', String region = ''}) async {
+    final uri = Uri.parse('$_baseUrl/inspection-results/weeks').replace(queryParameters: {
+      'year': year.toString(),
+      if (month.isNotEmpty) 'month': month,
+      if (region.isNotEmpty) 'region': region,
+    });
+    final resp = await http.get(uri, headers: _headers).timeout(_apiTimeout);
+    if (resp.statusCode != 200) return [];
+    final data = json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+    return List<String>.from(data['weeks'] as List? ?? []);
+  }
+
   Future<Uint8List> exportResultsXlsx(int year, {
     String region = '', String progress = '', String status = '',
     String perfDoc = '', String week = '',

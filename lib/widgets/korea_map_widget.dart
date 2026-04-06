@@ -239,7 +239,7 @@ class _KoreaMapWidgetState extends State<KoreaMapWidget> {
                 children: [
                   // 지도
                   SimpleMap(
-                    key: ValueKey('map_${widget.selectedRegion}_${_hoveredRegion}'),
+                    key: ValueKey('map_${_hoveredRegion}'),
                     instructions: SMapSouthKorea.instructions,
                     defaultColor: Colors.grey.shade300,
                     countryBorder: CountryBorder(color: const Color(0xFF455A64), width: 1),
