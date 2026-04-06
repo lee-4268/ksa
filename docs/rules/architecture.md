@@ -57,7 +57,7 @@ year, region, 주차별, 허가번호, 통합시설코드, 합불여부,
 | 테이블 | PK | 용도 |
 |--------|-----|------|
 | kca-users | user_id (사번) | i-NET 사용자 정보 (read-only) |
-| kca-user-roles | user_id | KSA 역할 관리 (admin/manager/member) |
+| kca-user-roles | user_id | KSA 역할/로그인/휴면 관리 (role, last_login, is_dormant) |
 | kca-audit-logs | id | 감사 로그 (90일 TTL) |
 | kca-ds-records | — | DS 데이터 레코드 |
 | kca-ds-uploads | — | DS 업로드 메타데이터 |
@@ -82,7 +82,10 @@ journalctl -u kca-api --no-pager -n 50  # 로그 확인
 # /etc/systemd/system/kca-api.service [Service] 섹션
 Environment=AUTH_TOKEN_SECRET=...
 Environment=ADMIN_BOOTSTRAP_KEY=...
-Environment=DEV_LOGIN_ENABLED=1  # 개발 모드
+Environment=DEV_LOGIN_ENABLED=1        # 개발 모드 (dev-login 활성화)
+Environment=SES_FROM_EMAIL=...         # 휴면 예고 메일 발신 주소 (AWS SES 검증 필요)
+Environment=DORMANT_DAYS=30            # 휴면 기준일 (기본 30)
+Environment=SERVICE_URL=https://...    # 메일 본문 링크용 서비스 URL
 ```
 변경 후: `sudo systemctl daemon-reload && sudo systemctl restart kca-api`
 

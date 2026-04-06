@@ -108,3 +108,43 @@ await dialog.error(message: '실패');  // X 애니메이션
 - 성능(빨강) + 서류(파랑) 두 라인
 - 클릭 시 확대 다이얼로그 (showGeneralDialog + fade + scale easeOutBack)
 - 확대 시 fontSize: 13
+
+## DashboardScreen 외부 선택 동기화
+
+`DashboardScreen`은 `selectedRegion` prop을 받아 외부 필터와 지도 선택 상태를 동기화:
+
+```dart
+DashboardScreen(
+  showStats: false,
+  selectedRegion: _selectedRegion,  // 외부 필터와 지도 강조 동기화
+  onRegionSelected: (region) { ... },
+)
+```
+
+- `initState`: 초기 selectedRegion을 내부 key로 변환해 반영
+- `didUpdateWidget`: 외부 값 변화 시 내부 `_selectedRegion` 갱신
+- shortName → map key 변환: `_shortNameToKey()` (강남→gangnam 등)
+
+## 인라인 배경 (현황 리포트 달성/미달성)
+
+전체 너비를 채우지 않고 텍스트 너비만큼만 배경 적용:
+```dart
+Row(
+  mainAxisSize: MainAxisSize.min,
+  children: [
+    Container(
+      padding: ...,
+      color: bgColor,
+      child: Text(...),
+    ),
+  ],
+)
+```
+`Expanded`나 `전체폭 Container` 사용 금지 — Row mainAxisSize.min 필수.
+
+## Excel 다운로드 다이얼로그 (3단계)
+
+본부 → 월 → 주차 순서로 선택:
+- 월 선택 시 `getResultsWeeks()` 호출로 실제 업로드된 주차만 표시
+- 주차 로딩 중 CircularProgressIndicator 표시
+- 선택 항목이 없으면 '전체'로 처리

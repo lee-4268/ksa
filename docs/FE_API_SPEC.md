@@ -2,8 +2,8 @@
 
 ## Frontend Services Specification
 
-**버전:** 2.0.0
-**최종 수정일:** 2026-03-23
+**버전:** 2.1.0
+**최종 수정일:** 2026-04-06
 
 ---
 
@@ -56,8 +56,9 @@ i-NET SSO 기반 사용자 인증 + HMAC 토큰 관리를 담당합니다.
 | 메서드 | 시그니처 | 설명 |
 |--------|---------|------|
 | `setCurrentUser` | `void setCurrentUser(String empno, {String? token})` | 인증 토큰 설정 |
-| `loadAllUsers` | `Future<void>` | `GET /admin/users` — 전체 사용자 목록 조회 |
-| `updateUserRole` | `Future<bool> updateUserRole(String profileId, UserRole newRole)` | `PUT /admin/set-role` — 역할 변경 |
+| `loadAllUsers` | `Future<void>` | `GET /admin/users` — 전체 사용자 목록 (last_login, is_dormant 포함) |
+| `changeUserRole` | `Future<bool> changeUserRole(String profileId, UserRole newRole)` | `PUT /admin/set-role` — 역할 변경 |
+| `undormantUser` | `Future<bool> undormantUser(String empno)` | `POST /admin/undormant/{empno}` — 휴면 해제 |
 
 ### Properties
 
@@ -66,6 +67,18 @@ i-NET SSO 기반 사용자 인증 + HMAC 토큰 관리를 담당합니다.
 | `allUsers` | `List<AppUserProfile>` | 전체 사용자 목록 |
 | `isLoading` | `bool` | 로딩 상태 |
 | `errorMessage` | `String?` | 오류 메시지 |
+
+### AppUserProfile 모델 (주요 필드)
+
+| 필드 | Type | 설명 |
+|------|------|------|
+| `id` | `String` | 사번 |
+| `email` | `String` | 이메일 |
+| `role` | `UserRole` | superAdmin / divisionAdmin / member |
+| `teamId` | `String?` | 소속 팀 |
+| `divisionId` | `String?` | 소속 본부 |
+| `lastLogin` | `String?` | 마지막 로그인 (UTC ISO) |
+| `isDormant` | `bool` | 휴면 여부 |
 
 ---
 
@@ -454,7 +467,7 @@ class WeatherInfo {
 
 ---
 
-## 15. InspectionService (v2.0.0)
+## 15. InspectionService (v2.1.0)
 
 **파일:** `lib/services/inspection_service.dart`
 
@@ -513,8 +526,21 @@ class WeatherInfo {
 
 | 메서드 | 시그니처 | 설명 |
 |--------|---------|------|
-| `getMyList` | `Future<List> getMyList(String year)` | `GET /inspection/my-list` |
-| `getProgress` | `Future<Map> getProgress(String year)` | `GET /inspection/progress` |
+| `getMyList` | `Future<List> getMyList(String year, {String week})` | `GET /inspection/my-list` (dev: 전체, 실계정: AND 조건) |
+| `getProgress` | `Future<List> getProgress(int year)` | `GET /inspection/progress` — 본부별 진행률 |
+
+### Results Methods (실적 결과장)
+
+| 메서드 | 시그니처 | 설명 |
+|--------|---------|------|
+| `getResultsDashboard` | `Future<Map> getResultsDashboard(int year, {String region})` | 대시보드 집계 |
+| `getResultsMonthly` | `Future<Map> getResultsMonthly(int year, String month, {String region})` | 월별 집계 |
+| `getResultsAnalysis` | `Future<Map> getResultsAnalysis(int year, {String region})` | 불합격 분석 |
+| `getResultsWeeklyTrend` | `Future<Map> getResultsWeeklyTrend(int year, {String region})` | 주별 추이 |
+| `getResultsWeeklyTrendByRegion` | `Future<Map> getResultsWeeklyTrendByRegion(int year, {String region})` | 본부별 주별 추이 |
+| `getResultsSummaryReport` | `Future<Map> getResultsSummaryReport(int year, {String region})` | 현황 리포트 (성능/서류 분리) |
+| `getResultsWeeks` | `Future<List<String>> getResultsWeeks(int year, {String month, String region})` | 업로드된 주차 목록 동적 조회 |
+| `exportResultsXlsx` | `Future<Uint8List> exportResultsXlsx(int year, {String region, String week})` | 결과장 XLSX 다운로드 |
 
 ---
 
@@ -745,3 +771,4 @@ flutter build web --release \
 | 1.3.1 | 2026-03-03 | Upload-Zero-Build 반영: _maxPollDuration 35분→3분, DsDashboardScreen 자동 갱신 타이머 추가, DsUploadService 설명 업데이트 |
 | 1.4.0 | 2026-03-04 | 보안 강화: AuthService SSO+토큰 전환, AdminService·AuditService 추가, 전 서비스 Bearer 토큰 인증, API 키 dart-define 분리, X-User-Id 완전 제거, 관리자 화면(사용자 관리/감사 로그) 추가 |
 | 2.0.0 | 2026-03-23 | CallnameService, CertificateService, InspectionService, ErpDsCompareService, DivisionDataService, TeamContextService 추가. 화면 7개 추가 (호출명칭 매칭, 설치확인서, 수검 일정, 수검 결과, ERP-DS 비교, 본부 대상 관리, DS 업로드). Drawer 메뉴 전면 재구성 |
+| 2.1.0 | 2026-04-06 | AdminService.undormantUser() 추가 (휴면 해제), AppUserProfile에 lastLogin/isDormant 필드 추가, InspectionService Results Methods 섹션 추가 (getResultsWeeks 포함), 메뉴명 '수검 현황' → '실적 관리' 반영, DashboardScreen.selectedRegion prop 추가 (외부 필터 동기화) |

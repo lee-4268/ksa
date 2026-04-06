@@ -1,7 +1,7 @@
 # KSA Backend API 명세서
 
-**버전:** 2.0.0
-**최종 수정일:** 2026-03-23
+**버전:** 2.1.0
+**최종 수정일:** 2026-04-06
 **API 타입:** AWS AppSync GraphQL + FastAPI REST (2개 서버)
 
 ---
@@ -57,7 +57,7 @@ https://c3jictzagh.execute-api.ap-northeast-2.amazonaws.com
 |------|-----------|
 | **공개** (인증 불필요) | `GET /`, `/health`, `/classes`, `POST /auth/login`, `GET /ds/region-codes` |
 | **인증 필요** (Bearer 토큰) | categories·stations CRUD, upload/photo·excel, download/*, predict, feedback, ds/stats·data·export*, ds/presign-*, ds/upload-raw·enqueue, ds/job/*, users/{empno}, `DELETE /storage/*`, callname/*, cert/*, inspection/*, erp-ds/* |
-| **관리자 전용** (admin/manager 역할) | `GET /admin/users`, `GET /admin/audit-logs`, `PUT /admin/set-role`, `DELETE /ds/data`, `POST /ds/upload-raw`, `POST /ds/enqueue`, `POST /callname/upload-csv`, `POST /inspection/upload-raw`, `POST /inspection/enqueue` |
+| **관리자 전용** (admin/manager 역할) | `GET /admin/users`, `GET /admin/audit-logs`, `PUT /admin/set-role`, `POST /admin/undormant/{empno}`, `DELETE /ds/data`, `POST /ds/upload-raw`, `POST /ds/enqueue`, `POST /callname/upload-csv`, `POST /inspection/upload-raw`, `POST /inspection/enqueue` |
 
 ### 2.3 Rate Limiting
 
@@ -113,6 +113,10 @@ CORS_ALLOWED_ORIGINS=https://main.d3fueh5qj86kgy.amplifyapp.com,http://localhost
 | `AUTH_TOKEN_SECRET` | 운영 필수 | HMAC 토큰 서명 키 (64자 hex 권장) |
 | `ADMIN_BOOTSTRAP_KEY` | 선택 | 초기 관리자 설정용 부트스트랩 키 (미설정 시 비활성화) |
 | `CORS_ALLOWED_ORIGINS` | 선택 | 허용 도메인 (쉼표 구분, 미설정 시 기본값 사용) |
+| `DEV_LOGIN_ENABLED` | 선택 | `1` 설정 시 dev-login 활성화 (개발 환경만) |
+| `SES_FROM_EMAIL` | 선택 | 휴면 예고 메일 발신 주소 (AWS SES 검증 필요) |
+| `DORMANT_DAYS` | 선택 | 휴면 전환 기준일 (기본 30) |
+| `SERVICE_URL` | 선택 | 휴면 예고 메일 본문 링크 URL |
 
 ---
 
@@ -606,7 +610,10 @@ i-NET SSO 인증 + HMAC 토큰 발급. Rate Limit: 5회/60초.
 {
   "success": true,
   "users": [
-    { "empno": "N1104268", "name": "홍길동", "region": "충청본부", "team": "전파관리팀", "role": "admin" }
+    {
+      "empno": "N1104268", "name": "홍길동", "region": "충청본부", "team": "전파관리팀",
+      "role": "admin", "last_login": "2026-04-01T09:00:00", "is_dormant": false
+    }
   ],
   "total": 1
 }
@@ -625,10 +632,23 @@ i-NET SSO 인증 + HMAC 토큰 발급. Rate Limit: 5회/60초.
 **인증 방식:** `Authorization: Bearer <token>` (admin 역할) 또는 `X-Admin-Key: <bootstrap_key>`
 **유효 역할:** `admin`, `manager`, `member`
 
-### 4.5 관리자 — 감사 로그
+### 4.5 관리자 — 휴면 해제
+
+#### `POST /admin/undormant/{empno}`
+관리자/매니저 전용. 휴면 계정을 활성 상태로 복구.
+
+**Response:**
+```json
+{ "success": true, "message": "휴면 해제 완료" }
+```
+- `is_dormant=false` 설정
+- `notified_d7`, `notified_d3`, `notified_d1` 플래그 제거
+- `last_login` 현재 시각으로 갱신
+
+### 4.6 관리자 — 감사 로그
 
 #### `GET /admin/audit-logs`
-관리자/매니저 전용.
+관리자/매니저 전용. (구 4.5)
 
 **Query Parameters:** `entityType`, `action`, `limit` (기본 50)
 
@@ -1096,11 +1116,27 @@ Staging → 운영 DB 확정
 #### `GET /inspection/my-list`
 내 배정 수검 목록
 
-**Query Parameters:** `year`
+**Query Parameters:** `year`, `week` (선택)
+
+**동작 방식:**
+- dev 계정 (`_dev_users` 캐시): 팀 무관 전체 조회
+- 실계정: `access담당 AND 품질개선팀` 동시 조건 (팀 미배정 시 빈 목록)
 
 **Response:**
 ```json
-{ "success": true, "items": [...] }
+{ "items": [...] }
+```
+
+#### `GET /inspection/my-list/weeks`
+내 팀 수검예정주차 목록
+
+**Query Parameters:** `year`
+
+**동작 방식:** my-list와 동일한 is_dev 분기 적용
+
+**Response:**
+```json
+{ "weeks": ["1월1주", "1월2주", ...] }
 ```
 
 #### `GET /inspection/progress`
@@ -1123,7 +1159,60 @@ DS 데이터에서 수검 상세 인덱스 빌드
 
 ---
 
-## 9. ERP-DS 비교 API (v2.0.0)
+## 9. 실적 결과장 API (v2.1.0)
+
+Base URL: `https://api-sko-kca.skons.net`
+
+### 9.1 결과장 업로드
+
+#### `POST /inspection-results/upload`
+결과장 엑셀 업로드 (관리자/매니저 전용)
+
+**Request:** multipart/form-data, `file` 필드
+
+**Response:** `{ "success": true, "inserted": 1234 }`
+
+### 9.2 주차 목록 조회
+
+#### `GET /inspection-results/weeks`
+업로드된 실적 데이터 기준 주차 목록 조회
+
+**Query Parameters:**
+- `year` (필수)
+- `month` (선택, 예: `1월`)
+- `region` (선택, 예: `강남`)
+
+**Response:**
+```json
+{ "weeks": ["1월1주", "1월2주", "1월3주", "1월4주"] }
+```
+
+### 9.3 결과장 엑셀 다운로드
+
+#### `POST /inspection-results/export-xlsx`
+RAW DATA 시트 엑셀 파일 반환
+
+**Request Body:**
+```json
+{ "year": 2026, "본부": "강남", "진행여부": "", "status": "", "성능서류": "", "주차별": "1월1주" }
+```
+
+**Response:** `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` 바이너리
+
+### 9.4 대시보드 / 분석
+
+| Method | Path | Query | 설명 |
+|--------|------|-------|------|
+| GET | `/inspection-results/dashboard` | year, region | 전체 집계 |
+| GET | `/inspection-results/monthly` | year, month, region | 월별 집계 |
+| GET | `/inspection-results/analysis` | year, region | 불합격 분석 + 장비타입 크로스탭 |
+| GET | `/inspection-results/weekly-trend` | year, region | 주별 합격율 추이 |
+| GET | `/inspection-results/weekly-trend-by-region` | year, region | 본부별 주별 추이 (성능+서류) |
+| GET | `/inspection-results/summary-report` | year, region | 현황 리포트 (성능/서류 분리) |
+
+---
+
+## 10. ERP-DS 비교 API (v2.0.0)
 
 Base URL: `https://api-sko-kca.skons.net`
 
@@ -1238,3 +1327,4 @@ ERP 유지보수 데이터 vs DS 무선시설 데이터 비교
 | 1.3.1 | 2026-03-03 | Upload-Zero-Build: 메타데이터만 파싱 (xlsx 빌드 제거), storageType/fileManifest 추가, 트리플 라우팅 (s3-zip/s3/DynamoDB), export on-demand 빌드, kca-ds-uploads 속성 명세 |
 | 1.4.0 | 2026-03-04 | 보안 강화: HMAC 토큰 인증, SSO 로그인 토큰 발급, 관리자 패널 API (users/audit-logs/set-role), kca-user-roles·kca-audit-logs 테이블, Rate Limiting, 업로드 크기 제한, S3 경로 검증, CORS 제한, 에러 메시지 내부정보 차단, X-User-Id 폴백 제거 |
 | 2.0.0 | 2026-03-23 | 호출명칭 매칭 API (DB 관리 + 3-Step 매칭 워크플로우 + SSE 스트리밍), 설치확인서 API (개별/일괄 HWP 생성), 수검 관리 API (Import → Staging → 일정 → 결과 → 진도율), ERP-DS 비교 API, S3 경로 추가, SQLite DB 추가 |
+| 2.1.0 | 2026-04-06 | 실적 결과장 API 섹션 추가 (§9), POST /admin/undormant/{empno} (휴면 해제), GET /inspection-results/weeks (동적 주차 조회), GET /inspection/my-list 동작 방식 상세화 (dev/실계정 분기), /admin/users 응답에 last_login/is_dormant 추가, 환경변수 SES_FROM_EMAIL/DORMANT_DAYS/SERVICE_URL/DEV_LOGIN_ENABLED 추가 |

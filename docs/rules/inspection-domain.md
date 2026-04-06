@@ -45,7 +45,8 @@ Row 4: [장비 Type별 불합격 현황 테이블] | [장비 Type별 불합격 �
 - 성능/서류 달성 여부: `perf_ok`/`perf_fail`/`doc_ok`/`doc_fail` type
 - 달성: 초록 배경 + 체크 아이콘
 - 미달성: 빨간 배경 + 경고 아이콘
-- Acc.담당 누적 실적: 합격율 **높은 순** 정렬 (내림차순)
+- 인라인 배경 범위: `Row(mainAxisSize: min)` + 내부 `Container` (전체 너비 배경 방지)
+- Acc.담당 누적 실적: 성능/서류 **분리 표시**, 합격율 **높은 순** 정렬 (내림차순)
 
 ### 장비 Type별 불합격 현황
 - `성능불합격(건)` 합계 = **전체 성능불합격 건수** (Top3 합이 아님)
@@ -54,7 +55,21 @@ Row 4: [장비 Type별 불합격 현황 테이블] | [장비 Type별 불합격 �
 ## 현장 수검 Map (inspection_my_list_screen)
 - `/inspection/my-list` API로 데이터 조회
 - region에서 "Access담당" 제거 후 `access담당` 컬럼과 매칭
-- dev-login 사용자: `_dev_users` 캐시에서 region/team 조회 (DynamoDB fallback)
+- dev-login 사용자(is_dev=True): 팀 무관 전체 목록 조회
+- 실계정: access담당 AND 품질개선팀 동시 조건 (팀 미배정 시 빈 목록)
+- 뒤로가기: Navigator.canPop 체크 → pop 불가 시 버튼 숨김
+
+## 내비게이션 연동 (inspection_result_screen)
+- 설치장소 행에 위/경도가 있을 때 Tmap / 카카오 버튼 표시
+- **Tmap**: `tmap://route?goalx={lng}&goaly={lat}&goalname={name}` (모바일 앱 직접 호출)
+- **카카오내비**: `kakaomap://route?ep={lat},{lng}&by=CAR` (모바일 앱 직접 호출)
+- `html.window.open('딥링크', '_blank')` — 모바일 브라우저에서 앱 실행
+
+## 실적 Excel Export
+- `POST /inspection-results/export-xlsx` — RAW DATA 시트 1장
+- 다이얼로그 3단계: 본부 → 월 → 주차 (순서대로 선택)
+- 월 선택 시 `GET /inspection-results/weeks?year=&month=&region=` 로 실제 업로드된 주차 목록 동적 조회
+- 파일명: `실적_결과장_{year}_{본부}_{월}_{주차}.xlsx`
 
 ## 결과장 업로드 규칙
 - 본부관리자(isDivisionAdmin) 이상만 업로드 버튼 노출

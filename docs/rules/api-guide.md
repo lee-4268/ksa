@@ -17,35 +17,39 @@ Authorization: Bearer {base64url(empno:expiry:hmac_sha256)}
 
 ## 엔드포인트 그룹 (120+)
 
-### 인증 (5)
+### 인증 / 사용자 (7)
 | Method | Path | 설명 |
 |--------|------|------|
-| POST | `/auth/login` | SSO 로그인 → 토큰 발급 |
+| POST | `/auth/login` | SSO 로그인 → 토큰 발급 + last_login 기록 |
 | POST | `/auth/dev-login` | 개발용 테스트 로그인 (DEV_LOGIN_ENABLED=1 필요) |
 | GET | `/auth/dev-login/status` | dev-login 활성화 여부 |
-| GET | `/users/{empno}` | 사용자 정보 조회 |
+| GET | `/users/{empno}` | 사용자 정보 조회 (last_login, is_dormant 포함) |
+| GET | `/admin/users` | 전체 사용자 목록 (last_login, is_dormant 포함) |
 | PUT | `/admin/set-role` | 역할 변경 (admin 전용) |
+| POST | `/admin/undormant/{empno}` | 휴면 해제 (is_dormant=false, notified 플래그 제거) |
 
 ### 검사 관리 (40+)
 | Method | Path | 설명 |
 |--------|------|------|
 | POST | `/inspection/upload-raw` | ERP 엑셀 업로드 |
-| POST | `/inspection/enqueue` | 대상 확정 (→ 자동 지오코딩) |
-| GET | `/inspection/my-list` | 내 팀 배정 목록 (region 기반) |
+| POST | `/inspection/enqueue` | 대상 확정 (→ 자동 지오코딩 백그라운드 실행) |
+| GET | `/inspection/my-list` | 내 팀 배정 목록 (dev 계정: 전체, 실계정: AND 조건) |
+| GET | `/inspection/my-list/weeks` | 내 팀 수검예정주차 목록 (dev 계정: 전체) |
 | GET | `/inspection/schedules` | 일정 조회 |
 | POST | `/inspection/result` | 검사 결과 저장 |
 | GET | `/inspection/data` | 검사 데이터 조회 |
 
-### 실적 관리 (8)
+### 실적 관리 (9)
 | Method | Path | 설명 |
 |--------|------|------|
 | POST | `/inspection-results/upload` | 결과장 엑셀 업로드 |
+| GET | `/inspection-results/weeks` | 업로드된 주차 목록 (month/region 필터) |
 | POST | `/inspection-results/export-xlsx` | 결과장 엑셀 다운로드 |
 | GET | `/inspection-results/dashboard` | 대시보드 집계 |
 | GET | `/inspection-results/analysis` | 불합격 분석 + 장비타입 크로스탭 |
 | GET | `/inspection-results/weekly-trend` | 주별 합격율 추이 |
 | GET | `/inspection-results/weekly-trend-by-region` | 본부별 주별 추이 (성능+서류) |
-| GET | `/inspection-results/summary-report` | 현황 리포트 자동 생성 |
+| GET | `/inspection-results/summary-report` | 현황 리포트 자동 생성 (성능/서류 분리) |
 
 ### DS 데이터 (20+)
 | Method | Path | 설명 |

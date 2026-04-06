@@ -39,13 +39,14 @@ base64url(empno:expiry_unix:hmac_sha256(SECRET, empno:expiry_unix))
 
 | 메뉴 | member | manager | admin |
 |------|--------|---------|-------|
-| 수검 현황 | O | O | O |
+| 실적 관리 | O | O | O |
 | 일정 및 통계 | O | O | O |
 | 현장 수검 Map | O | O | O |
 | DS 데이터 | O | O | O |
 | 호출명칭/설치확인서/전산비교 | O | O | O |
 | 커뮤니티 | O | O | O |
 | 결과장 업로드 버튼 | X | O | O |
+| 수검 관리 화면 버튼 (일정탭) | X | O | O |
 | 관리자 메뉴 | X | X | O |
 
 ### 프론트 권한 체크
@@ -100,10 +101,35 @@ auth.isDivisionAdmin // admin || manager
 
 ### kca-user-roles (KSA 전용)
 - PK: `user_id`
-- 필드: role (admin/manager/member)
+- 필드: role (admin/manager/member), last_login (UTC ISO), is_dormant (bool)
 - 최초 로그인 시 자동 등록 (member)
+- 로그인 시 last_login 자동 갱신
+- 30일 미로그인 → is_dormant=true (매일 09:00 KST 배치)
 
 ### _dev_users (메모리 캐시)
 - dev-login 시 저장
 - `/users/{empno}`, `/inspection/my-list`, `/inspection/my-list/weeks`에서 fallback
 - 서버 재시작 시 초기화
+- **my-list 조회 시 is_dev=True이면 팀 무관 전체 조회** (실계정은 AND 조건)
+
+## 휴면계정 관리
+
+### 배치 스케줄러
+- 매일 09:00 KST 실행 (`_dormant_account_daily_scheduler`)
+- kca-user-roles 전체 스캔 → last_login 기준 경과일 계산
+- D-7, D-3, D-1: SES HTML 예고 메일 발송 (notified_d7/d3/d1 플래그로 중복 방지)
+- D+0 (30일 초과): `is_dormant=true` 마킹 → 로그인 시 403 반환
+
+### 환경변수 (필수)
+```ini
+SES_FROM_EMAIL=no-reply@example.com   # AWS SES 검증된 발신 주소
+DORMANT_DAYS=30                        # 기본값 30
+SERVICE_URL=https://your-service.com  # 메일 본문 링크용
+```
+
+### 휴면 해제
+- 관리자: POST `/admin/undormant/{empno}` → is_dormant=false + notified 플래그 제거
+- 프론트: AdminService.undormantUser() → user_management_screen 휴면 해제 버튼
+
+### SES 설정 없을 때 동작
+- SES 호출 실패 시 `logger.error`만 기록, 서버 에러 없음 (non-fatal)
