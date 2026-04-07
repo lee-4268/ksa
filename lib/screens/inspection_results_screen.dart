@@ -556,11 +556,11 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
           const SizedBox(width: 10),
           Expanded(
               child: _summaryCard(
-                  '성능합격율', _pct(perfRate), Icons.check_circle, _green, target: '기준 98.5%')),
+                  '성능합격율', _pct(perfRate), Icons.check_circle, _green, target: 'SLA 98.5%')),
           const SizedBox(width: 10),
           Expanded(
               child: _summaryCard(
-                  '서류합격율', _pct(docRate), Icons.description, _orange, target: '기준 85.5%')),
+                  '서류합격율', _pct(docRate), Icons.description, _orange, target: 'SLA 85.5%')),
           const SizedBox(width: 10),
           Expanded(
               child: _summaryCard(
