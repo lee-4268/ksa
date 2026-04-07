@@ -480,7 +480,6 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
         .toList();
     final lat  = target?['위도']?.toString() ?? '';
     final lng  = target?['경도']?.toString() ?? '';
-    final coord = (lat.isNotEmpty && lng.isNotEmpty) ? '$lat, $lng' : '';
 
     final installAddr = target?['설치장소']?.toString()
         ?? target?['도로명주소']?.toString() ?? '';
@@ -521,7 +520,6 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
         if (facilityNames.isNotEmpty || serial.isNotEmpty)
           _infoRow('일련번호 및 통합시설명칭',
               facilityNames.isNotEmpty ? facilityNames.join('\n') : serial),
-        if (coord.isNotEmpty)     _infoRow('좌표',     coord),
         if (_inspDateCtrl.text.isNotEmpty)
           _infoRow('검사일', _fmtDate(_inspDateCtrl.text)),
       ]),

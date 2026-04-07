@@ -66,6 +66,10 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
   int _selectedQuarter = 0; // 0=전체, 1=1Q, 2=2Q, 3=3Q, 4=4Q
   late bool _isAdmin;
 
+  // 테이블 정렬
+  int _sortColumnIndex = 0;
+  bool _sortAscending = true;
+
   @override
   void initState() {
     super.initState();
@@ -946,17 +950,28 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
   // A. 본부별 실적 테이블
   // ══════════════════════════════════════════════════════════
 
+  // 컬럼 인덱스 → 정렬 키 매핑
+  static const _colKeys = [
+    'name', '수검국소', '완료', '시기조정', '폐국',
+    '성능합격', '성능불합격', '서류합격', '서류불합격', '성능합격율', '서류합격율',
+  ];
+
+  void _onSort(int colIdx, bool asc) {
+    setState(() {
+      _sortColumnIndex = colIdx;
+      _sortAscending = asc;
+    });
+  }
+
   Widget _buildDataTable() {
     final regionData =
         List<Map<String, dynamic>>.from(_monthlyData['regions'] ?? []);
     Map<String, dynamic> totals =
         Map<String, dynamic>.from(_monthlyData['totals'] ?? {});
 
-    // 서버에서 합계 데이터를 주지 않은 경우 클라이언트에서 직접 계산하여 표시
     if (totals.isEmpty && regionData.isNotEmpty) {
       double totalS = 0, comp = 0, adj = 0, cls = 0;
       double pPass = 0, pFail = 0, dPass = 0, dFail = 0;
-
       for (var r in regionData) {
         totalS += _toDouble(r['수검국소'] ?? r['total']);
         comp += _toDouble(r['완료'] ?? r['completed']);
@@ -967,26 +982,41 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
         dPass += _toDouble(r['서류합격'] ?? r['doc_pass']);
         dFail += _toDouble(r['서류불합격'] ?? r['doc_fail']);
       }
-
       totals = {
         'name': '합계',
-        '수검국소': totalS,
-        '완료': comp,
-        '시기조정': adj,
-        '폐국': cls,
-        '성능합격': pPass,
-        '성능불합격': pFail,
-        '서류합격': dPass,
-        '서류불합격': dFail,
+        '수검국소': totalS, '완료': comp, '시기조정': adj, '폐국': cls,
+        '성능합격': pPass, '성능불합격': pFail, '서류합격': dPass, '서류불합격': dFail,
         '성능합격율': (pPass + pFail) > 0 ? (pPass / (pPass + pFail)) : 0.0,
         '서류합격율': (dPass + dFail) > 0 ? (dPass / (dPass + dFail)) : 0.0,
       };
     }
 
-    final allRows = [
-      ...regionData,
-      if (totals.isNotEmpty) totals,
-    ];
+    // 정렬 (합계 행 제외)
+    final sortedRegions = List<Map<String, dynamic>>.from(regionData);
+    if (_sortColumnIndex > 0) {
+      final key = _colKeys[_sortColumnIndex];
+      sortedRegions.sort((a, b) {
+        final av = _toDouble(a[key] ?? a[key == '수검국소' ? 'total' : key == '완료' ? 'completed' : key]);
+        final bv = _toDouble(b[key] ?? b[key == '수검국소' ? 'total' : key == '완료' ? 'completed' : key]);
+        return _sortAscending ? av.compareTo(bv) : bv.compareTo(av);
+      });
+    } else if (_sortColumnIndex == 0) {
+      sortedRegions.sort((a, b) {
+        final an = _regionName(a, fallback: '');
+        final bn = _regionName(b, fallback: '');
+        return _sortAscending ? an.compareTo(bn) : bn.compareTo(an);
+      });
+    }
+
+    final allRows = [...sortedRegions, if (totals.isNotEmpty) totals];
+
+    DataColumn col(String label, int idx, {bool numeric = false}) =>
+        DataColumn(
+          label: Center(child: Text(label)),
+          numeric: numeric,
+          headingRowAlignment: MainAxisAlignment.center,
+          onSort: (i, asc) => _onSort(idx, asc),
+        );
 
     return _chartSection(
       title: '본부별 현황',
@@ -994,8 +1024,9 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
       iconColor: _blue,
       child: ClipRect(
         child: DataTable(
-          headingRowColor:
-              WidgetStateProperty.all(const Color(0xFFF3F4F6)),
+          sortColumnIndex: _sortColumnIndex,
+          sortAscending: _sortAscending,
+          headingRowColor: WidgetStateProperty.all(const Color(0xFFF3F4F6)),
           headingRowHeight: 38,
           dataRowMinHeight: 36,
           dataRowMaxHeight: 36,
@@ -1007,29 +1038,29 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
             borderRadius: BorderRadius.circular(8),
           ),
           headingTextStyle: const TextStyle(
-              fontSize: 11,
-              fontWeight: FontWeight.w700,
-              color: Color(0xFF374151)),
-          dataTextStyle:
-              const TextStyle(fontSize: 11, color: Color(0xFF111827)),
-          columns: const [
-            DataColumn(label: Center(child: Text('본부')), headingRowAlignment: MainAxisAlignment.center),
-            DataColumn(label: Center(child: Text('수검국소')), numeric: true, headingRowAlignment: MainAxisAlignment.center),
-            DataColumn(label: Center(child: Text('완료')), numeric: true, headingRowAlignment: MainAxisAlignment.center),
-            DataColumn(label: Center(child: Text('시기조정')), numeric: true, headingRowAlignment: MainAxisAlignment.center),
-            DataColumn(label: Center(child: Text('폐국')), numeric: true, headingRowAlignment: MainAxisAlignment.center),
-            DataColumn(label: Center(child: Text('성능합격')), numeric: true, headingRowAlignment: MainAxisAlignment.center),
-            DataColumn(label: Center(child: Text('성능불합')), numeric: true, headingRowAlignment: MainAxisAlignment.center),
-            DataColumn(label: Center(child: Text('서류합격')), numeric: true, headingRowAlignment: MainAxisAlignment.center),
-            DataColumn(label: Center(child: Text('서류불합')), numeric: true, headingRowAlignment: MainAxisAlignment.center),
-            DataColumn(label: Center(child: Text('성능합격율')), numeric: true, headingRowAlignment: MainAxisAlignment.center),
-            DataColumn(label: Center(child: Text('서류합격율')), numeric: true, headingRowAlignment: MainAxisAlignment.center),
+              fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF374151)),
+          dataTextStyle: const TextStyle(fontSize: 11, color: Color(0xFF111827)),
+          columns: [
+            col('본부', 0),
+            col('수검국소', 1, numeric: true),
+            col('완료', 2, numeric: true),
+            col('시기조정', 3, numeric: true),
+            col('폐국', 4, numeric: true),
+            col('성능합격', 5, numeric: true),
+            col('성능불합', 6, numeric: true),
+            col('서류합격', 7, numeric: true),
+            col('서류불합', 8, numeric: true),
+            col('성능합격율', 9, numeric: true),
+            col('서류합격율', 10, numeric: true),
           ],
           rows: allRows.asMap().entries.map((entry) {
             final i = entry.key;
             final r = entry.value;
             final isTotalRow = i == allRows.length - 1 && totals.isNotEmpty;
             final isEven = i.isEven;
+            final total = _toDouble(r['수검국소'] ?? r['total']);
+            final completed = _toDouble(r['완료'] ?? r['completed']);
+            final isCompleted = !isTotalRow && total > 0 && completed >= total;
             final perfRate = _asPercent(r['성능합격율'] ?? r['perf_pass_rate']);
             final docRate = _asPercent(r['서류합격율'] ?? r['doc_pass_rate']);
             final style = TextStyle(
@@ -1042,14 +1073,23 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
               color: WidgetStateProperty.all(
                 isTotalRow
                     ? const Color(0xFFEEF2FF)
-                    : isEven
-                        ? Colors.white
-                        : const Color(0xFFFAFAFB),
+                    : isCompleted
+                        ? const Color(0xFFE8F5E9)
+                        : isEven
+                            ? Colors.white
+                            : const Color(0xFFFAFAFB),
               ),
               cells: [
-                DataCell(Center(child: Text(
-                    _regionName(r, fallback: isTotalRow ? '합계' : '-'),
-                    style: style))),
+                DataCell(Center(child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (isCompleted) ...[
+                      const Icon(Icons.check_circle, size: 12, color: Color(0xFF43A047)),
+                      const SizedBox(width: 3),
+                    ],
+                    Text(_regionName(r, fallback: isTotalRow ? '합계' : '-'), style: style),
+                  ],
+                ))),
                 DataCell(Center(child: Text(_fmt(r['수검국소'] ?? r['total']), style: style))),
                 DataCell(Center(child: Text(_fmt(r['완료'] ?? r['completed']), style: style))),
                 DataCell(Center(child: Text(_fmt(r['시기조정'] ?? r['adjusted']), style: style))),
@@ -1074,7 +1114,7 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
     Color textColor;
 
     if (isPerfRate) {
-      if (rate >= 98) {
+      if (rate >= 98.5) {
         bgColor = const Color(0xFFDCFCE7);
         textColor = const Color(0xFF16A34A);
       } else if (rate >= 95) {
@@ -1085,7 +1125,7 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
         textColor = const Color(0xFFDC2626);
       }
     } else {
-      if (rate >= 85) {
+      if (rate >= 85.5) {
         bgColor = const Color(0xFFDCFCE7);
         textColor = const Color(0xFF16A34A);
       } else if (rate >= 80) {

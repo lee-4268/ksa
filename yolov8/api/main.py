@@ -9124,6 +9124,140 @@ async def cert_batch_download(job_id: str, request: Request):
 
 
 # ============================================================
+# ACTA 도면 연동
+# ============================================================
+
+ACTA_BASE = "https://acta.sktelecom.com/api/portal-service"
+ACTA_CONST = "https://acta.sktelecom.com/api/const-service"
+
+@app.post("/acta/login")
+async def acta_login(request: Request):
+    """ACTA 로그인 프록시 → accessToken 반환"""
+    await _verify_auth(request)
+    body = await request.json()
+    user_id = body.get("userId", "").strip()
+    user_pwd = body.get("cUserPwd", "").strip()
+    if not user_id or not user_pwd:
+        raise HTTPException(status_code=400, detail="userId, cUserPwd 필수")
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(
+                f"{ACTA_BASE}/validations",
+                json={"userId": user_id, "cUserPwd": user_pwd},
+                headers={"Content-Type": "application/json"},
+            )
+        if resp.status_code != 200:
+            raise HTTPException(status_code=401, detail="ACTA 로그인 실패")
+        data = resp.json()
+        token = data.get("data", {}).get("accessToken")
+        if not token:
+            raise HTTPException(status_code=401, detail="ACTA 토큰 없음")
+        return {"accessToken": token}
+    except httpx.RequestError as e:
+        logger.error(f"ACTA 로그인 오류: {e}")
+        raise HTTPException(status_code=502, detail="ACTA 서버 연결 실패")
+
+
+@app.post("/acta/drawing")
+async def acta_drawing(request: Request):
+    """허가번호 → zpcode → ACTA /ifmsts → atfl_uuid 조회"""
+    await _verify_auth(request)
+    body = await request.json()
+    zpwino = body.get("zpwino", "").strip()
+    acta_token = body.get("actaToken", "").strip()
+    if not zpwino or not acta_token:
+        raise HTTPException(status_code=400, detail="zpwino, actaToken 필수")
+
+    # cert_cache에서 zpcode 조회
+    def _get_zpcode(zpwino: str) -> str | None:
+        db_path = "/tmp/cert_cache.db"
+        if not os.path.exists(db_path):
+            return None
+        conn = sqlite3.connect(db_path)
+        try:
+            row = conn.execute(
+                "SELECT zpcode FROM cert WHERE zpwino=? LIMIT 1", (zpwino,)
+            ).fetchone()
+            return row[0] if row else None
+        finally:
+            conn.close()
+
+    zpcode = await asyncio.to_thread(_get_zpcode, zpwino)
+    if not zpcode:
+        raise HTTPException(status_code=404, detail="해당 허가번호의 시설코드를 찾을 수 없습니다.")
+
+    # ACTA /ifmsts → prIntgFcltsCd, fcltsTypCd 획득
+    acta_headers = {
+        "Authorization": f"Bearer {acta_token}",
+        "Content-Type": "application/json",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp1 = await client.post(
+                f"{ACTA_CONST}/ifmsts",
+                json={
+                    "pageNo": 1, "rowPerPage": 5, "pageSize": 5,
+                    "intgFcltsCd": zpcode, "intgFcltsNm": "",
+                    "fcltsTypCd": "R", "isSearch": True,
+                    "fcltsItm": "1000", "fcltsSttCd": "",
+                    "fcltsSttCdArr": [], "fcltsSttCdLst": [],
+                    "locaCd": "", "locaHdofcId": "",
+                    "bldcpId": "", "bsTcYn": "",
+                    "dtbiDivCd": "", "dtIdItm": None,
+                    "biYr": "", "endDtm": "", "regEndDtm": "",
+                    "regStartDtm": "", "selectDateType": "ALL",
+                    "skoHofOrgId": "", "skoOpBpId": "", "sktOrgId": "",
+                    "itemVal": "", "itemValues": [], "itemValuesLst": [],
+                },
+                headers=acta_headers,
+            )
+        if resp1.status_code != 200:
+            raise HTTPException(status_code=502, detail="ACTA 시설 조회 실패")
+        data1 = resp1.json()
+        items1 = data1.get("list", [])
+        if not items1:
+            return {"found": False, "zpcode": zpcode}
+
+        facility = items1[0]
+        pr_intg_fclts_cd = facility.get("prIntgFcltsCd", "")
+        fclts_typ_cd = facility.get("fcltsTypCd", "R")
+
+        # ACTA /ifmsts/ifmst-dtl → ccdocGrid에서 atflUuid 획득
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp2 = await client.get(
+                f"{ACTA_CONST}/ifmsts/ifmst-dtl",
+                params={
+                    "intgFcltsCd": zpcode,
+                    "prIntgFcltsCd": pr_intg_fclts_cd,
+                    "fcltsTypCd": fclts_typ_cd,
+                },
+                headers=acta_headers,
+            )
+        if resp2.status_code != 200:
+            return {"found": False, "zpcode": zpcode}
+        data2 = resp2.json()
+
+        # ccdocGrid에서 DWG 도면 찾기
+        ccdoc_grid = data2.get("data", {}).get("tabPrjCcdoc", {}).get("ccdocGrid") or []
+        dwg_docs = [d for d in ccdoc_grid if d.get("atflKndNm") == "도면" and "평면도" in (d.get("atflOrglNm") or "")]
+
+        if not dwg_docs:
+            return {"found": False, "zpcode": zpcode, "msg": "평면도가 존재하지 않습니다."}
+
+        doc = dwg_docs[0]
+        atfl_uuid = doc.get("atflUuid", "")
+        file_nm = doc.get("atflOrglNm", "") or doc.get("atflSaveNm", "")
+        if not atfl_uuid:
+            return {"found": False, "zpcode": zpcode}
+
+        viewer_url = f"https://acta.sktelecom.com/exfiles/cadian/viewer.html?atfl_uuid={atfl_uuid}&filenm={file_nm}"
+        return {"found": True, "zpcode": zpcode, "atflUuid": atfl_uuid, "fileNm": file_nm, "viewerUrl": viewer_url}
+    except httpx.RequestError as e:
+        logger.error(f"ACTA 도면 조회 오류: {e}")
+        raise HTTPException(status_code=502, detail="ACTA 서버 연결 실패")
+
+
+# ============================================================
 # ERP vs DS 전산자료 비교
 # ============================================================
 

@@ -175,6 +175,39 @@ class CertificateService {
     return json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
   }
 
+  /// ACTA 로그인 → accessToken 반환
+  Future<String> actaLogin(String userId, String cUserPwd) async {
+    final resp = await http
+        .post(
+          Uri.parse('$_baseUrl/acta/login'),
+          headers: _headers,
+          body: json.encode({'userId': userId, 'cUserPwd': cUserPwd}),
+        )
+        .timeout(_apiTimeout);
+    if (resp.statusCode != 200) {
+      final msg = _parseError(resp);
+      throw Exception(msg);
+    }
+    final data = json.decode(utf8.decode(resp.bodyBytes));
+    return data['accessToken'] as String;
+  }
+
+  /// 허가번호 + ACTA 토큰 → atfl_uuid 조회
+  Future<Map<String, dynamic>> actaDrawing(String zpwino, String actaToken) async {
+    final resp = await http
+        .post(
+          Uri.parse('$_baseUrl/acta/drawing'),
+          headers: _headers,
+          body: json.encode({'zpwino': zpwino, 'actaToken': actaToken}),
+        )
+        .timeout(_apiTimeout);
+    if (resp.statusCode != 200) {
+      final msg = _parseError(resp);
+      throw Exception(msg);
+    }
+    return json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+  }
+
   String _parseError(http.Response resp) {
     try {
       final body = json.decode(utf8.decode(resp.bodyBytes));
