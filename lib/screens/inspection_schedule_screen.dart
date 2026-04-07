@@ -59,6 +59,36 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
   bool _loading = false;
   String? _error;
 
+  // 테이블 정렬
+  int? _sortColIdx;
+  bool _sortAsc = true;
+
+  // 정렬 컬럼 인덱스 → 데이터 키 (체크박스 컬럼 제외, 1부터 시작)
+  static const _scheduleColKeys = [
+    null, // 0: 체크박스
+    '수검일정', '허가번호', '호출명칭', '국종군', '부서', '분기',
+    '연도주기', '검사주기', '허가상태', '설치장소', '도로명주소',
+    '장치수', '통시', '공대', 'KCA검토결과', '시기조정', '기준연도',
+    'SKT본부', 'Access담당', '품질개선팀',
+  ];
+
+  void _onScheduleSort(int colIdx, bool asc) {
+    final key = _scheduleColKeys[colIdx];
+    if (key == null) return;
+    setState(() {
+      _sortColIdx = colIdx;
+      _sortAsc = asc;
+      _items.sort((a, b) {
+        final av = (a[key] ?? '').toString();
+        final bv = (b[key] ?? '').toString();
+        final an = double.tryParse(av);
+        final bn = double.tryParse(bv);
+        if (an != null && bn != null) return asc ? an.compareTo(bn) : bn.compareTo(an);
+        return asc ? av.compareTo(bv) : bv.compareTo(av);
+      });
+    });
+  }
+
   Map<String, dynamic> _matrix = {};
   List<String> _quarters = [];
   List<Map<String, dynamic>> _schedules = [];
@@ -1337,6 +1367,8 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                 scrollDirection: Axis.horizontal,
                 child: SingleChildScrollView(
                   child: DataTable(
+                    sortColumnIndex: _sortColIdx,
+                    sortAscending: _sortAsc,
                     headingRowColor: WidgetStateProperty.all(_primary.withValues(alpha: 0.12)),
                     headingRowHeight: 44,
                     dataRowMinHeight: 42,
@@ -1370,27 +1402,26 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                               },
                             )
                           : const SizedBox(width: 24)),
-                      DataColumn(label: Text('수검일정', style: headerStyle)),
-                      DataColumn(label: Text('허가번호', style: headerStyle)),
-                      DataColumn(label: Text('호출명칭', style: headerStyle)),
-                      DataColumn(label: Text('국종군', style: headerStyle)),
-                      DataColumn(label: Text('부서', style: headerStyle)),
-                      DataColumn(label: Text('분기', style: headerStyle)),
-                      DataColumn(label: Text('연도주기', style: headerStyle)),
-                      DataColumn(label: Text('검사주기', style: headerStyle)),
-                      DataColumn(label: Text('허가상태', style: headerStyle)),
-                      DataColumn(label: Text('설치장소', style: headerStyle)),
-                      DataColumn(label: Text('도로명주소', style: headerStyle)),
-                      DataColumn(label: Text('장치수', style: headerStyle)),
-                      DataColumn(label: Text('통시', style: headerStyle)),
-                      DataColumn(label: Text('공대', style: headerStyle)),
-                      DataColumn(label: Text('KCA검토결과', style: headerStyle)),
-                      DataColumn(label: Text('시기조정', style: headerStyle)),
-                      DataColumn(label: Text('기준연도', style: headerStyle)),
-                      DataColumn(label: Text('SKT본부', style: headerStyle)),
-                      DataColumn(label: Text('Access담당', style: headerStyle)),
-                      DataColumn(label: Text('품질개선팀', style: headerStyle)),
-                      
+                      DataColumn(label: Text('수검일정', style: headerStyle), onSort: (i, a) => _onScheduleSort(1, a)),
+                      DataColumn(label: Text('허가번호', style: headerStyle), onSort: (i, a) => _onScheduleSort(2, a)),
+                      DataColumn(label: Text('호출명칭', style: headerStyle), onSort: (i, a) => _onScheduleSort(3, a)),
+                      DataColumn(label: Text('국종군', style: headerStyle), onSort: (i, a) => _onScheduleSort(4, a)),
+                      DataColumn(label: Text('부서', style: headerStyle), onSort: (i, a) => _onScheduleSort(5, a)),
+                      DataColumn(label: Text('분기', style: headerStyle), onSort: (i, a) => _onScheduleSort(6, a)),
+                      DataColumn(label: Text('연도주기', style: headerStyle), onSort: (i, a) => _onScheduleSort(7, a)),
+                      DataColumn(label: Text('검사주기', style: headerStyle), onSort: (i, a) => _onScheduleSort(8, a)),
+                      DataColumn(label: Text('허가상태', style: headerStyle), onSort: (i, a) => _onScheduleSort(9, a)),
+                      DataColumn(label: Text('설치장소', style: headerStyle), onSort: (i, a) => _onScheduleSort(10, a)),
+                      DataColumn(label: Text('도로명주소', style: headerStyle), onSort: (i, a) => _onScheduleSort(11, a)),
+                      DataColumn(label: Text('장치수', style: headerStyle), onSort: (i, a) => _onScheduleSort(12, a)),
+                      DataColumn(label: Text('통시', style: headerStyle), onSort: (i, a) => _onScheduleSort(13, a)),
+                      DataColumn(label: Text('공대', style: headerStyle), onSort: (i, a) => _onScheduleSort(14, a)),
+                      DataColumn(label: Text('KCA검토결과', style: headerStyle), onSort: (i, a) => _onScheduleSort(15, a)),
+                      DataColumn(label: Text('시기조정', style: headerStyle), onSort: (i, a) => _onScheduleSort(16, a)),
+                      DataColumn(label: Text('기준연도', style: headerStyle), onSort: (i, a) => _onScheduleSort(17, a)),
+                      DataColumn(label: Text('SKT본부', style: headerStyle), onSort: (i, a) => _onScheduleSort(18, a)),
+                      DataColumn(label: Text('Access담당', style: headerStyle), onSort: (i, a) => _onScheduleSort(19, a)),
+                      DataColumn(label: Text('품질개선팀', style: headerStyle), onSort: (i, a) => _onScheduleSort(20, a)),
                     ],
                     rows: _items.asMap().entries.map((entry) {
                       final idx = entry.key;

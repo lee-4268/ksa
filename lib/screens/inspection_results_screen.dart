@@ -556,11 +556,11 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
           const SizedBox(width: 10),
           Expanded(
               child: _summaryCard(
-                  '성능합격율', _pct(perfRate), Icons.check_circle, _green)),
+                  '성능합격율', _pct(perfRate), Icons.check_circle, _green, target: '기준 98.5%')),
           const SizedBox(width: 10),
           Expanded(
               child: _summaryCard(
-                  '서류합격율', _pct(docRate), Icons.description, _orange)),
+                  '서류합격율', _pct(docRate), Icons.description, _orange, target: '기준 85.5%')),
           const SizedBox(width: 10),
           Expanded(
               child: _summaryCard(
@@ -571,7 +571,7 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
   }
 
   Widget _summaryCard(
-      String label, String value, IconData icon, Color color) {
+      String label, String value, IconData icon, Color color, {String? target}) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       decoration: BoxDecoration(
@@ -600,11 +600,22 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(label,
-                    style: const TextStyle(
-                        fontSize: 11,
-                        color: Color(0xFF6B7280),
-                        fontWeight: FontWeight.w500)),
+                Row(
+                  children: [
+                    Text(label,
+                        style: const TextStyle(
+                            fontSize: 11,
+                            color: Color(0xFF6B7280),
+                            fontWeight: FontWeight.w500)),
+                    if (target != null) ...[
+                      const SizedBox(width: 6),
+                      Text(target,
+                          style: const TextStyle(
+                              fontSize: 10,
+                              color: Color(0xFF9CA3AF))),
+                    ],
+                  ],
+                ),
                 const SizedBox(height: 2),
                 AnimatedSwitcher(
                   duration: const Duration(milliseconds: 400),
