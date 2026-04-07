@@ -1655,8 +1655,8 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
         columns: [
           DataColumn(label: Center(child: Text(month)), numeric: isQuarter, headingRowAlignment: MainAxisAlignment.center),
           const DataColumn(label: Center(child: Text('대상')), numeric: true, headingRowAlignment: MainAxisAlignment.center),
-          const DataColumn(label: Center(child: Text('불합')), numeric: true, headingRowAlignment: MainAxisAlignment.center),
-          const DataColumn(label: Center(child: Text('합격율')), numeric: true, headingRowAlignment: MainAxisAlignment.center),
+          const DataColumn(label: Center(child: Text('성능불합')), numeric: true, headingRowAlignment: MainAxisAlignment.center),
+          const DataColumn(label: Center(child: Text('성능합격율')), numeric: true, headingRowAlignment: MainAxisAlignment.center),
           const DataColumn(label: Center(child: Text('서류불합')), numeric: true, headingRowAlignment: MainAxisAlignment.center),
           const DataColumn(label: Center(child: Text('서류합격율')), numeric: true, headingRowAlignment: MainAxisAlignment.center),
         ],
