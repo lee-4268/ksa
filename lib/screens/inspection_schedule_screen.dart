@@ -109,6 +109,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
   late bool _isSuperAdmin;
   late bool _isDivisionAdmin;
   late String _myHdqt;
+  late String _myTeam;
 
   void _cacheAuthValues() {
     final auth = context.read<AuthService>();
@@ -118,6 +119,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     _isDivisionAdmin = auth.isDivisionAdmin;
     final dept = auth.userDepartment ?? '';
     _myHdqt = dept.replaceAll('Access담당', '').trim();
+    _myTeam = auth.userTeam ?? '';
   }
 
   /// 해당 item에 대해 일정 등록/체크 권한이 있는지
@@ -153,10 +155,24 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     _tabCtrl = TabController(length: 2, vsync: this);
     _svc = InspectionService()..setAuthToken(context.read<AuthService>().authToken);
     _cacheAuthValues();
+    _applyDefaultFilter();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _loadOrgMap();
       _loadAll();
     });
+  }
+
+  void _applyDefaultFilter() {
+    if (_isSuperAdmin) return; // superadmin은 전체 조회
+    if (_myHdqt.isNotEmpty) {
+      _pHdqt = _myHdqt;
+      _aHdqt = _myHdqt;
+    }
+    // member(일반 팀원)인 경우 팀까지 자동 필터
+    if (!_isAdmin && _myTeam.isNotEmpty) {
+      _pTeam = _myTeam;
+      _aTeam = _myTeam;
+    }
   }
 
   @override
