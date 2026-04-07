@@ -1657,9 +1657,12 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
           const DataColumn(label: Center(child: Text('대상')), numeric: true, headingRowAlignment: MainAxisAlignment.center),
           const DataColumn(label: Center(child: Text('불합')), numeric: true, headingRowAlignment: MainAxisAlignment.center),
           const DataColumn(label: Center(child: Text('합격율')), numeric: true, headingRowAlignment: MainAxisAlignment.center),
+          const DataColumn(label: Center(child: Text('서류불합')), numeric: true, headingRowAlignment: MainAxisAlignment.center),
+          const DataColumn(label: Center(child: Text('서류합격율')), numeric: true, headingRowAlignment: MainAxisAlignment.center),
         ],
         rows: monthWeeks.map((w) {
           final rate = _asPercent(w['합격율'] ?? 0);
+          final docRate = _asPercent(w['서류합격율'] ?? 0);
           final weekLabel = (w['주차'] ?? '-').toString().replaceAll(RegExp(r'^\d+월'), '');
           return DataRow(cells: [
             DataCell(Center(child: Text(weekLabel, style: TextStyle(fontSize: fontSize)))),
@@ -1668,6 +1671,10 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
             DataCell(Center(child: Text('${rate.toStringAsFixed(2)}%',
                 style: TextStyle(fontSize: fontSize, fontWeight: FontWeight.w600,
                     color: rate >= 98.5 ? const Color(0xFF2E7D32) : _primary)))),
+            DataCell(Center(child: Text(_fmt(w['서류불합격'] ?? 0), style: TextStyle(fontSize: fontSize)))),
+            DataCell(Center(child: Text('${docRate.toStringAsFixed(2)}%',
+                style: TextStyle(fontSize: fontSize, fontWeight: FontWeight.w600,
+                    color: docRate >= 85.5 ? const Color(0xFF2E7D32) : _blue)))),
           ]);
         }).toList(),
       );
@@ -2462,8 +2469,8 @@ class _ComboChartPainter extends CustomPainter {
         0, (m, w) => math.max(m, toDouble(w['수검'] ?? 0)));
     final yMaxCount = (maxCount * 1.2).ceilToDouble();
 
-    // Rate always 90-100
-    const rateMin = 90.0;
+    // Rate 80-100 (서류 목표 85.5% 포함)
+    const rateMin = 80.0;
     const rateMax = 100.0;
 
     final barWidth = (chartW / weeks.length) * 0.5;
@@ -2526,9 +2533,9 @@ class _ComboChartPainter extends CustomPainter {
     final perfTargetY = topPad + chartH * (1 - (98.5 - rateMin) / (rateMax - rateMin));
     _drawDashedLine(canvas, perfTargetY, const Color(0xFFE53935).withOpacity(0.6));
 
-    // 목표선 85.5% (서류) — rateMin(90) 아래라서 별도 처리
-    // 서류는 85~100 범위로 보이도록 rateMin을 80으로 확장하기 어려우니
-    // 차트 하단(rateMin=90 이하)에는 표시 불가 → 라인만 생략, 범례로 대체
+    // 목표선 85.5% (서류)
+    final docTargetY = topPad + chartH * (1 - (85.5 - rateMin) / (rateMax - rateMin));
+    _drawDashedLine(canvas, docTargetY, const Color(0xFF2196F3).withOpacity(0.6));
 
     // 성능 합격율 라인
     final perfPoints = <Offset>[];
