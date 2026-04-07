@@ -10380,7 +10380,9 @@ def _insp_job_read_sync(job_id: str):
 
 def _init_ds_detail_db():
     import sqlite3
-    conn = sqlite3.connect(_DS_DETAIL_DB)
+    conn = sqlite3.connect(_DS_DETAIL_DB, timeout=60)
+    conn.execute('PRAGMA journal_mode=WAL')
+    conn.execute('PRAGMA synchronous=NORMAL')
     conn.execute('''CREATE TABLE IF NOT EXISTS ds_일반사항 (
         허가번호 TEXT PRIMARY KEY, 무선국명 TEXT, 호출명칭 TEXT
     )''')
@@ -10440,7 +10442,8 @@ def _build_ds_detail_from_zip_sync(zip_path: str):
     """DS ZIP에서 일반사항/장치/안테나/전파형식/주파수 시트 파싱 → ds_detail.db 갱신."""
     import sqlite3, zipfile
     _init_ds_detail_db()
-    conn = sqlite3.connect(_DS_DETAIL_DB)
+    conn = sqlite3.connect(_DS_DETAIL_DB, timeout=60)
+    conn.execute('PRAGMA journal_mode=WAL')
 
     # 1pass: 모든 데이터 수집 (INSERT 전 DELETE를 위해 허가번호 먼저 확보)
     batches: dict = {'일반사항': [], '장치': [], '안테나': [], '전파형식': [], '주파수': []}
