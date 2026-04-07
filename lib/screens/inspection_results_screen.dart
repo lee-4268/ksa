@@ -609,10 +609,19 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
                             fontWeight: FontWeight.w500)),
                     if (target != null) ...[
                       const SizedBox(width: 6),
-                      Text(target,
-                          style: const TextStyle(
-                              fontSize: 10,
-                              color: Color(0xFF9CA3AF))),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFF3F4F6),
+                          borderRadius: BorderRadius.circular(4),
+                          border: Border.all(color: const Color(0xFFD1D5DB)),
+                        ),
+                        child: Text(target,
+                            style: const TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                                color: Color(0xFF6B7280))),
+                      ),
                     ],
                   ],
                 ),
@@ -1069,9 +1078,6 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
             final r = entry.value;
             final isTotalRow = i == allRows.length - 1 && totals.isNotEmpty;
             final isEven = i.isEven;
-            final total = _toDouble(r['수검국소'] ?? r['total']);
-            final completed = _toDouble(r['완료'] ?? r['completed']);
-            final isCompleted = !isTotalRow && total > 0 && completed >= total;
             final perfRate = _asPercent(r['성능합격율'] ?? r['perf_pass_rate']);
             final docRate = _asPercent(r['서류합격율'] ?? r['doc_pass_rate']);
             final style = TextStyle(
@@ -1084,23 +1090,12 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
               color: WidgetStateProperty.all(
                 isTotalRow
                     ? const Color(0xFFEEF2FF)
-                    : isCompleted
-                        ? const Color(0xFFE8F5E9)
-                        : isEven
-                            ? Colors.white
-                            : const Color(0xFFFAFAFB),
+                    : isEven
+                        ? Colors.white
+                        : const Color(0xFFFAFAFB),
               ),
               cells: [
-                DataCell(Center(child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    if (isCompleted) ...[
-                      const Icon(Icons.check_circle, size: 12, color: Color(0xFF43A047)),
-                      const SizedBox(width: 3),
-                    ],
-                    Text(_regionName(r, fallback: isTotalRow ? '합계' : '-'), style: style),
-                  ],
-                ))),
+                DataCell(Center(child: Text(_regionName(r, fallback: isTotalRow ? '합계' : '-'), style: style))),
                 DataCell(Center(child: Text(_fmt(r['수검국소'] ?? r['total']), style: style))),
                 DataCell(Center(child: Text(_fmt(r['완료'] ?? r['completed']), style: style))),
                 DataCell(Center(child: Text(_fmt(r['시기조정'] ?? r['adjusted']), style: style))),
@@ -1580,7 +1575,7 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
     final weeks = _filterByQuarter(allWeeks);
 
     return _chartSection(
-      title: '성능 합격율 주별 Trend',
+      title: '합격율 주별 Trend',
       icon: Icons.timeline,
       iconColor: _green,
       child: Column(
@@ -1593,10 +1588,13 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
               const Spacer(),
               _legendDot(const Color(0xFF90CAF9), '대상 건수'),
               const SizedBox(width: 12),
-              _legendDot(_primary, '합격율 (%)'),
+              _legendDot(_primary, '성능 합격율'),
               const SizedBox(width: 12),
-              _legendDot(
-                  _primary.withValues(alpha: 0.5), '목표 98.5%'),
+              _legendDot(const Color(0xFF2196F3), '서류 합격율'),
+              const SizedBox(width: 12),
+              _legendDot(_primary.withValues(alpha: 0.5), '성능 목표 98.5%'),
+              const SizedBox(width: 12),
+              _legendDot(const Color(0xFF2196F3).withValues(alpha: 0.5), '서류 목표 85.5%'),
             ],
           ),
           const SizedBox(height: 12),
@@ -2502,60 +2500,57 @@ class _ComboChartPainter extends CustomPainter {
       );
     }
 
-    // Draw target line at 98.5%
-    final targetY =
-        topPad + chartH * (1 - (98.5 - rateMin) / (rateMax - rateMin));
-    final dashedPaint = Paint()
-      ..color = const Color(0xFFE53935)
-      ..strokeWidth = 1.0;
-    const dashW = 5.0;
-    const dashS = 3.0;
-    double dx = leftPad;
-    while (dx < size.width - rightPad) {
-      canvas.drawLine(
-        Offset(dx, targetY),
-        Offset(math.min(dx + dashW, size.width - rightPad), targetY),
-        dashedPaint,
-      );
-      dx += dashW + dashS;
+    void _drawDashedLine(Canvas canvas, double y, Color color) {
+      final paint = Paint()..color = color..strokeWidth = 1.0;
+      const dashW = 5.0, dashS = 3.0;
+      double dx = leftPad;
+      while (dx < size.width - rightPad) {
+        canvas.drawLine(Offset(dx, y), Offset(math.min(dx + dashW, size.width - rightPad), y), paint);
+        dx += dashW + dashS;
+      }
     }
 
-    // Draw rate line with markers
-    final linePaint = Paint()
-      ..color = const Color(0xFFE53935)
-      ..strokeWidth = 2.0
-      ..style = PaintingStyle.stroke;
-    final dotPaint = Paint()
-      ..color = const Color(0xFFE53935)
-      ..style = PaintingStyle.fill;
+    void _drawLine(Canvas canvas, List<Offset> points, Color color) {
+      if (points.length < 2) return;
+      final paint = Paint()..color = color..strokeWidth = 2.0..style = PaintingStyle.stroke;
+      final path = Path()..moveTo(points[0].dx, points[0].dy);
+      for (int i = 1; i < points.length; i++) path.lineTo(points[i].dx, points[i].dy);
+      canvas.drawPath(path, paint);
+      for (final p in points) {
+        canvas.drawCircle(p, 4, Paint()..color = color..style = PaintingStyle.fill);
+        canvas.drawCircle(p, 2.5, Paint()..color = Colors.white..style = PaintingStyle.fill);
+      }
+    }
 
-    final points = <Offset>[];
+    // 목표선 98.5% (성능)
+    final perfTargetY = topPad + chartH * (1 - (98.5 - rateMin) / (rateMax - rateMin));
+    _drawDashedLine(canvas, perfTargetY, const Color(0xFFE53935).withOpacity(0.6));
+
+    // 목표선 85.5% (서류) — rateMin(90) 아래라서 별도 처리
+    // 서류는 85~100 범위로 보이도록 rateMin을 80으로 확장하기 어려우니
+    // 차트 하단(rateMin=90 이하)에는 표시 불가 → 라인만 생략, 범례로 대체
+
+    // 성능 합격율 라인
+    final perfPoints = <Offset>[];
     for (int i = 0; i < weeks.length; i++) {
       final rate = asPercent(weeks[i]['합격율'] ?? 0);
       final clamped = rate.clamp(rateMin, rateMax);
       final x = leftPad + spacing * i + spacing / 2;
-      final y = topPad +
-          chartH * (1 - (clamped - rateMin) / (rateMax - rateMin));
-      points.add(Offset(x, y));
+      final y = topPad + chartH * (1 - (clamped - rateMin) / (rateMax - rateMin));
+      perfPoints.add(Offset(x, y));
     }
+    _drawLine(canvas, perfPoints, const Color(0xFFE53935));
 
-    if (points.length >= 2) {
-      final path = Path()..moveTo(points[0].dx, points[0].dy);
-      for (int i = 1; i < points.length; i++) {
-        path.lineTo(points[i].dx, points[i].dy);
-      }
-      canvas.drawPath(path, linePaint);
+    // 서류 합격율 라인
+    final docPoints = <Offset>[];
+    for (int i = 0; i < weeks.length; i++) {
+      final rate = asPercent(weeks[i]['서류합격율'] ?? 0);
+      final clamped = rate.clamp(rateMin, rateMax);
+      final x = leftPad + spacing * i + spacing / 2;
+      final y = topPad + chartH * (1 - (clamped - rateMin) / (rateMax - rateMin));
+      docPoints.add(Offset(x, y));
     }
-
-    for (final p in points) {
-      canvas.drawCircle(p, 4, dotPaint);
-      canvas.drawCircle(
-          p,
-          2.5,
-          Paint()
-            ..color = Colors.white
-            ..style = PaintingStyle.fill);
-    }
+    _drawLine(canvas, docPoints, const Color(0xFF2196F3));
 
     // Y-axis labels (left = count)
     final textStyle = TextStyle(

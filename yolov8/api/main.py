@@ -13530,19 +13530,22 @@ async def inspection_results_weekly_trend(request: Request, year: int = Query(..
             rgn_p = (year, region) if region else (year,)
             rows = conn.execute(
                 "SELECT 주차별, COUNT(*) as cnt, "
-                "SUM(CASE WHEN 성능서류='성능' THEN 1 ELSE 0 END) as 성능불 "
+                "SUM(CASE WHEN 성능서류='성능' THEN 1 ELSE 0 END) as 성능불, "
+                "SUM(CASE WHEN 성능서류='서류' THEN 1 ELSE 0 END) as 서류불 "
                 f"FROM inspection_results_raw WHERE year=?{rgn_f} AND 주차별 IS NOT NULL AND 주차별 != '' "
                 "GROUP BY 주차별 ORDER BY 주차별",
                 rgn_p
             ).fetchall()
             weeks = []
             for r in rows:
-                주차, cnt, 성능불 = r
+                주차, cnt, 성능불, 서류불 = r
                 weeks.append({
                     "주차": 주차,
                     "수검": cnt,
                     "불합격": 성능불,
                     "합격율": round((cnt - 성능불) / cnt, 4) if cnt > 0 else 0,
+                    "서류불합격": 서류불,
+                    "서류합격율": round((cnt - 서류불) / cnt, 4) if cnt > 0 else 0,
                 })
             return {"weeks": weeks}
         finally:
