@@ -19,6 +19,7 @@ class DsMergeService {
       type: FileType.custom,
       allowedExtensions: ['zip'],
       withData: true,
+      withReadStream: true,
       allowMultiple: true,
     );
 
@@ -26,7 +27,25 @@ class DsMergeService {
       throw Exception('파일이 선택되지 않았습니다.');
     }
 
-    final files = result.files.where((f) => f.bytes != null).toList();
+    // withData: true 에도 웹에서 bytes가 null인 경우 readStream으로 fallback
+    final rawFiles = <PlatformFile>[];
+    for (final f in result.files) {
+      if (f.bytes != null) {
+        rawFiles.add(f);
+      } else if (f.readStream != null) {
+        final chunks = <int>[];
+        await for (final chunk in f.readStream!) {
+          chunks.addAll(chunk);
+        }
+        rawFiles.add(PlatformFile(
+          name: f.name,
+          size: chunks.length,
+          bytes: Uint8List.fromList(chunks),
+        ));
+      }
+    }
+
+    final files = rawFiles;
     if (files.isEmpty) throw Exception('파일을 읽을 수 없습니다.');
 
     Uint8List zipBytes;
