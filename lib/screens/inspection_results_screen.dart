@@ -526,44 +526,62 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
   // ── 상단 헤더 ──
 
   Widget _buildHeader() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        border: Border(bottom: BorderSide(color: Color(0xFFE5E7EB))),
-      ),
-      child: Row(
-        children: [
-          const Spacer(),
-          if (_isAdmin) ...[
-            _uploading
-                ? const SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2))
+    return LayoutBuilder(builder: (context, cst) {
+      final isMobile = cst.maxWidth < 600;
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          border: Border(bottom: BorderSide(color: Color(0xFFE5E7EB))),
+        ),
+        child: Row(
+          children: [
+            const Spacer(),
+            if (_isAdmin) ...[
+              _uploading
+                  ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                  : isMobile
+                      ? IconButton(
+                          onPressed: _pickAndUpload,
+                          icon: const Icon(Icons.upload_file, size: 20),
+                          color: _primary,
+                          tooltip: '결과장 업로드',
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                        )
+                      : TextButton.icon(
+                          onPressed: _pickAndUpload,
+                          icon: const Icon(Icons.upload_file, size: 18),
+                          label: const Text('결과장 업로드', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+                          style: TextButton.styleFrom(
+                            foregroundColor: _primary,
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                          ),
+                        ),
+              const SizedBox(width: 4),
+            ],
+            isMobile
+                ? IconButton(
+                    onPressed: _downloadExcel,
+                    icon: const Icon(Icons.file_download, size: 20),
+                    color: _green,
+                    tooltip: 'Excel 다운로드',
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                  )
                 : TextButton.icon(
-                    onPressed: _pickAndUpload,
-                    icon: const Icon(Icons.upload_file, size: 18),
-                    label: const Text('결과장 업로드', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+                    onPressed: _downloadExcel,
+                    icon: const Icon(Icons.file_download, size: 18),
+                    label: const Text('Excel 다운로드', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
                     style: TextButton.styleFrom(
-                      foregroundColor: _primary,
+                      foregroundColor: _green,
                       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                     ),
                   ),
-            const SizedBox(width: 4),
           ],
-          TextButton.icon(
-            onPressed: _downloadExcel,
-            icon: const Icon(Icons.file_download, size: 18),
-            label: const Text('Excel 다운로드', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
-            style: TextButton.styleFrom(
-              foregroundColor: _green,
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-            ),
-          ),
-        ],
-      ),
-    );
+        ),
+      );
+    });
   }
 
   // ── 요약 카드 ──
@@ -579,28 +597,42 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
         ? total / targetTotal
         : 0;
 
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-      child: Row(
-        children: [
-          Expanded(
-              child: _summaryCard(
-                  '수검국소', _fmt(total), Icons.location_on, _blue)),
-          const SizedBox(width: 10),
-          Expanded(
-              child: _summaryCard(
-                  '성능합격율', _pct(perfRate), Icons.check_circle, _green, target: 'SLA 98.5%')),
-          const SizedBox(width: 10),
-          Expanded(
-              child: _summaryCard(
-                  '서류합격율', _pct(docRate), Icons.description, _orange, target: 'SLA 85.5%')),
-          const SizedBox(width: 10),
-          Expanded(
-              child: _summaryCard(
-                  '진도율', _pct(progress), Icons.trending_up, _primary)),
-        ],
-      ),
-    );
+    final cards = [
+      _summaryCard('수검국소', _fmt(total), Icons.location_on, _blue),
+      _summaryCard('성능합격율', _pct(perfRate), Icons.check_circle, _green, target: 'SLA 98.5%'),
+      _summaryCard('서류합격율', _pct(docRate), Icons.description, _orange, target: 'SLA 85.5%'),
+      _summaryCard('진도율', _pct(progress), Icons.trending_up, _primary),
+    ];
+
+    return LayoutBuilder(builder: (context, cst) {
+      final isMobile = cst.maxWidth < 600;
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+        child: isMobile
+            ? Column(children: [
+                Row(children: [
+                  Expanded(child: cards[0]),
+                  const SizedBox(width: 10),
+                  Expanded(child: cards[1]),
+                ]),
+                const SizedBox(height: 10),
+                Row(children: [
+                  Expanded(child: cards[2]),
+                  const SizedBox(width: 10),
+                  Expanded(child: cards[3]),
+                ]),
+              ])
+            : Row(children: [
+                Expanded(child: cards[0]),
+                const SizedBox(width: 10),
+                Expanded(child: cards[1]),
+                const SizedBox(width: 10),
+                Expanded(child: cards[2]),
+                const SizedBox(width: 10),
+                Expanded(child: cards[3]),
+              ]),
+      );
+    });
   }
 
   Widget _summaryCard(
@@ -886,8 +918,9 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
     return LayoutBuilder(
       builder: (context, constraints) {
         final isWide = constraints.maxWidth >= 900;
+        final isMobile = constraints.maxWidth < 600;
         return Padding(
-          padding: const EdgeInsets.all(16),
+          padding: EdgeInsets.all(isMobile ? 8 : 16),
           child: Column(
             children: [
               if (isWide) ...[
@@ -964,8 +997,21 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
     required Color iconColor,
     required Widget child,
   }) {
+    return LayoutBuilder(builder: (context, cst) {
+      final p = cst.maxWidth < 400 ? 10.0 : 16.0;
+      return _chartSectionInner(title: title, icon: icon, iconColor: iconColor, child: child, padding: p);
+    });
+  }
+
+  Widget _chartSectionInner({
+    required String title,
+    required IconData icon,
+    required Color iconColor,
+    required Widget child,
+    double padding = 16,
+  }) {
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: EdgeInsets.all(padding),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
@@ -1053,7 +1099,8 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
       title: '본부별 현황',
       icon: Icons.table_chart,
       iconColor: _blue,
-      child: ClipRect(
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
         child: DataTable(
           headingRowColor: WidgetStateProperty.all(const Color(0xFFF3F4F6)),
           headingRowHeight: 38,
@@ -1354,14 +1401,13 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           // 범례
-          Row(
+          Wrap(
+            spacing: 12,
+            runSpacing: 6,
             children: [
               _legendDot(perfColor, '성능 (목표 $perfTarget%)'),
-              const SizedBox(width: 12),
               _legendDot(docColor, '서류 (목표 $docTarget%)'),
-              const SizedBox(width: 12),
               _legendDot(missColor, '미달'),
-              const SizedBox(width: 12),
               Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -1598,18 +1644,16 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           // 분기 선택 + 범례
-          Row(
+          Wrap(
+            spacing: 8,
+            runSpacing: 6,
+            crossAxisAlignment: WrapCrossAlignment.center,
             children: [
               _buildQuarterSelector(),
-              const Spacer(),
               _legendDot(const Color(0xFF90CAF9), '대상 건수'),
-              const SizedBox(width: 12),
               _legendDot(_primary, '성능 합격율'),
-              const SizedBox(width: 12),
               _legendDot(const Color(0xFF2196F3), '서류 합격율'),
-              const SizedBox(width: 12),
               _legendDot(_primary.withValues(alpha: 0.5), '성능 목표 98.5%'),
-              const SizedBox(width: 12),
               _legendDot(const Color(0xFF2196F3).withValues(alpha: 0.5), '서류 목표 85.5%'),
             ],
           ),
@@ -1696,20 +1740,19 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
       );
     }
 
-    // 분기 선택 시 (3개월) → Expanded로 균등 배분 + 크게
+    // 분기 선택 시 (3개월) → 가로 스크롤로 균등 배분
     if (isQuarter) {
-      return Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: entries.map((e) {
-          return Expanded(
-            child: Padding(
+      return SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: entries.map((e) {
+            return Padding(
               padding: const EdgeInsets.only(right: 8),
-              child: ClipRect(
-                child: buildTable(e.key, e.value),
-              ),
-            ),
-          );
-        }).toList(),
+              child: buildTable(e.key, e.value),
+            );
+          }).toList(),
+        ),
       );
     }
 
@@ -1836,14 +1879,13 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
+          Wrap(
+            spacing: 12,
+            runSpacing: 6,
             children: [
               _legendDot(_primary, '성능 합격율'),
-              const SizedBox(width: 12),
               _legendDot(const Color(0xFF2196F3), '서류 합격율'),
-              const SizedBox(width: 12),
               _legendDot(_primary.withValues(alpha: 0.4), '성능 목표 98.5%'),
-              const SizedBox(width: 12),
               _legendDot(const Color(0xFF2196F3).withValues(alpha: 0.4), '서류 목표 85.5%'),
             ],
           ),
@@ -2049,7 +2091,8 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
       title: '장비 Type별 불합격 현황 (Top3)',
       icon: Icons.router,
       iconColor: _orange,
-      child: ClipRect(
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
         child: DataTable(
           headingRowColor:
               WidgetStateProperty.all(const Color(0xFFF3F4F6)),
