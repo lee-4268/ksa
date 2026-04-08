@@ -217,7 +217,7 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
 
   // ── Excel 다운로드 ──
 
-  static const _divisions = ['', '강남', '강북', '인천', '경기', '강원', '충청', '경북', '경남', '서부'];
+  static const _divisions = ['', '강남', '강북', '인천', '경기', '경남', '경북', '서부', '충청', '강원'];
 
   Future<void> _downloadExcel() async {
     final result = await showDialog<Map<String, dynamic>>(
