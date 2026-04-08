@@ -10251,10 +10251,11 @@ def _init_inspection_db():
     conn.execute('CREATE INDEX IF NOT EXISTS idx_is_year ON inspection_schedules(year)')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_is_access ON inspection_schedules(year, access담당)')
     # 마이그레이션: inspection_schedules 확장 컬럼
-    try:
-        conn.execute("ALTER TABLE inspection_schedules ADD COLUMN 검사관 TEXT DEFAULT ''")
-    except Exception:
-        pass
+    for _col, _default in [("검사관", "''"), ("조", "''")]:
+        try:
+            conn.execute(f"ALTER TABLE inspection_schedules ADD COLUMN {_col} TEXT DEFAULT {_default}")
+        except Exception:
+            pass
     conn.execute('''CREATE TABLE IF NOT EXISTS inspection_results (
         pk TEXT PRIMARY KEY,
         year INTEGER NOT NULL,
@@ -10971,6 +10972,7 @@ class InspectionScheduleReq(BaseModel):
     수검종료일: str = ""
     지역: str = ""
     검사관: str = ""
+    조: str = ""
 
 class InspectionResultReq(BaseModel):
     year: int
@@ -11859,11 +11861,11 @@ async def inspection_schedule_upsert(request: Request, req: InspectionScheduleRe
         c = sqlite3.connect(_INSP_DB, timeout=60)
         c.execute('''INSERT OR REPLACE INTO inspection_schedules
             (pk, year, 허가번호, 호출명칭, 분기, skt본부, access담당, 품질개선팀,
-             수검예정주차, 수검시작일, 수검종료일, 지역, 등록자, 등록일시, 검사관)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+             수검예정주차, 수검시작일, 수검종료일, 지역, 등록자, 등록일시, 검사관, 조)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
             (pk, req.year, req.허가번호, req.호출명칭, req.분기, req.skt본부,
              req.access담당, req.품질개선팀, req.수검예정주차,
-             req.수검시작일, req.수검종료일, req.지역, empno, now, req.검사관))
+             req.수검시작일, req.수검종료일, req.지역, empno, now, req.검사관, req.조))
         c.commit(); c.close()
     await asyncio.to_thread(_write)
     await asyncio.to_thread(_record_audit_log_sync, "inspection_schedule_upsert", "inspection_schedule", pk, empno)

@@ -402,12 +402,14 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     final initWeek = match != null ? int.tryParse(match.group(2)!) : null;
 
     final existingInspector = item['schedule']?['검사관'] as String? ?? '';
+    final existingJo = item['schedule']?['조'] as String? ?? '';
     final inspectorCtrl = TextEditingController(text: existingInspector);
     final result = await showDialog<Map<String, dynamic>>(
       context: context,
       builder: (ctx) {
         int? selMonth = initMonth;
         int? selWeek = initWeek;
+        String selJo = existingJo;
         return StatefulBuilder(
           builder: (ctx, setDlgState) => AlertDialog(
             backgroundColor: Colors.white,
@@ -447,6 +449,11 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                   ),
                 ],
                 const SizedBox(height: 16),
+                _weekDropdown('조 (선택)', selJo.isEmpty ? null : int.tryParse(selJo.replaceAll('조', '')),
+                    [1, 2, 3, 4, 5], (i) => '$i조',
+                    (v) => setDlgState(() => selJo = v != null ? '$v조' : ''),
+                    nullable: true),
+                const SizedBox(height: 16),
                 TextField(
                   controller: inspectorCtrl,
                   decoration: InputDecoration(
@@ -465,7 +472,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                 style: ElevatedButton.styleFrom(backgroundColor: _primary, foregroundColor: Colors.white,
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
                 onPressed: selMonth != null && selWeek != null
-                    ? () => Navigator.pop(ctx, {'month': selMonth!, 'week': selWeek!, '검사관': inspectorCtrl.text.trim()})
+                    ? () => Navigator.pop(ctx, {'month': selMonth!, 'week': selWeek!, '검사관': inspectorCtrl.text.trim(), '조': selJo})
                     : null,
                 child: const Text('저장'),
               ),
@@ -491,6 +498,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
         '수검종료일': '',
         '지역': '',
         '검사관': result['검사관'] ?? '',
+        '조': result['조'] ?? '',
       }));
       _showSnack('일정이 저장되었습니다.');
       await Future.wait([
@@ -604,6 +612,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
       builder: (ctx) {
         int? selMonth;
         int? selWeek;
+        String selJo = '';
         return StatefulBuilder(
           builder: (ctx, setDlgState) => AlertDialog(
             backgroundColor: Colors.white,
@@ -661,6 +670,11 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                   ),
                 ],
                 const SizedBox(height: 16),
+                _weekDropdown('조 (선택)', selJo.isEmpty ? null : int.tryParse(selJo.replaceAll('조', '')),
+                    [1, 2, 3, 4, 5], (i) => '$i조',
+                    (v) => setDlgState(() => selJo = v != null ? '$v조' : ''),
+                    nullable: true),
+                const SizedBox(height: 16),
                 TextField(
                   controller: inspectorCtrl,
                   decoration: InputDecoration(
@@ -679,7 +693,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                 style: ElevatedButton.styleFrom(backgroundColor: _primary, foregroundColor: Colors.white,
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
                 onPressed: selMonth != null && selWeek != null
-                    ? () => Navigator.pop(ctx, {'month': selMonth!, 'week': selWeek!, '검사관': inspectorCtrl.text.trim()})
+                    ? () => Navigator.pop(ctx, {'month': selMonth!, 'week': selWeek!, '검사관': inspectorCtrl.text.trim(), '조': selJo})
                     : null,
                 child: const Text('저장'),
               ),
@@ -692,6 +706,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     if (result == null) return;
     final weekStr = '${result['month']}월 ${result['week']}주차';
     final inspector = result['검사관'] as String? ?? '';
+    final jo = result['조'] as String? ?? '';
 
     int successCount = 0, failCount = 0;
     await _withLoading('일정 등록 중... (${targetItems.length}건)', () async {
@@ -709,6 +724,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
           '수검종료일': '',
           '지역': '',
           '검사관': inspector,
+          '조': jo,
         }).then((_) => true).catchError((_) => false)),
       );
       successCount = results.where((r) => r).length;
@@ -892,7 +908,11 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
   }
 
   Widget _weekDropdown<T>(String hint, T? value, List<T> items,
-      String Function(T) label, ValueChanged<T?> onChanged) {
+      String Function(T) label, ValueChanged<T?> onChanged, {bool nullable = false}) {
+    final menuItems = [
+      if (nullable) DropdownMenuItem<T>(value: null, child: Text(hint, style: const TextStyle(fontSize: 13, color: Colors.black45))),
+      ...items.map((v) => DropdownMenuItem(value: v, child: Text(label(v)))),
+    ];
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
       decoration: BoxDecoration(
@@ -908,10 +928,9 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
           value: value,
           icon: Icon(Icons.arrow_drop_down, color: _blue, size: 20),
           dropdownColor: Colors.white,
-
           borderRadius: BorderRadius.circular(12),
           style: const TextStyle(color: Colors.black87, fontSize: 13),
-          items: items.map((v) => DropdownMenuItem(value: v, child: Text(label(v)))).toList(),
+          items: menuItems,
           onChanged: onChanged,
         ),
       ),
@@ -2157,6 +2176,10 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
             if (schedule != null) ...[
               _infoRow('담당', '${target?['access담당'] ?? ''} / ${target?['품질개선팀'] ?? ''}'),
               _infoRow('예정주차', schedule['수검예정주차'] ?? ''),
+              if ((schedule['조'] as String? ?? '').isNotEmpty)
+                _infoRow('조', schedule['조'] ?? ''),
+              if ((schedule['검사관'] as String? ?? '').isNotEmpty)
+                _infoRow('검사관', schedule['검사관'] ?? ''),
               _infoRow('지역', schedule['지역'] ?? ''),
             ] else
               Padding(
@@ -2239,9 +2262,8 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
 
   Widget _scheduleTag(Map<String, dynamic> schedule) {
     final week = schedule['수검예정주차'] ?? '';
-    final team = schedule['access담당'] ?? '';
-    final region = schedule['지역'] ?? '';
-    final label = [week, team, region].where((s) => s.isNotEmpty).join('_');
+    final jo = schedule['조'] as String? ?? '';
+    final label = [week, if (jo.isNotEmpty) jo].where((s) => s.isNotEmpty).join(' ');
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(color: _blue.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(6)),

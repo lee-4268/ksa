@@ -378,14 +378,13 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
   // ── 상세 리스트 ────────────────────────────────────────────────────────
 
   Widget _buildDetailList({bool isWebLayout = false}) {
-    final grouped = <String, List<Map<String, dynamic>>>{};
+    // 주차별 그룹핑
+    final weekGroups = <String, List<Map<String, dynamic>>>{};
     for (final item in _assignedItems) {
       final key = item['수검예정주차'] as String? ?? '미정';
-      grouped.putIfAbsent(key, () => []).add(item);
+      weekGroups.putIfAbsent(key, () => []).add(item);
     }
-    final sortedGroups = Map.fromEntries(
-      grouped.entries.toList()..sort((a, b) => a.key.compareTo(b.key)),
-    );
+    final sortedWeeks = weekGroups.keys.toList()..sort();
 
     return Container(
       decoration: BoxDecoration(
@@ -507,22 +506,31 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
                 onRefresh: _loadInspection,
                 child: ListView.builder(
                   padding: const EdgeInsets.symmetric(vertical: 4),
-                  itemCount: sortedGroups.length,
+                  itemCount: sortedWeeks.length,
                   itemBuilder: (context, gi) {
-                    final week = sortedGroups.keys.elementAt(gi);
-                    final items = sortedGroups[week]!;
-                    final done = items.where((it) =>
+                    final week = sortedWeeks[gi];
+                    final weekItems = weekGroups[week]!;
+                    final weekDone = weekItems.where((it) =>
                         (it['status'] as String?) == '합격' ||
                         (it['status'] as String?) == '불합격').length;
-                    final firstItem = items.first;
-                    final startDate = firstItem['수검시작일'] as String? ?? '';
-                    final endDate   = firstItem['수검종료일'] as String? ?? '';
-                    final dateRange = (startDate.isNotEmpty && endDate.isNotEmpty)
-                        ? '$startDate~$endDate' : '';
+
+                    // 조별 그룹핑 ('조' 필드 기준, 없으면 '')
+                    final joGroups = <String, List<Map<String, dynamic>>>{};
+                    for (final item in weekItems) {
+                      final jo = (item['조'] as String? ?? '').trim();
+                      joGroups.putIfAbsent(jo, () => []).add(item);
+                    }
+                    final hasJo = joGroups.keys.any((k) => k.isNotEmpty);
+                    final sortedJos = joGroups.keys.toList()..sort((a, b) {
+                      if (a.isEmpty) return 1;
+                      if (b.isEmpty) return -1;
+                      return a.compareTo(b);
+                    });
 
                     return Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
+                        // 주차 헤더
                         Padding(
                           padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
                           child: Row(children: [
@@ -533,17 +541,26 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
                             const SizedBox(width: 8),
                             Expanded(child: Text(week,
                                 style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Colors.black87))),
-                            if (dateRange.isNotEmpty)
-                              Text(dateRange, style: TextStyle(fontSize: 10, color: Colors.grey.shade500)),
                             const SizedBox(width: 8),
-                            Text('$done/${items.length}',
+                            Text('$weekDone/${weekItems.length}',
                                 style: TextStyle(
                                     fontSize: 12,
-                                    color: done == items.length ? const Color(0xFF43A047) : Colors.grey.shade500,
+                                    color: weekDone == weekItems.length ? const Color(0xFF43A047) : Colors.grey.shade500,
                                     fontWeight: FontWeight.w600)),
                           ]),
                         ),
-                        ...items.map(_buildInspectionItem),
+                        // 조별 펼치기 or 단순 리스트
+                        if (hasJo)
+                          ...sortedJos.map((jo) {
+                            final joItems = joGroups[jo]!;
+                            final joDone = joItems.where((it) =>
+                                (it['status'] as String?) == '합격' ||
+                                (it['status'] as String?) == '불합격').length;
+                            final joLabel = jo.isEmpty ? '조 미지정' : jo;
+                            return _buildJoSection(joLabel, joItems, joDone);
+                          })
+                        else
+                          ...weekItems.map(_buildInspectionItem),
                         const Divider(height: 1),
                       ],
                     );
@@ -552,6 +569,52 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
               ),
             ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildJoSection(String joLabel, List<Map<String, dynamic>> items, int done) {
+    const primaryColor = Color(0xFFE53935);
+    const blueColor = Color(0xFF1E88E5);
+    final isUnassigned = joLabel == '조 미지정';
+    return Theme(
+      data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+      child: ExpansionTile(
+        initiallyExpanded: true,
+        tilePadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 0),
+        childrenPadding: EdgeInsets.zero,
+        leading: Container(
+          width: 28, height: 28,
+          decoration: BoxDecoration(
+            color: isUnassigned
+                ? Colors.grey.shade100
+                : blueColor.withValues(alpha: 0.1),
+            borderRadius: BorderRadius.circular(6),
+          ),
+          child: Icon(
+            isUnassigned ? Icons.help_outline : Icons.group,
+            size: 16,
+            color: isUnassigned ? Colors.grey.shade400 : blueColor,
+          ),
+        ),
+        title: Text(joLabel,
+            style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: isUnassigned ? Colors.grey.shade500 : blueColor)),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('$done/${items.length}',
+                style: TextStyle(
+                    fontSize: 12,
+                    color: done == items.length ? const Color(0xFF43A047) : Colors.grey.shade500,
+                    fontWeight: FontWeight.w600)),
+            const SizedBox(width: 4),
+            const Icon(Icons.expand_more, size: 18, color: Colors.black38),
+          ],
+        ),
+        children: items.map(_buildInspectionItem).toList(),
       ),
     );
   }
