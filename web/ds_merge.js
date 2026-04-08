@@ -9,25 +9,22 @@
 // ============================================================
 
 function _xlsxRead(data, opts) {
+  // ArrayBuffer → Uint8Array 변환 (type:'array'가 Uint8Array 전용이므로)
+  var normalizedData = (data instanceof ArrayBuffer) ? new Uint8Array(data) : data;
+  var normalizedOpts = (data instanceof ArrayBuffer)
+    ? Object.assign({}, opts, { type: 'array' })
+    : opts;
+
   // 1차: 일반 읽기
   try {
-    return XLSX.read(data, opts);
+    return XLSX.read(normalizedData, normalizedOpts);
   } catch (e1) {
-    // 2차: WTF:false + sheetStubs:true 로 재시도 (손상된 OLE2 구조 허용)
+    // 2차: dense 모드 + sheetStubs로 재시도 (손상된 OLE2 구조 허용)
     try {
-      var opts2 = Object.assign({}, opts, { WTF: false, sheetStubs: true });
-      return XLSX.read(data, opts2);
+      var opts2 = Object.assign({}, normalizedOpts, { dense: true, sheetStubs: true });
+      return XLSX.read(normalizedData, opts2);
     } catch (e2) {
-      // 3차: Uint8Array 형태로 변환 후 재시도 (내부 파싱 경로 변경)
-      try {
-        var arr = (data instanceof ArrayBuffer)
-          ? new Uint8Array(data)
-          : (data instanceof Uint8Array ? data : new Uint8Array(data));
-        var opts3 = Object.assign({}, opts, { type: 'array', WTF: false });
-        return XLSX.read(arr, opts3);
-      } catch (e3) {
-        throw e1; // 모두 실패 시 원래 에러 throw
-      }
+      throw e1; // 모두 실패 시 원래 에러 throw
     }
   }
 }

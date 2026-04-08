@@ -1,6 +1,9 @@
 import 'package:archive/archive.dart';
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
+
+// 웹 전용 파일 선택 (file_picker focus 버그 우회)
+import 'file_picker_stub.dart'
+    if (dart.library.html) 'file_picker_web.dart' as web_picker;
 
 // 조건부 import - 플랫폼별 DS 병합
 import 'ds_merge_service_stub.dart'
@@ -15,51 +18,30 @@ class DsMergeService {
   }) async {
     onProgress('파일 선택 중...', 0);
 
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: ['zip'],
-      withData: true,
-      withReadStream: true,
-      allowMultiple: true,
+    final picked = await web_picker.pickFilesWeb(
+      accept: '.zip',
+      multiple: true,
     );
 
-    if (result == null || result.files.isEmpty) {
+    if (picked == null || picked.isEmpty) {
       throw Exception('파일이 선택되지 않았습니다.');
     }
 
-    // withData: true 에도 웹에서 bytes가 null인 경우 readStream으로 fallback
-    final rawFiles = <PlatformFile>[];
-    for (final f in result.files) {
-      if (f.bytes != null) {
-        rawFiles.add(f);
-      } else if (f.readStream != null) {
-        final chunks = <int>[];
-        await for (final chunk in f.readStream!) {
-          chunks.addAll(chunk);
-        }
-        rawFiles.add(PlatformFile(
-          name: f.name,
-          size: chunks.length,
-          bytes: Uint8List.fromList(chunks),
-        ));
-      }
-    }
-
-    final files = rawFiles;
-    if (files.isEmpty) throw Exception('파일을 읽을 수 없습니다.');
-
     Uint8List zipBytes;
 
-    if (files.length == 1) {
-      // 단일 파일: 기존 그대로
-      zipBytes = files.first.bytes!;
-      debugPrint('ZIP 파일 선택됨: ${files.first.name} (${zipBytes.length} bytes)');
+    if (picked.length == 1) {
+      zipBytes = picked.first.bytes;
+      debugPrint('ZIP 파일 선택됨: ${picked.first.name} (${zipBytes.length} bytes)');
     } else {
-      // 복수 파일: Dart에서 XLS만 추출해 하나의 ZIP으로 병합
-      onProgress('ZIP 파일 병합 중... (${files.length}개)', 2);
-      debugPrint('복수 ZIP 선택: ${files.map((f) => f.name).join(', ')}');
-      zipBytes = await compute(_mergeZipsIsolate,
-          _MergeZipsArgs(files.map((f) => f.bytes!).toList(), files.map((f) => f.name).toList()));
+      onProgress('ZIP 파일 병합 중... (${picked.length}개)', 2);
+      debugPrint('복수 ZIP 선택: ${picked.map((f) => f.name).join(', ')}');
+      zipBytes = await compute(
+        _mergeZipsIsolate,
+        _MergeZipsArgs(
+          picked.map((f) => f.bytes).toList(),
+          picked.map((f) => f.name).toList(),
+        ),
+      );
       debugPrint('ZIP 병합 완료: ${zipBytes.length} bytes');
     }
 
@@ -78,7 +60,6 @@ Uint8List _mergeZipsIsolate(_MergeZipsArgs args) {
   for (var i = 0; i < args.zipBytesList.length; i++) {
     final bytes = args.zipBytesList[i];
     final rawName = args.fileNames[i];
-    // 파일명 충돌 방지용 접두사 (확장자 제거)
     final prefix = rawName.endsWith('.zip')
         ? rawName.substring(0, rawName.length - 4)
         : rawName;
@@ -87,7 +68,7 @@ Uint8List _mergeZipsIsolate(_MergeZipsArgs args) {
     try {
       srcArchive = ZipDecoder().decodeBytes(bytes);
     } catch (_) {
-      continue; // 손상된 ZIP 건너뜀
+      continue;
     }
 
     for (final file in srcArchive.files) {
@@ -98,13 +79,11 @@ Uint8List _mergeZipsIsolate(_MergeZipsArgs args) {
           : entryName;
       final lower = baseName.toLowerCase();
 
-      // XLS만 추출, xlsx 및 임시파일 제외
       if (!lower.endsWith('.xls')) continue;
       if (lower.endsWith('.xlsx')) continue;
       if (baseName.startsWith('~') || baseName.startsWith('.')) continue;
 
       final outName = '$prefix/$baseName';
-      // 같은 경로 중복 방지
       if (seen.contains(outName)) continue;
       seen.add(outName);
 

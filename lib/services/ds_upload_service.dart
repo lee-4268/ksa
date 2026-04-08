@@ -1,8 +1,11 @@
 import 'dart:convert';
 
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+
+// 웹 전용 파일 선택 (file_picker focus 버그 우회)
+import 'file_picker_stub.dart'
+    if (dart.library.html) 'file_picker_web.dart' as web_picker;
 
 /// DS 업로드 서비스 — Upload-Zero-Build (EC2 경유 S3 업로드 + 메타데이터 파싱)
 ///
@@ -82,8 +85,8 @@ class DsUploadService {
   }
 
   /// 파일 목록을 지역코드별로 그룹핑 (미사용 코드 필터링)
-  static Map<String, List<PlatformFile>> _groupByRegion(List<PlatformFile> files) {
-    final groups = <String, List<PlatformFile>>{};
+  static Map<String, List<web_picker.PickedFile>> _groupByRegion(List<web_picker.PickedFile> files) {
+    final groups = <String, List<web_picker.PickedFile>>{};
     for (final file in files) {
       final code = _parseDivisionCode(file.name);
       if (code == null) continue;
@@ -99,38 +102,16 @@ class DsUploadService {
   }) async {
     onProgress('파일 선택 중...', 0);
 
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: ['zip'],
-      withData: true,
-      withReadStream: true,
-      allowMultiple: true,
+    final picked = await web_picker.pickFilesWeb(
+      accept: '.zip',
+      multiple: true,
     );
 
-    if (result == null || result.files.isEmpty) {
+    if (picked == null || picked.isEmpty) {
       throw Exception('파일이 선택되지 않았습니다.');
     }
 
-    // withData: true 에도 웹에서 bytes가 null인 경우 readStream으로 fallback
-    final rawFiles = <PlatformFile>[];
-    for (final f in result.files) {
-      if (f.bytes != null) {
-        rawFiles.add(f);
-      } else if (f.readStream != null) {
-        final chunks = <int>[];
-        await for (final chunk in f.readStream!) {
-          chunks.addAll(chunk);
-        }
-        rawFiles.add(PlatformFile(
-          name: f.name,
-          size: chunks.length,
-          bytes: Uint8List.fromList(chunks),
-        ));
-      }
-    }
-    final files = rawFiles;
-    if (files.isEmpty) throw Exception('파일을 읽을 수 없습니다.');
-
+    final files = picked;
     debugPrint('선택된 파일 수: ${files.length}');
 
     // 지역코드별 그룹핑
@@ -162,7 +143,7 @@ class DsUploadService {
           // 단일 파일: 기존 flow
           final file = regionFiles.first;
           final msg = await _uploadSingleFile(
-            bytes: file.bytes!,
+            bytes: file.bytes,
             fileName: file.name,
             uploadedBy: uploadedBy,
             onProgress: (stage, percent) {
@@ -244,7 +225,7 @@ class DsUploadService {
 
   /// 복수 ZIP 병합 업로드
   Future<String> _uploadMultiFiles({
-    required List<PlatformFile> files,
+    required List<web_picker.PickedFile> files,
     required String uploadedBy,
     required void Function(String stage, double percent) onProgress,
   }) async {
@@ -260,7 +241,7 @@ class DsUploadService {
         (i / totalFiles) * 50,
       );
 
-      final tempId = await _uploadToTemp(file.bytes!, file.name);
+      final tempId = await _uploadToTemp(file.bytes, file.name);
       tempIds.add(tempId);
       fileNames.add(file.name);
     }
