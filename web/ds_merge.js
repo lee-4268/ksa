@@ -5,6 +5,34 @@
  */
 
 // ============================================================
+// SheetJS 관대한 읽기 헬퍼 (DIFAT 등 손상 xls 처리)
+// ============================================================
+
+function _xlsxRead(data, opts) {
+  // 1차: 일반 읽기
+  try {
+    return XLSX.read(data, opts);
+  } catch (e1) {
+    // 2차: WTF:false + sheetStubs:true 로 재시도 (손상된 OLE2 구조 허용)
+    try {
+      var opts2 = Object.assign({}, opts, { WTF: false, sheetStubs: true });
+      return XLSX.read(data, opts2);
+    } catch (e2) {
+      // 3차: Uint8Array 형태로 변환 후 재시도 (내부 파싱 경로 변경)
+      try {
+        var arr = (data instanceof ArrayBuffer)
+          ? new Uint8Array(data)
+          : (data instanceof Uint8Array ? data : new Uint8Array(data));
+        var opts3 = Object.assign({}, opts, { type: 'array', WTF: false });
+        return XLSX.read(arr, opts3);
+      } catch (e3) {
+        throw e1; // 모두 실패 시 원래 에러 throw
+      }
+    }
+  }
+}
+
+// ============================================================
 // xlsx 수동 빌드 유틸리티
 // ============================================================
 
@@ -259,7 +287,7 @@ async function _mergeDsFilesFromDart(zipArrayBuffer, progressCallback, completio
     progressCallback('서식 정보 추출 중...', 7);
 
     var baseBytes = await zip.files[classified.base].async('arraybuffer');
-    var baseWb = XLSX.read(baseBytes, { type: 'array', cellStyles: true });
+    var baseWb = _xlsxRead(baseBytes, { type: 'array', cellStyles: true });
     var sheetOrder = baseWb.SheetNames.slice();
     var baseSheetNames = baseWb.SheetNames.slice();
 
@@ -288,7 +316,7 @@ async function _mergeDsFilesFromDart(zipArrayBuffer, progressCallback, completio
     // spt 시트 순서 + preamble 추출
     if (classified.spt) {
       var sptBytes2 = await zip.files[classified.spt].async('arraybuffer');
-      var sptWb2 = XLSX.read(sptBytes2, { type: 'array', cellStyles: true });
+      var sptWb2 = _xlsxRead(sptBytes2, { type: 'array', cellStyles: true });
       var sptSheetNames2 = sptWb2.SheetNames.slice();
       for (var si2 = 0; si2 < sptSheetNames2.length; si2++) {
         if (sheetOrder.indexOf(sptSheetNames2[si2]) === -1) {
@@ -315,7 +343,7 @@ async function _mergeDsFilesFromDart(zipArrayBuffer, progressCallback, completio
     var hundredSheetNames = [];
     if (classified.skipped.length > 0) {
       var hBytes = await zip.files[classified.skipped[0]].async('arraybuffer');
-      var hWb = XLSX.read(hBytes, { type: 'array', cellStyles: true });
+      var hWb = _xlsxRead(hBytes, { type: 'array', cellStyles: true });
       hundredSheetNames = hWb.SheetNames.slice();
       for (var hi = 0; hi < hundredSheetNames.length; hi++) {
         var hRenamedSheet = hundredSheetNames[hi] + '(검사전)';
@@ -363,7 +391,7 @@ async function _mergeDsFilesFromDart(zipArrayBuffer, progressCallback, completio
         10 + Math.round((bfi / baseAndNumbered.length) * 35));
 
       var bfData = await zip.files[bfName].async('arraybuffer');
-      var bfWb = XLSX.read(bfData, { type: 'array', cellDates: false });
+      var bfWb = _xlsxRead(bfData, { type: 'array', cellDates: false });
       bfData = null;
 
       for (var bsi = 0; bsi < baseSheetNames.length; bsi++) {
@@ -387,7 +415,7 @@ async function _mergeDsFilesFromDart(zipArrayBuffer, progressCallback, completio
     if (classified.spt) {
       progressCallback('spt 파일 읽기...', 47);
       var sptFd = await zip.files[classified.spt].async('arraybuffer');
-      var sptWbM = XLSX.read(sptFd, { type: 'array', cellDates: false });
+      var sptWbM = _xlsxRead(sptFd, { type: 'array', cellDates: false });
       sptFd = null;
 
       for (var ssi = 0; ssi < sptWbM.SheetNames.length; ssi++) {
@@ -407,7 +435,7 @@ async function _mergeDsFilesFromDart(zipArrayBuffer, progressCallback, completio
       progressCallback('(100) 파일 읽기...', 48);
       for (var ski = 0; ski < classified.skipped.length; ski++) {
         var skFd = await zip.files[classified.skipped[ski]].async('arraybuffer');
-        var skWbM = XLSX.read(skFd, { type: 'array', cellDates: false });
+        var skWbM = _xlsxRead(skFd, { type: 'array', cellDates: false });
         skFd = null;
 
         for (var sksi = 0; sksi < skWbM.SheetNames.length; sksi++) {
