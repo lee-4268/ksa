@@ -12,7 +12,7 @@ import asyncio
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Union
 from datetime import datetime, timezone
 from decimal import Decimal
 import logging
@@ -13754,11 +13754,11 @@ async def inspection_results_summary_report(request: Request, year: int = Query(
 
 class InspectionResultsExportReq(BaseModel):
     year: int
-    본부: str = ""
+    본부: Union[str, List[str]] = ""
     진행여부: str = ""
     status: str = ""
     성능서류: str = ""
-    주차별: str = ""
+    주차별: Union[str, List[str]] = ""
 
 
 @app.get("/inspection-results/weeks")
@@ -13808,16 +13808,26 @@ async def inspection_results_export_xlsx(request: Request, req: InspectionResult
         )
         where_parts = ['r.year=?']
         params = [req.year]
-        if req.본부:
-            where_parts.append('r.region=?'); params.append(req.본부)
+        # 본부: 단일 str 또는 리스트
+        본부_list = [req.본부] if isinstance(req.본부, str) else req.본부
+        본부_list = [v for v in 본부_list if v]
+        if 본부_list:
+            placeholders = ','.join('?' * len(본부_list))
+            where_parts.append(f'r.region IN ({placeholders})')
+            params.extend(본부_list)
         if req.진행여부:
             where_parts.append('r.진행여부=?'); params.append(req.진행여부)
         if req.status:
             where_parts.append('r.합불여부=?'); params.append(req.status)
         if req.성능서류:
             where_parts.append('r.성능서류=?'); params.append(req.성능서류)
-        if req.주차별:
-            where_parts.append('r.주차별=?'); params.append(req.주차별)
+        # 주차별: 단일 str 또는 리스트
+        주차_list = [req.주차별] if isinstance(req.주차별, str) else req.주차별
+        주차_list = [v for v in 주차_list if v]
+        if 주차_list:
+            placeholders = ','.join('?' * len(주차_list))
+            where_parts.append(f'r.주차별 IN ({placeholders})')
+            params.extend(주차_list)
         where_sql = ' AND '.join(where_parts)
         rows = c.execute(_sel + f'WHERE {where_sql} ORDER BY r.id', params).fetchall()
         c.close()

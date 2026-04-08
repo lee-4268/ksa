@@ -505,15 +505,15 @@ class InspectionService {
   }
 
   Future<Uint8List> exportResultsXlsx(int year, {
-    String region = '', String progress = '', String status = '',
-    String perfDoc = '', String week = '',
+    List<String> regions = const [], String progress = '', String status = '',
+    String perfDoc = '', List<String> weeks = const [],
   }) async {
     final resp = await http.post(
       Uri.parse('$_baseUrl/inspection-results/export-xlsx'),
       headers: _headers,
       body: json.encode({
-        'year': year, '본부': region, '진행여부': progress,
-        'status': status, '성능서류': perfDoc, '주차별': week,
+        'year': year, '본부': regions, '진행여부': progress,
+        'status': status, '성능서류': perfDoc, '주차별': weeks,
       }),
     ).timeout(const Duration(minutes: 5));
     if (resp.statusCode != 200) throw Exception('엑셀 다운로드 실패');

@@ -220,80 +220,111 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
   static const _divisions = ['', '강남', '강북', '인천', '경기', '강원', '충청', '경북', '경남', '서부'];
 
   Future<void> _downloadExcel() async {
-    // 옵션 팝업 표시 (본부→월→주차 3단계)
-    final result = await showDialog<Map<String, String>>(
+    final result = await showDialog<Map<String, dynamic>>(
       context: context,
       builder: (ctx) {
-        String selDivision = '';
-        String selMonth = '';
-        String selWeek = '';
-        List<String> weekOptions = [''];
+        final Set<String> selDivisions = {};
+        final Set<String> selMonths = {};
+        final Set<String> selWeeks = {};
+        List<String> weekOptions = [];
         bool weekLoading = false;
 
-        Widget _dropdown(String label, String value, List<String> items,
-            void Function(String) onChanged, {bool loading = false}) {
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(label, style: TextStyle(fontSize: 13, color: Colors.grey.shade600)),
-              const SizedBox(height: 6),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  border: Border.all(color: Colors.grey.shade300),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: loading
-                    ? const SizedBox(height: 36, child: Center(child: SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))))
-                    : DropdownButtonHideUnderline(
-                        child: DropdownButton<String>(
-                          isExpanded: true,
-                          isDense: true,
-                          value: items.contains(value) ? value : items.first,
-                          icon: Icon(Icons.arrow_drop_down, color: _primary, size: 20),
-                          dropdownColor: Colors.white,
-                          borderRadius: BorderRadius.circular(12),
-                          style: const TextStyle(color: Colors.black87, fontSize: 13),
-                          items: items.map((v) => DropdownMenuItem(
-                            value: v,
-                            child: Text(v.isEmpty ? '전체' : v),
-                          )).toList(),
-                          onChanged: (v) => onChanged(v ?? ''),
-                        ),
-                      ),
-              ),
-            ],
-          );
+        final months = List.generate(12, (i) => '${i + 1}월');
+
+        Future<void> loadWeeks(void Function(void Function()) setS) async {
+          setS(() { weekLoading = true; selWeeks.clear(); weekOptions = []; });
+          final monthParam = selMonths.length == 1 ? selMonths.first : '';
+          final regionParam = selDivisions.length == 1 ? selDivisions.first : '';
+          final ws = await _svc.getResultsWeeks(_year, month: monthParam, region: regionParam);
+          setS(() { weekLoading = false; weekOptions = ws; });
         }
 
-        return StatefulBuilder(builder: (ctx, setDlgState) {
-          Future<void> loadWeeks() async {
-            setDlgState(() { weekLoading = true; selWeek = ''; weekOptions = ['']; });
-            final weeks = await _svc.getResultsWeeks(_year, month: selMonth, region: selDivision);
-            setDlgState(() { weekLoading = false; weekOptions = ['', ...weeks]; });
-          }
+        Widget sectionLabel(String label) => Padding(
+          padding: const EdgeInsets.only(bottom: 6),
+          child: Text(label, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.grey.shade700)),
+        );
 
+        Widget checkChip(String label, bool selected, VoidCallback onTap) => InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(20),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 150),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+            decoration: BoxDecoration(
+              color: selected ? _primary : Colors.grey.shade100,
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: selected ? _primary : Colors.grey.shade300),
+            ),
+            child: Text(label, style: TextStyle(fontSize: 12, color: selected ? Colors.white : Colors.black87, fontWeight: selected ? FontWeight.w600 : FontWeight.normal)),
+          ),
+        );
+
+        return StatefulBuilder(builder: (ctx, setS) {
           return AlertDialog(
             backgroundColor: Colors.white,
             surfaceTintColor: Colors.white,
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
             title: const Text('Excel 다운로드 옵션', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _dropdown('본부', selDivision, _divisions, (v) {
-                  setDlgState(() { selDivision = v; selMonth = ''; selWeek = ''; weekOptions = ['']; });
-                }),
-                const SizedBox(height: 12),
-                _dropdown('월', selMonth,
-                  ['', ...List.generate(12, (i) => '${i + 1}월')],
-                  (v) { setDlgState(() { selMonth = v; selWeek = ''; }); if (v.isNotEmpty) loadWeeks(); }
+            content: SizedBox(
+              width: 480,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // 본부
+                    sectionLabel('본부 (복수 선택 가능)'),
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 6,
+                      children: _divisions.where((d) => d.isNotEmpty).map((d) {
+                        final sel = selDivisions.contains(d);
+                        return checkChip(d, sel, () {
+                          setS(() {
+                            if (sel) selDivisions.remove(d); else selDivisions.add(d);
+                            selWeeks.clear(); weekOptions = [];
+                          });
+                        });
+                      }).toList(),
+                    ),
+                    const SizedBox(height: 16),
+                    // 월
+                    sectionLabel('월 (복수 선택 가능)'),
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 6,
+                      children: months.map((m) {
+                        final sel = selMonths.contains(m);
+                        return checkChip(m, sel, () {
+                          setS(() {
+                            if (sel) selMonths.remove(m); else selMonths.add(m);
+                            selWeeks.clear(); weekOptions = [];
+                          });
+                          if (selMonths.isNotEmpty) loadWeeks(setS);
+                        });
+                      }).toList(),
+                    ),
+                    const SizedBox(height: 16),
+                    // 주차
+                    sectionLabel('주차 (복수 선택 가능)'),
+                    if (weekLoading)
+                      const SizedBox(height: 28, child: Center(child: SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))))
+                    else if (weekOptions.isEmpty)
+                      Text('월을 먼저 선택하세요', style: TextStyle(fontSize: 12, color: Colors.grey.shade500))
+                    else
+                      Wrap(
+                        spacing: 6,
+                        runSpacing: 6,
+                        children: weekOptions.map((w) {
+                          final sel = selWeeks.contains(w);
+                          return checkChip(w, sel, () => setS(() {
+                            if (sel) selWeeks.remove(w); else selWeeks.add(w);
+                          }));
+                        }).toList(),
+                      ),
+                  ],
                 ),
-                const SizedBox(height: 12),
-                _dropdown('주차', selWeek, weekOptions, (v) => setDlgState(() => selWeek = v), loading: weekLoading),
-              ],
+              ),
             ),
             actions: [
               TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('취소')),
@@ -303,7 +334,11 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
                   foregroundColor: Colors.white,
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                 ),
-                onPressed: () => Navigator.pop(ctx, {'region': selDivision, 'month': selMonth, 'week': selWeek}),
+                onPressed: () => Navigator.pop(ctx, {
+                  'regions': selDivisions.toList(),
+                  'months': selMonths.toList(),
+                  'weeks': selWeeks.toList(),
+                }),
                 child: const Text('다운로드'),
               ),
             ],
@@ -316,16 +351,16 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
     final dialog = ProgressDialog(context);
     dialog.show(message: 'Excel 다운로드\n준비 중...');
     try {
-      final region = result['region'] ?? '';
-      final month = result['month'] ?? '';
-      final week = result['week'] ?? '';
-      final bytes = await _svc.exportResultsXlsx(_year, region: region, week: week);
+      final regions = (result['regions'] as List<String>? ?? []);
+      final months = (result['months'] as List<String>? ?? []);
+      final weeks = (result['weeks'] as List<String>? ?? []);
+      final bytes = await _svc.exportResultsXlsx(_year, regions: regions, weeks: weeks);
       if (!mounted) return;
       final fileSuffix = [
-        if (region.isNotEmpty) region,
-        if (month.isNotEmpty) month,
-        if (week.isNotEmpty) week,
-        if (region.isEmpty && month.isEmpty && week.isEmpty) '전체',
+        if (regions.isNotEmpty) regions.join('+'),
+        if (months.isNotEmpty) months.join('+'),
+        if (weeks.isNotEmpty) weeks.join('+'),
+        if (regions.isEmpty && months.isEmpty && weeks.isEmpty) '전체',
       ].join('_');
       final blob = html.Blob([bytes],
           'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
