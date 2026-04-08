@@ -34,6 +34,11 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
   String _selectedWeek = '';
   List<String> _weekOptions = [];
 
+  // 본부 관리자용 팀 필터
+  bool _isDivisionAdmin = false;
+  String _selectedTeam = '';
+  List<String> _teamOptions = [];
+
   // 드래그 (모바일)
   double _listHeightRatio = 0.40;
   static const double _minListRatio = 0.15;
@@ -44,13 +49,36 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
     super.initState();
     _svc = InspectionService()
       ..setAuthToken(context.read<AuthService>().authToken);
+    final auth = context.read<AuthService>();
+    _isDivisionAdmin = auth.isDivisionAdmin || auth.isSuperAdmin;
+    if (_isDivisionAdmin) _loadTeams();
     _loadWeeks();
     _loadInspection();
   }
 
+  Future<void> _loadTeams() async {
+    try {
+      final orgMap = await _svc.getOrgMap(_year);
+      final map = (orgMap['org_map'] as Map?)?.cast<String, dynamic>() ?? {};
+      final auth = context.read<AuthService>();
+      final myHdqt = (auth.userDepartment ?? '').replaceAll('Access담당', '').trim();
+      List<String> teams = [];
+      if (auth.isSuperAdmin) {
+        // 수퍼 관리자: 모든 팀
+        for (final v in map.values) {
+          teams.addAll((v as List).cast<String>());
+        }
+        teams = teams.toSet().toList()..sort();
+      } else if (myHdqt.isNotEmpty && map.containsKey(myHdqt)) {
+        teams = List<String>.from(map[myHdqt] as List);
+      }
+      if (mounted) setState(() => _teamOptions = teams);
+    } catch (_) {}
+  }
+
   Future<void> _loadWeeks() async {
     try {
-      final weeks = await _svc.getMyListWeeks(_year);
+      final weeks = await _svc.getMyListWeeks(_year, team: _selectedTeam);
       if (mounted) setState(() => _weekOptions = weeks);
     } catch (_) {}
   }
@@ -58,7 +86,7 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
   Future<void> _loadInspection() async {
     setState(() { _loadingInsp = true; _inspError = null; });
     try {
-      final items = await _svc.getMyList(_year, week: _selectedWeek);
+      final items = await _svc.getMyList(_year, week: _selectedWeek, team: _selectedTeam);
       setState(() => _assignedItems = items);
     } catch (e) {
       setState(() => _inspError = e.toString());
@@ -294,6 +322,10 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
           const Text('수검 관리',
               style: TextStyle(color: Colors.black87, fontSize: 17, fontWeight: FontWeight.w600)),
           const SizedBox(width: 12),
+          if (_isDivisionAdmin && _teamOptions.isNotEmpty) ...[
+            _buildTeamDropdown(),
+            const SizedBox(width: 8),
+          ],
           if (_weekOptions.isNotEmpty) _buildWeekDropdown(),
           const Spacer(),
           if (_loadingInsp)
@@ -318,7 +350,8 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
         return GestureDetector(
           onTap: () {
             if (_year != y) {
-              setState(() { _year = y; _selectedWeek = ''; _weekOptions = []; });
+              setState(() { _year = y; _selectedWeek = ''; _weekOptions = []; _selectedTeam = ''; _teamOptions = []; });
+              if (_isDivisionAdmin) _loadTeams();
               _loadWeeks();
               _loadInspection();
             }
@@ -339,6 +372,39 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
           ),
         );
       }).toList(),
+    );
+  }
+
+  Widget _buildTeamDropdown() {
+    const primaryColor = Color(0xFFE53935);
+    final items = <DropdownMenuItem<String>>[
+      const DropdownMenuItem(value: '', child: Text('전체 팀')),
+      ..._teamOptions.map((t) => DropdownMenuItem(value: t, child: Text(t))),
+    ];
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border.all(color: _selectedTeam.isNotEmpty ? primaryColor : Colors.grey.shade300),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<String>(
+          isExpanded: false,
+          isDense: true,
+          icon: const Icon(Icons.arrow_drop_down, color: primaryColor, size: 20),
+          dropdownColor: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          style: const TextStyle(color: Colors.black87, fontSize: 13),
+          value: _selectedTeam,
+          items: items,
+          onChanged: (v) {
+            setState(() { _selectedTeam = v ?? ''; _selectedWeek = ''; _weekOptions = []; });
+            _loadWeeks();
+            _loadInspection();
+          },
+        ),
+      ),
     );
   }
 

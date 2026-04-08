@@ -304,20 +304,24 @@ class InspectionService {
     return resp.bodyBytes;
   }
 
-  Future<List<Map<String, dynamic>>> getMyList(int year, {String week = ''}) async {
+  Future<List<Map<String, dynamic>>> getMyList(int year, {String week = '', String team = ''}) async {
     final uri = Uri.parse('$_baseUrl/inspection/my-list').replace(
         queryParameters: {
           'year': '$year',
           if (week.isNotEmpty) 'week': week,
+          if (team.isNotEmpty) 'team': team,
         });
     final resp = await http.get(uri, headers: _headers).timeout(_apiTimeout);
     final body = json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
     return List<Map<String, dynamic>>.from(body['items'] ?? []);
   }
 
-  Future<List<String>> getMyListWeeks(int year) async {
+  Future<List<String>> getMyListWeeks(int year, {String team = ''}) async {
     final uri = Uri.parse('$_baseUrl/inspection/my-list/weeks').replace(
-        queryParameters: {'year': '$year'});
+        queryParameters: {
+          'year': '$year',
+          if (team.isNotEmpty) 'team': team,
+        });
     final resp = await http.get(uri, headers: _headers).timeout(_apiTimeout);
     final body = json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
     return List<String>.from(body['weeks'] ?? []);

@@ -1048,7 +1048,8 @@ def _list_all_users_sync() -> list:
             "is_dormant": bool(role_item.get("is_dormant", False)),
         })
 
-    users.sort(key=lambda u: u.get("name", ""))
+
+    users.sort(key=lambda u: u.get("name") or "")
     _admin_users_cache = users
     _admin_users_cache_time = now
     return users
@@ -12046,25 +12047,32 @@ async def inspection_result_photo_data(request: Request, s3_key: str):
         raise HTTPException(404, f"사진을 찾을 수 없습니다: {e}")
 
 @app.get("/inspection/my-list/weeks")
-async def inspection_my_list_weeks(request: Request, year: int):
-    """내 팀 수검예정주차 목록."""
+async def inspection_my_list_weeks(request: Request, year: int, team: str = ""):
+    """내 팀 수검예정주차 목록. 본부 관리자는 team 파라미터로 특정 팀 필터 가능."""
     empno = await _verify_auth(request)
     user_data = {}
     dev = _dev_users.get(empno)
     if dev:
-        user_data = {"region": dev["region"], "team": dev["team"]}
+        user_data = {"region": dev["region"], "team": dev["team"], "role": dev.get("role", "member")}
     else:
         dynamodb = get_dynamodb_resource()
         users_table = dynamodb.Table(DYNAMODB_TABLES["users"])
         user_item = await asyncio.to_thread(lambda: users_table.get_item(
             Key={"user_id": empno},
-            ProjectionExpression="#r, team",
-            ExpressionAttributeNames={"#r": "region"},
+            ProjectionExpression="#r, team, #ro",
+            ExpressionAttributeNames={"#r": "region", "#ro": "role"},
         ))
         user_data = user_item.get("Item", {})
     access_team = user_data.get("region", "").replace("Access담당", "").strip()
     품질팀 = user_data.get("team", "")
+    user_role = user_data.get("role", "member")
     is_dev = _dev_users.get(empno) is not None
+    is_manager = user_role in ("admin", "manager")
+
+    # 본부 관리자가 team 파라미터로 특정 팀 지정 시 해당 팀으로 필터
+    if is_manager and team:
+        품질팀 = team
+
     if not is_dev and not access_team and not 품질팀:
         return {"weeks": []}
 
@@ -12079,6 +12087,16 @@ async def inspection_my_list_weeks(request: Request, year: int):
             rows = c.execute(
                 'SELECT DISTINCT 수검예정주차 FROM inspection_schedules WHERE year=? AND 수검예정주차 != "" ORDER BY 수검예정주차',
                 (year,)).fetchall()
+        elif is_manager and access_team and 품질팀:
+            # 본부 관리자 + 팀 필터
+            rows = c.execute(
+                'SELECT DISTINCT 수검예정주차 FROM inspection_schedules WHERE year=? AND access담당=? AND 품질개선팀=? AND 수검예정주차 != "" ORDER BY 수검예정주차',
+                (year, access_team, 품질팀)).fetchall()
+        elif is_manager and access_team:
+            # 본부 관리자 (팀 필터 없음 → 본부 전체)
+            rows = c.execute(
+                'SELECT DISTINCT 수검예정주차 FROM inspection_schedules WHERE year=? AND access담당=? AND 수검예정주차 != "" ORDER BY 수검예정주차',
+                (year, access_team)).fetchall()
         elif access_team and 품질팀:
             rows = c.execute(
                 'SELECT DISTINCT 수검예정주차 FROM inspection_schedules WHERE year=? AND access담당=? AND 품질개선팀=? AND 수검예정주차 != "" ORDER BY 수검예정주차',
@@ -12098,27 +12116,33 @@ async def inspection_my_list_weeks(request: Request, year: int):
 
 
 @app.get("/inspection/my-list")
-async def inspection_my_list(request: Request, year: int, week: str = ""):
-    """내 팀 배정 수검 목록 (팀원용)."""
+async def inspection_my_list(request: Request, year: int, week: str = "", team: str = ""):
+    """내 팀 배정 수검 목록. 본부 관리자는 team 파라미터로 특정 팀 필터 가능."""
     empno = await _verify_auth(request)
-    # Users 테이블에서 region(본부=access담당), team(품질개선팀) 조회
+    # Users 테이블에서 region(본부=access담당), team(품질개선팀), role 조회
     user_data = {}
     dev = _dev_users.get(empno)
     if dev:
-        user_data = {"region": dev["region"], "team": dev["team"]}
+        user_data = {"region": dev["region"], "team": dev["team"], "role": dev.get("role", "member")}
     else:
         dynamodb = get_dynamodb_resource()
         users_table = dynamodb.Table(DYNAMODB_TABLES["users"])
         user_item = await asyncio.to_thread(lambda: users_table.get_item(
             Key={"user_id": empno},
-            ProjectionExpression="#r, team",
-            ExpressionAttributeNames={"#r": "region"},
+            ProjectionExpression="#r, team, #ro",
+            ExpressionAttributeNames={"#r": "region", "#ro": "role"},
         ))
         user_data = user_item.get("Item", {})
     # region: "경북Access담당" → "경북" (inspection_schedules.access담당과 매칭)
     access_team = user_data.get("region", "").replace("Access담당", "").strip()
     품질팀 = user_data.get("team", "")
+    user_role = user_data.get("role", "member")
     is_dev = _dev_users.get(empno) is not None
+    is_manager = user_role in ("admin", "manager")
+
+    # 본부 관리자가 team 파라미터로 특정 팀 지정 시 해당 팀으로 필터
+    if is_manager and team:
+        품질팀 = team
 
     if not is_dev and not access_team and not 품질팀:
         return {"items": [], "message": "팀 배정 없음"}
@@ -12142,6 +12166,14 @@ async def inspection_my_list(request: Request, year: int, week: str = ""):
             # 테스트 계정인데 본부 정보도 없으면 전체 (fallback)
             where_parts.append('s.year=?')
             params.extend([year])
+        elif is_manager and access_team and 품질팀:
+            # 본부 관리자 + 팀 필터
+            where_parts.append('s.year=? AND s.access담당=? AND s.품질개선팀=?')
+            params.extend([year, access_team, 품질팀])
+        elif is_manager and access_team:
+            # 본부 관리자 (팀 필터 없음 → 본부 전체)
+            where_parts.append('s.year=? AND s.access담당=?')
+            params.extend([year, access_team])
         elif access_team and 품질팀:
             where_parts.append('s.year=? AND s.access담당=? AND s.품질개선팀=?')
             params.extend([year, access_team, 품질팀])
