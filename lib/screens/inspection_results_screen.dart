@@ -922,25 +922,40 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
         return Padding(
           padding: EdgeInsets.all(isMobile ? 8 : 16),
           child: Column(
+            mainAxisSize: MainAxisSize.min,
             children: [
               if (isWide) ...[
                 // ── Row 1: 본부별 실적 + 파이차트 (좌) | 본부별 목표 대비 (우) ──
-                IntrinsicHeight(
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Expanded(
-                        flex: 5,
-                        child: Column(children: [
+                // IntrinsicHeight(
+                //   child: Row(
+                //     crossAxisAlignment: CrossAxisAlignment.stretch,
+                //     children: [
+                //       Expanded(
+                //         flex: 5,
+                //         child: Column(children: [
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      flex: 5,
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
                           _buildDataTable(),
                           const SizedBox(height: 14),
-                          Expanded(child: _buildFailureDonutSection()),
-                        ]),
+                        //   Expanded(child: _buildFailureDonutSection()),
+                        // ]),
+                          _buildFailureDonutSection(),
+                        ],
                       ),
-                      const SizedBox(width: 14),
-                      Expanded(flex: 5, child: _buildRegionBarChart()),
-                    ],
-                  ),
+                  //     const SizedBox(width: 14),
+                  //     Expanded(flex: 5, child: _buildRegionBarChart()),
+                  //   ],
+                  // ),
+                    ),
+                    const SizedBox(width: 14),
+                    Expanded(flex: 5, child: _buildRegionBarChart()),
+                  ],
                 ),
               ] else ...[
                 // Single column layout for narrow screens
@@ -962,20 +977,33 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
 
               // ── F. 장비 Type별 불합격 현황 크로스탭 + 요약 ──
               if (isWide)
-                Builder(
-                  builder: (context) {
-                    final summaryWidget = _buildEquipTypeSummary();
-                    return IntrinsicHeight(
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          Expanded(flex: 5, child: _buildEquipTypeCrosstab()),
-                          const SizedBox(width: 14),
-                          Expanded(flex: 5, child: summaryWidget),
-                        ],
-                      ),
-                    );
-                  },
+                // Builder(
+                //   builder: (context) {
+                //     final summaryWidget = _buildEquipTypeSummary();
+                //     return IntrinsicHeight(
+                //       child: Row(
+                //         crossAxisAlignment: CrossAxisAlignment.stretch,
+                //         children: [
+                //           Expanded(flex: 5, child: _buildEquipTypeCrosstab()),
+                //           const SizedBox(width: 14),
+                //           Expanded(flex: 5, child: summaryWidget),
+                //         ],
+                //       ),
+                //     );
+                //   },
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      flex: 5,
+                      child: _buildEquipTypeCrosstab(),
+                    ),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      flex: 5,
+                      child: _buildEquipTypeSummary(),
+                    ),
+                  ],
                 )
               else ...[
                 _buildEquipTypeCrosstab(),
