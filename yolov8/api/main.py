@@ -3314,7 +3314,10 @@ def _parse_zip_metadata_sync(zip_temp_path: str, progress_cb=None) -> tuple:
                 continue
 
             try:
-                workbook = xlrd.open_workbook(xls_tmp_path)
+                try:
+                    workbook = xlrd.open_workbook(xls_tmp_path)
+                except Exception:
+                    workbook = xlrd.open_workbook(xls_tmp_path, ignore_workbook_corruption=True)
             except Exception as e:
                 logger.warning(f"DS metadata: XLS 파싱 실패 ({base_fname}): {e}")
                 os.remove(xls_tmp_path)
@@ -3449,7 +3452,10 @@ def _read_xls_from_zip_paginated_sync(
                 xls_sheet_name = entry.get("orig", sheet_name)
                 try:
                     xls_bytes = zf.read(fname)
-                    wb = xlrd.open_workbook(file_contents=xls_bytes)
+                    try:
+                        wb = xlrd.open_workbook(file_contents=xls_bytes)
+                    except Exception:
+                        wb = xlrd.open_workbook(file_contents=xls_bytes, ignore_workbook_corruption=True)
                 except Exception:
                     global_row_idx += entry["r"]
                     continue
@@ -3532,7 +3538,10 @@ def _read_xls_from_zip_paginated_sync(
 
                 try:
                     xls_bytes = zf.read(fname)
-                    wb = xlrd.open_workbook(file_contents=xls_bytes)
+                    try:
+                        wb = xlrd.open_workbook(file_contents=xls_bytes)
+                    except Exception:
+                        wb = xlrd.open_workbook(file_contents=xls_bytes, ignore_workbook_corruption=True)
                 except Exception:
                     global_row_idx += file_row_count
                     cumulative += file_row_count
@@ -3666,7 +3675,10 @@ def _process_zip_to_xlsx_sync(zip_temp_path: str, progress_cb=None,
             try:
                 with zf.open(fname) as src, open(xls_tmp, "wb") as dst:
                     shutil.copyfileobj(src, dst)
-                workbook = xlrd.open_workbook(xls_tmp)
+                try:
+                    workbook = xlrd.open_workbook(xls_tmp)
+                except Exception:
+                    workbook = xlrd.open_workbook(xls_tmp, ignore_workbook_corruption=True)
             except Exception as e:
                 logger.warning(f"DS xlsx Pass1: {fname} 실패: {e}")
                 if os.path.exists(xls_tmp):
@@ -3798,7 +3810,10 @@ def _process_zip_to_xlsx_sync(zip_temp_path: str, progress_cb=None,
                 continue
 
             try:
-                workbook = xlrd.open_workbook(xls_tmp_path)
+                try:
+                    workbook = xlrd.open_workbook(xls_tmp_path)
+                except Exception:
+                    workbook = xlrd.open_workbook(xls_tmp_path, ignore_workbook_corruption=True)
             except Exception as e:
                 logger.warning(f"DS xlsx Pass2: XLS 파싱 실패 ({base_fname}): {e}")
                 os.remove(xls_tmp_path)
