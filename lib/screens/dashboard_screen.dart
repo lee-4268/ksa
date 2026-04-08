@@ -666,7 +666,7 @@ class _DashboardScreenState extends State<DashboardScreen>
   }
 
   Widget _buildRegionList() {
-    const _regionOrder = ['gangnam', 'gangbuk', 'gangwon', 'gyeonggi', 'gyeongnam', 'gyeongbuk', 'seobu', 'incheon', 'chungcheong'];
+    const _regionOrder = ['gangnam', 'gangbuk', 'incheon', 'gyeonggi', 'gyeongnam', 'gyeongbuk', 'seobu', 'chungcheong', 'gangwon'];
     final sortedRegions = _regionData.entries.toList()
       ..sort((a, b) {
         final ai = _regionOrder.indexOf(a.key);

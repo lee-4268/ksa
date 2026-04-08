@@ -67,8 +67,6 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
   late bool _isAdmin;
 
   // 테이블 정렬
-  int _sortColumnIndex = 0;
-  bool _sortAscending = true;
 
   @override
   void initState() {
@@ -1006,17 +1004,6 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
   // ══════════════════════════════════════════════════════════
 
   // 컬럼 인덱스 → 정렬 키 매핑
-  static const _colKeys = [
-    'name', '수검국소', '완료', '시기조정', '폐국',
-    '성능합격', '성능불합격', '서류합격', '서류불합격', '성능합격율', '서류합격율',
-  ];
-
-  void _onSort(int colIdx, bool asc) {
-    setState(() {
-      _sortColumnIndex = colIdx;
-      _sortAscending = asc;
-    });
-  }
 
   Widget _buildDataTable() {
     final regionData =
@@ -1046,31 +1033,20 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
       };
     }
 
-    // 정렬 (합계 행 제외)
-    final sortedRegions = List<Map<String, dynamic>>.from(regionData);
-    if (_sortColumnIndex > 0) {
-      final key = _colKeys[_sortColumnIndex];
-      sortedRegions.sort((a, b) {
-        final av = _toDouble(a[key] ?? a[key == '수검국소' ? 'total' : key == '완료' ? 'completed' : key]);
-        final bv = _toDouble(b[key] ?? b[key == '수검국소' ? 'total' : key == '완료' ? 'completed' : key]);
-        return _sortAscending ? av.compareTo(bv) : bv.compareTo(av);
+    // _regionOrder 순서로 고정 정렬
+    final sortedRegions = [...regionData]..sort((a, b) {
+        final ai = _regionOrder.indexOf(_regionName(a, fallback: ''));
+        final bi = _regionOrder.indexOf(_regionName(b, fallback: ''));
+        return (ai < 0 ? 99 : ai).compareTo(bi < 0 ? 99 : bi);
       });
-    } else if (_sortColumnIndex == 0) {
-      sortedRegions.sort((a, b) {
-        final an = _regionName(a, fallback: '');
-        final bn = _regionName(b, fallback: '');
-        return _sortAscending ? an.compareTo(bn) : bn.compareTo(an);
-      });
-    }
 
     final allRows = [...sortedRegions, if (totals.isNotEmpty) totals];
 
-    DataColumn col(String label, int idx, {bool numeric = false}) =>
+    DataColumn col(String label, {bool numeric = false}) =>
         DataColumn(
           label: Center(child: Text(label)),
           numeric: numeric,
           headingRowAlignment: MainAxisAlignment.center,
-          onSort: (i, asc) => _onSort(idx, asc),
         );
 
     return _chartSection(
@@ -1079,8 +1055,6 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
       iconColor: _blue,
       child: ClipRect(
         child: DataTable(
-          sortColumnIndex: _sortColumnIndex,
-          sortAscending: _sortAscending,
           headingRowColor: WidgetStateProperty.all(const Color(0xFFF3F4F6)),
           headingRowHeight: 38,
           dataRowMinHeight: 36,
@@ -1096,17 +1070,17 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
               fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF374151)),
           dataTextStyle: const TextStyle(fontSize: 11, color: Color(0xFF111827)),
           columns: [
-            col('본부', 0),
-            col('수검국소', 1, numeric: true),
-            col('완료', 2, numeric: true),
-            col('시기조정', 3, numeric: true),
-            col('폐국', 4, numeric: true),
-            col('성능합격', 5, numeric: true),
-            col('성능불합', 6, numeric: true),
-            col('서류합격', 7, numeric: true),
-            col('서류불합', 8, numeric: true),
-            col('성능합격율', 9, numeric: true),
-            col('서류합격율', 10, numeric: true),
+            col('본부'),
+            col('수검국소', numeric: true),
+            col('완료', numeric: true),
+            col('시기조정', numeric: true),
+            col('폐국', numeric: true),
+            col('성능합격', numeric: true),
+            col('성능불합', numeric: true),
+            col('서류합격', numeric: true),
+            col('서류불합', numeric: true),
+            col('성능합격율', numeric: true),
+            col('서류합격율', numeric: true),
           ],
           rows: allRows.asMap().entries.map((entry) {
             final i = entry.key;
@@ -1345,6 +1319,13 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
     final regionData =
         List<Map<String, dynamic>>.from(_monthlyData['regions'] ?? []);
     if (regionData.isEmpty) return const SizedBox.shrink();
+
+    // _regionOrder 순서로 고정 정렬
+    regionData.sort((a, b) {
+      final ai = _regionOrder.indexOf(_regionName(a, fallback: ''));
+      final bi = _regionOrder.indexOf(_regionName(b, fallback: ''));
+      return (ai < 0 ? 99 : ai).compareTo(bi < 0 ? 99 : bi);
+    });
 
     const double perfTarget = 98.5;
     const double docTarget = 85.5;
