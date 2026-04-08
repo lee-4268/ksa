@@ -509,6 +509,8 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
                 const SizedBox(width: 4),
                 _naviButton('카카오', const Color(0xFFFEE500), () => _openKakaoNavi(navLat, navLng, installAddr),
                     textColor: Colors.black87),
+                const SizedBox(width: 4),
+                _naviButton('네이버', const Color(0xFF03C75A), () => _openNaverNavi(navLat, navLng, installAddr)),
               ],
             ]),
           ),
@@ -1006,10 +1008,16 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
   }
 
   void _openKakaoNavi(double lat, double lng, String name) {
-    final encoded = Uri.encodeComponent(name);
-    // 모바일 브라우저에서는 kakaomap:// 딥링크로 앱 직접 호출
     html.window.open(
       'kakaomap://route?ep=$lat,$lng&by=CAR',
+      '_blank',
+    );
+  }
+
+  void _openNaverNavi(double lat, double lng, String name) {
+    final encoded = Uri.encodeComponent(name);
+    html.window.open(
+      'nmap://route/car?dlat=$lat&dlng=$lng&dname=$encoded&appname=com.kca.ksa',
       '_blank',
     );
   }
