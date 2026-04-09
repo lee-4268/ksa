@@ -79,9 +79,9 @@ class _InadequateManagementScreenState
       if (mounted) {
         setState(() {
           _totalCount = stats['total'] as int? ?? 0;
-          _incompleteCount = stats['incomplete'] as int? ?? 0;
-          _completeCount = stats['complete'] as int? ?? 0;
-          _excludedCount = stats['excluded'] as int? ?? 0;
+          _incompleteCount = stats['미완료'] as int? ?? 0;
+          _completeCount = stats['완료'] as int? ?? 0;
+          _excludedCount = stats['대상제외'] as int? ?? 0;
           _items = List<Map<String, dynamic>>.from(listData['items'] ?? []);
           _totalItems = listData['total'] as int? ?? 0;
           _loading = false;
@@ -122,7 +122,7 @@ class _InadequateManagementScreenState
   void _showEditDialog(Map<String, dynamic> item) {
     if (!_isAdmin) return;
 
-    String selectedStatus = (item['상태'] ?? '미완료') as String;
+    String selectedStatus = (item['status'] ?? '미완료') as String;
     final reviewCtrl = TextEditingController(text: (item['심의차수'] ?? '') as String);
 
     showDialog(
@@ -491,7 +491,7 @@ class _InadequateManagementScreenState
                         child: Text(_str(item, '불합격상세'), overflow: TextOverflow.ellipsis),
                       ),
                     ),
-                    DataCell(_buildStatusChip(_str(item, '상태'))),
+                    DataCell(_buildStatusChip(_str(item, 'status'))),
                     DataCell(Text(_str(item, '심의차수'))),
                   ],
                 );
