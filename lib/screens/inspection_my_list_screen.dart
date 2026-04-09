@@ -36,6 +36,8 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
 
   // 본부 관리자용 팀 필터
   bool _isDivisionAdmin = false;
+  bool _isTracking = false;
+  bool _isSatellite = false;
   String _selectedTeam = '';
   List<String> _teamOptions = [];
 
@@ -805,6 +807,45 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
   // ── Helpers ───────────────────────────────────────────────────────────
 
   Widget _buildMyLocationButton() {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // 위성뷰 토글
+        _mapFloatingButton(
+          icon: _isSatellite ? Icons.map : Icons.satellite_alt,
+          color: _isSatellite ? const Color(0xFF4285F4) : Colors.black87,
+          onTap: () {
+            setState(() => _isSatellite = !_isSatellite);
+            _mapKey.currentState?.setMapType(_isSatellite);
+          },
+        ),
+        const SizedBox(height: 8),
+        // 내 위치 / 실시간 추적 토글
+        _mapFloatingButton(
+          icon: _isTracking ? Icons.navigation : Icons.my_location,
+          color: _isTracking ? const Color(0xFF4285F4) : Colors.black87,
+          onTap: () {
+            _mapKey.currentState?.onGeolocationError = (error) {
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text(error), backgroundColor: Colors.red),
+                );
+              }
+            };
+            if (_isTracking) {
+              _mapKey.currentState?.stopLocationTracking();
+              setState(() => _isTracking = false);
+            } else {
+              _mapKey.currentState?.startLocationTracking();
+              setState(() => _isTracking = true);
+            }
+          },
+        ),
+      ],
+    );
+  }
+
+  Widget _mapFloatingButton({required IconData icon, required Color color, required VoidCallback onTap}) {
     return Container(
       decoration: BoxDecoration(
         color: Colors.white,
@@ -816,19 +857,10 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
         shape: const CircleBorder(),
         child: InkWell(
           customBorder: const CircleBorder(),
-          onTap: () {
-            _mapKey.currentState?.onGeolocationError = (error) {
-              if (mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text(error), backgroundColor: Colors.red),
-                );
-              }
-            };
-            _mapKey.currentState?.moveToCurrentLocation();
-          },
-          child: const Padding(
-            padding: EdgeInsets.all(12),
-            child: Icon(Icons.my_location, color: Colors.black87, size: 24),
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.all(10),
+            child: Icon(icon, color: color, size: 22),
           ),
         ),
       ),

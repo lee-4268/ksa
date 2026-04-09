@@ -207,6 +207,106 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
     html.document.body?.append(html.ScriptElement()..text = jsCode);
   }
 
+  /// 실시간 위치 추적 시작 (watchPosition)
+  void startLocationTracking() {
+    final jsCode = '''
+      (function() {
+        if (!navigator.geolocation) return;
+        var map = window['kakaoMapInstance_$_containerId'];
+        if (!map) return;
+
+        // 기존 추적 중지
+        if (window['kakaoWatchId_$_containerId']) {
+          navigator.geolocation.clearWatch(window['kakaoWatchId_$_containerId']);
+        }
+
+        window['kakaoWatchId_$_containerId'] = navigator.geolocation.watchPosition(
+          function(position) {
+            var lat = position.coords.latitude;
+            var lng = position.coords.longitude;
+            var heading = position.coords.heading; // 이동 방향 (도)
+            var speed = position.coords.speed;
+
+            // 지도 중심 이동
+            var moveLatLon = new kakao.maps.LatLng(lat, lng);
+            map.setCenter(moveLatLon);
+
+            // 기존 마커/방향 제거
+            if (window['kakaoCurrentLocationMarker_$_containerId']) {
+              window['kakaoCurrentLocationMarker_$_containerId'].setMap(null);
+            }
+            if (window['kakaoCurrentLocationCircle_$_containerId']) {
+              window['kakaoCurrentLocationCircle_$_containerId'].setMap(null);
+            }
+
+            // 방향 화살표 + 파란 점 마커
+            var rotation = (heading && !isNaN(heading)) ? heading : 0;
+            var hasHeading = heading && !isNaN(heading) && speed > 0.5;
+            var arrowHtml = hasHeading
+              ? '<div style="transform:rotate(' + rotation + 'deg);width:0;height:0;border-left:8px solid transparent;border-right:8px solid transparent;border-bottom:16px solid #4285F4;position:absolute;top:-18px;left:2px;"></div>'
+              : '';
+            var markerContent = '<div style="position:relative;">' + arrowHtml +
+              '<div style="width:18px;height:18px;background:#4285F4;border:3px solid white;border-radius:50%;box-shadow:0 2px 6px rgba(0,0,0,0.3);"></div></div>';
+
+            var overlay = new kakao.maps.CustomOverlay({
+              position: moveLatLon,
+              content: markerContent,
+              yAnchor: 0.5,
+              xAnchor: 0.5,
+              zIndex: 10
+            });
+            overlay.setMap(map);
+            window['kakaoCurrentLocationMarker_$_containerId'] = overlay;
+
+            // 정확도 원
+            var circle = new kakao.maps.Circle({
+              center: moveLatLon,
+              radius: Math.max(position.coords.accuracy, 20),
+              strokeWeight: 1, strokeColor: '#4285F4', strokeOpacity: 0.5,
+              fillColor: '#4285F4', fillOpacity: 0.1
+            });
+            circle.setMap(map);
+            window['kakaoCurrentLocationCircle_$_containerId'] = circle;
+
+            window.postMessage({type: 'currentLocation', lat: lat, lng: lng}, '*');
+          },
+          function(error) {
+            console.warn('위치 추적 오류:', error.message);
+          },
+          {enableHighAccuracy: true, timeout: 15000, maximumAge: 0}
+        );
+      })();
+    ''';
+    html.document.body?.append(html.ScriptElement()..text = jsCode);
+  }
+
+  /// 실시간 위치 추적 중지
+  void stopLocationTracking() {
+    final jsCode = '''
+      (function() {
+        if (window['kakaoWatchId_$_containerId']) {
+          navigator.geolocation.clearWatch(window['kakaoWatchId_$_containerId']);
+          window['kakaoWatchId_$_containerId'] = null;
+        }
+      })();
+    ''';
+    html.document.body?.append(html.ScriptElement()..text = jsCode);
+  }
+
+  /// 위성뷰 전환
+  void setMapType(bool satellite) {
+    final typeId = satellite ? 'kakao.maps.MapTypeId.HYBRID' : 'kakao.maps.MapTypeId.ROADMAP';
+    final jsCode = '''
+      (function() {
+        var map = window['kakaoMapInstance_$_containerId'];
+        if (map) {
+          map.setMapTypeId($typeId);
+        }
+      })();
+    ''';
+    html.document.body?.append(html.ScriptElement()..text = jsCode);
+  }
+
   /// 특정 스테이션 위치로 카메라 이동 (외부에서 호출 가능)
   void moveToStation(RadioStation station) {
     if (!station.hasCoordinates || !_isMapReady) return;
