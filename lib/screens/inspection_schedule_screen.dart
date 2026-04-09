@@ -44,7 +44,11 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
 
   // applied 필터 (실제 쿼리)
   String _aHdqt = '', _aTeam = '', _aSearch = '', _aScheduled = '';
+  String _aSchedWeek = ''; // 수검예정주차 필터 (매트릭스 카드 클릭 시 세팅)
   List<String> _aQuarters = [], _aNationGroups = [], _aKcaResults = [];
+
+  // 매트릭스 탭 전용 필터
+  String _mHdqt = '', _mTeam = '', _mWeek = '';
 
   // 다중 선택 (일괄 일정 등록)
   final _selectedLicenseNos = <String>{};
@@ -147,7 +151,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
   bool get _hasActiveFilters =>
       _aHdqt.isNotEmpty || _aTeam.isNotEmpty || _aQuarters.isNotEmpty ||
       _aNationGroups.isNotEmpty || _aKcaResults.isNotEmpty || _aSearch.isNotEmpty ||
-      _aScheduled.isNotEmpty;
+      _aScheduled.isNotEmpty || _aSchedWeek.isNotEmpty;
 
   @override
   void initState() {
@@ -232,6 +236,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
         addr: _aSearch,
         page: _page, pageSize: 100,
         scheduleYn: _aScheduled,
+        scheduleWeek: _aSchedWeek,
       );
     } catch (_) { return null; }
   }
@@ -340,7 +345,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
 
   void _resetFilters() {
     _pHdqt = _pTeam = _pSearch = _pScheduled = '';
-    _aHdqt = _aTeam = _aSearch = _aScheduled = '';
+    _aHdqt = _aTeam = _aSearch = _aScheduled = _aSchedWeek = '';
     _pQuarters = []; _pNationGroups = []; _pKcaResults = [];
     _aQuarters = []; _aNationGroups = []; _aKcaResults = [];
     _searchCtrl.clear();
@@ -970,7 +975,11 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
 
   Widget _buildMain() {
     return Column(children: [
-      _buildFilterBar(),
+      // 탭별 필터바: 수검 대상 현황 탭은 기존 필터, 매트릭스 탭은 별도 필터
+      AnimatedBuilder(
+        animation: _tabCtrl,
+        builder: (_, __) => _tabCtrl.index == 0 ? _buildFilterBar() : _buildMatrixFilterBar(),
+      ),
       Expanded(
         child: TabBarView(
           controller: _tabCtrl,
@@ -1133,6 +1142,67 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
             const SizedBox(height: 10),
             _buildActiveFilterChips(),
           ],
+        ],
+      ),
+    );
+  }
+
+  // ── 매트릭스 탭 전용 필터바 ──────────────────────────────
+
+  Widget _buildMatrixFilterBar() {
+    // 수검일정(주차) 목록: _schedules에서 추출
+    final allWeeks = <String>{};
+    for (final s in _schedules) {
+      final w = (s['수검예정주차'] as String? ?? '').trim();
+      if (w.isNotEmpty) allWeeks.add(w);
+    }
+    final weekOptions = <String>['', ...allWeeks.toList()
+      ..sort((a, b) {
+        final na = int.tryParse(a.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0;
+        final nb = int.tryParse(b.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0;
+        return na.compareTo(nb);
+      })];
+
+    // 매트릭스 탭 팀 옵션: 선택된 본부 기준
+    final mTeamOpts = <String>['', ...(_mHdqt.isNotEmpty ? (_orgMap[_mHdqt] ?? []) : _orgMap.values.expand((v) => v).toSet().toList()..sort())];
+
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFE5E7EB)),
+        boxShadow: [
+          BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 8, offset: const Offset(0, 2)),
+        ],
+      ),
+      child: Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          _yearDropdown(),
+          _filterDropdown('본부', _mHdqt, ['', ..._hdqts], (v) {
+            setState(() { _mHdqt = v ?? ''; _mTeam = ''; });
+          }),
+          _filterDropdown('팀', _mTeam, mTeamOpts, (v) {
+            setState(() => _mTeam = v ?? '');
+          }),
+          _filterDropdown('수검일정', _mWeek, weekOptions, (v) {
+            setState(() => _mWeek = v ?? '');
+          }),
+          if (_mHdqt.isNotEmpty || _mTeam.isNotEmpty || _mWeek.isNotEmpty)
+            OutlinedButton(
+              style: OutlinedButton.styleFrom(
+                foregroundColor: Colors.grey.shade600,
+                side: BorderSide(color: Colors.grey.shade300),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              ),
+              onPressed: () => setState(() { _mHdqt = ''; _mTeam = ''; _mWeek = ''; }),
+              child: const Text('초기화', style: TextStyle(fontSize: 13)),
+            ),
         ],
       ),
     );
@@ -1336,6 +1406,12 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     if (_aScheduled.isNotEmpty) {
       addChip('일정등록', _aScheduled == 'Y' ? '등록됨' : '미등록', () {
         _pScheduled = ''; _aScheduled = ''; _page = 1;
+        _loadAll();
+      });
+    }
+    if (_aSchedWeek.isNotEmpty) {
+      addChip('수검일정', _aSchedWeek, () {
+        setState(() { _aSchedWeek = ''; _page = 1; });
         _loadAll();
       });
     }
@@ -1623,8 +1699,24 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
   // ── 매트릭스 탭 ──────────────────────────────────────
 
   Widget _buildMatrixTab() {
-    if (_matrix.isEmpty) return const Center(child: Text('데이터 없음', style: TextStyle(color: Colors.black38)));
-    final hdqts = _matrix.keys.toList()..sort();
+    // 매트릭스 필터 적용: 본부/팀 기준으로 클라이언트 필터
+    final filteredMatrix = <String, dynamic>{};
+    _matrix.forEach((hdqt, teamMapRaw) {
+      if (_mHdqt.isNotEmpty && hdqt != _mHdqt) return;
+      final teamMap = teamMapRaw as Map<String, dynamic>? ?? {};
+      if (_mTeam.isNotEmpty) {
+        if (!teamMap.containsKey(_mTeam)) return;
+        filteredMatrix[hdqt] = {_mTeam: teamMap[_mTeam]};
+      } else {
+        filteredMatrix[hdqt] = teamMap;
+      }
+    });
+
+    if (filteredMatrix.isEmpty && _matrix.isEmpty) {
+      return const Center(child: Text('데이터 없음', style: TextStyle(color: Colors.black38)));
+    }
+
+    final hdqts = filteredMatrix.keys.toList()..sort();
     final rows = <TableRow>[];
 
     rows.add(TableRow(
@@ -1638,7 +1730,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     ));
 
     for (final hdqt in hdqts) {
-      final teamMap = _matrix[hdqt] as Map<String, dynamic>? ?? {};
+      final teamMap = filteredMatrix[hdqt] as Map<String, dynamic>? ?? {};
       final teams = teamMap.keys.toList()..sort();
       final hdqtTotal = _quarters.fold<int>(0, (s, q) =>
           s + teams.fold<int>(0, (s2, t) => s2 + (((teamMap[t] as Map?)?.containsKey(q) == true ? (teamMap[t] as Map)[q] : 0) as num).toInt()));
@@ -1683,55 +1775,87 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
             _buildUnassignedBanner(),
             const SizedBox(height: 16),
           ],
-          // 수검일정별 현황 카드
+          // 수검일정별 현황 카드 (필터 적용)
           if (_schedules.isNotEmpty) ...[
             _buildScheduleStatusSection(),
             const SizedBox(height: 16),
           ],
           // 매트릭스 테이블
-          Container(
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: const Color(0xFFE5E7EB)),
-              boxShadow: [
-                BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 8, offset: const Offset(0, 2)),
-              ],
-            ),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(12),
-              child: Table(
-                border: TableBorder.all(color: const Color(0xFFE5E7EB)),
-                defaultColumnWidth: const IntrinsicColumnWidth(),
-                children: rows,
+          if (rows.length > 1)
+            Container(
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: const Color(0xFFE5E7EB)),
+                boxShadow: [
+                  BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 8, offset: const Offset(0, 2)),
+                ],
               ),
-          ),
-        ),
-      ]),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: Table(
+                  border: TableBorder.all(color: const Color(0xFFE5E7EB)),
+                  defaultColumnWidth: const IntrinsicColumnWidth(),
+                  children: rows,
+                ),
+              ),
+            ),
+        ],
+      ),
     );
   }
 
   // ── 수검일정별 현황 (본부/팀별) ────────────────────────────
 
+  /// 매트릭스 카드에서 건수 클릭 시 수검 대상 현황 탭으로 전환하며 필터 적용
+  void _navigateToDataTabWithFilter({required String week, required String hdqt}) {
+    setState(() {
+      // 수검일정 + 일정등록 여부 필터
+      _aSchedWeek = week;
+      _pScheduled = 'Y'; _aScheduled = 'Y';
+      // 본부 필터: 항상 갱신 (이전 값 덮어씌움, 빈 값이면 초기화)
+      final validHdqt = hdqt.isNotEmpty && hdqt != '미지정' ? hdqt : '';
+      _pHdqt = validHdqt; _aHdqt = validHdqt;
+      _currentTeams = validHdqt.isNotEmpty ? (_orgMap[validHdqt] ?? []) : [];
+      // 팀 필터 초기화 (주차 변경 시 이전 팀 필터 유지 방지)
+      _pTeam = ''; _aTeam = '';
+      _page = 1;
+    });
+    _tabCtrl.animateTo(0);
+    _loadAll();
+  }
+
   Widget _buildScheduleStatusSection() {
+    // 매트릭스 필터 적용: 본부/팀/주차
+    final filteredSchedules = _schedules.where((s) {
+      final week = (s['수검예정주차'] as String? ?? '').trim();
+      final hdqt = (s['access담당'] as String? ?? '').trim();
+      final team = (s['품질개선팀'] as String? ?? '').trim();
+      if (_mWeek.isNotEmpty && week != _mWeek) return false;
+      if (_mHdqt.isNotEmpty && hdqt != _mHdqt) return false;
+      if (_mTeam.isNotEmpty && team != _mTeam) return false;
+      return week.isNotEmpty;
+    }).toList();
+
     // 수검예정주차 → 본부 → 건수
     final weekMap = <String, Map<String, int>>{};
-    for (final s in _schedules) {
+    for (final s in filteredSchedules) {
       final week = (s['수검예정주차'] as String? ?? '').trim();
-      if (week.isEmpty) continue;
       final hdqt = (s['access담당'] as String? ?? '').trim();
       final hdqtKey = hdqt.isEmpty ? '미지정' : hdqt;
       weekMap.putIfAbsent(week, () => {});
       weekMap[week]![hdqtKey] = (weekMap[week]![hdqtKey] ?? 0) + 1;
     }
 
-    // 주차 정렬: 숫자 파싱 후 정렬
+    // 주차 정렬
     final weeks = weekMap.keys.toList()
       ..sort((a, b) {
         final na = int.tryParse(a.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0;
         final nb = int.tryParse(b.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0;
         return na.compareTo(nb);
       });
+
+    final totalFiltered = filteredSchedules.length;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1742,10 +1866,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
             children: [
               Container(
                 width: 3, height: 16,
-                decoration: BoxDecoration(
-                  color: _primary,
-                  borderRadius: BorderRadius.circular(2),
-                ),
+                decoration: BoxDecoration(color: _primary, borderRadius: BorderRadius.circular(2)),
               ),
               const SizedBox(width: 8),
               const Text(
@@ -1760,18 +1881,30 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                   borderRadius: BorderRadius.circular(10),
                 ),
                 child: Text(
-                  '${_schedules.length}건',
+                  '$totalFiltered건',
                   style: TextStyle(fontSize: 11, color: _primary, fontWeight: FontWeight.w600),
                 ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                '건수 클릭 시 해당 조건으로 이동',
+                style: TextStyle(fontSize: 11, color: Colors.grey.shade500),
               ),
             ],
           ),
         ),
-        Wrap(
-          spacing: 12,
-          runSpacing: 12,
-          children: weeks.map((week) => _buildWeekCard(week, weekMap[week]!)).toList(),
-        ),
+        if (weeks.isEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: Text('조건에 맞는 일정이 없습니다.',
+                style: TextStyle(fontSize: 13, color: Colors.grey.shade400)),
+          )
+        else
+          Wrap(
+            spacing: 12,
+            runSpacing: 12,
+            children: weeks.map((week) => _buildWeekCard(week, weekMap[week]!)).toList(),
+          ),
       ],
     );
   }
@@ -1793,66 +1926,77 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // 카드 헤더
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-            decoration: BoxDecoration(
-              color: _blue.withValues(alpha: 0.08),
-              borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
-              border: Border(bottom: BorderSide(color: _blue.withValues(alpha: 0.15))),
-            ),
-            child: Row(
-              children: [
-                Icon(Icons.calendar_today_outlined, size: 14, color: _blue),
-                const SizedBox(width: 6),
-                Expanded(
-                  child: Text(
-                    week,
-                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _blue),
+          // 카드 헤더 (전체 건수 클릭 → 탭 이동)
+          InkWell(
+            onTap: () => _navigateToDataTabWithFilter(week: week, hdqt: ''),
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              decoration: BoxDecoration(
+                color: _blue.withValues(alpha: 0.08),
+                borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
+                border: Border(bottom: BorderSide(color: _blue.withValues(alpha: 0.15))),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.calendar_today_outlined, size: 14, color: _blue),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      week,
+                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _blue),
+                    ),
                   ),
-                ),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: _blue,
-                    borderRadius: BorderRadius.circular(10),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                    decoration: BoxDecoration(color: _blue, borderRadius: BorderRadius.circular(10)),
+                    child: Text(
+                      '$totalCount건',
+                      style: const TextStyle(fontSize: 11, color: Colors.white, fontWeight: FontWeight.w600),
+                    ),
                   ),
-                  child: Text(
-                    '$totalCount건',
-                    style: const TextStyle(fontSize: 11, color: Colors.white, fontWeight: FontWeight.w600),
-                  ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
-          // 본부별 목록
+          // 본부별 목록 (각 행 클릭 → 해당 본부+주차 필터로 탭 이동)
           Padding(
             padding: const EdgeInsets.all(12),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
-              children: hdqts.map((hdqt) => Padding(
-                padding: const EdgeInsets.only(bottom: 6),
-                child: Row(
-                  children: [
-                    Container(
-                      width: 6, height: 6,
-                      decoration: BoxDecoration(
-                        color: _primary,
-                        borderRadius: BorderRadius.circular(3),
+              children: hdqts.map((hdqt) => InkWell(
+                onTap: () => _navigateToDataTabWithFilter(week: week, hdqt: hdqt),
+                borderRadius: BorderRadius.circular(4),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 2),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 6, height: 6,
+                        decoration: BoxDecoration(color: _primary, borderRadius: BorderRadius.circular(3)),
                       ),
-                    ),
-                    const SizedBox(width: 6),
-                    Expanded(
-                      child: Text(
-                        hdqt,
-                        style: const TextStyle(fontSize: 12, color: Color(0xFF374151)),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          hdqt,
+                          style: const TextStyle(fontSize: 12, color: Color(0xFF374151)),
+                        ),
                       ),
-                    ),
-                    Text(
-                      '${hdqtData[hdqt]}건',
-                      style: TextStyle(fontSize: 12, color: _primary, fontWeight: FontWeight.w600),
-                    ),
-                  ],
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                        decoration: BoxDecoration(
+                          color: _primary.withValues(alpha: 0.08),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Text(
+                          '${hdqtData[hdqt]}건',
+                          style: TextStyle(fontSize: 12, color: _primary, fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                      const SizedBox(width: 2),
+                      Icon(Icons.arrow_forward_ios, size: 10, color: Colors.grey.shade400),
+                    ],
+                  ),
                 ),
               )).toList(),
             ),

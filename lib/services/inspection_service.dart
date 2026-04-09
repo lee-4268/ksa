@@ -144,6 +144,7 @@ class InspectionService {
     int page = 1,
     int pageSize = 100,
     String scheduleYn = '',
+    String scheduleWeek = '',
   }) async {
     final resp = await http.post(
       Uri.parse('$_baseUrl/inspection/data'),
@@ -153,6 +154,7 @@ class InspectionService {
         'filters': filters, 'search': search, 'addr': addr,
         'page': page, 'page_size': pageSize,
         'schedule_yn': scheduleYn,
+        'schedule_week': scheduleWeek,
       }),
     ).timeout(_apiTimeout);
     return json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;

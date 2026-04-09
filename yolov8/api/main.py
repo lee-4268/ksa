@@ -11569,9 +11569,10 @@ class InspectionDataReq(BaseModel):
     addr: str = ""       # 도로명주소/설치장소 검색
     page: int = 1
     page_size: int = 100
-    schedule_yn: str = ""  # 일정등록 여부 필터 (Y/N)
+    schedule_yn: str = ""    # 일정등록 여부 필터 (Y/N)
+    schedule_week: str = ""  # 수검예정주차 필터
 
-def _build_insp_where(year, sheet, filters, search, addr, schedule_yn=""):
+def _build_insp_where(year, sheet, filters, search, addr, schedule_yn="", schedule_week=""):
     """inspection_data / export 공통 WHERE 절 빌더."""
     ALLOWED_COLS = {'분기','국종군','부서','kca검토결과','시기조정','skt본부','access담당','품질개선팀','허가상태'}
     where = ["year=?"]
@@ -11638,6 +11639,9 @@ def _build_insp_where(year, sheet, filters, search, addr, schedule_yn=""):
     elif schedule_yn == 'N':
         where.append('허가번호 NOT IN (SELECT 허가번호 FROM inspection_schedules WHERE year=?)')
         params.append(year)
+    if schedule_week:
+        where.append('허가번호 IN (SELECT 허가번호 FROM inspection_schedules WHERE year=? AND 수검예정주차=?)')
+        params.extend([year, schedule_week])
     return " AND ".join(where), params
 
 @app.post("/inspection/data")
@@ -11645,7 +11649,7 @@ async def inspection_data(request: Request, req: InspectionDataReq):
     """필터 적용 데이터 조회 (페이지네이션)."""
     await _verify_auth(request)
     if not os.path.exists(_INSP_DB): return {"items": [], "total": 0}
-    where_sql, params = _build_insp_where(req.year, req.sheet, req.filters, req.search, req.addr, req.schedule_yn)
+    where_sql, params = _build_insp_where(req.year, req.sheet, req.filters, req.search, req.addr, req.schedule_yn, req.schedule_week)
     def _read():
         c = sqlite3.connect(_INSP_DB, timeout=60); c.row_factory = sqlite3.Row
         total = c.execute(f'SELECT COUNT(*) FROM inspection_targets WHERE {where_sql}', params).fetchone()[0]
