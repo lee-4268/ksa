@@ -384,29 +384,36 @@ async function _mergeDsFilesFromDart(zipArrayBuffer, progressCallback, completio
       baseAndNumbered.push(classified.numbered[bni].name);
     }
 
+    var skippedFiles = [];
     for (var bfi = 0; bfi < baseAndNumbered.length; bfi++) {
       var bfName = baseAndNumbered[bfi];
-      progressCallback('파일 읽기 (' + (bfi + 1) + '/' + baseAndNumbered.length + '): ' + bfName.split('/').pop(),
+      var bfShortName = bfName.split('/').pop();
+      progressCallback('파일 읽기 (' + (bfi + 1) + '/' + baseAndNumbered.length + '): ' + bfShortName,
         10 + Math.round((bfi / baseAndNumbered.length) * 35));
 
-      var bfData = await zip.files[bfName].async('arraybuffer');
-      var bfWb = _xlsxRead(bfData, { type: 'array', cellDates: false }, bfName);
-      bfData = null;
+      try {
+        var bfData = await zip.files[bfName].async('arraybuffer');
+        var bfWb = _xlsxRead(bfData, { type: 'array', cellDates: false }, bfName);
+        bfData = null;
 
-      for (var bsi = 0; bsi < baseSheetNames.length; bsi++) {
-        var bsn = baseSheetNames[bsi];
-        if (bfWb.SheetNames.indexOf(bsn) === -1) continue;
+        for (var bsi = 0; bsi < baseSheetNames.length; bsi++) {
+          var bsn = baseSheetNames[bsi];
+          if (bfWb.SheetNames.indexOf(bsn) === -1) continue;
 
-        var bRows = XLSX.utils.sheet_to_json(bfWb.Sheets[bsn], { header: 1, raw: true, defval: '' });
-        if (allMergedRows[bsn].length === 0) {
-          for (var br = 0; br < bRows.length; br++) allMergedRows[bsn].push(bRows[br]);
-        } else if (bsn !== '부적합무선국') {
-          for (var br2 = 1; br2 < bRows.length; br2++) allMergedRows[bsn].push(bRows[br2]);
+          var bRows = XLSX.utils.sheet_to_json(bfWb.Sheets[bsn], { header: 1, raw: true, defval: '' });
+          if (allMergedRows[bsn].length === 0) {
+            for (var br = 0; br < bRows.length; br++) allMergedRows[bsn].push(bRows[br]);
+          } else if (bsn !== '부적합무선국') {
+            for (var br2 = 1; br2 < bRows.length; br2++) allMergedRows[bsn].push(bRows[br2]);
+          }
+          bRows = null;
+          bfWb.Sheets[bsn] = null;
         }
-        bRows = null;
-        bfWb.Sheets[bsn] = null; // 시트 메모리 해제
+        bfWb = null;
+      } catch (parseErr) {
+        console.error('[DS병합] 파일 스킵 (' + bfShortName + '):', parseErr.message);
+        skippedFiles.push(bfShortName);
       }
-      bfWb = null;
       await new Promise(function(resolve) { setTimeout(resolve, 5); });
     }
 
@@ -576,6 +583,10 @@ async function _mergeDsFilesFromDart(zipArrayBuffer, progressCallback, completio
     var resultMsg = '병합 완료! ' + outputName + '\n'
       + '시트 ' + totalSheets + '개, 총 ' + totalRows.toLocaleString() + '행'
       + (classified.skipped.length > 0 ? '\n(100) 일반사항 → 일반사항(검사전) 시트 포함' : '');
+    if (skippedFiles.length > 0) {
+      resultMsg += '\n\n⚠️ 파싱 실패로 제외된 파일 (' + skippedFiles.length + '건):\n' + skippedFiles.join(', ')
+        + '\n(해당 파일은 OLE2 구조 손상으로 브라우저에서 읽을 수 없습니다)';
+    }
     completionCallback(true, resultMsg);
 
   } catch (e) {
