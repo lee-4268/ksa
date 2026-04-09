@@ -2324,6 +2324,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       _infoRow('상태', result['status'] ?? ''),
       _infoRow('검사일', result['검사일'] ?? ''),
+      if ((result['입력자'] ?? '').isNotEmpty) _infoRow('입회자', result['입력자'] ?? ''),
       _infoRow('철탑형태', result['철탑형태'] ?? ''),
       if ((result['메모'] ?? '').isNotEmpty) _infoRow('특이사항', result['메모'] ?? ''),
       if (photoKeys.isNotEmpty) ...[

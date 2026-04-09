@@ -61,7 +61,9 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
   Future<void> _loadTeams() async {
     try {
       final orgMap = await _svc.getOrgMap(_year);
-      final map = (orgMap['org_map'] as Map?)?.cast<String, dynamic>() ?? {};
+      final map = (orgMap['org_map'] as Map?)?.cast<String, dynamic>()
+          ?? (orgMap['org'] as Map?)?.cast<String, dynamic>()
+          ?? {};
       final auth = context.read<AuthService>();
       final myHdqt = (auth.userDepartment ?? '').replaceAll('Access담당', '').trim();
       List<String> teams = [];
