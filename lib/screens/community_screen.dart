@@ -6,7 +6,7 @@ import '../services/community_service.dart';
 import 'notice_board_screen.dart';
 import 'request_board_screen.dart';
 
-/// 커뮤니티 통합 화면 — 요약 카드 + 탭(요청 및 문의 / 공지)
+/// 커뮤니티 통합 화면
 class CommunityScreen extends StatefulWidget {
   const CommunityScreen({super.key});
 
@@ -17,6 +17,7 @@ class CommunityScreen extends StatefulWidget {
 class _CommunityScreenState extends State<CommunityScreen> {
   static const _primary = Color(0xFFE53935);
   static const _bg = Color(0xFFFAFAFB);
+  static const _border = Color(0xFFE5E7EB);
 
   final _svc = CommunityService();
   bool _statsLoading = true;
@@ -34,6 +35,9 @@ class _CommunityScreenState extends State<CommunityScreen> {
   int _allDone = 0;
 
   int _noticeTotal = 0;
+
+  /// 모바일에서 상단 통계 카드 접기 (기본 접힘)
+  bool _mobileStatsExpanded = false;
 
   @override
   void initState() {
@@ -68,79 +72,162 @@ class _CommunityScreenState extends State<CommunityScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: _bg,
-      body: Column(
+    final narrow = MediaQuery.sizeOf(context).width < 760;
+    final hPad = narrow ? 12.0 : 24.0;
+    final vTop = narrow ? 12.0 : 24.0;
+    final gapAfterStats = narrow ? 10.0 : 20.0;
+
+    return Material(
+      color: _bg,
+      child: Column(
         children: [
-          // ── 요약 카드 ──
           Padding(
-            padding: const EdgeInsets.fromLTRB(24, 24, 24, 0),
+            padding: EdgeInsets.fromLTRB(hPad, vTop, hPad, 0),
             child: _buildSummaryCards(),
           ),
-          const SizedBox(height: 20),
+          SizedBox(height: gapAfterStats),
 
-          // ── 탭 바 ──
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 24),
+            padding: EdgeInsets.symmetric(horizontal: hPad),
             child: _buildTabBar(),
           ),
-          const SizedBox(height: 4),
+          SizedBox(height: narrow ? 8 : 12),
 
-          // ── 탭 콘텐츠 ──
           Expanded(
-            child: _selectedTab == 0
-                ? const RequestBoardScreen(showHeader: false)
-                : const NoticeBoardScreen(showHeader: false),
+            child: IndexedStack(
+              index: _selectedTab,
+              children: const [
+                RequestBoardScreen(showHeader: false),
+                NoticeBoardScreen(showHeader: false),
+              ],
+            ),
           ),
         ],
       ),
     );
   }
 
-  // ── 요약 카드 Row ──
-
   Widget _buildSummaryCards() {
-    if (_statsLoading) {
-      return const SizedBox(
-        height: 100,
-        child: Center(child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))),
-      );
-    }
+    return LayoutBuilder(
+      builder: (context, cst) {
+        final isNarrow = cst.maxWidth < 760;
 
-    return Row(
-      children: [
-        Expanded(child: _buildStatCard(
-          title: '개인별 요청 현황',
-          icon: Icons.person_outline,
-          iconColor: const Color(0xFF3B82F6),
-          total: _myTotal,
-          details: [
-            _StatDetail('접수', _myReceived, const Color(0xFF3B82F6)),
-            _StatDetail('처리중', _myProcessing, const Color(0xFFF59E0B)),
-            _StatDetail('완료', _myDone, const Color(0xFF10B981)),
-          ],
-        )),
-        const SizedBox(width: 16),
-        Expanded(child: _buildStatCard(
-          title: '전체 요청 현황',
-          icon: Icons.groups_outlined,
-          iconColor: const Color(0xFF8B5CF6),
-          total: _allTotal,
-          details: [
-            _StatDetail('접수', _allReceived, const Color(0xFF3B82F6)),
-            _StatDetail('처리중', _allProcessing, const Color(0xFFF59E0B)),
-            _StatDetail('완료', _allDone, const Color(0xFF10B981)),
-          ],
-        )),
-        const SizedBox(width: 16),
-        Expanded(child: _buildStatCard(
-          title: '공지 현황',
-          icon: Icons.campaign_outlined,
-          iconColor: _primary,
-          total: _noticeTotal,
-          details: [],
-        )),
-      ],
+        if (_statsLoading) {
+          return SizedBox(
+            height: isNarrow ? 44 : 108,
+            child: const Center(
+              child: SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            ),
+          );
+        }
+
+        final cards = [
+          _buildStatCard(
+            title: '개인별 요청',
+            icon: Icons.person_outline,
+            iconColor: const Color(0xFF3B82F6),
+            total: _myTotal,
+            details: [
+              _StatDetail('접수', _myReceived, const Color(0xFF3B82F6)),
+              _StatDetail('처리중', _myProcessing, const Color(0xFFF59E0B)),
+              _StatDetail('완료', _myDone, const Color(0xFF10B981)),
+            ],
+          ),
+          _buildStatCard(
+            title: '전체 요청',
+            icon: Icons.groups_outlined,
+            iconColor: const Color(0xFF8B5CF6),
+            total: _allTotal,
+            details: [
+              _StatDetail('접수', _allReceived, const Color(0xFF3B82F6)),
+              _StatDetail('처리중', _allProcessing, const Color(0xFFF59E0B)),
+              _StatDetail('완료', _allDone, const Color(0xFF10B981)),
+            ],
+          ),
+          _buildStatCard(
+            title: '공지',
+            icon: Icons.campaign_outlined,
+            iconColor: _primary,
+            total: _noticeTotal,
+            details: const [],
+          ),
+        ];
+
+        if (isNarrow) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Material(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(10),
+                child: InkWell(
+                  onTap: () =>
+                      setState(() => _mobileStatsExpanded = !_mobileStatsExpanded),
+                  borderRadius: BorderRadius.circular(10),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: _border),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(Icons.stacked_bar_chart,
+                            size: 18, color: Colors.grey.shade600),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            '개인 $_myTotal · 전체 $_allTotal · 공지 $_noticeTotal',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w500,
+                              color: Colors.grey.shade800,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        Icon(
+                          _mobileStatsExpanded
+                              ? Icons.expand_less
+                              : Icons.expand_more,
+                          size: 22,
+                          color: Colors.grey.shade600,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              if (_mobileStatsExpanded) ...[
+                const SizedBox(height: 10),
+                ...cards.map((card) => Padding(
+                      padding: const EdgeInsets.only(bottom: 10),
+                      child: card,
+                    )),
+              ],
+            ],
+          );
+        }
+
+        final cardMinWidth = 250.0;
+        return Wrap(
+          spacing: 12,
+          runSpacing: 12,
+          children: cards
+              .map(
+                (card) => SizedBox(
+                  width: cardMinWidth,
+                  child: card,
+                ),
+              )
+              .toList(),
+        );
+      },
     );
   }
 
@@ -152,11 +239,11 @@ class _CommunityScreenState extends State<CommunityScreen> {
     required List<_StatDetail> details,
   }) {
     return Container(
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFFE5E7EB)),
+        border: Border.all(color: _border),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -164,39 +251,75 @@ class _CommunityScreenState extends State<CommunityScreen> {
           Row(
             children: [
               Container(
-                padding: const EdgeInsets.all(8),
+                padding: const EdgeInsets.all(6),
                 decoration: BoxDecoration(
                   color: iconColor.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(8),
                 ),
-                child: Icon(icon, size: 20, color: iconColor),
+                child: Icon(icon, size: 18, color: iconColor),
               ),
-              const SizedBox(width: 12),
+              const SizedBox(width: 8),
               Expanded(
-                child: Text(title,
-                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF374151)),
+                child: Text(
+                  title,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFF374151),
+                  ),
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 12),
           Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
             children: [
-              Text('$total', style: const TextStyle(fontSize: 28, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+              Text(
+                '$total',
+                style: const TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.w700,
+                  color: Color(0xFF111827),
+                ),
+              ),
               const SizedBox(width: 4),
-              Text('건', style: TextStyle(fontSize: 14, color: Colors.grey.shade500)),
+              Text(
+                '건',
+                style: TextStyle(
+                  fontSize: 14,
+                  color: Colors.grey.shade500,
+                ),
+              ),
               if (details.isNotEmpty) ...[
                 const Spacer(),
-                ...details.map((d) => Padding(
-                  padding: const EdgeInsets.only(left: 12),
-                  child: Column(
-                    children: [
-                      Text(d.label, style: TextStyle(fontSize: 11, color: Colors.grey.shade500)),
-                      const SizedBox(height: 2),
-                      Text('${d.count}', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: d.color)),
-                    ],
+                ...details.map(
+                  (d) => Padding(
+                    padding: const EdgeInsets.only(left: 12),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Text(
+                          d.label,
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: Colors.grey.shade500,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          '${d.count}',
+                          style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w700,
+                            color: d.color,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
-                )),
+                ),
               ],
             ],
           ),
@@ -205,39 +328,46 @@ class _CommunityScreenState extends State<CommunityScreen> {
     );
   }
 
-  // ── 탭 바 ──
-
   Widget _buildTabBar() {
-    return Row(
-      children: [
-        _buildTab('요청 및 문의', 0),
-        const SizedBox(width: 4),
-        _buildTab('공지', 1),
-        const Spacer(),
-      ],
+    return Container(
+      padding: const EdgeInsets.all(4),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: _border),
+      ),
+      child: Row(
+        children: [
+          Expanded(child: _buildTab('요청 및 문의', 0)),
+          const SizedBox(width: 4),
+          Expanded(child: _buildTab('공지', 1)),
+        ],
+      ),
     );
   }
 
   Widget _buildTab(String label, int index) {
     final selected = _selectedTab == index;
-    return GestureDetector(
+    return InkWell(
       onTap: () {
         if (_selectedTab != index) {
           setState(() => _selectedTab = index);
         }
       },
+      borderRadius: BorderRadius.circular(8),
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+        height: 38,
+        alignment: Alignment.center,
         decoration: BoxDecoration(
           color: selected ? _primary : Colors.transparent,
           borderRadius: BorderRadius.circular(8),
-          border: selected ? null : Border.all(color: Colors.grey.shade300),
         ),
-        child: Text(label,
+        child: Text(
+          label,
           style: TextStyle(
             fontSize: 14,
-            fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
-            color: selected ? Colors.white : Colors.grey.shade600,
+            fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+            color: selected ? Colors.white : const Color(0xFF4B5563),
           ),
         ),
       ),
