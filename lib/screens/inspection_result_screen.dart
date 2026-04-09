@@ -522,8 +522,12 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
         if (facilityNames.isNotEmpty || serial.isNotEmpty)
           _infoRow('일련번호 및 통합시설명칭',
               facilityNames.isNotEmpty ? facilityNames.join('\n') : serial),
+        if (lat.isNotEmpty && lng.isNotEmpty)
+          _infoRow('좌표', '$lat, $lng'),
         if (_inspDateCtrl.text.isNotEmpty)
           _infoRow('검사일', _fmtDate(_inspDateCtrl.text)),
+        if ((_data?['result']?['입력자'] ?? '').toString().isNotEmpty)
+          _infoRow('입회자', _data!['result']['입력자'].toString()),
       ]),
     );
   }

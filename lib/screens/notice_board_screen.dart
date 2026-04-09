@@ -252,10 +252,12 @@ class _NoticeBoardScreenState extends State<NoticeBoardScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final narrow = MediaQuery.sizeOf(context).width < 760;
+    final pad = narrow ? 12.0 : 24.0;
     return Material(
       color: const Color(0xFFF5F5F5),
       child: Padding(
-        padding: const EdgeInsets.all(24),
+        padding: EdgeInsets.all(pad),
         child: switch (_mode) {
           _ViewMode.list => _buildList(),
           _ViewMode.detail => _buildDetail(),
@@ -421,6 +423,15 @@ class _NoticeBoardScreenState extends State<NoticeBoardScreen> {
       );
     }
 
+    final isNarrow = MediaQuery.sizeOf(context).width < 760;
+    if (isNarrow) {
+      return ListView.separated(
+        itemCount: _items.length,
+        separatorBuilder: (_, _) => const SizedBox(height: 8),
+        itemBuilder: (_, i) => _buildNoticeMobileCard(_items[i], i),
+      );
+    }
+
     return Container(
       decoration: BoxDecoration(
         color: Colors.white,
@@ -494,6 +505,87 @@ class _NoticeBoardScreenState extends State<NoticeBoardScreen> {
     );
   }
 
+  Widget _buildNoticeMobileCard(Map<String, dynamic> item, int index) {
+    final id = item['id'] ?? 0;
+    final rowNum = item['번호'] ?? (index + 1);
+    final title = item['title'] ?? '';
+    final authorName = item['author_name'] ?? item['author'] ?? '';
+    final authorOrg = item['author_org'] as String? ?? '';
+    final author = authorOrg.isNotEmpty ? '$authorName($authorOrg)' : authorName;
+    final date = _fmtDate(item['created_at']);
+    final views = item['view_count'] ?? 0;
+    final division = item['division'] as String? ?? '';
+
+    return Material(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(10),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(10),
+        onTap: () => _openDetail(id),
+        child: Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: Colors.grey.shade200),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Text(
+                    '$rowNum',
+                    style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                  ),
+                  if (division.isNotEmpty && division != '전체') ...[
+                    const SizedBox(width: 8),
+                    Flexible(
+                      child: _metaChip(division),
+                    ),
+                  ],
+                  const Spacer(),
+                  Text(
+                    '조회 $views',
+                    style: TextStyle(fontSize: 12, color: Colors.grey.shade500),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Text(
+                title,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Icon(Icons.person_outline, size: 14, color: Colors.grey.shade500),
+                  const SizedBox(width: 4),
+                  Expanded(
+                    child: Text(
+                      author,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Icon(Icons.calendar_today_outlined, size: 13, color: Colors.grey.shade500),
+                  const SizedBox(width: 4),
+                  Text(
+                    date,
+                    style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildPagination() {
     const maxButtons = 5;
     int start = ((_page - 1) ~/ maxButtons) * maxButtons + 1;
@@ -562,65 +654,56 @@ class _NoticeBoardScreenState extends State<NoticeBoardScreen> {
     final views = d['view_count'] ?? 0;
     final content = d['content'] ?? '';
     final division = d['division'] ?? '';
+    final narrow = MediaQuery.sizeOf(context).width < 760;
+    final cardPad = narrow ? 16.0 : 24.0;
 
-    return SingleChildScrollView(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // 뒤로가기
-          TextButton.icon(
-            onPressed: _backToList,
-            icon: const Icon(Icons.arrow_back, size: 18),
-            label: const Text('목록으로', style: TextStyle(fontSize: 13)),
-            style: TextButton.styleFrom(foregroundColor: Colors.grey.shade700),
-          ),
-          const SizedBox(height: 8),
+    final metaChildren = <Widget>[
+      if (division.toString().trim().isNotEmpty) _metaChip(division.toString()),
+      _detailMetaChip(Icons.person_outline, author),
+      _detailMetaChip(Icons.calendar_today, date),
+      _detailMetaChip(Icons.visibility_outlined, '조회 $views'),
+    ];
 
-          // 카드
-          Container(
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        TextButton.icon(
+          onPressed: _backToList,
+          icon: const Icon(Icons.arrow_back, size: 18),
+          label: const Text('목록으로', style: TextStyle(fontSize: 13)),
+          style: TextButton.styleFrom(foregroundColor: Colors.grey.shade700),
+        ),
+        const SizedBox(height: 12),
+        Expanded(
+          child: Container(
             width: double.infinity,
-            padding: const EdgeInsets.all(28),
+            padding: EdgeInsets.all(cardPad),
             decoration: BoxDecoration(
               color: Colors.white,
               borderRadius: BorderRadius.circular(10),
               border: Border.all(color: Colors.grey.shade200),
             ),
-            child: Column(
+            child: SingleChildScrollView(
+              child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // 제목
-                  Text(title, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                  Text(
+                    title,
+                    style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                    softWrap: true,
+                  ),
                   const SizedBox(height: 12),
-
-                  // 메타
-                  Row(
-                    children: [
-                      if (division.isNotEmpty) ...[
-                        _metaChip(division),
-                        const SizedBox(width: 12),
-                      ],
-                      Icon(Icons.person_outline, size: 15, color: Colors.grey.shade500),
-                      const SizedBox(width: 4),
-                      Text(author, style: TextStyle(fontSize: 13, color: Colors.grey.shade600)),
-                      const SizedBox(width: 16),
-                      Icon(Icons.calendar_today_outlined, size: 14, color: Colors.grey.shade500),
-                      const SizedBox(width: 4),
-                      Text(date, style: TextStyle(fontSize: 13, color: Colors.grey.shade600)),
-                      const SizedBox(width: 16),
-                      Icon(Icons.visibility_outlined, size: 15, color: Colors.grey.shade500),
-                      const SizedBox(width: 4),
-                      Text('조회 $views', style: TextStyle(fontSize: 13, color: Colors.grey.shade600)),
-                    ],
+                  Wrap(
+                    spacing: 16,
+                    runSpacing: 8,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: metaChildren,
                   ),
                   const Divider(height: 32),
-
-                  // 본문
                   SelectableText(
                     content,
                     style: const TextStyle(fontSize: 14, height: 1.7),
                   ),
-
-                  // 첨부 이미지
                   if (_parseImages(d['images']).isNotEmpty) ...[
                     const SizedBox(height: 24),
                     const Divider(),
@@ -662,13 +745,13 @@ class _NoticeBoardScreenState extends State<NoticeBoardScreen> {
                       }).toList(),
                     ),
                   ],
-
-                  // 하단 구분선 + 수정/삭제 버튼
                   if (isMine || isAdmin) ...[
                     const SizedBox(height: 32),
                     const Divider(),
                     const SizedBox(height: 12),
-                    Row(
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
                       children: [
                         if (isMine)
                           OutlinedButton.icon(
@@ -682,7 +765,6 @@ class _NoticeBoardScreenState extends State<NoticeBoardScreen> {
                               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                             ),
                           ),
-                        if (isMine) const SizedBox(width: 8),
                         OutlinedButton.icon(
                           onPressed: () => _delete(d['id'] as int),
                           icon: const Icon(Icons.delete_outline, size: 16, color: Colors.red),
@@ -699,9 +781,10 @@ class _NoticeBoardScreenState extends State<NoticeBoardScreen> {
                 ],
               ),
             ),
-          ],
+          ),
         ),
-      );
+      ],
+    );
   }
 
   Widget _metaChip(String label) {
@@ -711,7 +794,28 @@ class _NoticeBoardScreenState extends State<NoticeBoardScreen> {
         color: _primary.withValues(alpha: 0.08),
         borderRadius: BorderRadius.circular(12),
       ),
-      child: Text(label, style: const TextStyle(fontSize: 12, color: _primary, fontWeight: FontWeight.w500)),
+      child: Text(
+        label,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: const TextStyle(fontSize: 12, color: _primary, fontWeight: FontWeight.w500),
+      ),
+    );
+  }
+
+  Widget _detailMetaChip(IconData icon, String text) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 14, color: Colors.grey.shade500),
+        const SizedBox(width: 4),
+        Text(
+          text,
+          style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+        ),
+      ],
     );
   }
 

@@ -11933,6 +11933,9 @@ async def inspection_result_upsert(request: Request, req: InspectionResultReq):
     """수검 결과 입력 (팀원 가능)."""
     import json as _j
     empno = await _verify_auth(request)
+    # 입력자 이름 조회
+    user_info = await asyncio.to_thread(_get_user_info_for_community, empno)
+    입력자_name = user_info.get("name", empno)
     pk = f"{req.year}#{req.허가번호}"
     now = datetime.now(timezone.utc).isoformat()
     def _write():
@@ -11944,7 +11947,7 @@ async def inspection_result_upsert(request: Request, req: InspectionResultReq):
             (pk, year, 허가번호, status, 검사일, 메모, 철탑형태, 사진S3키, 입력자, 입력일시)
             VALUES (?,?,?,?,?,?,?,?,?,?)''',
             (pk, req.year, req.허가번호, req.status, req.검사일,
-             req.메모, req.철탑형태, photos_json, empno, now))
+             req.메모, req.철탑형태, photos_json, 입력자_name, now))
         c.commit(); c.close()
     await asyncio.to_thread(_write)
     await asyncio.to_thread(_record_audit_log_sync, "inspection_result_upsert", "inspection_result", pk, empno)
@@ -12092,17 +12095,22 @@ async def inspection_my_list_weeks(request: Request, year: int, team: str = ""):
     is_dev = _dev_users.get(empno) is not None
     is_manager = user_role in ("admin", "manager")
 
-    # 본부 관리자가 team 파라미터로 특정 팀 지정 시 해당 팀으로 필터
-    if is_manager and team:
-        품질팀 = team
+    # 본부 관리자: team 파라미터 있으면 해당 팀, 없으면 본부 전체
+    if is_manager:
+        품질팀 = team  # team 없으면 '' → 본부 전체
 
-    if not is_dev and not access_team and not 품질팀:
+    if not is_dev and not access_team and not 품질팀 and not is_manager:
         return {"weeks": []}
 
     def _read_weeks():
         c = sqlite3.connect(_INSP_DB, timeout=60)
-        if is_dev and access_team:
-            # 테스트 계정: 소속 본부 전체 주차 (팀 무관), 타 본부 제외
+        if (is_dev or is_manager) and access_team and 품질팀:
+            # 본부 + 팀 필터
+            rows = c.execute(
+                'SELECT DISTINCT 수검예정주차 FROM inspection_schedules WHERE year=? AND access담당=? AND 품질개선팀=? AND 수검예정주차 != "" ORDER BY 수검예정주차',
+                (year, access_team, 품질팀)).fetchall()
+        elif (is_dev or is_manager) and access_team:
+            # 본부 전체 주차
             rows = c.execute(
                 'SELECT DISTINCT 수검예정주차 FROM inspection_schedules WHERE year=? AND access담당=? AND 수검예정주차 != "" ORDER BY 수검예정주차',
                 (year, access_team)).fetchall()
@@ -12163,11 +12171,11 @@ async def inspection_my_list(request: Request, year: int, week: str = "", team: 
     is_dev = _dev_users.get(empno) is not None
     is_manager = user_role in ("admin", "manager")
 
-    # 본부 관리자가 team 파라미터로 특정 팀 지정 시 해당 팀으로 필터
-    if is_manager and team:
-        품질팀 = team
+    # 본부 관리자: team 파라미터 있으면 해당 팀, 없으면 본부 전체
+    if is_manager:
+        품질팀 = team  # team 파라미터 없으면 '' → 본부 전체
 
-    if not is_dev and not access_team and not 품질팀:
+    if not is_dev and not access_team and not 품질팀 and not is_manager:
         return {"items": [], "message": "팀 배정 없음"}
 
     # SQLite schedules + results 조인
@@ -12181,8 +12189,12 @@ async def inspection_my_list(request: Request, year: int, week: str = "", team: 
                 'LEFT JOIN inspection_results r ON s.pk=r.pk ')
         params = []
         where_parts = []
-        if is_dev and access_team:
-            # 테스트 계정: 소속 본부 전체 (팀 무관), 타 본부 제외
+        if (is_dev or is_manager) and access_team and 품질팀:
+            # 본부 + 팀 필터
+            where_parts.append('s.year=? AND s.access담당=? AND s.품질개선팀=?')
+            params.extend([year, access_team, 품질팀])
+        elif (is_dev or is_manager) and access_team:
+            # 테스트 계정: 소속 본부 전체 (팀 무관)
             where_parts.append('s.year=? AND s.access담당=?')
             params.extend([year, access_team])
         elif is_dev:
