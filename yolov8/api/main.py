@@ -10357,6 +10357,29 @@ def _init_inspection_db():
     conn.execute('CREATE INDEX IF NOT EXISTS idx_irr_region ON inspection_results_raw(region)')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_irr_hn ON inspection_results_raw(허가번호)')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_irr_month ON inspection_results_raw(월)')
+    # ── inadequate_management 테이블 (부적합 관리) ──
+    conn.execute('''CREATE TABLE IF NOT EXISTS inadequate_management (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        year INTEGER,
+        허가번호 TEXT,
+        통합시설코드 TEXT,
+        호출명칭 TEXT,
+        주소 TEXT,
+        skt본부 TEXT,
+        region TEXT,
+        ons팀 TEXT,
+        검사일자 TEXT,
+        시정기한 TEXT,
+        불합격내용 TEXT,
+        불합격상세 TEXT,
+        status TEXT DEFAULT '미완료',
+        심의차수 TEXT DEFAULT '',
+        updated_by TEXT DEFAULT '',
+        updated_at TEXT DEFAULT '',
+        UNIQUE(year, 허가번호)
+    )''')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_inad_year ON inadequate_management(year)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_inad_region ON inadequate_management(region)')
     # 24시간 지난 완료/에러 잡 정리
     conn.execute(
         "DELETE FROM inspection_jobs WHERE status IN ('complete','error') "
@@ -12104,13 +12127,18 @@ async def inspection_my_list_weeks(request: Request, year: int, team: str = ""):
 
     def _read_weeks():
         c = sqlite3.connect(_INSP_DB, timeout=60)
-        if (is_dev or is_manager) and access_team and 품질팀:
-            # 본부 + 팀 필터
+        if is_manager and access_team and 품질팀:
+            # 본부 관리자 + 팀 필터
             rows = c.execute(
                 'SELECT DISTINCT 수검예정주차 FROM inspection_schedules WHERE year=? AND access담당=? AND 품질개선팀=? AND 수검예정주차 != "" ORDER BY 수검예정주차',
                 (year, access_team, 품질팀)).fetchall()
-        elif (is_dev or is_manager) and access_team:
-            # 본부 전체 주차
+        elif is_manager and access_team:
+            # 본부 관리자 (팀 미선택)
+            rows = c.execute(
+                'SELECT DISTINCT 수검예정주차 FROM inspection_schedules WHERE year=? AND access담당=? AND 수검예정주차 != "" ORDER BY 수검예정주차',
+                (year, access_team)).fetchall()
+        elif is_dev and access_team:
+            # 테스트 계정(member): 본부 전체
             rows = c.execute(
                 'SELECT DISTINCT 수검예정주차 FROM inspection_schedules WHERE year=? AND access담당=? AND 수검예정주차 != "" ORDER BY 수검예정주차',
                 (year, access_team)).fetchall()
@@ -12118,7 +12146,7 @@ async def inspection_my_list_weeks(request: Request, year: int, team: str = ""):
             rows = c.execute(
                 'SELECT DISTINCT 수검예정주차 FROM inspection_schedules WHERE year=? AND 수검예정주차 != "" ORDER BY 수검예정주차',
                 (year,)).fetchall()
-        elif is_manager and access_team and 품질팀:
+        elif access_team and 품질팀:
             # 본부 관리자 + 팀 필터
             rows = c.execute(
                 'SELECT DISTINCT 수검예정주차 FROM inspection_schedules WHERE year=? AND access담당=? AND 품질개선팀=? AND 수검예정주차 != "" ORDER BY 수검예정주차',
@@ -12189,19 +12217,23 @@ async def inspection_my_list(request: Request, year: int, week: str = "", team: 
                 'LEFT JOIN inspection_results r ON s.pk=r.pk ')
         params = []
         where_parts = []
-        if (is_dev or is_manager) and access_team and 품질팀:
-            # 본부 + 팀 필터
+        if is_manager and access_team and 품질팀:
+            # 본부 관리자 + 팀 필터
             where_parts.append('s.year=? AND s.access담당=? AND s.품질개선팀=?')
             params.extend([year, access_team, 품질팀])
-        elif (is_dev or is_manager) and access_team:
-            # 테스트 계정: 소속 본부 전체 (팀 무관)
+        elif is_manager and access_team:
+            # 본부 관리자 (팀 미선택 → 본부 전체)
+            where_parts.append('s.year=? AND s.access담당=?')
+            params.extend([year, access_team])
+        elif is_dev and access_team:
+            # 테스트 계정(member): 소속 본부 전체
             where_parts.append('s.year=? AND s.access담당=?')
             params.extend([year, access_team])
         elif is_dev:
-            # 테스트 계정인데 본부 정보도 없으면 전체 (fallback)
+            # 테스트 계정 본부 없음 → 전체 (fallback)
             where_parts.append('s.year=?')
             params.extend([year])
-        elif is_manager and access_team and 품질팀:
+        elif access_team and 품질팀:
             # 본부 관리자 + 팀 필터
             where_parts.append('s.year=? AND s.access담당=? AND s.품질개선팀=?')
             params.extend([year, access_team, 품질팀])
@@ -14711,6 +14743,177 @@ async def delete_comment(comment_id: int, request: Request):
 
     await asyncio.to_thread(_do)
     return {"success": True}
+
+
+# ============================================================
+# 부적합 관리 (Inadequate Management)
+# ============================================================
+
+class InadequateUpdateReq(BaseModel):
+    id: int
+    status: str = ""  # 완료/미완료/대상제외
+    심의차수: str = ""
+
+
+@app.post("/inadequate/sync")
+async def inadequate_sync(request: Request, year: int = Query(...)):
+    """실적 데이터에서 부적합 국소 동기화."""
+    empno = await _verify_auth(request)
+    role = await asyncio.to_thread(_get_user_role_sync, empno)
+    if role not in {"admin", "manager"}:
+        raise HTTPException(403, "관리자/매니저만 가능")
+
+    def _sync():
+        conn = sqlite3.connect(_INSP_DB, timeout=60)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT * FROM inspection_results_raw WHERE year=? AND 성능서류='부적합'",
+            (year,)
+        ).fetchall()
+
+        count = 0
+        for r in rows:
+            검사일자_raw = r['검사일자'] or ''
+            검사일자 = 검사일자_raw
+            시정기한 = ''
+            if 검사일자_raw:
+                try:
+                    dt = None
+                    s = str(검사일자_raw).strip()
+                    # 엑셀 시리얼 숫자 (예: 46097)
+                    try:
+                        serial = float(s)
+                        if 40000 < serial < 60000:
+                            from datetime import timedelta as _td
+                            dt = datetime(1899, 12, 30) + _td(days=int(serial))
+                            검사일자 = dt.strftime('%Y-%m-%d')
+                    except (ValueError, TypeError):
+                        pass
+                    # 일반 날짜 형식
+                    if dt is None:
+                        for fmt in ('%Y-%m-%d %H:%M:%S', '%Y-%m-%d', '%Y/%m/%d'):
+                            try:
+                                dt = datetime.strptime(s.split('.')[0].strip(), fmt)
+                                검사일자 = dt.strftime('%Y-%m-%d')
+                                break
+                            except Exception:
+                                pass
+                    if dt:
+                        month = dt.month + 6
+                        year_add = (month - 1) // 12
+                        month = ((month - 1) % 12) + 1
+                        시정기한 = dt.replace(year=dt.year + year_add, month=month).strftime('%Y-%m-%d')
+                except Exception:
+                    pass
+
+            conn.execute('''INSERT OR IGNORE INTO inadequate_management
+                (year, 허가번호, 통합시설코드, 호출명칭, 주소, skt본부, region, ons팀,
+                 검사일자, 시정기한, 불합격내용, 불합격상세)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)''',
+                (year, r['허가번호'], r['통합시설코드'], r['호출명칭'], r['주소'],
+                 r['skt본부'], r['region'], r['ons팀'],
+                 검사일자, 시정기한, r['불합격내용'] or '', r['불합격상세'] or ''))
+            count += 1
+        conn.commit()
+        total = conn.execute("SELECT COUNT(*) FROM inadequate_management WHERE year=?", (year,)).fetchone()[0]
+        conn.close()
+        return {"synced": count, "total": total}
+
+    return await asyncio.to_thread(_sync)
+
+
+@app.get("/inadequate/list")
+async def inadequate_list(
+    request: Request,
+    year: int = Query(...),
+    region: str = Query(""),
+    status: str = Query(""),
+    page: int = Query(1),
+    pageSize: int = Query(100),
+):
+    """부적합 관리 목록 조회."""
+    await _verify_auth(request)
+
+    def _list():
+        conn = sqlite3.connect(_INSP_DB, timeout=60)
+        conn.row_factory = sqlite3.Row
+        where = "year=?"
+        params: list = [year]
+        if region:
+            where += " AND region=?"
+            params.append(region)
+        if status:
+            where += " AND status=?"
+            params.append(status)
+        total = conn.execute(
+            f"SELECT COUNT(*) FROM inadequate_management WHERE {where}", params
+        ).fetchone()[0]
+        offset = (page - 1) * pageSize
+        rows = conn.execute(
+            f"SELECT * FROM inadequate_management WHERE {where} ORDER BY 검사일자 DESC LIMIT ? OFFSET ?",
+            params + [pageSize, offset],
+        ).fetchall()
+        conn.close()
+        return {"items": [dict(r) for r in rows], "total": total}
+
+    return await asyncio.to_thread(_list)
+
+
+@app.put("/inadequate/update")
+async def inadequate_update(request: Request, req: InadequateUpdateReq):
+    """부적합 상태/심의차수 업데이트 (관리자/매니저)."""
+    empno = await _verify_auth(request)
+    role = await asyncio.to_thread(_get_user_role_sync, empno)
+    if role not in {"admin", "manager"}:
+        raise HTTPException(403, "관리자/매니저만 가능")
+    now = datetime.now(timezone.utc).isoformat()
+
+    def _update():
+        conn = sqlite3.connect(_INSP_DB, timeout=60)
+        sets = []
+        params = []
+        if req.status:
+            sets.append("status=?")
+            params.append(req.status)
+        if req.심의차수 is not None:
+            sets.append("심의차수=?")
+            params.append(req.심의차수)
+        sets.append("updated_by=?")
+        params.append(empno)
+        sets.append("updated_at=?")
+        params.append(now)
+        params.append(req.id)
+        conn.execute(f"UPDATE inadequate_management SET {','.join(sets)} WHERE id=?", params)
+        conn.commit()
+        conn.close()
+
+    await asyncio.to_thread(_update)
+    return {"success": True}
+
+
+@app.get("/inadequate/stats")
+async def inadequate_stats(request: Request, year: int = Query(...)):
+    """부적합 관리 통계."""
+    await _verify_auth(request)
+
+    def _stats():
+        conn = sqlite3.connect(_INSP_DB, timeout=60)
+        total = conn.execute(
+            "SELECT COUNT(*) FROM inadequate_management WHERE year=?", (year,)
+        ).fetchone()[0]
+        done = conn.execute(
+            "SELECT COUNT(*) FROM inadequate_management WHERE year=? AND status='완료'", (year,)
+        ).fetchone()[0]
+        pending = conn.execute(
+            "SELECT COUNT(*) FROM inadequate_management WHERE year=? AND status='미완료'", (year,)
+        ).fetchone()[0]
+        excluded = conn.execute(
+            "SELECT COUNT(*) FROM inadequate_management WHERE year=? AND status='대상제외'", (year,)
+        ).fetchone()[0]
+        conn.close()
+        return {"total": total, "완료": done, "미완료": pending, "대상제외": excluded}
+
+    return await asyncio.to_thread(_stats)
 
 
 # ============================================================

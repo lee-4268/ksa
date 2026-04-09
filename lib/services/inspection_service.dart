@@ -524,6 +524,64 @@ class InspectionService {
     return resp.bodyBytes;
   }
 
+  // ── 부적합 관리 ──────────────────────────────────────────
+
+  /// 부적합 동기화
+  Future<Map<String, dynamic>> syncInadequate(int year) async {
+    final resp = await http.post(
+      Uri.parse('$_baseUrl/inadequate/sync').replace(
+          queryParameters: {'year': '$year'}),
+      headers: _headers,
+    ).timeout(const Duration(minutes: 5));
+    final body = json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+    if (resp.statusCode != 200) throw Exception(body['detail'] ?? '동기화 실패');
+    return body;
+  }
+
+  /// 부적합 목록
+  Future<Map<String, dynamic>> getInadequateList(int year, {
+    String region = '',
+    String status = '',
+    int page = 1,
+    int pageSize = 100,
+  }) async {
+    final uri = Uri.parse('$_baseUrl/inadequate/list').replace(
+        queryParameters: {
+      'year': '$year',
+      if (region.isNotEmpty) 'region': region,
+      if (status.isNotEmpty) 'status': status,
+      'page': '$page',
+      'page_size': '$pageSize',
+    });
+    final resp = await http.get(uri, headers: _headers).timeout(_apiTimeout);
+    return json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+  }
+
+  /// 부적합 상태 업데이트
+  Future<void> updateInadequate(int id, {String status = '', String reviewRound = ''}) async {
+    final resp = await http.put(
+      Uri.parse('$_baseUrl/inadequate/update'),
+      headers: _headers,
+      body: json.encode({
+        'id': id,
+        if (status.isNotEmpty) 'status': status,
+        if (reviewRound.isNotEmpty) '심의차수': reviewRound,
+      }),
+    ).timeout(_apiTimeout);
+    if (resp.statusCode != 200) {
+      final body = json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+      throw Exception(body['detail'] ?? '업데이트 실패');
+    }
+  }
+
+  /// 부적합 통계
+  Future<Map<String, dynamic>> getInadequateStats(int year) async {
+    final uri = Uri.parse('$_baseUrl/inadequate/stats').replace(
+        queryParameters: {'year': '$year'});
+    final resp = await http.get(uri, headers: _headers).timeout(_apiTimeout);
+    return json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+  }
+
   Future<String> buildDsDetail(String divisionId, String importDate) async {
     final uri = Uri.parse('$_baseUrl/inspection/build-ds-detail').replace(
         queryParameters: {'division_id': divisionId, 'import_date': importDate});
