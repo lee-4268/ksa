@@ -27,15 +27,15 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
 
   // 본부 목록
   static const _divisionOptions = [
-    {'id': 'gangnam', 'name': '강남본부'},
-    {'id': 'gangbuk', 'name': '강북본부'},
-    {'id': 'gyeonggi', 'name': '경기본부'},
-    {'id': 'incheon', 'name': '인천본부'},
-    {'id': 'gangwon', 'name': '강원본부'},
-    {'id': 'chungcheong', 'name': '충청본부'},
-    {'id': 'gyeongbuk', 'name': '경북본부'},
-    {'id': 'gyeongnam', 'name': '경남본부'},
-    {'id': 'seobu', 'name': '서부본부'},
+    {'id': 'gangnam', 'name': '강남'},
+    {'id': 'gangbuk', 'name': '강북'},
+    {'id': 'gyeonggi', 'name': '경기'},
+    {'id': 'incheon', 'name': '인천'},
+    {'id': 'gangwon', 'name': '강원'},
+    {'id': 'chungcheong', 'name': '충청'},
+    {'id': 'gyeongbuk', 'name': '경북'},
+    {'id': 'gyeongnam', 'name': '경남'},
+    {'id': 'seobu', 'name': '서부'},
   ];
 
   final _service = ErpDsCompareService();

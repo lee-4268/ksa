@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../services/auth_service.dart';
 import '../services/inspection_service.dart';
+import '../widgets/progress_dialog.dart';
 
 /// 부적합 관리 화면
 class InadequateManagementScreen extends StatefulWidget {
@@ -41,6 +42,8 @@ class _InadequateManagementScreenState
   int _page = 1;
   int _pageSize = 100;
   int _totalItems = 0;
+
+  bool _isSummaryExpanded = false;
 
   static const _regionOptions = [
     '', '강남', '강북', '경기', '인천',
@@ -130,104 +133,214 @@ class _InadequateManagementScreenState
       builder: (ctx) {
         return StatefulBuilder(
           builder: (ctx2, setDialogState) {
-            return AlertDialog(
-              title: Row(
-                children: [
-                  const Icon(Icons.edit_outlined, size: 20, color: primaryColor),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      '${item['호출명칭'] ?? item['허가번호'] ?? ''}',
-                      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                ],
-              ),
-              content: SizedBox(
-                width: 400,
+            return Dialog(
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              elevation: 0,
+              backgroundColor: Colors.white,
+              child: Container(
+                width: 440,
+                padding: const EdgeInsets.all(24),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text('상태', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-                    const SizedBox(height: 8),
-                    Wrap(
-                      spacing: 8,
-                      children: ['완료', '미완료', '대상제외'].map((s) {
-                        final isSelected = selectedStatus == s;
-                        return ChoiceChip(
-                          label: Text(s),
-                          selected: isSelected,
-                          selectedColor: primaryColor.withValues(alpha: 0.15),
-                          labelStyle: TextStyle(
-                            color: isSelected ? primaryColor : Colors.black87,
-                            fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
+                    // 1. 헤더 영역 (아이콘 + 제목 + 서브타이틀)
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                            color: primaryColor.withValues(alpha: 0.1),
+                            borderRadius: BorderRadius.circular(10),
                           ),
-                          onSelected: (_) {
-                            setDialogState(() => selectedStatus = s);
-                          },
+                          child: const Icon(Icons.edit_document, size: 24, color: primaryColor),
+                        ),
+                        const SizedBox(width: 14),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                '${item['호출명칭'] ?? item['허가번호'] ?? '정보 없음'}',
+                                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF111827)),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                '허가번호: ${item['허가번호'] ?? '-'}',
+                                style: const TextStyle(fontSize: 13, color: Color(0xFF6B7280)),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                    const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 20),
+                      child: Divider(height: 1, color: Color(0xFFE5E7EB)),
+                    ),
+
+                    // 2. 정보 요약 카드 (어떤 내용을 수정하는지 참고용)
+                    Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFF9FAFB),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: const Color(0xFFE5E7EB)),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          _buildDialogInfoRow('불합격내용', item['불합격내용']?.toString() ?? '-'),
+                          const SizedBox(height: 8),
+                          // 👇 불합격 상세 추가 부분
+                          _buildDialogInfoRow('불합격상세', item['불합격상세']?.toString() ?? '-'),
+                          const SizedBox(height: 8),
+                          _buildDialogInfoRow('시정기한', item['시정기한']?.toString() ?? '-'),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+
+                    // 3. 상태 선택 버튼 (모던한 탭 스타일)
+                    const Text('처리 상태', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF374151))),
+                    const SizedBox(height: 10),
+                    Row(
+                      children: ['미완료', '완료', '대상제외'].map((s) {
+                        final isSelected = selectedStatus == s;
+                        return Expanded(
+                          child: GestureDetector(
+                            onTap: () => setDialogState(() => selectedStatus = s),
+                            child: Container(
+                              margin: const EdgeInsets.only(right: 8),
+                              padding: const EdgeInsets.symmetric(vertical: 12),
+                              decoration: BoxDecoration(
+                                color: isSelected ? primaryColor : Colors.white,
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(
+                                  color: isSelected ? primaryColor : const Color(0xFFD1D5DB),
+                                ),
+                                boxShadow: isSelected
+                                    ? [BoxShadow(color: primaryColor.withValues(alpha: 0.25), blurRadius: 4, offset: const Offset(0, 2))]
+                                    : [],
+                              ),
+                              alignment: Alignment.center,
+                              child: Text(
+                                s,
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
+                                  color: isSelected ? Colors.white : const Color(0xFF4B5563),
+                                ),
+                              ),
+                            ),
+                          ),
                         );
                       }).toList(),
                     ),
-                    const SizedBox(height: 16),
-                    const Text('심의차수', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-                    const SizedBox(height: 8),
+                    const SizedBox(height: 24),
+
+                    // 4. 심의차수 입력
+                    const Text('심의차수', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF374151))),
+                    const SizedBox(height: 10),
                     TextField(
                       controller: reviewCtrl,
                       decoration: InputDecoration(
-                        hintText: '예: 1차',
-                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-                        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                        isDense: true,
+                        hintText: '예: 1차, 2차...',
+                        hintStyle: const TextStyle(color: Color(0xFF9CA3AF), fontSize: 13),
+                        filled: true,
+                        fillColor: const Color(0xFFF9FAFB),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(8),
+                          borderSide: const BorderSide(color: Color(0xFFE5E7EB)),
+                        ),
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(8),
+                          borderSide: const BorderSide(color: Color(0xFFE5E7EB)),
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(8),
+                          borderSide: const BorderSide(color: primaryColor),
+                        ),
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
                       ),
-                      style: const TextStyle(fontSize: 13),
+                      style: const TextStyle(fontSize: 14),
+                    ),
+                    const SizedBox(height: 32),
+
+                    // 5. 하단 액션 버튼
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(ctx),
+                          style: TextButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                            foregroundColor: const Color(0xFF6B7280),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                          ),
+                          child: const Text('취소', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                        ),
+                        const SizedBox(width: 8),
+                        ElevatedButton(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: primaryColor,
+                            foregroundColor: Colors.white,
+                            elevation: 0,
+                            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                          ),
+                          onPressed: () async {
+                            final id = item['id'] as int?;
+                            if (id == null) return;
+
+                            final dialog = ProgressDialog(context);
+                            dialog.show(message: '저장 중...');
+
+                            try {
+                              await _svc.updateInadequate(
+                                id,
+                                status: selectedStatus,
+                                reviewRound: reviewCtrl.text.trim(),
+                              );
+
+                              await dialog.complete(message: '저장 완료');
+
+                              if (mounted) {
+                                Navigator.pop(ctx);
+                                _loadData();
+                              }
+                            } catch (e) {
+                              await dialog.error(message: '저장 실패: $e');
+                            }
+                          },
+                          child: const Text('저장', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
+                        ),
+                      ],
                     ),
                   ],
                 ),
               ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(ctx),
-                  child: const Text('취소', style: TextStyle(color: Colors.grey)),
-                ),
-                ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: primaryColor,
-                    foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                  ),
-                  onPressed: () async {
-                    final id = item['id'] as int?;
-                    if (id == null) return;
-                    try {
-                      await _svc.updateInadequate(
-                        id,
-                        status: selectedStatus,
-                        reviewRound: reviewCtrl.text.trim(),
-                      );
-                      if (mounted) {
-                        Navigator.pop(ctx);
-                        _loadData();
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('저장 완료'), backgroundColor: Colors.green),
-                        );
-                      }
-                    } catch (e) {
-                      if (ctx.mounted) {
-                        ScaffoldMessenger.of(ctx).showSnackBar(
-                          SnackBar(content: Text('저장 실패: $e'), backgroundColor: Colors.red),
-                        );
-                      }
-                    }
-                  },
-                  child: const Text('저장'),
-                ),
-              ],
             );
           },
         );
       },
+    );
+  }
+
+  // 다이얼로그 내부 요약 정보 출력을 위한 헬퍼 위젯 (클래스 내부 아무 곳에나 추가)
+  Widget _buildDialogInfoRow(String label, String value) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          width: 70,
+          child: Text(label, style: const TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
+        ),
+        Expanded(
+          child: Text(value, style: const TextStyle(fontSize: 13, color: Color(0xFF111827), fontWeight: FontWeight.w500)),
+        ),
+      ],
     );
   }
 
@@ -291,6 +404,8 @@ class _InadequateManagementScreenState
   }
 
   Widget _buildSummaryCards() {
+    final isMobile = MediaQuery.of(context).size.width < 600;
+
     final cards = [
       _SummaryInfo('전체', _totalCount, const Color(0xFF374151), Icons.list_alt),
       _SummaryInfo('미완료', _incompleteCount, const Color(0xFFEF4444), Icons.pending_outlined),
@@ -298,6 +413,78 @@ class _InadequateManagementScreenState
       _SummaryInfo('대상제외', _excludedCount, const Color(0xFF6B7280), Icons.remove_circle_outline),
     ];
 
+    // 📱 모바일 환경: 접기/펼치기 기능 적용 (터치 물결 효과 추가)
+    if (isMobile) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        child: Column(
+          children: [
+            // 1) 클릭 가능한 요약 바 (Material + InkWell 적용)
+            Material(
+              color: Colors.white, // Container의 배경색을 Material로 이동
+              borderRadius: BorderRadius.circular(10),
+              child: InkWell(
+                onTap: () {
+                  setState(() {
+                    _isSummaryExpanded = !_isSummaryExpanded;
+                  });
+                },
+                borderRadius: BorderRadius.circular(10), // 모서리 둥글게 물결치도록 설정
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: _border), 
+                    // ⚠️ 여기서 color: Colors.white를 빼야 물결이 보입니다!
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.bar_chart, size: 18, color: Color(0xFF6B7280)),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          '전체 $_totalCount · 미완료 $_incompleteCount · 완료 $_completeCount · 제외 $_excludedCount',
+                          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: Color(0xFF374151)),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      // 질문자님 예시처럼 좀 더 부드러운 아이콘으로 변경
+                      Icon(
+                        _isSummaryExpanded ? Icons.expand_less : Icons.expand_more,
+                        size: 22,
+                        color: const Color(0xFF9CA3AF),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            
+            // 2) 펼쳐졌을 때 보이는 카드 영역 (2x2 배열)
+            if (_isSummaryExpanded) ...[
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  _buildMobileCard(cards[0]),
+                  const SizedBox(width: 8),
+                  _buildMobileCard(cards[1]),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  _buildMobileCard(cards[2]),
+                  const SizedBox(width: 8),
+                  _buildMobileCard(cards[3]),
+                ],
+              ),
+            ],
+          ],
+        ),
+      );
+    }
+
+    // 💻 PC/태블릿 환경: 기존처럼 4개 가로 배치
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
       child: Row(
@@ -322,16 +509,19 @@ class _InadequateManagementScreenState
                     child: Icon(c.icon, color: c.color, size: 20),
                   ),
                   const SizedBox(width: 12),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(c.label, style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280))),
-                      const SizedBox(height: 2),
-                      Text(
-                        '${c.count}건',
-                        style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: c.color),
-                      ),
-                    ],
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(c.label, style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280))),
+                        const SizedBox(height: 2),
+                        Text(
+                          '${c.count}건',
+                          style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: c.color),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
+                    ),
                   ),
                 ],
               ),
@@ -365,6 +555,7 @@ class _InadequateManagementScreenState
                   dropdownColor: Colors.white,
                   style: const TextStyle(color: Colors.black87, fontSize: 13),
                   value: _selectedRegion,
+                  borderRadius: BorderRadius.circular(10),
                   items: _regionOptions.map((r) {
                     return DropdownMenuItem(value: r, child: Text(r.isEmpty ? '전체 본부' : r));
                   }).toList(),
@@ -398,6 +589,7 @@ class _InadequateManagementScreenState
                   dropdownColor: Colors.white,
                   style: const TextStyle(color: Colors.black87, fontSize: 13),
                   value: _selectedStatus,
+                  borderRadius: BorderRadius.circular(10),
                   items: _statusOptions.map((s) {
                     return DropdownMenuItem(value: s, child: Text(s.isEmpty ? '전체 상태' : s));
                   }).toList(),
@@ -593,6 +785,47 @@ class _InadequateManagementScreenState
   }
 
   String _str(Map<String, dynamic> m, String key) => (m[key] ?? '').toString();
+
+  Widget _buildMobileCard(_SummaryInfo c) {
+    return Expanded(
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 12),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: _border),
+        ),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: c.color.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Icon(c.icon, color: c.color, size: 20),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(c.label, style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280))),
+                  const SizedBox(height: 2),
+                  Text(
+                    '${c.count}건',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: c.color),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
 }
 
 class _SummaryInfo {
