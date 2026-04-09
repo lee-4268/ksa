@@ -11651,10 +11651,17 @@ async def inspection_data(request: Request, req: InspectionDataReq):
         total = c.execute(f'SELECT COUNT(*) FROM inspection_targets WHERE {where_sql}', params).fetchone()[0]
         offset = (req.page - 1) * req.page_size
         rows = c.execute(
-            f'''SELECT t.*, s.수검예정주차, r.status AS 검사결과
+            f'''SELECT t.*, s.수검예정주차,
+                    COALESCE(r.status, irr.합불여부) AS 검사결과
                 FROM (SELECT * FROM inspection_targets WHERE {where_sql} ORDER BY id LIMIT ? OFFSET ?) t
                 LEFT JOIN inspection_schedules s ON s.year = t.year AND s.허가번호 = t.허가번호
-                LEFT JOIN inspection_results r ON r.year = t.year AND r.허가번호 = t.허가번호''',
+                LEFT JOIN inspection_results r ON r.year = t.year AND r.허가번호 = t.허가번호
+                LEFT JOIN (
+                    SELECT year, REPLACE(허가번호,'-','') AS 허가번호, MIN(합불여부) AS 합불여부
+                    FROM inspection_results_raw
+                    WHERE 합불여부 != ''
+                    GROUP BY year, REPLACE(허가번호,'-','')
+                ) irr ON irr.year = t.year AND irr.허가번호 = REPLACE(t.허가번호,'-','')''',
             params + [req.page_size, offset]
         ).fetchall()
         c.close()
