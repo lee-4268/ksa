@@ -252,9 +252,9 @@ class _NoticeBoardScreenState extends State<NoticeBoardScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFFF5F5F5),
-      body: Padding(
+    return Material(
+      color: const Color(0xFFF5F5F5),
+      child: Padding(
         padding: const EdgeInsets.all(24),
         child: switch (_mode) {
           _ViewMode.list => _buildList(),
@@ -292,12 +292,16 @@ class _NoticeBoardScreenState extends State<NoticeBoardScreen> {
         const SizedBox(height: 16),
 
         // ── 총 건수 + 검색 + 글쓰기 ──
-        Row(
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          alignment: WrapAlignment.spaceBetween,
+          crossAxisAlignment: WrapCrossAlignment.center,
           children: [
             Text('총 $_total건', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-            const Spacer(),
-            SizedBox(
-              width: 220,
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 220),
+              child: SizedBox(
               height: 36,
               child: TextField(
                 controller: _searchCtrl,
@@ -329,8 +333,8 @@ class _NoticeBoardScreenState extends State<NoticeBoardScreen> {
                 },
               ),
             ),
+            ),
             if (canWrite) ...[
-              const SizedBox(width: 8),
               SizedBox(
                 height: 36,
                 child: ElevatedButton.icon(
@@ -719,31 +723,30 @@ class _NoticeBoardScreenState extends State<NoticeBoardScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // 뒤로가기
         TextButton.icon(
           onPressed: _backToList,
           icon: const Icon(Icons.arrow_back, size: 18),
           label: Text(_isEditing ? '수정 취소' : '작성 취소', style: const TextStyle(fontSize: 13)),
           style: TextButton.styleFrom(foregroundColor: Colors.grey.shade700),
         ),
-        const SizedBox(height: 8),
-
+        const SizedBox(height: 12),
         Expanded(
-          child: Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(28),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: Colors.grey.shade200),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  _isEditing ? '공지사항 수정' : '공지사항 작성',
-                  style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                ),
+          child: SingleChildScrollView(
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(28),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: Colors.grey.shade200),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    _isEditing ? '공지사항 수정' : '공지사항 작성',
+                    style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                  ),
                 const SizedBox(height: 20),
 
                 // 제목
@@ -808,31 +811,28 @@ class _NoticeBoardScreenState extends State<NoticeBoardScreen> {
                 // 내용
                 const Text('내용', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
                 const SizedBox(height: 6),
-                Expanded(
-                  child: TextField(
-                    controller: _contentCtrl,
-                    maxLines: null,
-                    expands: true,
-                    textAlignVertical: TextAlignVertical.top,
-                    style: const TextStyle(fontSize: 14, height: 1.6),
-                    decoration: InputDecoration(
-                      hintText: '공지사항 내용을 입력하세요',
-                      hintStyle: TextStyle(fontSize: 13, color: Colors.grey.shade400),
-                      contentPadding: const EdgeInsets.all(14),
-                      filled: true,
-                      fillColor: Colors.white,
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8),
-                        borderSide: BorderSide(color: Colors.grey.shade300),
-                      ),
-                      enabledBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8),
-                        borderSide: BorderSide(color: Colors.grey.shade300),
-                      ),
-                      focusedBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8),
-                        borderSide: const BorderSide(color: _primary),
-                      ),
+                TextField(
+                  controller: _contentCtrl,
+                  maxLines: 15,
+                  textAlignVertical: TextAlignVertical.top,
+                  style: const TextStyle(fontSize: 14, height: 1.6),
+                  decoration: InputDecoration(
+                    hintText: '공지사항 내용을 입력하세요',
+                    hintStyle: TextStyle(fontSize: 13, color: Colors.grey.shade400),
+                    contentPadding: const EdgeInsets.all(14),
+                    filled: true,
+                    fillColor: Colors.white,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: BorderSide(color: Colors.grey.shade300),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: BorderSide(color: Colors.grey.shade300),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: const BorderSide(color: _primary),
                     ),
                   ),
                 ),
@@ -935,6 +935,7 @@ class _NoticeBoardScreenState extends State<NoticeBoardScreen> {
                   ],
                 ),
               ],
+            ),
             ),
           ),
         ),

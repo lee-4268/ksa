@@ -870,35 +870,67 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
         Padding(
           padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
           child: (context.read<AuthService>().isSuperAdmin || context.read<AuthService>().isDivisionAdmin)
-            ? OutlinedButton.icon(
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: _primary,
-                  side: BorderSide(color: _primary.withValues(alpha: 0.5)),
-                  minimumSize: const Size(double.infinity, 44),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10)),
+              ? Row(
+                  children: [
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: _primary,
+                          foregroundColor: Colors.white,
+                          minimumSize: const Size(double.infinity, 44),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(10)),
+                        ),
+                        icon: _saving
+                            ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                    color: Colors.white, strokeWidth: 2))
+                            : const Icon(Icons.save_outlined, size: 18),
+                        label: Text(_saving ? '저장 중...' : '저장',
+                            style: const TextStyle(
+                                fontSize: 14, fontWeight: FontWeight.w500)),
+                        onPressed: _saving ? null : _save,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    OutlinedButton.icon(
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: _primary,
+                        side: BorderSide(color: _primary.withValues(alpha: 0.5)),
+                        minimumSize: const Size(120, 44),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10)),
+                      ),
+                      icon: const Icon(Icons.delete_outline, size: 18),
+                      label: const Text('삭제',
+                          style: TextStyle(
+                              fontSize: 14, fontWeight: FontWeight.w500)),
+                      onPressed: _delete,
+                    ),
+                  ],
+                )
+              : ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: _primary,
+                    foregroundColor: Colors.white,
+                    minimumSize: const Size(double.infinity, 44),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10)),
+                  ),
+                  icon: _saving
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                              color: Colors.white, strokeWidth: 2))
+                      : const Icon(Icons.save_outlined, size: 18),
+                  label: Text(_saving ? '저장 중...' : '저장',
+                      style: const TextStyle(
+                          fontSize: 14, fontWeight: FontWeight.w500)),
+                  onPressed: _saving ? null : _save,
                 ),
-                icon: const Icon(Icons.delete_outline, size: 18),
-                label: const Text('삭제',
-                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500)),
-                onPressed: _delete,
-              )
-            : ElevatedButton.icon(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: _primary,
-                  foregroundColor: Colors.white,
-                  minimumSize: const Size(double.infinity, 44),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10)),
-                ),
-                icon: _saving
-                    ? const SizedBox(width: 18, height: 18,
-                        child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                    : const Icon(Icons.save_outlined, size: 18),
-                label: Text(_saving ? '저장 중...' : '저장',
-                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500)),
-                onPressed: _saving ? null : _save,
-              ),
         ),
       ]),
     );

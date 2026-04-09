@@ -289,9 +289,8 @@ class _RequestBoardScreenState extends State<RequestBoardScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFFFAFAFB),
-      body: _loading
+    return Container(
+      child: _loading
           ? const Center(child: CircularProgressIndicator())
           : _buildBody(),
     );
@@ -313,8 +312,9 @@ class _RequestBoardScreenState extends State<RequestBoardScreen> {
   // ════════════════════════════════════════════════════════════
 
   Widget _buildListView() {
+    final isNarrow = MediaQuery.of(context).size.width < 760;
     return Padding(
-      padding: const EdgeInsets.all(24),
+      padding: EdgeInsets.all(isNarrow ? 12 : 24),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -329,7 +329,7 @@ class _RequestBoardScreenState extends State<RequestBoardScreen> {
           ],
 
           // 툴바
-          _buildToolbar(),
+          _buildToolbar(isNarrow: isNarrow),
           const SizedBox(height: 12),
 
           // 테이블
@@ -339,108 +339,131 @@ class _RequestBoardScreenState extends State<RequestBoardScreen> {
           const SizedBox(height: 12),
           _buildPagination(),
         ],
-      ),
+      )
     );
   }
 
-  Widget _buildToolbar() {
-    return Row(
-      children: [
-        // 총 N건
-        Text('총 $_total건',
-            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-        const Spacer(),
-        // 상태 필터
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            border: Border.all(color: Colors.grey.shade300),
-            borderRadius: BorderRadius.circular(10),
-          ),
-          child: DropdownButtonHideUnderline(
-            child: DropdownButton<String>(
-              isExpanded: false,
-              isDense: true,
-              icon: Icon(Icons.arrow_drop_down, color: _primaryColor, size: 20),
-              dropdownColor: Colors.white,
-
-              borderRadius: BorderRadius.circular(12),
-              style: const TextStyle(color: Colors.black87, fontSize: 13),
-              value: _statusFilter,
-              items: const [
-                DropdownMenuItem(value: '', child: Text('전체')),
-                DropdownMenuItem(value: '접수', child: Text('접수')),
-                DropdownMenuItem(value: '처리중', child: Text('처리중')),
-                DropdownMenuItem(value: '완료', child: Text('완료')),
-              ],
-              onChanged: (v) {
-                _statusFilter = v ?? '';
-                _page = 1;
-                _fetchList();
-              },
-            ),
-          ),
+  Widget _buildToolbar({required bool isNarrow}) {
+    final filter = Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border.all(color: Colors.grey.shade300),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<String>(
+          isExpanded: false,
+          isDense: true,
+          icon: Icon(Icons.arrow_drop_down, color: _primaryColor, size: 20),
+          dropdownColor: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          style: const TextStyle(color: Colors.black87, fontSize: 13),
+          value: _statusFilter,
+          items: const [
+            DropdownMenuItem(value: '', child: Text('전체')),
+            DropdownMenuItem(value: '접수', child: Text('접수')),
+            DropdownMenuItem(value: '처리중', child: Text('처리중')),
+            DropdownMenuItem(value: '완료', child: Text('완료')),
+          ],
+          onChanged: (v) {
+            _statusFilter = v ?? '';
+            _page = 1;
+            _fetchList();
+          },
         ),
-        const SizedBox(width: 8),
-        // 검색
-        SizedBox(
-          width: 200,
-          height: 36,
-          child: TextField(
-            controller: _searchController,
-            style: const TextStyle(fontSize: 13),
-            decoration: InputDecoration(
-              hintText: '검색어 입력',
-              hintStyle: TextStyle(fontSize: 13, color: Colors.grey.shade400),
-              contentPadding:
-                  const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
-              filled: true,
-              fillColor: Colors.white,
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(10),
-                borderSide: BorderSide(color: Colors.grey.shade300),
-              ),
-              enabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(10),
-                borderSide: BorderSide(color: Colors.grey.shade300),
-              ),
-              suffixIcon: IconButton(
-                icon: const Icon(Icons.search, size: 18),
-                onPressed: () {
-                  _page = 1;
-                  _fetchList();
-                },
-              ),
-            ),
-            onSubmitted: (_) {
+      ),
+    );
+
+    final search = SizedBox(
+      height: 36,
+      child: TextField(
+        controller: _searchController,
+        style: const TextStyle(fontSize: 13),
+        decoration: InputDecoration(
+          hintText: '검색어 입력',
+          hintStyle: TextStyle(fontSize: 13, color: Colors.grey.shade400),
+          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
+          filled: true,
+          fillColor: Colors.white,
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(10),
+            borderSide: BorderSide(color: Colors.grey.shade300),
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(10),
+            borderSide: BorderSide(color: Colors.grey.shade300),
+          ),
+          suffixIcon: IconButton(
+            icon: const Icon(Icons.search, size: 18),
+            onPressed: () {
               _page = 1;
               _fetchList();
             },
           ),
         ),
-        const SizedBox(width: 8),
-        // 글쓰기
-        SizedBox(
-          height: 36,
-          child: ElevatedButton.icon(
-            onPressed: () => _openWrite(),
-            icon: const Icon(Icons.edit, size: 16),
-            label: const Text('글쓰기', style: TextStyle(fontSize: 13)),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: _primaryColor,
-              foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8)),
-              elevation: 0,
-            ),
-          ),
+        onSubmitted: (_) {
+          _page = 1;
+          _fetchList();
+        },
+      ),
+    );
+
+    final writeBtn = SizedBox(
+      height: 36,
+      child: ElevatedButton.icon(
+        onPressed: () => _openWrite(),
+        icon: const Icon(Icons.edit, size: 16),
+        label: const Text('글쓰기', style: TextStyle(fontSize: 13)),
+        style: ElevatedButton.styleFrom(
+          backgroundColor: _primaryColor,
+          foregroundColor: Colors.white,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          elevation: 0,
         ),
+      ),
+    );
+
+    if (isNarrow) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('총 $_total건',
+              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              filter,
+              const SizedBox(width: 8),
+              Expanded(child: search),
+            ],
+          ),
+          const SizedBox(height: 8),
+          writeBtn,
+        ],
+      );
+    }
+
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      alignment: WrapAlignment.spaceBetween,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        Text('총 $_total건',
+            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+        filter,
+        ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 240),
+          child: search,
+        ),
+        writeBtn,
       ],
     );
   }
 
   Widget _buildTable() {
+    final isNarrow = MediaQuery.of(context).size.width < 760;
     if (_error != null) {
       return Center(
         child: Column(
@@ -471,6 +494,14 @@ class _RequestBoardScreenState extends State<RequestBoardScreen> {
                 style: TextStyle(fontSize: 14, color: Colors.grey.shade500)),
           ],
         ),
+      );
+    }
+
+    if (isNarrow) {
+      return ListView.separated(
+        itemCount: _items.length,
+        separatorBuilder: (_, _) => const SizedBox(height: 8),
+        itemBuilder: (_, i) => _buildMobileCard(_items[i]),
       );
     }
 
@@ -604,6 +635,96 @@ class _RequestBoardScreenState extends State<RequestBoardScreen> {
                     textAlign: TextAlign.center,
                     style: TextStyle(fontSize: 12, color: Colors.grey.shade600))),
           ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMobileCard(Map<String, dynamic> item) {
+    final id = item['id'] as int? ?? 0;
+    final rowNum = item['번호'] ?? id;
+    final title = item['title'] as String? ?? '';
+    final status = item['status'] as String? ?? '접수';
+    final authorName = item['author_name'] as String? ?? '';
+    final authorOrg = item['author_org'] as String? ?? '';
+    final author = authorOrg.isNotEmpty ? '$authorName($authorOrg)' : authorName;
+    final createdAt = _formatDate(item['created_at'] as String?);
+    final views = (item['view_count'] as int?) ?? 0;
+    final isSecret = item['is_secret'] == true || item['is_secret'] == 1;
+
+    return Material(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(10),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(10),
+        onTap: () => _openDetail(id),
+        child: Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: Colors.grey.shade200),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Text(
+                    '$rowNum',
+                    style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                  ),
+                  const SizedBox(width: 8),
+                  _statusBadge(status),
+                  const Spacer(),
+                  Text(
+                    '조회 $views',
+                    style: TextStyle(fontSize: 12, color: Colors.grey.shade500),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (isSecret)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 2, right: 4),
+                      child: Icon(Icons.lock, size: 14, color: Colors.grey.shade500),
+                    ),
+                  Expanded(
+                    child: Text(
+                      title,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Icon(Icons.person_outline, size: 14, color: Colors.grey.shade500),
+                  const SizedBox(width: 4),
+                  Expanded(
+                    child: Text(
+                      author,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Icon(Icons.calendar_today_outlined, size: 13, color: Colors.grey.shade500),
+                  const SizedBox(width: 4),
+                  Text(
+                    createdAt,
+                    style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                  ),
+                ],
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -745,26 +866,45 @@ class _RequestBoardScreenState extends State<RequestBoardScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // 제목 + 상태
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Text(title,
-                              style: const TextStyle(
-                                  fontSize: 20, fontWeight: FontWeight.bold)),
-                        ),
-                        const SizedBox(width: 12),
-                        _statusBadge(status),
-                      ],
+                    // 제목 + 상태 (좁은 폭에서는 세로 배치로 오버플로우 방지)
+                    LayoutBuilder(
+                      builder: (context, c) {
+                        const titleStyle = TextStyle(
+                            fontSize: 20, fontWeight: FontWeight.bold);
+                        if (c.maxWidth < 760) {
+                          return Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(title,
+                                  style: titleStyle, softWrap: true),
+                              const SizedBox(height: 8),
+                              _statusBadge(status),
+                            ],
+                          );
+                        }
+                        return Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Expanded(
+                              child: Text(title,
+                                  style: titleStyle,
+                                  softWrap: true),
+                            ),
+                            const SizedBox(width: 12),
+                            _statusBadge(status),
+                          ],
+                        );
+                      },
                     ),
                     const SizedBox(height: 12),
                     // 메타 정보
-                    Row(
+                    Wrap(
+                      spacing: 16,
+                      runSpacing: 8,
+                      crossAxisAlignment: WrapCrossAlignment.center,
                       children: [
                         _metaChip(Icons.person_outline, authorDisplay),
-                        const SizedBox(width: 16),
                         _metaChip(Icons.calendar_today, createdAt),
-                        const SizedBox(width: 16),
                         _metaChip(Icons.visibility_outlined, '조회 $views'),
                       ],
                     ),
@@ -1061,13 +1201,12 @@ class _RequestBoardScreenState extends State<RequestBoardScreen> {
   Widget _buildWriteView() {
     final isEdit = _editId != null;
 
-    return Padding(
-      padding: const EdgeInsets.all(24),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // 뒤로가기
-          TextButton.icon(
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(24, 24, 24, 12),
+          child: TextButton.icon(
             onPressed: () {
               setState(() => _viewMode =
                   _detail != null ? _ViewMode.detail : _ViewMode.list);
@@ -1076,9 +1215,10 @@ class _RequestBoardScreenState extends State<RequestBoardScreen> {
             label: Text(isEdit ? '상세로 돌아가기' : '목록으로'),
             style: TextButton.styleFrom(foregroundColor: Colors.black54),
           ),
-          const SizedBox(height: 12),
-
-          Expanded(
+        ),
+        Expanded(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
             child: Container(
               width: double.infinity,
               padding: const EdgeInsets.all(24),
@@ -1087,14 +1227,13 @@ class _RequestBoardScreenState extends State<RequestBoardScreen> {
                 borderRadius: BorderRadius.circular(10),
                 border: Border.all(color: Colors.grey.shade200),
               ),
-              child: SingleChildScrollView(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(isEdit ? '요청사항 수정' : '요청사항 등록',
-                        style: const TextStyle(
-                            fontSize: 18, fontWeight: FontWeight.bold)),
-                    const SizedBox(height: 20),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(isEdit ? '요청사항 수정' : '요청사항 등록',
+                      style: const TextStyle(
+                          fontSize: 18, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 20),
 
                     // 제목
                     const Text('제목',
@@ -1309,8 +1448,7 @@ class _RequestBoardScreenState extends State<RequestBoardScreen> {
             ),
           ),
         ],
-      ),
-    );
+      );
   }
 
   // ── 유틸 ──

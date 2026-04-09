@@ -665,15 +665,17 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
+                Wrap(
+                  spacing: 4,
+                  runSpacing: 2,
+                  crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
                     Text(label,
                         style: const TextStyle(
                             fontSize: 11,
                             color: Color(0xFF6B7280),
                             fontWeight: FontWeight.w500)),
-                    if (target != null) ...[
-                      const SizedBox(width: 6),
+                    if (target != null)
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
                         decoration: BoxDecoration(
@@ -683,11 +685,10 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
                         ),
                         child: Text(target,
                             style: const TextStyle(
-                                fontSize: 11,
+                                fontSize: 9,
                                 fontWeight: FontWeight.w600,
                                 color: Color(0xFF6B7280))),
                       ),
-                    ],
                   ],
                 ),
                 const SizedBox(height: 2),
@@ -1345,12 +1346,17 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
                 fontWeight: FontWeight.w600,
                 color: Color(0xFF374151))),
         const SizedBox(height: 8),
-        SizedBox(
-          width: 200,
-          height: 200,
-          child: CustomPaint(
-            painter: _DonutPainter(slices: slices, total: total),
-          ),
+        LayoutBuilder(
+          builder: (context, cst) {
+            final donutSize = cst.maxWidth < 300 ? 120.0 : 160.0;
+            return SizedBox(
+              width: donutSize,
+              height: donutSize,
+              child: CustomPaint(
+                painter: _DonutPainter(slices: slices, total: total),
+              ),
+            );
+          },
         ),
         const SizedBox(height: 10),
         ...slices.map((s) {
