@@ -172,10 +172,13 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
       _pHdqt = _myHdqt;
       _aHdqt = _myHdqt;
     }
-    // member(일반 팀원)인 경우 팀까지 자동 필터
+    // member(일반 팀원)인 경우 팀까지 자동 필터 (org_map에 있는 팀만)
     if (!_isAdmin && _myTeam.isNotEmpty) {
-      _pTeam = _myTeam;
-      _aTeam = _myTeam;
+      final teams = _orgMap[_myHdqt] ?? [];
+      if (teams.contains(_myTeam)) {
+        _pTeam = _myTeam;
+        _aTeam = _myTeam;
+      }
     }
   }
 
