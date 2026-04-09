@@ -11663,7 +11663,7 @@ def _build_insp_where(year, sheet, filters, search, addr, schedule_yn="", schedu
         where.append('허가번호 NOT IN (SELECT 허가번호 FROM inspection_schedules WHERE year=?)')
         params.append(year)
     if schedule_week:
-        where.append('허가번호 IN (SELECT 허가번호 FROM inspection_schedules WHERE year=? AND 수검예정주차=?)')
+        where.append("REPLACE(허가번호,'-','') IN (SELECT REPLACE(허가번호,'-','') FROM inspection_schedules WHERE year=? AND TRIM(수검예정주차)=TRIM(?))")
         params.extend([year, schedule_week])
     return " AND ".join(where), params
 

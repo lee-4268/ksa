@@ -39,7 +39,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
   List<String> _allKcaResults = [];
 
   // pending 필터 (UI 선택 중)
-  String _pHdqt = '', _pTeam = '', _pSearch = '', _pScheduled = '';
+  String _pHdqt = '', _pTeam = '', _pSearch = '', _pScheduled = '', _pSchedWeek = '';
   List<String> _pQuarters = [], _pNationGroups = [], _pKcaResults = [];
 
   // applied 필터 (실제 쿼리)
@@ -339,6 +339,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     // setState 없이 먼저 값 업데이트 → _loadAll의 setState로 한 번만 리빌드
     _aHdqt = _pHdqt; _aTeam = _pTeam; _aSearch = _pSearch;
     _aScheduled = _pScheduled;
+    _aSchedWeek = _pSchedWeek;
     _aQuarters = List.from(_pQuarters);
     _aNationGroups = List.from(_pNationGroups);
     _aKcaResults = List.from(_pKcaResults);
@@ -347,7 +348,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
   }
 
   void _resetFilters() {
-    _pHdqt = _pTeam = _pSearch = _pScheduled = '';
+    _pHdqt = _pTeam = _pSearch = _pScheduled = _pSchedWeek = '';
     _aHdqt = _aTeam = _aSearch = _aScheduled = _aSchedWeek = '';
     _pQuarters = []; _pNationGroups = []; _pKcaResults = [];
     _aQuarters = []; _aNationGroups = []; _aKcaResults = [];
@@ -1096,6 +1097,21 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
               _filterDropdown('일정등록', _pScheduled, const ['', 'Y', 'N'],
                   (v) => setState(() => _pScheduled = v ?? ''),
                   displayMap: const {'Y': '등록', 'N': '미등록'}),
+              Builder(builder: (_) {
+                final allWeeks = <String>{};
+                for (final s in _schedules) {
+                  final w = (s['수검예정주차'] as String? ?? '').trim();
+                  if (w.isNotEmpty) allWeeks.add(w);
+                }
+                final weekOptions = <String>['', ...allWeeks.toList()
+                  ..sort((a, b) {
+                    final na = int.tryParse(a.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0;
+                    final nb = int.tryParse(b.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0;
+                    return na.compareTo(nb);
+                  })];
+                return _filterDropdown('수검일정', _pSchedWeek, weekOptions,
+                    (v) => setState(() => _pSchedWeek = v ?? ''));
+              }),
               const SizedBox(width: 4),
               ElevatedButton(
                 style: ElevatedButton.styleFrom(
@@ -1414,7 +1430,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     }
     if (_aSchedWeek.isNotEmpty) {
       addChip('수검일정', _aSchedWeek, () {
-        setState(() { _aSchedWeek = ''; _page = 1; });
+        setState(() { _pSchedWeek = ''; _aSchedWeek = ''; _page = 1; });
         _loadAll();
       });
     }
@@ -1813,8 +1829,9 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
   /// 매트릭스 카드에서 건수 클릭 시 수검 대상 현황 탭으로 전환하며 필터 적용
   void _navigateToDataTabWithFilter({required String week, required String hdqt}) {
     setState(() {
-      // 수검일정 + 일정등록 여부 필터
-      _aSchedWeek = week;
+      // 수검일정 필터 (pending/applied 동기화)
+      _pSchedWeek = week; _aSchedWeek = week;
+      // 일정등록 여부 필터
       _pScheduled = 'Y'; _aScheduled = 'Y';
       // 본부 필터: 항상 갱신 (이전 값 덮어씌움, 빈 값이면 초기화)
       final validHdqt = hdqt.isNotEmpty && hdqt != '미지정' ? hdqt : '';
