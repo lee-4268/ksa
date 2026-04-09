@@ -102,21 +102,25 @@ class _InadequateManagementScreenState
 
   Future<void> _doSync() async {
     setState(() => _syncing = true);
+
+    // 1. ProgressDialog 초기화 및 표시
+    final dialog = ProgressDialog(context);
+    dialog.show(message: '데이터를 동기화하는 중...');
+
     try {
+      // 2. 동기화 API 호출
       await _svc.syncInadequate(_year);
+      
+      // 3. 성공 시 dialog 완료 처리 (내부에서 자동으로 스낵바 띄워줌)
+      await dialog.complete(message: '동기화 완료');
+
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('동기화 완료'), backgroundColor: Colors.green),
-        );
         _page = 1;
-        _loadData();
+        _loadData(); // 동기화 완료 후 1페이지부터 다시 데이터 불러오기
       }
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('동기화 실패: $e'), backgroundColor: Colors.red),
-        );
-      }
+      // 4. 실패 시 dialog 에러 표시
+      await dialog.error(message: '동기화 실패: $e');
     } finally {
       if (mounted) setState(() => _syncing = false);
     }
