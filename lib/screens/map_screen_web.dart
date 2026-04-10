@@ -251,47 +251,7 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
     html.document.body?.append(html.ScriptElement()..text = jsCode);
   }
 
-  /// 지도 회전 헬퍼 (내가 향하는 방향이 위쪽)
-  void _rotateMap(double heading) {
-    final jsCode = '''
-      (function() {
-        var map = window['kakaoMapInstance_$_containerId'];
-        if (!map) return;
-        // map.getContainer(): 카카오맵이 생성한 실제 div
-        var mapDiv = map.getContainer ? map.getContainer() : null;
-        if (!mapDiv) mapDiv = document.getElementById('$_containerId');
-        if (!mapDiv) return;
-        // 부모도 overflow visible로 설정해야 잘리지 않음
-        if (mapDiv.parentElement) {
-          mapDiv.parentElement.style.overflow = 'visible';
-        }
-        mapDiv.style.transform = 'rotate(' + (-$heading) + 'deg)';
-        mapDiv.style.transformOrigin = '50% 50%';
-      })();
-    ''';
-    html.document.body?.append(html.ScriptElement()..text = jsCode);
-  }
-
-  /// 지도 회전 초기화 (북쪽 고정)
-  void resetMapRotation() {
-    final jsCode = '''
-      (function() {
-        var map = window['kakaoMapInstance_$_containerId'];
-        if (!map) return;
-        var mapDiv = map.getContainer ? map.getContainer() : null;
-        if (!mapDiv) mapDiv = document.getElementById('$_containerId');
-        if (!mapDiv) return;
-        mapDiv.style.transform = '';
-        mapDiv.style.transformOrigin = '';
-        if (mapDiv.parentElement) {
-          mapDiv.parentElement.style.overflow = '';
-        }
-      })();
-    ''';
-    html.document.body?.append(html.ScriptElement()..text = jsCode);
-  }
-
-  /// 실시간 위치 추적 시작 (watchPosition — 지도가 내 방향으로 회전)
+  /// 실시간 위치 추적 시작 (watchPosition — 지도 중심 따라가기 + 방향 부채꼴)
   void startLocationTracking() {
     final jsCode = '''
       (function() {
@@ -299,18 +259,15 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
         var map = window['kakaoMapInstance_$_containerId'];
         if (!map) return;
 
-        // content 함수 등록
         if (!window['makeLocationContent_$_containerId']) {
           $_makeLocationContentJs
           window['makeLocationContent_$_containerId'] = makeLocationContent;
         }
 
-        // 기존 추적 중지
         if (window['kakaoWatchId_$_containerId']) {
           navigator.geolocation.clearWatch(window['kakaoWatchId_$_containerId']);
         }
 
-        // 나침반 이벤트 — 정지 시 방향 + 지도 회전
         if (!window['kakaoCompassRegistered_$_containerId']) {
           window['kakaoCompassRegistered_$_containerId'] = true;
           var handleOrientation = function(event) {
@@ -319,22 +276,9 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
               : (event.alpha !== null && event.alpha !== undefined ? (360 - event.alpha) : null);
             if (alpha === null || isNaN(alpha)) return;
             window['kakaoCompassHeading_$_containerId'] = alpha;
-
-            // 추적 모드일 때만 지도 회전
-            if (!window['kakaoTrackingActive_$_containerId']) return;
-
-            // 마커는 항상 위를 가리킴(부채꼴도 위쪽), 지도가 회전
             var ov = window['kakaoCurrentLocationMarker_$_containerId'];
             var f = window['makeLocationContent_$_containerId'];
-            if (ov && f) ov.setContent(f(0)); // 마커는 항상 0도(위)
-
-            // 지도 회전: 내가 향하는 방향이 위쪽
-            var mapDiv = map.getContainer ? map.getContainer() : document.getElementById('$_containerId');
-            if (mapDiv) {
-              if (mapDiv.parentElement) mapDiv.parentElement.style.overflow = 'visible';
-              mapDiv.style.transform = 'rotate(' + (-alpha) + 'deg)';
-              mapDiv.style.transformOrigin = '50% 50%';
-            }
+            if (ov && f) ov.setContent(f(alpha));
           };
           if (typeof DeviceOrientationEvent !== 'undefined' &&
               typeof DeviceOrientationEvent.requestPermission === 'function') {
@@ -346,8 +290,6 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
           }
         }
 
-        window['kakaoTrackingActive_$_containerId'] = true;
-
         window['kakaoWatchId_$_containerId'] = navigator.geolocation.watchPosition(
           function(position) {
             var lat = position.coords.latitude;
@@ -355,28 +297,23 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
             var gpsHeading = position.coords.heading;
             var speed = position.coords.speed;
 
-            // heading: GPS 이동 방향 우선, 정지 시 나침반
             var compassH = window['kakaoCompassHeading_$_containerId'];
             var heading = 0;
             if (gpsHeading !== null && !isNaN(gpsHeading) && speed !== null && speed > 0.5) {
               heading = gpsHeading;
-              window['kakaoCompassHeading_$_containerId'] = heading;
             } else if (compassH !== null && compassH !== undefined && !isNaN(compassH)) {
               heading = compassH;
             }
 
-            // 지도 중심 이동
             var moveLatLon = new kakao.maps.LatLng(lat, lng);
             map.setCenter(moveLatLon);
 
-            // 마커: 항상 위(0도) — 지도가 회전하니까 마커는 고정
             if (window['kakaoCurrentLocationMarker_$_containerId']) window['kakaoCurrentLocationMarker_$_containerId'].setMap(null);
             if (window['kakaoCurrentLocationCircle_$_containerId']) window['kakaoCurrentLocationCircle_$_containerId'].setMap(null);
 
             var fn = window['makeLocationContent_$_containerId'];
             var overlay = new kakao.maps.CustomOverlay({
-              position: moveLatLon,
-              content: fn(0),
+              position: moveLatLon, content: fn(heading),
               yAnchor: 0.5, xAnchor: 0.5, zIndex: 10
             });
             overlay.setMap(map);
@@ -391,14 +328,6 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
             circle.setMap(map);
             window['kakaoCurrentLocationCircle_$_containerId'] = circle;
 
-            // 지도 회전 적용
-            var mapDiv = map.getContainer ? map.getContainer() : document.getElementById('$_containerId');
-            if (mapDiv) {
-              if (mapDiv.parentElement) mapDiv.parentElement.style.overflow = 'visible';
-              mapDiv.style.transform = 'rotate(' + (-heading) + 'deg)';
-              mapDiv.style.transformOrigin = '50% 50%';
-            }
-
             window.postMessage({type: 'currentLocation', lat: lat, lng: lng, heading: heading}, '*');
           },
           function(error) { console.warn('위치 추적 오류:', error.message); },
@@ -409,24 +338,13 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
     html.document.body?.append(html.ScriptElement()..text = jsCode);
   }
 
-  /// 실시간 위치 추적 중지 + 지도 회전 초기화
+  /// 실시간 위치 추적 중지
   void stopLocationTracking() {
     final jsCode = '''
       (function() {
-        window['kakaoTrackingActive_$_containerId'] = false;
         if (window['kakaoWatchId_$_containerId']) {
           navigator.geolocation.clearWatch(window['kakaoWatchId_$_containerId']);
           window['kakaoWatchId_$_containerId'] = null;
-        }
-        // 지도 회전 초기화 (북쪽 위)
-        var map = window['kakaoMapInstance_$_containerId'];
-        if (map) {
-          var mapDiv = map.getContainer ? map.getContainer() : document.getElementById('$_containerId');
-          if (mapDiv) {
-            mapDiv.style.transform = '';
-            mapDiv.style.transformOrigin = '';
-            if (mapDiv.parentElement) mapDiv.parentElement.style.overflow = '';
-          }
         }
       })();
     ''';
