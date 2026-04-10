@@ -555,7 +555,7 @@ class InspectionService {
       if (team.isNotEmpty) 'team': team,
       if (status.isNotEmpty) 'status': status,
       'page': '$page',
-      'page_size': '$pageSize',
+      'pageSize': '$pageSize',
     });
     final resp = await http.get(uri, headers: _headers).timeout(_apiTimeout);
     return json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;

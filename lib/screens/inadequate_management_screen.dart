@@ -39,6 +39,10 @@ class _InadequateManagementScreenState
 
   late final InspectionService _svc;
   late bool _isAdmin;
+  late bool _isSuperAdmin;
+  late bool _isDivisionAdmin;
+  late String _myRegion;  // 내 본부 (짧은 형태: '강북' 등)
+  late String _myTeam;    // 내 팀
 
   int _year = DateTime.now().year;
   bool _loading = false;
@@ -105,8 +109,30 @@ class _InadequateManagementScreenState
     super.initState();
     final auth = context.read<AuthService>();
     _svc = InspectionService()..setAuthToken(auth.authToken);
-    _isAdmin = auth.isSuperAdmin || auth.isDivisionAdmin;
+    _isSuperAdmin = auth.isSuperAdmin;
+    _isDivisionAdmin = auth.isDivisionAdmin;
+    _isAdmin = _isSuperAdmin || _isDivisionAdmin;
+    // 본부명: '강북Access담당' → '강북' 등 짧은 형태로 정규화
+    final dept = auth.userDepartment ?? '';
+    _myRegion = dept.isNotEmpty ? (auth.currentDivisionShortName ?? '') : '';
+    // 팀: 품질개선팀인 경우만 (orgMap에 있는 팀만 유효)
+    final rawTeam = auth.userTeam ?? '';
+    _myTeam = (_myRegion.isNotEmpty && (_orgMap[_myRegion]?.contains(rawTeam) ?? false))
+        ? rawTeam
+        : '';
+    _applyDefaultFilter();
     _loadData();
+  }
+
+  void _applyDefaultFilter() {
+    if (_isSuperAdmin) return; // superadmin은 전체 조회
+    if (_myRegion.isNotEmpty) {
+      _selectedRegion = _myRegion;
+    }
+    // 본부 관리자는 본부까지만, 일반 팀원은 팀까지
+    if (!_isDivisionAdmin && _myTeam.isNotEmpty) {
+      _selectedTeam = _myTeam;
+    }
   }
 
   Future<void> _loadData() async {

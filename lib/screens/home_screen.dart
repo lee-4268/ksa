@@ -659,7 +659,6 @@ class _HomeContentState extends State<_HomeContent> {
         final auth = context.read<AuthService>();
         // notices.division은 '강북','충청' 등 짧은 한글명으로 저장됨
         final divisionName = auth.currentDivisionShortName; // null이면 지역본부 아님
-        debugPrint('[공지] userDepartment=${auth.userDepartment} | shortName=$divisionName');
 
         Future<List<Map<String, dynamic>>> fetchNotices;
         if (divisionName != null) {
@@ -668,9 +667,6 @@ class _HomeContentState extends State<_HomeContent> {
             _commSvc.getNotices(division: '전체', pageSize: 20),       // 전체 카테고리
             _commSvc.getNotices(division: divisionName, pageSize: 20), // 본부 카테고리
           ]).then((results) {
-            debugPrint('[공지] 전체카테고리 ${(results[0]['notices'] as List?)?.length ?? 0}건, $divisionName카테고리 ${(results[1]['notices'] as List?)?.length ?? 0}건');
-            debugPrint('[공지] 전체카테고리 divisions: ${(results[0]['notices'] as List?)?.map((e) => e['division']).toList()}');
-            debugPrint('[공지] $divisionName카테고리 divisions: ${(results[1]['notices'] as List?)?.map((e) => e['division']).toList()}');
             final all = <Map<String, dynamic>>{};
             for (final res in results) {
               for (final item in List<Map<String, dynamic>>.from(res['notices'] ?? [])) {
