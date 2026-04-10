@@ -654,18 +654,64 @@ class _HomeContentState extends State<_HomeContent> {
   Future<void> _loadComm() async {
     setState(() => _commLoading = true);
     try {
-      final futures = await Future.wait([
-        _commTab ? _commSvc.getNotices(pageSize: 5) : _commSvc.getRequests(pageSize: 5),
-        _commSvc.getStats(),
-      ]);
-      final res = futures[0] as Map<String, dynamic>;
-      final stats = futures[1] as Map<String, dynamic>;
-      final key = _commTab ? 'notices' : 'requests';
-      if (mounted) setState(() {
-        _commItems = List<Map<String, dynamic>>.from(res[key] ?? []);
-        _dailyVisitors = (stats['daily_visitors'] as int?) ?? 0;
-        _commLoading = false;
-      });
+      if (_commTab) {
+        // 공지사항: 사용자 본부에 따라 필터링
+        final auth = context.read<AuthService>();
+        final divisionId = auth.currentDivisionId; // null이면 지역본부 아님
+
+        Future<List<Map<String, dynamic>>> fetchNotices;
+        if (divisionId != null) {
+          // 지역본부 소속: 전체 공지 + 본부 공지 합쳐서 표시
+          fetchNotices = Future.wait([
+            _commSvc.getNotices(pageSize: 20),           // 전체 카테고리
+            _commSvc.getNotices(division: divisionId, pageSize: 20), // 본부 카테고리
+          ]).then((results) {
+            final all = <Map<String, dynamic>>{};
+            for (final res in results) {
+              for (final item in List<Map<String, dynamic>>.from(res['notices'] ?? [])) {
+                // id 기준 중복 제거
+                all.add(item);
+              }
+            }
+            // id로 중복 제거 후 created_at 내림차순 정렬, 5개만
+            final seen = <dynamic>{};
+            final deduped = all.where((item) => seen.add(item['id'])).toList();
+            deduped.sort((a, b) {
+              final da = a['created_at'] as String? ?? '';
+              final db = b['created_at'] as String? ?? '';
+              return db.compareTo(da);
+            });
+            return deduped.take(5).toList();
+          });
+        } else {
+          // 지역본부 아님: 전체 카테고리만
+          fetchNotices = _commSvc.getNotices(pageSize: 5).then(
+            (res) => List<Map<String, dynamic>>.from(res['notices'] ?? []),
+          );
+        }
+
+        final results = await Future.wait([fetchNotices, _commSvc.getStats()]);
+        final notices = results[0] as List<Map<String, dynamic>>;
+        final stats = results[1] as Map<String, dynamic>;
+        if (mounted) setState(() {
+          _commItems = notices;
+          _dailyVisitors = (stats['daily_visitors'] as int?) ?? 0;
+          _commLoading = false;
+        });
+      } else {
+        // 요청사항: 기존과 동일
+        final futures = await Future.wait([
+          _commSvc.getRequests(pageSize: 5),
+          _commSvc.getStats(),
+        ]);
+        final res = futures[0] as Map<String, dynamic>;
+        final stats = futures[1] as Map<String, dynamic>;
+        if (mounted) setState(() {
+          _commItems = List<Map<String, dynamic>>.from(res['requests'] ?? []);
+          _dailyVisitors = (stats['daily_visitors'] as int?) ?? 0;
+          _commLoading = false;
+        });
+      }
     } catch (_) {
       if (mounted) setState(() { _commItems = []; _commLoading = false; });
     }
