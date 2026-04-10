@@ -10,8 +10,11 @@ import '../models/radio_station.dart';
 /// 검사대기 마커 이미지 경로 (파란색)
 const String _pendingMarkerPath = 'images/marker_pending.svg';
 
-/// 검사완료 마커 이미지 경로 (빨간색)
-const String _inspectedMarkerPath = 'images/marker_inspected.svg';
+/// 합격 마커 이미지 경로 (초록색)
+const String _passedMarkerPath = 'images/marker_passed.svg';
+
+/// 불합격 마커 이미지 경로 (빨간색)
+const String _failedMarkerPath = 'images/marker_inspected.svg';
 
 /// 웹 플랫폼용 카카오맵 위젯
 class PlatformMapWidget extends StatefulWidget {
@@ -851,11 +854,18 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
     final escapedName = _escapeJs(station.displayName);
     final escapedAddress = _escapeJs(station.address);
     final escapedId = _escapeJs(station.id);
-    final isInspected = station.isInspected;
     final inspectionStatus = station.inspectionStatus;
     final inspectionStatusText = station.inspectionStatusText;
-    final markerImagePath = isInspected ? _inspectedMarkerPath : _pendingMarkerPath;
-    final labelColor = isInspected ? '#FF0000' : '#0066CC';
+    final markerImagePath = inspectionStatus == InspectionStatus.passed
+        ? _passedMarkerPath
+        : inspectionStatus == InspectionStatus.failed
+            ? _failedMarkerPath
+            : _pendingMarkerPath;
+    final labelColor = inspectionStatus == InspectionStatus.passed
+        ? '#2E7D32'
+        : inspectionStatus == InspectionStatus.failed
+            ? '#FF0000'
+            : '#0066CC';
 
     // 검사 상태별 색상 및 아이콘 (InfoWindow용)
     String statusColor;
@@ -966,7 +976,7 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
           }, '*');
         });
 
-        console.log('Marker added with label: $escapedName (inspected: $isInspected)');
+        console.log('Marker added with label: $escapedName (status: $inspectionStatusText)');
       })();
     ''';
     html.document.body?.append(html.ScriptElement()..text = addMarkerJs);
