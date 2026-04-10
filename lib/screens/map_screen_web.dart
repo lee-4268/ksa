@@ -171,89 +171,102 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
           radius: 30,
           strokeWeight: 1,
           strokeColor: '#4285F4',
-          strokeOpacity: 0.8,
+          strokeOpacity: 0.6,
           strokeStyle: 'solid',
           fillColor: '#4285F4',
-          fillOpacity: 0.15
+          fillOpacity: 0.12
         });
         circle.setMap(map);
         window['kakaoCurrentLocationCircle_$_containerId'] = circle;
 
-        // heading: 파라미터 우선, 없으면 나침반 캐시값 사용
+        // heading 결정: GPS 값 우선, 없으면 나침반 캐시
         var passedHeading = $headingVal;
         var compassHeading = window['kakaoCompassHeading_$_containerId'];
         var rotation = 0;
-        var hasDirection = false;
         if (passedHeading !== null && !isNaN(passedHeading)) {
           rotation = passedHeading;
-          hasDirection = true;
         } else if (compassHeading !== null && compassHeading !== undefined && !isNaN(compassHeading)) {
           rotation = compassHeading;
-          hasDirection = true;
         }
 
-        // 마커 HTML: 방향 있으면 화살표 + 파란 점, 없으면 파란 점만
-        var arrowHtml = hasDirection
-          ? '<div style="' +
-              'position:absolute;' +
-              'top:-20px;left:50%;' +
-              'transform:translateX(-50%) rotate(' + rotation + 'deg);' +
+        // 마커: 화살표(위) + 파란 점, 전체를 rotation만큼 회전
+        // transform-origin을 파란 점 중심(50% 75%)으로 설정하여 점 기준 회전
+        var makeContent = function(deg) {
+          return '<div style="' +
+            'width:20px;height:40px;' +
+            'display:flex;flex-direction:column;align-items:center;' +
+            'transform:rotate(' + deg + 'deg);' +
+            'transform-origin:50% 75%;' +
+          '">' +
+            '<div style="' +
               'width:0;height:0;' +
               'border-left:7px solid transparent;' +
               'border-right:7px solid transparent;' +
-              'border-bottom:18px solid #4285F4;' +
-              'filter:drop-shadow(0 1px 2px rgba(0,0,0,0.4));' +
-            '"></div>'
-          : '';
-
-        var markerContent =
-          '<div style="position:relative;width:20px;height:20px;">' +
-            arrowHtml +
+              'border-bottom:16px solid #4285F4;' +
+              'margin-bottom:2px;' +
+              'filter:drop-shadow(0 1px 3px rgba(0,0,0,0.4));' +
+            '"></div>' +
             '<div style="' +
-              'width:20px;height:20px;' +
+              'width:18px;height:18px;' +
               'background:#4285F4;' +
               'border:3px solid white;' +
               'border-radius:50%;' +
               'box-shadow:0 2px 6px rgba(0,0,0,0.35);' +
+              'flex-shrink:0;' +
             '"></div>' +
           '</div>';
+        };
 
         var customOverlay = new kakao.maps.CustomOverlay({
           position: position,
-          content: markerContent,
-          yAnchor: 0.5,
+          content: makeContent(rotation),
+          // yAnchor: 파란 점(전체 높이 40px 중 아래 18px의 중심 = 31/40 = 0.775)
+          yAnchor: 0.775,
           xAnchor: 0.5,
           zIndex: 10
         });
         customOverlay.setMap(map);
         window['kakaoCurrentLocationMarker_$_containerId'] = customOverlay;
+        window['kakaoMakeContent_$_containerId'] = makeContent;
+
+        // 지도 회전 (나침반 방향의 반대 = 지도가 북쪽을 위로)
+        // 카카오맵은 setRotation이 없으므로 CSS transform으로 맵 컨테이너 회전
+        var mapContainer = map.getNode ? map.getNode() : null;
+        if (!mapContainer) {
+          // getNode 없는 버전 대비: 컨테이너 직접 접근
+          mapContainer = document.getElementById('$_containerId');
+        }
+        if (mapContainer) {
+          mapContainer.style.transform = 'rotate(' + (-rotation) + 'deg)';
+          mapContainer.style.transformOrigin = '50% 50%';
+          window['kakaoMapContainer_$_containerId'] = mapContainer;
+        }
 
         // 나침반 이벤트 등록 (한 번만)
         if (!window['kakaoCompassRegistered_$_containerId']) {
           window['kakaoCompassRegistered_$_containerId'] = true;
           var handleOrientation = function(event) {
-            var alpha = event.webkitCompassHeading || (event.alpha ? (360 - event.alpha) : null);
-            if (alpha !== null && !isNaN(alpha)) {
-              window['kakaoCompassHeading_$_containerId'] = alpha;
-              // 마커가 있으면 방향 실시간 업데이트
-              var overlay = window['kakaoCurrentLocationMarker_$_containerId'];
-              if (overlay) {
-                var newArrow = '<div style="' +
-                  'position:absolute;top:-20px;left:50%;' +
-                  'transform:translateX(-50%) rotate(' + alpha + 'deg);' +
-                  'width:0;height:0;' +
-                  'border-left:7px solid transparent;border-right:7px solid transparent;border-bottom:18px solid #4285F4;' +
-                  'filter:drop-shadow(0 1px 2px rgba(0,0,0,0.4));' +
-                '"></div>';
-                var newContent =
-                  '<div style="position:relative;width:20px;height:20px;">' +
-                    newArrow +
-                    '<div style="width:20px;height:20px;background:#4285F4;border:3px solid white;border-radius:50%;box-shadow:0 2px 6px rgba(0,0,0,0.35);"></div>' +
-                  '</div>';
-                overlay.setContent(newContent);
-              }
+            var alpha = (event.webkitCompassHeading !== undefined && event.webkitCompassHeading !== null)
+              ? event.webkitCompassHeading
+              : (event.alpha !== null ? (360 - event.alpha) : null);
+            if (alpha === null || isNaN(alpha)) return;
+
+            window['kakaoCompassHeading_$_containerId'] = alpha;
+
+            // 마커 방향 업데이트
+            var overlay = window['kakaoCurrentLocationMarker_$_containerId'];
+            var fn = window['kakaoMakeContent_$_containerId'];
+            if (overlay && fn) {
+              overlay.setContent(fn(alpha));
+            }
+
+            // 지도 반대 방향 회전 (나침반이 북쪽을 가리키도록)
+            var container = window['kakaoMapContainer_$_containerId'];
+            if (container) {
+              container.style.transform = 'rotate(' + (-alpha) + 'deg)';
             }
           };
+
           if (typeof DeviceOrientationEvent !== 'undefined' &&
               typeof DeviceOrientationEvent.requestPermission === 'function') {
             // iOS 13+ 권한 요청
