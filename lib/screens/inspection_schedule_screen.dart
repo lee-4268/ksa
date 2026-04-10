@@ -1653,7 +1653,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     if (val.isEmpty) return const SizedBox.shrink();
     Color color;
     if (val == '합격') { color = _green; }
-    else if (val == '불합격') { color = _primary; }
+    else if (val.startsWith('불합격')) { color = _primary; }
     else { color = Colors.grey; }
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
@@ -2287,7 +2287,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
 
     final statusColor = result == null ? Colors.grey
         : result['status'] == '합격' ? _green
-        : result['status'] == '불합격' ? _primary
+        : (result['status'] as String? ?? '').startsWith('불합격') ? _primary
         : _orange;
     final statusText = result?['status'] ?? '검사대기';
 

@@ -119,7 +119,7 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
         licenseNumber: ln,
         inspectionStatus: status == '합격'
             ? InspectionStatus.passed
-            : status == '불합격'
+            : status.startsWith('불합격')
                 ? InspectionStatus.failed
                 : InspectionStatus.pending,
       ));
@@ -582,7 +582,7 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
                     final weekItems = weekGroups[week]!;
                     final weekDone = weekItems.where((it) =>
                         (it['status'] as String?) == '합격' ||
-                        (it['status'] as String?) == '불합격').length;
+                        ((it['status'] as String?) ?? '').startsWith('불합격')).length;
 
                     // 조별 그룹핑 ('조' 필드 기준, 없으면 '')
                     final joGroups = <String, List<Map<String, dynamic>>>{};
@@ -625,7 +625,7 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
                             final joItems = joGroups[jo]!;
                             final joDone = joItems.where((it) =>
                                 (it['status'] as String?) == '합격' ||
-                                (it['status'] as String?) == '불합격').length;
+                                ((it['status'] as String?) ?? '').startsWith('불합격')).length;
                             final joLabel = jo.isEmpty ? '조 미지정' : jo;
                             return _buildJoSection(joLabel, joItems, joDone);
                           })
@@ -701,18 +701,15 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
 
     final Color statusColor;
     final IconData statusIcon;
-    switch (status) {
-      case '합격':
-        statusColor = const Color(0xFF43A047);
-        statusIcon  = Icons.check_circle_outline;
-        break;
-      case '불합격':
-        statusColor = const Color(0xFFE53935);
-        statusIcon  = Icons.cancel_outlined;
-        break;
-      default:
-        statusColor = const Color(0xFF9E9E9E);
-        statusIcon  = Icons.pending_outlined;
+    if (status == '합격') {
+      statusColor = const Color(0xFF43A047);
+      statusIcon  = Icons.check_circle_outline;
+    } else if (status.startsWith('불합격')) {
+      statusColor = const Color(0xFFE53935);
+      statusIcon  = Icons.cancel_outlined;
+    } else {
+      statusColor = const Color(0xFF9E9E9E);
+      statusIcon  = Icons.pending_outlined;
     }
 
     return InkWell(
