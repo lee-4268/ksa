@@ -21,6 +21,7 @@ enum _ViewMode { list, detail, write }
 
 class _RequestBoardScreenState extends State<RequestBoardScreen> {
   static const _primaryColor = Color(0xFFE53935);
+  static const _darkBtnColor = Color(0xFF111827); // 세련된 블랙 톤 강조색
 
   final _svc = CommunityService();
 
@@ -215,15 +216,16 @@ class _RequestBoardScreenState extends State<RequestBoardScreen> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
-        title: const Text('삭제 확인'),
-        content: const Text('이 글을 삭제하시겠습니까?'),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        title: const Text('삭제 확인', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+        content: const Text('이 글을 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.', style: TextStyle(fontSize: 14)),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(context, false),
-              child: const Text('취소')),
+              child: Text('취소', style: TextStyle(color: Colors.grey.shade700))),
           TextButton(
               onPressed: () => Navigator.pop(context, true),
-              child: const Text('삭제', style: TextStyle(color: Colors.red))),
+              child: const Text('삭제', style: TextStyle(color: Colors.red, fontWeight: FontWeight.w600))),
         ],
       ),
     );
@@ -279,15 +281,20 @@ class _RequestBoardScreenState extends State<RequestBoardScreen> {
 
   void _showSnack(String msg) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(content: Text(msg), duration: const Duration(seconds: 2)));
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(msg),
+      behavior: SnackBarBehavior.floating,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      duration: const Duration(seconds: 2),
+    ));
   }
 
   // ── 빌드 ──
 
   @override
   Widget build(BuildContext context) {
-    return Container(
+    return Material(
+      color: Colors.transparent,
       child: _loading
           ? const Center(child: CircularProgressIndicator())
           : _buildBody(),
@@ -312,18 +319,18 @@ class _RequestBoardScreenState extends State<RequestBoardScreen> {
   Widget _buildListView() {
     final isNarrow = MediaQuery.of(context).size.width < 760;
     return Padding(
-      padding: EdgeInsets.all(isNarrow ? 12 : 24),
+      padding: EdgeInsets.all(isNarrow ? 16 : 24),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           // 타이틀
           if (widget.showHeader) ...[
             const Text('요청사항',
-                style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 4),
-            Text('문의 및 요청사항을 등록합니다.',
-                style: TextStyle(fontSize: 13, color: Colors.grey.shade600)),
-            const SizedBox(height: 20),
+                style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+            const SizedBox(height: 6),
+            Text('문의 및 요청사항을 등록하고 처리 현황을 확인하세요.',
+                style: TextStyle(fontSize: 14, color: Colors.grey.shade600)),
+            const SizedBox(height: 24),
           ],
 
           // 툴바
@@ -334,8 +341,7 @@ class _RequestBoardScreenState extends State<RequestBoardScreen> {
           Expanded(child: _buildTable()),
 
           // 페이지네이션
-          const SizedBox(height: 12),
-          _buildPagination(),
+          if (_total > 0) _buildPagination(),
         ],
       )
     );
@@ -343,23 +349,23 @@ class _RequestBoardScreenState extends State<RequestBoardScreen> {
 
   Widget _buildToolbar({required bool isNarrow}) {
     final filter = Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      height: 38,
+      padding: const EdgeInsets.symmetric(horizontal: 12),
       decoration: BoxDecoration(
         color: Colors.white,
         border: Border.all(color: Colors.grey.shade300),
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(6),
       ),
       child: DropdownButtonHideUnderline(
         child: DropdownButton<String>(
           isExpanded: false,
-          isDense: true,
-          icon: Icon(Icons.arrow_drop_down, color: _primaryColor, size: 20),
+          icon: Icon(Icons.unfold_more, color: Colors.grey.shade500, size: 18),
           dropdownColor: Colors.white,
-          borderRadius: BorderRadius.circular(12),
-          style: const TextStyle(color: Colors.black87, fontSize: 13),
+          borderRadius: BorderRadius.circular(8),
+          style: const TextStyle(color: Color(0xFF374151), fontSize: 13, fontWeight: FontWeight.w500),
           value: _statusFilter,
           items: const [
-            DropdownMenuItem(value: '', child: Text('전체')),
+            DropdownMenuItem(value: '', child: Text('상태 전체')),
             DropdownMenuItem(value: '접수', child: Text('접수')),
             DropdownMenuItem(value: '처리중', child: Text('처리중')),
             DropdownMenuItem(value: '완료', child: Text('완료')),
@@ -374,30 +380,28 @@ class _RequestBoardScreenState extends State<RequestBoardScreen> {
     );
 
     final search = SizedBox(
-      height: 36,
+      height: 38,
       child: TextField(
         controller: _searchController,
-        style: const TextStyle(fontSize: 13),
+        style: const TextStyle(fontSize: 14),
         decoration: InputDecoration(
           hintText: '검색어 입력',
           hintStyle: TextStyle(fontSize: 13, color: Colors.grey.shade400),
+          prefixIcon: Icon(Icons.search, size: 18, color: Colors.grey.shade500),
           contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
           filled: true,
           fillColor: Colors.white,
           border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(10),
+            borderRadius: BorderRadius.circular(6),
             borderSide: BorderSide(color: Colors.grey.shade300),
           ),
           enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(10),
+            borderRadius: BorderRadius.circular(6),
             borderSide: BorderSide(color: Colors.grey.shade300),
           ),
-          suffixIcon: IconButton(
-            icon: const Icon(Icons.search, size: 18),
-            onPressed: () {
-              _page = 1;
-              _fetchList();
-            },
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(6),
+            borderSide: const BorderSide(color: _primaryColor),
           ),
         ),
         onSubmitted: (_) {
@@ -408,16 +412,17 @@ class _RequestBoardScreenState extends State<RequestBoardScreen> {
     );
 
     final writeBtn = SizedBox(
-      height: 36,
+      height: 38,
       child: ElevatedButton.icon(
         onPressed: () => _openWrite(),
-        icon: const Icon(Icons.edit, size: 16),
-        label: const Text('글쓰기', style: TextStyle(fontSize: 13)),
+        icon: const Icon(Icons.edit_outlined, size: 16),
+        label: const Text('글쓰기', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
         style: ElevatedButton.styleFrom(
-          backgroundColor: _primaryColor,
+          backgroundColor: _darkBtnColor,
           foregroundColor: Colors.white,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
           elevation: 0,
+          padding: const EdgeInsets.symmetric(horizontal: 16),
         ),
       ),
     );
@@ -426,9 +431,14 @@ class _RequestBoardScreenState extends State<RequestBoardScreen> {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('총 $_total건',
-              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-          const SizedBox(height: 8),
+          Row(
+            children: [
+              Text('총 ', style: TextStyle(fontSize: 14, color: Colors.grey.shade600)),
+              Text('$_total', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF111827))),
+              Text('건', style: TextStyle(fontSize: 14, color: Colors.grey.shade600)),
+            ],
+          ),
+          const SizedBox(height: 12),
           Row(
             children: [
               filter,
@@ -437,24 +447,21 @@ class _RequestBoardScreenState extends State<RequestBoardScreen> {
             ],
           ),
           const SizedBox(height: 8),
-          writeBtn,
+          SizedBox(width: double.infinity, child: writeBtn),
         ],
       );
     }
 
-    return Wrap(
-      spacing: 8,
-      runSpacing: 8,
-      alignment: WrapAlignment.spaceBetween,
-      crossAxisAlignment: WrapCrossAlignment.center,
+    return Row(
       children: [
-        Text('총 $_total건',
-            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+        Text('총 ', style: TextStyle(fontSize: 14, color: Colors.grey.shade600)),
+        Text('$_total', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF111827))),
+        Text('건', style: TextStyle(fontSize: 14, color: Colors.grey.shade600)),
+        const Spacer(),
         filter,
-        ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 240),
-          child: search,
-        ),
+        const SizedBox(width: 8),
+        SizedBox(width: 200, child: search),
+        const SizedBox(width: 8),
         writeBtn,
       ],
     );
@@ -462,34 +469,50 @@ class _RequestBoardScreenState extends State<RequestBoardScreen> {
 
   Widget _buildTable() {
     final isNarrow = MediaQuery.of(context).size.width < 760;
+    
     if (_error != null) {
-      return Center(
+      return Container(
+        width: double.infinity,
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: Colors.grey.shade200),
+        ),
         child: Column(
-          mainAxisSize: MainAxisSize.min,
+          mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.info_outline, size: 48, color: Colors.grey.shade400),
-            const SizedBox(height: 12),
+            Icon(Icons.info_outline, size: 48, color: Colors.grey.shade300),
+            const SizedBox(height: 16),
             Text(_error!, style: TextStyle(fontSize: 14, color: Colors.grey.shade600)),
             const SizedBox(height: 16),
-            TextButton.icon(
+            OutlinedButton.icon(
               onPressed: _fetchList,
               icon: const Icon(Icons.refresh, size: 16),
               label: const Text('다시 시도'),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: Colors.grey.shade700,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+              ),
             ),
           ],
         ),
       );
     }
+    
     if (_items.isEmpty) {
-      return Center(
+      return Container(
+        width: double.infinity,
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: Colors.grey.shade200),
+        ),
         child: Column(
-          mainAxisSize: MainAxisSize.min,
+          mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.chat_bubble_outline,
-                size: 48, color: Colors.grey.shade300),
-            const SizedBox(height: 12),
-            Text('등록된 요청사항이 없습니다.',
-                style: TextStyle(fontSize: 14, color: Colors.grey.shade500)),
+            Icon(Icons.inbox_outlined, size: 48, color: Colors.grey.shade300),
+            const SizedBox(height: 16),
+            Text('등록된 요청사항이 없습니다.', style: TextStyle(fontSize: 14, color: Colors.grey.shade500)),
           ],
         ),
       );
@@ -498,8 +521,8 @@ class _RequestBoardScreenState extends State<RequestBoardScreen> {
     if (isNarrow) {
       return ListView.separated(
         itemCount: _items.length,
-        separatorBuilder: (_, _) => const SizedBox(height: 8),
-        itemBuilder: (_, i) => _buildMobileCard(_items[i]),
+        separatorBuilder: (_, _) => const SizedBox(height: 10),
+        itemBuilder: (_, i) => _buildMobileCard(_items[i], i),
       );
     }
 
@@ -507,68 +530,36 @@ class _RequestBoardScreenState extends State<RequestBoardScreen> {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: Colors.grey.shade200),
+        border: Border.all(color: Colors.grey.shade300),
       ),
       child: Column(
         children: [
           // 헤더
           Container(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
             decoration: BoxDecoration(
               color: Colors.grey.shade50,
-              borderRadius:
-                  const BorderRadius.vertical(top: Radius.circular(8)),
+              borderRadius: const BorderRadius.vertical(top: Radius.circular(8)),
             ),
-            child: const Row(
+            child: Row(
               children: [
-                SizedBox(width: 60, child: Text('번호',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                        color: Colors.black54))),
-                Expanded(
-                    flex: 5,
-                    child: Text('제목',
-                        style: TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                            color: Colors.black54))),
-                SizedBox(width: 70, child: Text('상태',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                        color: Colors.black54))),
-                SizedBox(width: 80, child: Text('등록자',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                        color: Colors.black54))),
-                SizedBox(width: 90, child: Text('등록일',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                        color: Colors.black54))),
-                SizedBox(width: 50, child: Text('조회',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                        color: Colors.black54))),
+                SizedBox(width: 60, child: Text('번호', textAlign: TextAlign.center, style: _headerStyle())),
+                Expanded(flex: 5, child: Text('제목', style: _headerStyle())),
+                SizedBox(width: 80, child: Text('상태', textAlign: TextAlign.center, style: _headerStyle())),
+                SizedBox(width: 100, child: Text('등록자', textAlign: TextAlign.center, style: _headerStyle())),
+                SizedBox(width: 100, child: Text('등록일', textAlign: TextAlign.center, style: _headerStyle())),
+                SizedBox(width: 60, child: Text('조회', textAlign: TextAlign.center, style: _headerStyle())),
               ],
             ),
           ),
-          const Divider(height: 1),
+          Divider(height: 1, color: Colors.grey.shade300),
+          
           // 행
           Expanded(
             child: ListView.separated(
               itemCount: _items.length,
-              separatorBuilder: (_, _) => const Divider(height: 1),
-              itemBuilder: (_, i) => _buildRow(_items[i]),
+              separatorBuilder: (_, _) => Divider(height: 1, color: Colors.grey.shade200),
+              itemBuilder: (_, i) => _buildRow(_items[i], i),
             ),
           ),
         ],
@@ -576,9 +567,11 @@ class _RequestBoardScreenState extends State<RequestBoardScreen> {
     );
   }
 
-  Widget _buildRow(Map<String, dynamic> item) {
+  TextStyle _headerStyle() => TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Colors.grey.shade700);
+
+  Widget _buildRow(Map<String, dynamic> item, int index) {
     final id = item['id'] as int? ?? 0;
-    final rowNum = item['번호'] ?? id;
+    final rowNum = item['번호'] ?? (index + 1);
     final title = item['title'] as String? ?? '';
     final status = item['status'] as String? ?? '접수';
     final authorName = item['author_name'] as String? ?? '';
@@ -590,57 +583,44 @@ class _RequestBoardScreenState extends State<RequestBoardScreen> {
 
     return InkWell(
       onTap: () => _openDetail(id),
+      hoverColor: Colors.grey.shade50,
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         child: Row(
           children: [
-            SizedBox(
-                width: 60,
-                child: Text('$rowNum',
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(fontSize: 13))),
+            SizedBox(width: 60, child: Text('$rowNum', textAlign: TextAlign.center, style: TextStyle(fontSize: 13, color: Colors.grey.shade500))),
             Expanded(
               flex: 5,
               child: Row(
                 children: [
                   if (isSecret)
                     Padding(
-                      padding: const EdgeInsets.only(right: 4),
-                      child: Icon(Icons.lock, size: 14, color: Colors.grey.shade500),
+                      padding: const EdgeInsets.only(right: 6),
+                      child: Icon(Icons.lock_outline, size: 14, color: Colors.grey.shade400),
                     ),
                   Flexible(
-                    child: Text(title,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontSize: 13)),
+                    child: Text(
+                      title,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 14, color: Color(0xFF111827), fontWeight: FontWeight.w500),
+                    ),
                   ),
                 ],
               ),
             ),
-            SizedBox(width: 70, child: Center(child: _statusBadge(status))),
-            SizedBox(
-                width: 80,
-                child: Text(author,
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(fontSize: 13))),
-            SizedBox(
-                width: 90,
-                child: Text(createdAt,
-                    textAlign: TextAlign.center,
-                    style: TextStyle(fontSize: 12, color: Colors.grey.shade600))),
-            SizedBox(
-                width: 50,
-                child: Text('$views',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(fontSize: 12, color: Colors.grey.shade600))),
+            SizedBox(width: 80, child: Center(child: _statusBadge(status))),
+            SizedBox(width: 100, child: Text(author, textAlign: TextAlign.center, style: TextStyle(fontSize: 13, color: Colors.grey.shade600))),
+            SizedBox(width: 100, child: Text(createdAt, textAlign: TextAlign.center, style: TextStyle(fontSize: 13, color: Colors.grey.shade600))),
+            SizedBox(width: 60, child: Text('$views', textAlign: TextAlign.center, style: TextStyle(fontSize: 13, color: Colors.grey.shade500))),
           ],
         ),
       ),
     );
   }
 
-  Widget _buildMobileCard(Map<String, dynamic> item) {
+  Widget _buildMobileCard(Map<String, dynamic> item, int index) {
     final id = item['id'] as int? ?? 0;
-    final rowNum = item['번호'] ?? id;
+    final rowNum = item['번호'] ?? (index + 1);
     final title = item['title'] as String? ?? '';
     final status = item['status'] as String? ?? '접수';
     final authorName = item['author_name'] as String? ?? '';
@@ -652,73 +632,62 @@ class _RequestBoardScreenState extends State<RequestBoardScreen> {
 
     return Material(
       color: Colors.white,
-      borderRadius: BorderRadius.circular(10),
+      borderRadius: BorderRadius.circular(8),
       child: InkWell(
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(8),
         onTap: () => _openDetail(id),
         child: Container(
-          padding: const EdgeInsets.all(12),
+          padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(color: Colors.grey.shade200),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: Colors.grey.shade300),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Row(
                 children: [
-                  Text(
-                    '$rowNum',
-                    style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(color: Colors.grey.shade100, borderRadius: BorderRadius.circular(4)),
+                    child: Text('No.$rowNum', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Colors.grey.shade600)),
                   ),
                   const SizedBox(width: 8),
                   _statusBadge(status),
                   const Spacer(),
-                  Text(
-                    '조회 $views',
-                    style: TextStyle(fontSize: 12, color: Colors.grey.shade500),
-                  ),
+                  Icon(Icons.visibility_outlined, size: 14, color: Colors.grey.shade400),
+                  const SizedBox(width: 4),
+                  Text('$views', style: TextStyle(fontSize: 12, color: Colors.grey.shade500)),
                 ],
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: 12),
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   if (isSecret)
                     Padding(
-                      padding: const EdgeInsets.only(top: 2, right: 4),
-                      child: Icon(Icons.lock, size: 14, color: Colors.grey.shade500),
+                      padding: const EdgeInsets.only(top: 2, right: 6),
+                      child: Icon(Icons.lock_outline, size: 16, color: Colors.grey.shade400),
                     ),
                   Expanded(
                     child: Text(
                       title,
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                      style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: Color(0xFF111827), height: 1.4),
                     ),
                   ),
                 ],
               ),
-              const SizedBox(height: 10),
+              const SizedBox(height: 14),
               Row(
                 children: [
-                  Icon(Icons.person_outline, size: 14, color: Colors.grey.shade500),
-                  const SizedBox(width: 4),
-                  Expanded(
-                    child: Text(
-                      author,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
-                    ),
+                  Text(author, style: TextStyle(fontSize: 13, color: Colors.grey.shade600)),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    child: Text('|', style: TextStyle(color: Colors.grey.shade300, fontSize: 12)),
                   ),
-                  const SizedBox(width: 8),
-                  Icon(Icons.calendar_today_outlined, size: 13, color: Colors.grey.shade500),
-                  const SizedBox(width: 4),
-                  Text(
-                    createdAt,
-                    style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
-                  ),
+                  Text(createdAt, style: TextStyle(fontSize: 13, color: Colors.grey.shade600)),
                 ],
               ),
             ],
@@ -731,28 +700,34 @@ class _RequestBoardScreenState extends State<RequestBoardScreen> {
   Widget _statusBadge(String status) {
     Color bg;
     Color fg;
+    Color border;
     switch (status) {
       case '접수':
-        bg = const Color(0xFFE3F2FD);
-        fg = const Color(0xFF1565C0);
+        bg = const Color(0xFFEFF6FF);
+        fg = const Color(0xFF2563EB);
+        border = const Color(0xFFBFDBFE);
         break;
       case '처리중':
-        bg = const Color(0xFFFFF3E0);
-        fg = const Color(0xFFE65100);
+        bg = const Color(0xFFFFFBEB);
+        fg = const Color(0xFFD97706);
+        border = const Color(0xFFFDE68A);
         break;
       case '완료':
-        bg = const Color(0xFFE8F5E9);
-        fg = const Color(0xFF2E7D32);
+        bg = const Color(0xFFECFDF5);
+        fg = const Color(0xFF059669);
+        border = const Color(0xFFA7F3D0);
         break;
       default:
         bg = Colors.grey.shade100;
         fg = Colors.grey.shade700;
+        border = Colors.grey.shade300;
     }
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
         color: bg,
-        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: border),
+        borderRadius: BorderRadius.circular(4),
       ),
       child: Text(status,
           style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: fg)),
@@ -760,57 +735,51 @@ class _RequestBoardScreenState extends State<RequestBoardScreen> {
   }
 
   Widget _buildPagination() {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        IconButton(
-          icon: const Icon(Icons.chevron_left, size: 20),
-          onPressed: _page > 1
-              ? () {
-                  _page--;
-                  _fetchList();
-                }
-              : null,
-        ),
-        for (int p = 1; p <= _totalPages; p++)
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 2),
-            child: InkWell(
-              onTap: p == _page
-                  ? null
-                  : () {
-                      _page = p;
-                      _fetchList();
-                    },
-              borderRadius: BorderRadius.circular(6),
-              child: Container(
-                width: 32,
-                height: 32,
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  color: p == _page ? _primaryColor : Colors.transparent,
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                child: Text('$p',
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontWeight:
-                          p == _page ? FontWeight.bold : FontWeight.normal,
-                      color: p == _page ? Colors.white : Colors.black87,
-                    )),
-              ),
+    const maxButtons = 5;
+    int start = ((_page - 1) ~/ maxButtons) * maxButtons + 1;
+    int end = (start + maxButtons - 1).clamp(1, _totalPages);
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 20),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          _pageBtn('<<', () { _page = 1; _fetchList(); }, enabled: _page > 1),
+          _pageBtn('<', () { _page--; _fetchList(); }, enabled: _page > 1),
+          for (int p = start; p <= end; p++)
+            _pageBtn('$p', () { _page = p; _fetchList(); }, selected: p == _page),
+          _pageBtn('>', () { _page++; _fetchList(); }, enabled: _page < _totalPages),
+          _pageBtn('>>', () { _page = _totalPages; _fetchList(); }, enabled: _page < _totalPages),
+        ],
+      ),
+    );
+  }
+
+  Widget _pageBtn(String label, VoidCallback onTap, {bool selected = false, bool enabled = true}) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 3),
+      child: InkWell(
+        onTap: enabled ? onTap : null,
+        borderRadius: BorderRadius.circular(6),
+        child: Container(
+          width: 32,
+          height: 32,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: selected ? _darkBtnColor : Colors.white, // 통일된 강조색
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(color: selected ? _darkBtnColor : Colors.grey.shade300),
+          ),
+          child: Text(
+            label,
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+              color: selected ? Colors.white : (enabled ? Colors.grey.shade700 : Colors.grey.shade400),
             ),
           ),
-        IconButton(
-          icon: const Icon(Icons.chevron_right, size: 20),
-          onPressed: _page < _totalPages
-              ? () {
-                  _page++;
-                  _fetchList();
-                }
-              : null,
         ),
-      ],
+      ),
     );
   }
 
@@ -840,160 +809,69 @@ class _RequestBoardScreenState extends State<RequestBoardScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           // 뒤로가기
-          TextButton.icon(
-            onPressed: () {
+          InkWell(
+            onTap: () {
               setState(() => _viewMode = _ViewMode.list);
               _fetchList();
             },
-            icon: const Icon(Icons.arrow_back, size: 18),
-            label: const Text('목록으로'),
-            style: TextButton.styleFrom(foregroundColor: Colors.black54),
+            borderRadius: BorderRadius.circular(6),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.arrow_back_ios_new, size: 14, color: Colors.grey.shade600),
+                  const SizedBox(width: 6),
+                  Text('목록으로 돌아가기', style: TextStyle(fontSize: 14, color: Colors.grey.shade600, fontWeight: FontWeight.w500)),
+                ],
+              ),
+            ),
           ),
           const SizedBox(height: 12),
+          
           // 카드
           Expanded(
             child: Container(
               width: double.infinity,
-              padding: const EdgeInsets.all(24),
               decoration: BoxDecoration(
                 color: Colors.white,
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: Colors.grey.shade200),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.grey.shade300),
               ),
               child: SingleChildScrollView(
+                padding: const EdgeInsets.all(32),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // 제목 + 상태 (좁은 폭에서는 세로 배치로 오버플로우 방지)
-                    LayoutBuilder(
-                      builder: (context, c) {
-                        const titleStyle = TextStyle(
-                            fontSize: 20, fontWeight: FontWeight.bold);
-                        if (c.maxWidth < 760) {
-                          return Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(title,
-                                  style: titleStyle, softWrap: true),
-                              const SizedBox(height: 8),
-                              _statusBadge(status),
-                            ],
-                          );
-                        }
-                        return Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Expanded(
-                              child: Text(title,
-                                  style: titleStyle,
-                                  softWrap: true),
-                            ),
-                            const SizedBox(width: 12),
-                            _statusBadge(status),
-                          ],
-                        );
-                      },
-                    ),
-                    const SizedBox(height: 12),
-                    // 메타 정보
-                    Wrap(
-                      spacing: 16,
-                      runSpacing: 8,
-                      crossAxisAlignment: WrapCrossAlignment.center,
+                    // 상태 뱃지 & 관리자 상태 변경
+                    Row(
                       children: [
-                        _metaChip(Icons.person_outline, authorDisplay),
-                        _metaChip(Icons.calendar_today, createdAt),
-                        _metaChip(Icons.visibility_outlined, '조회 $views'),
-                      ],
-                    ),
-                    const Divider(height: 32),
-
-                    // 본문
-                    SelectableText(content,
-                        style: const TextStyle(fontSize: 14, height: 1.7)),
-
-                    // 첨부 이미지
-                    if (_parseImages(_detail!['images']).isNotEmpty) ...[
-                      const SizedBox(height: 24),
-                      const Divider(),
-                      const SizedBox(height: 12),
-                      Text('첨부 이미지', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Colors.grey.shade700)),
-                      const SizedBox(height: 10),
-                      Wrap(
-                        spacing: 12,
-                        runSpacing: 12,
-                        children: _parseImages(_detail!['images']).map((key) {
-                          return ClipRRect(
-                            borderRadius: BorderRadius.circular(8),
-                            child: Image.network(
-                              _svc.getImageUrl(key),
-                              width: 240,
-                              fit: BoxFit.cover,
-                              loadingBuilder: (_, child, progress) {
-                                if (progress == null) return child;
-                                return SizedBox(
-                                  width: 240,
-                                  height: 160,
-                                  child: Center(child: CircularProgressIndicator(
-                                    value: progress.expectedTotalBytes != null
-                                        ? progress.cumulativeBytesLoaded / progress.expectedTotalBytes!
-                                        : null,
-                                    color: _primaryColor,
-                                    strokeWidth: 2,
-                                  )),
-                                );
-                              },
-                              errorBuilder: (_, __, ___) => Container(
-                                width: 240,
-                                height: 160,
-                                color: Colors.grey.shade100,
-                                child: Icon(Icons.broken_image, size: 40, color: Colors.grey.shade400),
-                              ),
-                            ),
-                          );
-                        }).toList(),
-                      ),
-                    ],
-                    const SizedBox(height: 32),
-
-                    // 관리자 상태 변경
-                    if (isAdmin) ...[
-                      const Divider(),
-                      const SizedBox(height: 12),
-                      Row(
-                        children: [
-                          const Text('상태 변경:',
-                              style: TextStyle(
-                                  fontSize: 13, fontWeight: FontWeight.w600)),
-                          const SizedBox(width: 12),
+                        _statusBadge(status),
+                        const Spacer(),
+                        if (isAdmin) ...[
+                          Text('상태 변경', style: TextStyle(fontSize: 12, color: Colors.grey.shade500, fontWeight: FontWeight.w600)),
+                          const SizedBox(width: 8),
                           Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 12, vertical: 4),
+                            height: 32,
+                            padding: const EdgeInsets.symmetric(horizontal: 10),
                             decoration: BoxDecoration(
                               color: Colors.white,
-                              border:
-                                  Border.all(color: Colors.grey.shade300),
-                              borderRadius: BorderRadius.circular(10),
+                              border: Border.all(color: Colors.grey.shade300),
+                              borderRadius: BorderRadius.circular(6),
                             ),
                             child: DropdownButtonHideUnderline(
                               child: DropdownButton<String>(
                                 isExpanded: false,
                                 isDense: true,
-                                icon: Icon(Icons.arrow_drop_down,
-                                    color: _primaryColor, size: 20),
+                                icon: Icon(Icons.unfold_more, color: Colors.grey.shade500, size: 16),
                                 dropdownColor: Colors.white,
-
-                                borderRadius: BorderRadius.circular(12),
-                                style: const TextStyle(
-                                    color: Colors.black87, fontSize: 13),
+                                borderRadius: BorderRadius.circular(8),
+                                style: const TextStyle(color: Color(0xFF374151), fontSize: 13),
                                 value: status,
                                 items: const [
-                                  DropdownMenuItem(
-                                      value: '접수', child: Text('접수')),
-                                  DropdownMenuItem(
-                                      value: '처리중', child: Text('처리중')),
-                                  DropdownMenuItem(
-                                      value: '완료', child: Text('완료')),
+                                  DropdownMenuItem(value: '접수', child: Text('접수')),
+                                  DropdownMenuItem(value: '처리중', child: Text('처리중')),
+                                  DropdownMenuItem(value: '완료', child: Text('완료')),
                                 ],
                                 onChanged: (v) {
                                   if (v != null && v != status) {
@@ -1004,175 +882,232 @@ class _RequestBoardScreenState extends State<RequestBoardScreen> {
                             ),
                           ),
                         ],
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+
+                    // 제목
+                    Text(
+                      title,
+                      style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w700, color: Color(0xFF111827), height: 1.3),
+                    ),
+                    const SizedBox(height: 20),
+                    
+                    // 메타 정보
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                      decoration: BoxDecoration(
+                        color: Colors.grey.shade50,
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(color: Colors.grey.shade200),
+                      ),
+                      child: Row(
+                        children: [
+                          _detailInfoItem(Icons.person_outline, authorDisplay),
+                          _verticalDivider(),
+                          _detailInfoItem(Icons.calendar_today_outlined, createdAt),
+                          _verticalDivider(),
+                          _detailInfoItem(Icons.visibility_outlined, '조회 $views'),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 32),
+
+                    // 본문
+                    SelectableText(
+                      content,
+                      style: const TextStyle(fontSize: 15, color: Color(0xFF374151), height: 1.8),
+                    ),
+
+                    // 첨부 이미지
+                    if (_parseImages(_detail!['images']).isNotEmpty) ...[
+                      const SizedBox(height: 40),
+                      Text('첨부 이미지', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Colors.grey.shade800)),
+                      const SizedBox(height: 12),
+                      Wrap(
+                        spacing: 12,
+                        runSpacing: 12,
+                        children: _parseImages(_detail!['images']).map((key) {
+                          return Container(
+                            decoration: BoxDecoration(
+                              border: Border.all(color: Colors.grey.shade200),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(8),
+                              child: Image.network(
+                                _svc.getImageUrl(key),
+                                width: 300,
+                                fit: BoxFit.cover,
+                                loadingBuilder: (_, child, progress) {
+                                  if (progress == null) return child;
+                                  return SizedBox(
+                                    width: 300,
+                                    height: 200,
+                                    child: Center(child: CircularProgressIndicator(color: _primaryColor, strokeWidth: 2)),
+                                  );
+                                },
+                                errorBuilder: (_, __, ___) => Container(
+                                  width: 300,
+                                  height: 200,
+                                  color: Colors.grey.shade50,
+                                  child: Icon(Icons.image_not_supported_outlined, size: 40, color: Colors.grey.shade300),
+                                ),
+                              ),
+                            ),
+                          );
+                        }).toList(),
                       ),
                     ],
 
                     // 수정/삭제
                     if (isMine || isAdmin) ...[
+                      const SizedBox(height: 40),
+                      Divider(color: Colors.grey.shade200),
                       const SizedBox(height: 16),
                       Row(
+                        mainAxisAlignment: MainAxisAlignment.end,
                         children: [
                           if (isMine)
                             OutlinedButton.icon(
                               onPressed: () => _openWrite(editItem: _detail),
-                              icon: const Icon(Icons.edit, size: 16),
+                              icon: const Icon(Icons.edit_outlined, size: 16),
                               label: const Text('수정'),
-                              style: OutlinedButton.styleFrom(
-                                foregroundColor: Colors.black87,
-                                side: BorderSide(color: Colors.grey.shade300),
-                                shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(8)),
-                              ),
+                              style: _actionButtonStyle(Colors.grey.shade700),
                             ),
                           if (isMine) const SizedBox(width: 8),
                           OutlinedButton.icon(
                             onPressed: () => _deletePost(id),
                             icon: const Icon(Icons.delete_outline, size: 16),
                             label: const Text('삭제'),
-                            style: OutlinedButton.styleFrom(
-                              foregroundColor: Colors.red,
-                              side: const BorderSide(color: Colors.red),
-                              shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(8)),
-                            ),
+                            style: _actionButtonStyle(Colors.red),
                           ),
                         ],
                       ),
                     ],
 
                     // ── 댓글 섹션 ──
-                    const Divider(height: 32),
-                    Text(
-                      '댓글 ${_comments.length}건',
-                      style: const TextStyle(
-                          fontSize: 15, fontWeight: FontWeight.w600),
-                    ),
-                    const SizedBox(height: 12),
-                    // 댓글 입력
-                    Row(
-                      children: [
-                        Expanded(
-                          child: TextField(
-                            controller: _commentController,
-                            style: const TextStyle(fontSize: 13),
-                            maxLines: null,
-                            keyboardType: TextInputType.multiline,
-                            textInputAction: TextInputAction.newline,
-                            decoration: InputDecoration(
-                              hintText: '댓글을 입력하세요',
-                              hintStyle: TextStyle(
-                                  fontSize: 13,
-                                  color: Colors.grey.shade400),
-                              contentPadding: const EdgeInsets.symmetric(
-                                  horizontal: 12, vertical: 10),
-                              border: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(8),
-                                borderSide: BorderSide(
-                                    color: Colors.grey.shade300),
+                    const SizedBox(height: 40),
+                    Container(
+                      padding: const EdgeInsets.all(24),
+                      decoration: BoxDecoration(
+                        color: Colors.grey.shade50,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.grey.shade200),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Icon(Icons.chat_bubble_outline, size: 18, color: Colors.grey.shade700),
+                              const SizedBox(width: 8),
+                              Text(
+                                '댓글 ${_comments.length}',
+                                style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: Color(0xFF111827)),
                               ),
-                              enabledBorder: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(8),
-                                borderSide: BorderSide(
-                                    color: Colors.grey.shade300),
-                              ),
-                              focusedBorder: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(8),
-                                borderSide: const BorderSide(
-                                    color: _primaryColor),
-                              ),
-                              isDense: true,
-                            ),
+                            ],
                           ),
-                        ),
-                        const SizedBox(width: 8),
-                        SizedBox(
-                          height: 36,
-                          child: ElevatedButton(
-                            onPressed: () => _submitComment(id),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: _primaryColor,
-                              foregroundColor: Colors.white,
-                              shape: RoundedRectangleBorder(
-                                  borderRadius:
-                                      BorderRadius.circular(8)),
-                              elevation: 0,
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 16),
-                            ),
-                            child: const Text('등록',
-                                style: TextStyle(fontSize: 13)),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 12),
-                    // 댓글 목록
-                    ..._comments.map((c) {
-                      final cIsMine = c['is_mine'] == true ||
-                          c['is_mine'] == 1;
-                      final cAuthor = c['author_name'] ?? '';
-                      final cOrg = c['author_org'] as String? ?? '';
-                      final cDisplay = cOrg.isNotEmpty
-                          ? '$cAuthor($cOrg)'
-                          : cAuthor;
-                      final cDate =
-                          _formatDate(c['created_at'] as String?);
-                      final cContent = c['content'] ?? '';
-                      final cId = c['id'] as int? ?? 0;
-
-                      return Container(
-                        margin: const EdgeInsets.only(bottom: 8),
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: Colors.grey.shade50,
-                          borderRadius: BorderRadius.circular(8),
-                          border:
-                              Border.all(color: Colors.grey.shade200),
-                        ),
-                        child: Column(
-                          crossAxisAlignment:
-                              CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              children: [
-                                Text(cDisplay,
-                                    style: const TextStyle(
-                                        fontSize: 12,
-                                        fontWeight:
-                                            FontWeight.w600)),
-                                const SizedBox(width: 8),
-                                Text(cDate,
-                                    style: TextStyle(
-                                        fontSize: 11,
-                                        color:
-                                            Colors.grey.shade500)),
-                                const Spacer(),
-                                if (cIsMine || isAdmin)
-                                  InkWell(
-                                    onTap: () =>
-                                        _deleteComment(cId, id),
-                                    borderRadius:
-                                        BorderRadius.circular(4),
-                                    child: Padding(
-                                      padding:
-                                          const EdgeInsets.all(4),
-                                      child: Icon(
-                                          Icons.close,
-                                          size: 14,
-                                          color: Colors
-                                              .grey.shade400),
+                          const SizedBox(height: 16),
+                          
+                          // 댓글 입력 폼
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Expanded(
+                                child: TextField(
+                                  controller: _commentController,
+                                  style: const TextStyle(fontSize: 14),
+                                  maxLines: 3,
+                                  minLines: 1,
+                                  decoration: InputDecoration(
+                                    hintText: '댓글을 남겨주세요',
+                                    hintStyle: TextStyle(fontSize: 13, color: Colors.grey.shade400),
+                                    contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                                    filled: true,
+                                    fillColor: Colors.white,
+                                    border: OutlineInputBorder(
+                                      borderRadius: BorderRadius.circular(6),
+                                      borderSide: BorderSide(color: Colors.grey.shade300),
+                                    ),
+                                    enabledBorder: OutlineInputBorder(
+                                      borderRadius: BorderRadius.circular(6),
+                                      borderSide: BorderSide(color: Colors.grey.shade300),
+                                    ),
+                                    focusedBorder: OutlineInputBorder(
+                                      borderRadius: BorderRadius.circular(6),
+                                      borderSide: const BorderSide(color: _darkBtnColor),
                                     ),
                                   ),
-                              ],
-                            ),
-                            const SizedBox(height: 6),
-                            Text(cContent,
-                                style: const TextStyle(
-                                    fontSize: 13, height: 1.5)),
-                          ],
-                        ),
-                      );
-                    }),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              SizedBox(
+                                height: 46, // 텍스트 필드 기본 높이와 맞춤
+                                child: ElevatedButton(
+                                  onPressed: () => _submitComment(id),
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: _darkBtnColor,
+                                    foregroundColor: Colors.white,
+                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                                    elevation: 0,
+                                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                                  ),
+                                  child: const Text('등록', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                                ),
+                              ),
+                            ],
+                          ),
+                          
+                          if (_comments.isNotEmpty) const SizedBox(height: 24),
+                          
+                          // 댓글 목록
+                          ..._comments.map((c) {
+                            final cIsMine = c['is_mine'] == true || c['is_mine'] == 1;
+                            final cAuthor = c['author_name'] ?? '';
+                            final cOrg = c['author_org'] as String? ?? '';
+                            final cDisplay = cOrg.isNotEmpty ? '$cAuthor($cOrg)' : cAuthor;
+                            final cDate = _formatDate(c['created_at'] as String?);
+                            final cContent = c['content'] ?? '';
+                            final cId = c['id'] as int? ?? 0;
+
+                            return Container(
+                              margin: const EdgeInsets.only(bottom: 12),
+                              padding: const EdgeInsets.all(16),
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(6),
+                                border: Border.all(color: Colors.grey.shade200),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: [
+                                      Text(cDisplay, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF111827))),
+                                      const SizedBox(width: 8),
+                                      Text(cDate, style: TextStyle(fontSize: 12, color: Colors.grey.shade500)),
+                                      const Spacer(),
+                                      if (cIsMine || isAdmin)
+                                        InkWell(
+                                          onTap: () => _deleteComment(cId, id),
+                                          borderRadius: BorderRadius.circular(4),
+                                          child: Padding(
+                                            padding: const EdgeInsets.all(4),
+                                            child: Icon(Icons.close, size: 14, color: Colors.grey.shade400),
+                                          ),
+                                        ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Text(cContent, style: const TextStyle(fontSize: 14, height: 1.5, color: Color(0xFF374151))),
+                                ],
+                              ),
+                            );
+                          }),
+                        ],
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -1183,15 +1118,31 @@ class _RequestBoardScreenState extends State<RequestBoardScreen> {
     );
   }
 
-  Widget _metaChip(IconData icon, String text) {
+  Widget _detailInfoItem(IconData icon, String text) {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
         Icon(icon, size: 14, color: Colors.grey.shade500),
-        const SizedBox(width: 4),
-        Text(text,
-            style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+        const SizedBox(width: 6),
+        Text(text, style: TextStyle(fontSize: 13, color: Colors.grey.shade600, fontWeight: FontWeight.w500)),
       ],
+    );
+  }
+
+  Widget _verticalDivider() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: Text('|', style: TextStyle(color: Colors.grey.shade300, fontSize: 14)),
+    );
+  }
+
+  ButtonStyle _actionButtonStyle(Color color) {
+    return OutlinedButton.styleFrom(
+      foregroundColor: color,
+      side: BorderSide(color: color.withOpacity(0.3)),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+      textStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
     );
   }
 
@@ -1207,14 +1158,22 @@ class _RequestBoardScreenState extends State<RequestBoardScreen> {
       children: [
         Padding(
           padding: const EdgeInsets.fromLTRB(24, 24, 24, 12),
-          child: TextButton.icon(
-            onPressed: () {
-              setState(() => _viewMode =
-                  _detail != null ? _ViewMode.detail : _ViewMode.list);
+          child: InkWell(
+            onTap: () {
+              setState(() => _viewMode = _detail != null ? _ViewMode.detail : _ViewMode.list);
             },
-            icon: const Icon(Icons.arrow_back, size: 18),
-            label: Text(isEdit ? '상세로 돌아가기' : '목록으로'),
-            style: TextButton.styleFrom(foregroundColor: Colors.black54),
+            borderRadius: BorderRadius.circular(6),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.arrow_back_ios_new, size: 14, color: Colors.grey.shade600),
+                  const SizedBox(width: 6),
+                  Text(isEdit ? '수정 취소' : '작성 취소', style: TextStyle(fontSize: 14, color: Colors.grey.shade600, fontWeight: FontWeight.w500)),
+                ],
+              ),
+            ),
           ),
         ),
         Expanded(
@@ -1222,234 +1181,244 @@ class _RequestBoardScreenState extends State<RequestBoardScreen> {
             padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
             child: Container(
               width: double.infinity,
-              padding: const EdgeInsets.all(24),
+              padding: const EdgeInsets.all(32),
               decoration: BoxDecoration(
                 color: Colors.white,
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: Colors.grey.shade200),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.grey.shade300),
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(isEdit ? '요청사항 수정' : '요청사항 등록',
-                      style: const TextStyle(
-                          fontSize: 18, fontWeight: FontWeight.bold)),
+                  Text(isEdit ? '요청사항 수정' : '새 요청사항 작성',
+                      style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+                  const SizedBox(height: 24),
+
+                  // 제목
+                  _inputLabel('제목'),
+                  TextField(
+                    controller: _titleController,
+                    style: const TextStyle(fontSize: 14),
+                    decoration: _inputDecoration('제목을 입력하세요'),
+                  ),
                   const SizedBox(height: 20),
 
-                    // 제목
-                    const Text('제목',
-                        style: TextStyle(
-                            fontSize: 13, fontWeight: FontWeight.w600)),
-                    const SizedBox(height: 6),
-                    TextField(
-                      controller: _titleController,
-                      style: const TextStyle(fontSize: 14),
-                      decoration: InputDecoration(
-                        hintText: '제목을 입력하세요',
-                        hintStyle: TextStyle(
-                            fontSize: 13, color: Colors.grey.shade400),
-                        contentPadding: const EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 12),
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(8),
-                          borderSide:
-                              BorderSide(color: Colors.grey.shade300),
-                        ),
-                        enabledBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(8),
-                          borderSide:
-                              BorderSide(color: Colors.grey.shade300),
-                        ),
+                  // 비밀글 설정 (신규 작성 시만)
+                  if (!isEdit) ...[
+                    _inputLabel('공개 설정'),
+                    Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: Colors.grey.shade50,
+                        border: Border.all(color: Colors.grey.shade200),
+                        borderRadius: BorderRadius.circular(6),
                       ),
-                    ),
-                    const SizedBox(height: 16),
-
-                    // 내용
-                    const Text('내용',
-                        style: TextStyle(
-                            fontSize: 13, fontWeight: FontWeight.w600)),
-                    const SizedBox(height: 6),
-                    TextField(
-                      controller: _contentController,
-                      maxLines: 12,
-                      style: const TextStyle(fontSize: 14),
-                      decoration: InputDecoration(
-                        hintText: '내용을 입력하세요',
-                        hintStyle: TextStyle(
-                            fontSize: 13, color: Colors.grey.shade400),
-                        contentPadding: const EdgeInsets.all(12),
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(8),
-                          borderSide:
-                              BorderSide(color: Colors.grey.shade300),
-                        ),
-                        enabledBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(8),
-                          borderSide:
-                              BorderSide(color: Colors.grey.shade300),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-
-                    // 이미지 첨부
-                    const Text('이미지 첨부',
-                        style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-                    const SizedBox(height: 6),
-                    Row(
-                      children: [
-                        OutlinedButton.icon(
-                          onPressed: (_uploading || _images.length >= 5) ? null : _pickImage,
-                          icon: _uploading
-                              ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: _primaryColor))
-                              : const Icon(Icons.add_photo_alternate_outlined, size: 18),
-                          label: Text(_uploading ? '업로드 중...' : '이미지 추가', style: const TextStyle(fontSize: 13)),
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: _primaryColor,
-                            side: const BorderSide(color: _primaryColor),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                          ),
-                        ),
-                        const SizedBox(width: 10),
-                        Text('${_images.length}/5', style: TextStyle(fontSize: 12, color: Colors.grey.shade500)),
-                      ],
-                    ),
-                    if (_images.isNotEmpty) ...[
-                      const SizedBox(height: 10),
-                      Wrap(
-                        spacing: 10,
-                        runSpacing: 10,
-                        children: List.generate(_images.length, (i) {
-                          return Stack(
-                            children: [
-                              ClipRRect(
-                                borderRadius: BorderRadius.circular(8),
-                                child: Image.network(
-                                  _svc.getImageUrl(_images[i]),
-                                  width: 120,
-                                  height: 90,
-                                  fit: BoxFit.cover,
-                                  errorBuilder: (_, __, ___) => Container(
-                                    width: 120, height: 90,
-                                    color: Colors.grey.shade100,
-                                    child: Icon(Icons.broken_image, color: Colors.grey.shade400),
-                                  ),
-                                ),
-                              ),
-                              Positioned(
-                                top: 2,
-                                right: 2,
-                                child: InkWell(
-                                  onTap: () => setState(() => _images.removeAt(i)),
-                                  child: Container(
-                                    decoration: const BoxDecoration(
-                                      color: Colors.black54,
-                                      shape: BoxShape.circle,
-                                    ),
-                                    padding: const EdgeInsets.all(3),
-                                    child: const Icon(Icons.close, size: 14, color: Colors.white),
-                                  ),
-                                ),
-                              ),
-                            ],
-                          );
-                        }),
-                      ),
-                    ],
-                    const SizedBox(height: 12),
-
-                    // 비밀글 (신규 작성 시만)
-                    if (!isEdit) ...[
-                      Row(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          SizedBox(
-                            width: 24,
-                            height: 24,
-                            child: Checkbox(
-                              value: _isSecret,
-                              activeColor: _primaryColor,
-                              onChanged: (v) =>
-                                  setState(() => _isSecret = v ?? false),
-                            ),
+                          Row(
+                            children: [
+                              SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: Checkbox(
+                                  value: _isSecret,
+                                  activeColor: _darkBtnColor,
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+                                  side: BorderSide(color: Colors.grey.shade400),
+                                  onChanged: (v) => setState(() => _isSecret = v ?? false),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              const Text('비밀글로 작성하기', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: Color(0xFF374151))),
+                            ],
                           ),
-                          const SizedBox(width: 6),
-                          const Text('비밀글',
-                              style: TextStyle(fontSize: 13)),
+                          if (_isSecret) ...[
+                            const SizedBox(height: 12),
+                            SizedBox(
+                              width: 300,
+                              child: TextField(
+                                controller: _passwordController,
+                                obscureText: true,
+                                decoration: _inputDecoration('비밀번호를 설정해주세요 (조회 시 필요)').copyWith(
+                                  prefixIcon: Icon(Icons.lock_outline, size: 18, color: Colors.grey.shade500),
+                                ),
+                                style: const TextStyle(fontSize: 14),
+                              ),
+                            ),
+                          ],
                         ],
                       ),
-                      if (_isSecret) ...[
-                        const SizedBox(height: 8),
-                        SizedBox(
-                          width: 300,
-                          child: TextField(
-                            controller: _passwordController,
-                            obscureText: true,
-                            decoration: InputDecoration(
-                              hintText: '비밀번호를 입력하세요',
-                              hintStyle: TextStyle(fontSize: 13, color: Colors.grey.shade400),
-                              prefixIcon: const Icon(Icons.lock_outline, size: 18),
-                              border: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(8),
-                                borderSide: BorderSide(color: Colors.grey.shade300),
-                              ),
-                              enabledBorder: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(8),
-                                borderSide: BorderSide(color: Colors.grey.shade300),
-                              ),
-                              contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                              isDense: true,
-                              filled: true,
-                              fillColor: Colors.white,
-                            ),
-                            style: const TextStyle(fontSize: 13),
-                          ),
-                        ),
-                      ],
-                    ],
-                    const SizedBox(height: 24),
-
-                    // 버튼
-                    Row(
-                      children: [
-                        ElevatedButton(
-                          onPressed: _savePost,
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: _primaryColor,
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 24, vertical: 12),
-                            shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(8)),
-                          ),
-                          child: Text(isEdit ? '수정' : '등록'),
-                        ),
-                        const SizedBox(width: 8),
-                        OutlinedButton(
-                          onPressed: () {
-                            setState(() => _viewMode = _detail != null
-                                ? _ViewMode.detail
-                                : _ViewMode.list);
-                          },
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: Colors.black87,
-                            side: BorderSide(color: Colors.grey.shade300),
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 24, vertical: 12),
-                            shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(8)),
-                          ),
-                          child: const Text('취소'),
-                        ),
-                      ],
                     ),
+                    const SizedBox(height: 20),
                   ],
-                ),
+
+                  // 내용
+                  _inputLabel('내용'),
+                  TextField(
+                    controller: _contentController,
+                    maxLines: 15,
+                    style: const TextStyle(fontSize: 15, height: 1.6),
+                    decoration: _inputDecoration('요청하실 상세 내용을 입력하세요').copyWith(
+                      contentPadding: const EdgeInsets.all(16),
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+
+                  // 이미지 첨부
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      _inputLabel('첨부 이미지', paddingBottom: 0),
+                      const SizedBox(width: 12),
+                      Text('${_images.length} / 5', style: TextStyle(fontSize: 13, color: Colors.grey.shade500)),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      InkWell(
+                        onTap: (_uploading || _images.length >= 5) ? null : _pickImage,
+                        borderRadius: BorderRadius.circular(6),
+                        child: Container(
+                          width: 80,
+                          height: 80,
+                          decoration: BoxDecoration(
+                            color: Colors.grey.shade50,
+                            border: Border.all(color: Colors.grey.shade300, style: BorderStyle.solid),
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: _uploading
+                              ? const Center(child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)))
+                              : Column(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    Icon(Icons.add_photo_alternate_outlined, color: Colors.grey.shade500, size: 24),
+                                    const SizedBox(height: 4),
+                                    Text('추가', style: TextStyle(fontSize: 12, color: Colors.grey.shade500)),
+                                  ],
+                                ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: SingleChildScrollView(
+                          scrollDirection: Axis.horizontal,
+                          child: Row(
+                            children: List.generate(_images.length, (i) {
+                              return Padding(
+                                padding: const EdgeInsets.only(right: 12),
+                                child: Stack(
+                                  clipBehavior: Clip.none,
+                                  children: [
+                                    Container(
+                                      width: 80,
+                                      height: 80,
+                                      decoration: BoxDecoration(
+                                        border: Border.all(color: Colors.grey.shade200),
+                                        borderRadius: BorderRadius.circular(6),
+                                      ),
+                                      child: ClipRRect(
+                                        borderRadius: BorderRadius.circular(6),
+                                        child: Image.network(
+                                          _svc.getImageUrl(_images[i]),
+                                          fit: BoxFit.cover,
+                                          errorBuilder: (_, __, ___) => Icon(Icons.broken_image, color: Colors.grey.shade300),
+                                        ),
+                                      ),
+                                    ),
+                                    Positioned(
+                                      top: -6,
+                                      right: -6,
+                                      child: InkWell(
+                                        onTap: () => setState(() => _images.removeAt(i)),
+                                        child: Container(
+                                          decoration: const BoxDecoration(
+                                            color: Color(0xFF111827),
+                                            shape: BoxShape.circle,
+                                          ),
+                                          padding: const EdgeInsets.all(4),
+                                          child: const Icon(Icons.close, size: 12, color: Colors.white),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              );
+                            }),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 40),
+                  Divider(color: Colors.grey.shade200),
+                  const SizedBox(height: 16),
+
+                  // 버튼
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      OutlinedButton(
+                        onPressed: _loading ? null : () {
+                          setState(() => _viewMode = _detail != null ? _ViewMode.detail : _ViewMode.list);
+                        },
+                        style: _actionButtonStyle(Colors.grey.shade700),
+                        child: const Text('취소'),
+                      ),
+                      const SizedBox(width: 8),
+                      ElevatedButton(
+                        onPressed: _loading ? null : _savePost,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: _darkBtnColor,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 12),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                          elevation: 0,
+                          textStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                        ),
+                        child: _loading 
+                            ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                            : Text(isEdit ? '수정 완료' : '등록 완료'),
+                      ),
+                    ],
+                  ),
+                ],
               ),
             ),
           ),
-        ],
-      );
+        ),
+      ],
+    );
+  }
+
+  Widget _inputLabel(String text, {double paddingBottom = 8}) {
+    return Padding(
+      padding: EdgeInsets.only(bottom: paddingBottom),
+      child: Text(text, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF374151))),
+    );
+  }
+
+  InputDecoration _inputDecoration(String hint) {
+    return InputDecoration(
+      hintText: hint,
+      hintStyle: TextStyle(fontSize: 14, color: Colors.grey.shade400),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      filled: true,
+      fillColor: Colors.white,
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(6),
+        borderSide: BorderSide(color: Colors.grey.shade300),
+      ),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(6),
+        borderSide: BorderSide(color: Colors.grey.shade300),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(6),
+        borderSide: const BorderSide(color: _darkBtnColor),
+      ),
+    );
   }
 
   // ── 유틸 ──
