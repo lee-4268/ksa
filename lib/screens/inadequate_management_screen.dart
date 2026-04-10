@@ -1006,23 +1006,21 @@ class _InadequateManagementScreenState
                 final id = item['id'] as int;
                 final checked = _checkedIds.contains(id);
                 return DataRow(
-                  selected: checked,
                   color: checked
                       ? WidgetStateProperty.all(primaryColor.withValues(alpha: 0.06))
                       : null,
-                  onSelectChanged: _isAdmin
-                      ? (v) {
-                          setState(() {
-                            if (v == true) {
-                              _checkedIds.add(id);
-                            } else {
-                              _checkedIds.remove(id);
-                            }
-                          });
-                        }
-                      : null,
                   cells: [
-                    if (_isAdmin) const DataCell(SizedBox.shrink()),
+                    if (_isAdmin)
+                      DataCell(
+                        Checkbox(
+                          value: checked,
+                          activeColor: primaryColor,
+                          onChanged: (v) => setState(() {
+                            if (v == true) _checkedIds.add(id);
+                            else _checkedIds.remove(id);
+                          }),
+                        ),
+                      ),
                     DataCell(Text(_str(item, 'region').isNotEmpty ? _str(item, 'region') : _str(item, 'skt본부'), overflow: TextOverflow.ellipsis)),
                     DataCell(Text(_str(item, 'ons팀'), overflow: TextOverflow.ellipsis)),
                     DataCell(Text(_str(item, '허가번호'), overflow: TextOverflow.ellipsis)),
