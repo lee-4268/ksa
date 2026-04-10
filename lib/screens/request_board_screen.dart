@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 
 import '../services/auth_service.dart';
 import '../services/community_service.dart';
+import '../widgets/progress_dialog.dart';
 
 /// 요청사항 게시판 화면
 class RequestBoardScreen extends StatefulWidget {
@@ -241,18 +242,15 @@ class _RequestBoardScreenState extends State<RequestBoardScreen> {
   }
 
   Future<void> _changeStatus(int id, String status) async {
-    setState(() => _loading = true);
+    final dialog = ProgressDialog(context);
+    dialog.show(message: '상태 변경 중...');
     try {
       await _svc.updateRequestStatus(id, status);
       final res = await _svc.getRequest(id);
-      setState(() {
-        _detail = res;
-        _loading = false;
-      });
-      _showSnack('상태가 변경되었습니다.');
+      if (mounted) setState(() => _detail = res);
+      await dialog.complete(message: '상태가 변경되었습니다.');
     } catch (e) {
-      _showSnack('상태 변경 실패: $e');
-      setState(() => _loading = false);
+      await dialog.error(message: '상태 변경 실패: $e');
     }
   }
 
@@ -1057,6 +1055,9 @@ class _RequestBoardScreenState extends State<RequestBoardScreen> {
                           child: TextField(
                             controller: _commentController,
                             style: const TextStyle(fontSize: 13),
+                            maxLines: null,
+                            keyboardType: TextInputType.multiline,
+                            textInputAction: TextInputAction.newline,
                             decoration: InputDecoration(
                               hintText: '댓글을 입력하세요',
                               hintStyle: TextStyle(

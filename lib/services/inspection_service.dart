@@ -545,6 +545,8 @@ class InspectionService {
     String region = '',
     String team = '',
     String status = '',
+    String searchField = '',   // 'license' | 'callname' | 'address'
+    String searchValues = '',  // 콤마 구분 복수값
     int page = 1,
     int pageSize = 100,
   }) async {
@@ -554,6 +556,8 @@ class InspectionService {
       if (region.isNotEmpty) 'region': region,
       if (team.isNotEmpty) 'team': team,
       if (status.isNotEmpty) 'status': status,
+      if (searchField.isNotEmpty && searchValues.isNotEmpty) 'search_field': searchField,
+      if (searchField.isNotEmpty && searchValues.isNotEmpty) 'search_values': searchValues,
       'page': '$page',
       'pageSize': '$pageSize',
     });
@@ -578,10 +582,39 @@ class InspectionService {
     }
   }
 
+  /// 부적합 Excel 내보내기
+  Future<Uint8List> exportInadequateXlsx(int year, {
+    String region = '',
+    String team = '',
+    String status = '',
+    String searchField = '',
+    String searchValues = '',
+  }) async {
+    final uri = Uri.parse('$_baseUrl/inadequate/export-xlsx').replace(
+        queryParameters: {
+      'year': '$year',
+      if (region.isNotEmpty) 'region': region,
+      if (team.isNotEmpty) 'team': team,
+      if (status.isNotEmpty) 'status': status,
+      if (searchField.isNotEmpty && searchValues.isNotEmpty) 'search_field': searchField,
+      if (searchField.isNotEmpty && searchValues.isNotEmpty) 'search_values': searchValues,
+    });
+    final resp = await http.get(uri, headers: _headers).timeout(const Duration(minutes: 3));
+    if (resp.statusCode != 200) throw Exception('엑셀 내보내기 실패');
+    return resp.bodyBytes;
+  }
+
   /// 부적합 통계
-  Future<Map<String, dynamic>> getInadequateStats(int year) async {
+  Future<Map<String, dynamic>> getInadequateStats(int year, {
+    String region = '',
+    String team = '',
+  }) async {
     final uri = Uri.parse('$_baseUrl/inadequate/stats').replace(
-        queryParameters: {'year': '$year'});
+        queryParameters: {
+      'year': '$year',
+      if (region.isNotEmpty) 'region': region,
+      if (team.isNotEmpty) 'team': team,
+    });
     final resp = await http.get(uri, headers: _headers).timeout(_apiTimeout);
     return json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
   }

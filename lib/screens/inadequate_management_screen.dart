@@ -1,5 +1,3 @@
-import 'package:excel/excel.dart' as xl;
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -74,6 +72,11 @@ class _InadequateManagementScreenState
   String? _sortColumn;
   bool _sortAsc = true;
 
+  // 검색
+  String _searchField = 'callname'; // 'callname' | 'license' | 'address'
+  String _searchValues = ''; // 적용된 검색값 (버튼 클릭 시에만 갱신)
+  final TextEditingController _searchCtrl = TextEditingController();
+
   bool _isSummaryExpanded = false;
 
   static const _regionOptions = [
@@ -103,6 +106,12 @@ class _InadequateManagementScreenState
     ('상태', 'status'),
     ('심의차수', '심의차수'),
   ];
+
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
+  }
 
   @override
   void initState() {
@@ -139,12 +148,14 @@ class _InadequateManagementScreenState
     setState(() { _loading = true; _error = null; _checkedIds.clear(); });
     try {
       final results = await Future.wait([
-        _svc.getInadequateStats(_year),
+        _svc.getInadequateStats(_year, region: _selectedRegion, team: _selectedTeam),
         _svc.getInadequateList(
           _year,
           region: _selectedRegion,
           team: _selectedTeam,
           status: _selectedStatus,
+          searchField: _searchValues.isNotEmpty ? _searchField : '',
+          searchValues: _searchValues,
           page: _page,
           pageSize: _pageSize,
         ),
@@ -209,71 +220,22 @@ class _InadequateManagementScreenState
 
   Future<void> _doExport() async {
     setState(() => _exporting = true);
+    final dialog = ProgressDialog(context);
+    dialog.show(message: 'Excel 파일 생성 중...');
     try {
-      // 전체 데이터 가져오기 (페이지 없이)
-      final res = await _svc.getInadequateList(
+      final bytes = await _svc.exportInadequateXlsx(
         _year,
         region: _selectedRegion,
         team: _selectedTeam,
         status: _selectedStatus,
-        page: 1,
-        pageSize: 9999,
+        searchField: _searchValues.isNotEmpty ? _searchField : '',
+        searchValues: _searchValues,
       );
-      final allItems = List<Map<String, dynamic>>.from(res['items'] ?? []);
-
-      // 정렬 적용
-      if (_sortColumn != null) {
-        final col = _sortColumn!;
-        allItems.sort((a, b) {
-          final va = (a[col] ?? '').toString();
-          final vb = (b[col] ?? '').toString();
-          return _sortAsc ? va.compareTo(vb) : vb.compareTo(va);
-        });
-      }
-
-      // Excel 생성
-      final excel = xl.Excel.createExcel();
-      const sheetName = '부적합관리';
-      excel.rename(excel.getDefaultSheet()!, sheetName);
-      final sheet = excel[sheetName];
-
-      final headerStyle = xl.CellStyle(
-        bold: true,
-        backgroundColorHex: xl.ExcelColor.fromHexString('#E53935'),
-      );
-
-      final headers = ['본부', '팀', '허가번호', '호출명칭', '주소', '검사일자', '시정기한', '불합격내용', '불합격상세', '상태', '심의차수'];
-      final keys = ['region', 'ons팀', '허가번호', '호출명칭', '주소', '검사일자', '시정기한', '불합격내용', '불합격상세', 'status', '심의차수'];
-
-      for (int i = 0; i < headers.length; i++) {
-        final cell = sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: i, rowIndex: 0));
-        cell.value = xl.TextCellValue(headers[i]);
-        cell.cellStyle = headerStyle;
-      }
-
-      for (int r = 0; r < allItems.length; r++) {
-        final item = allItems[r];
-        for (int c = 0; c < keys.length; c++) {
-          final cell = sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: c, rowIndex: r + 1));
-          final val = (item[keys[c]] ?? '').toString();
-          cell.value = xl.TextCellValue(val);
-        }
-      }
-
-      final widths = [10.0, 18.0, 14.0, 20.0, 28.0, 12.0, 12.0, 20.0, 28.0, 8.0, 8.0];
-      for (int i = 0; i < widths.length; i++) {
-        sheet.setColumnWidth(i, widths[i]);
-      }
-
-      final bytes = excel.encode();
-      if (bytes == null) throw Exception('Excel 파일 생성 실패');
-      await platform_export.saveExcelFile(Uint8List.fromList(bytes), '부적합관리_$_year.xlsx');
+      await dialog.complete(message: 'Excel 내보내기 완료');
+      final suffix = [_selectedRegion, _selectedTeam, '$_year'].where((s) => s.isNotEmpty).join('_');
+      await platform_export.saveExcelFile(bytes, '부적합관리_$suffix.xlsx');
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('엑셀 내보내기 실패: $e'), backgroundColor: Colors.red),
-        );
-      }
+      await dialog.error(message: '엑셀 내보내기 실패: $e');
     } finally {
       if (mounted) setState(() => _exporting = false);
     }
@@ -722,6 +684,7 @@ class _InadequateManagementScreenState
           if (_isAdmin && _checkedIds.isNotEmpty) _buildBulkActionBar(),
           _buildSummaryCards(),
           _buildFilters(),
+          _buildSearchBar(),
           Expanded(child: _loading ? const Center(child: CircularProgressIndicator()) : _buildTable()),
           _buildPagination(),
         ],
@@ -930,6 +893,118 @@ class _InadequateManagementScreenState
         ],
       ),
     );
+  }
+
+  static const _searchFieldOptions = [
+    ('callname', '호출명칭'),
+    ('license', '허가번호'),
+    ('address', '주소'),
+  ];
+
+  Widget _buildSearchBar() {
+    final hint = switch (_searchField) {
+      'license' => '허가번호 입력 (여러 개는 쉼표로 구분)',
+      'address' => '주소 입력 (여러 개는 쉼표로 구분)',
+      _ => '호출명칭 입력 (여러 개는 쉼표로 구분)',
+    };
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+      child: Row(
+        children: [
+          // 검색 필드 드롭다운
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              border: Border.all(color: Colors.grey.shade300),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: DropdownButtonHideUnderline(
+              child: DropdownButton<String>(
+                isDense: true,
+                icon: const Icon(Icons.arrow_drop_down, color: primaryColor, size: 20),
+                dropdownColor: Colors.white,
+                style: const TextStyle(color: Colors.black87, fontSize: 13),
+                value: _searchField,
+                borderRadius: BorderRadius.circular(10),
+                items: _searchFieldOptions.map((opt) {
+                  return DropdownMenuItem(value: opt.$1, child: Text(opt.$2));
+                }).toList(),
+                onChanged: (v) => setState(() {
+                  _searchField = v ?? 'callname';
+                }),
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          // 검색 입력란
+          Expanded(
+            child: TextField(
+              controller: _searchCtrl,
+              decoration: InputDecoration(
+                hintText: hint,
+                hintStyle: const TextStyle(color: Color(0xFF9CA3AF), fontSize: 13),
+                filled: true,
+                fillColor: Colors.white,
+                contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                  borderSide: BorderSide(color: Colors.grey.shade300),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                  borderSide: BorderSide(color: Colors.grey.shade300),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                  borderSide: const BorderSide(color: primaryColor),
+                ),
+                suffixIcon: _searchCtrl.text.isNotEmpty
+                    ? IconButton(
+                        icon: const Icon(Icons.clear, size: 16, color: Color(0xFF9CA3AF)),
+                        onPressed: () {
+                          _searchCtrl.clear();
+                          if (_searchValues.isNotEmpty) {
+                            setState(() { _searchValues = ''; _page = 1; });
+                            _loadData();
+                          }
+                        },
+                      )
+                    : null,
+              ),
+              style: const TextStyle(fontSize: 13),
+              onChanged: (_) => setState(() {}), // suffixIcon 업데이트용
+              onSubmitted: (_) => _doSearch(),
+            ),
+          ),
+          const SizedBox(width: 8),
+          // 검색 버튼
+          ElevatedButton.icon(
+            onPressed: _doSearch,
+            icon: const Icon(Icons.search, size: 16),
+            label: const Text('검색'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: primaryColor,
+              foregroundColor: Colors.white,
+              elevation: 0,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
+              textStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _doSearch() {
+    final input = _searchCtrl.text.trim();
+    setState(() {
+      _searchValues = input;
+      _page = 1;
+    });
+    _loadData();
   }
 
   Widget _buildDropdown({
