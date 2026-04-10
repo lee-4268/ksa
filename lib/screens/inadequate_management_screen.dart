@@ -1,9 +1,27 @@
+import 'package:excel/excel.dart' as xl;
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../services/auth_service.dart';
+import '../services/excel_export_stub.dart'
+    if (dart.library.io) '../services/excel_export_mobile.dart'
+    if (dart.library.html) '../services/excel_export_web.dart' as platform_export;
 import '../services/inspection_service.dart';
 import '../widgets/progress_dialog.dart';
+
+/// 본부 → 팀 목록 매핑
+const _orgMap = <String, List<String>>{
+  '강남': ['강남품질개선팀', '관악품질개선팀', '강동품질개선팀', '양천품질개선팀'],
+  '강북': ['용산품질개선팀', '종로품질개선팀', '성수품질개선팀', '수유품질개선팀', '지하철품질개선팀'],
+  '인천': ['북인천품질개선팀', '남인천품질개선팀', '부천품질개선팀', '일산품질개선팀', '남양주품질개선팀', '의정부품질개선팀'],
+  '경기': ['하남품질개선팀', '평택품질개선팀', '수원품질개선팀', '분당품질개선팀', '용인품질개선팀'],
+  '경남': ['동부산품질개선팀', '서부산품질개선팀', '김해품질개선팀', '울산품질개선팀', '진주품질개선팀', '창원품질개선팀'],
+  '경북': ['동대구품질개선팀', '서대구품질개선팀', '경산품질개선팀', '포항품질개선팀', '안동품질개선팀', '구미품질개선팀'],
+  '서부': ['서광주품질개선팀', '동광주품질개선팀', '목포품질개선팀', '순천품질개선팀', '제주품질개선팀', '전주품질개선팀', '군산품질개선팀'],
+  '충청': ['대전품질개선팀', '천안품질개선팀', '세종품질개선팀', '서산품질개선팀', '서청주품질개선팀', '동청주품질개선팀', '충주품질개선팀'],
+  '강원': ['원주품질개선팀', '춘천품질개선팀', '강릉품질개선팀'],
+};
 
 /// 부적합 관리 화면
 class InadequateManagementScreen extends StatefulWidget {
@@ -25,6 +43,7 @@ class _InadequateManagementScreenState
   int _year = DateTime.now().year;
   bool _loading = false;
   bool _syncing = false;
+  bool _exporting = false;
   String? _error;
 
   // 통계
@@ -35,6 +54,7 @@ class _InadequateManagementScreenState
 
   // 필터
   String _selectedRegion = '';
+  String _selectedTeam = '';
   String _selectedStatus = '';
 
   // 데이터
@@ -42,6 +62,10 @@ class _InadequateManagementScreenState
   int _page = 1;
   int _pageSize = 100;
   int _totalItems = 0;
+
+  // 정렬
+  String? _sortColumn;
+  bool _sortAsc = true;
 
   bool _isSummaryExpanded = false;
 
@@ -51,6 +75,27 @@ class _InadequateManagementScreenState
   ];
 
   static const _statusOptions = ['', '미완료', '완료', '대상제외'];
+
+  // 본부 선택에 따른 팀 목록
+  List<String> get _teamOptions {
+    if (_selectedRegion.isEmpty) return [];
+    return _orgMap[_selectedRegion] ?? [];
+  }
+
+  // 컬럼 정의: (표시명, 데이터키)
+  static const _columns = [
+    ('본부', 'region'),
+    ('팀', 'ons팀'),
+    ('허가번호', '허가번호'),
+    ('호출명칭', '호출명칭'),
+    ('주소', '주소'),
+    ('검사일자', '검사일자'),
+    ('시정기한', '시정기한'),
+    ('불합격내용', '불합격내용'),
+    ('불합격상세', '불합격상세'),
+    ('상태', 'status'),
+    ('심의차수', '심의차수'),
+  ];
 
   @override
   void initState() {
@@ -62,16 +107,14 @@ class _InadequateManagementScreenState
   }
 
   Future<void> _loadData() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
+    setState(() { _loading = true; _error = null; });
     try {
       final results = await Future.wait([
         _svc.getInadequateStats(_year),
         _svc.getInadequateList(
           _year,
           region: _selectedRegion,
+          team: _selectedTeam,
           status: _selectedStatus,
           page: _page,
           pageSize: _pageSize,
@@ -88,41 +131,122 @@ class _InadequateManagementScreenState
           _items = List<Map<String, dynamic>>.from(listData['items'] ?? []);
           _totalItems = listData['total'] as int? ?? 0;
           _loading = false;
+          // 정렬 적용
+          if (_sortColumn != null) _applySort();
         });
       }
     } catch (e) {
-      if (mounted) {
-        setState(() {
-          _loading = false;
-          _error = '$e';
-        });
-      }
+      if (mounted) setState(() { _loading = false; _error = '$e'; });
     }
+  }
+
+  void _applySort() {
+    final col = _sortColumn!;
+    _items.sort((a, b) {
+      final va = (a[col] ?? '').toString();
+      final vb = (b[col] ?? '').toString();
+      // 날짜 형식이면 숫자 비교처럼
+      final cmp = va.compareTo(vb);
+      return _sortAsc ? cmp : -cmp;
+    });
+  }
+
+  void _onSort(String col) {
+    setState(() {
+      if (_sortColumn == col) {
+        _sortAsc = !_sortAsc;
+      } else {
+        _sortColumn = col;
+        _sortAsc = true;
+      }
+      _applySort();
+    });
   }
 
   Future<void> _doSync() async {
     setState(() => _syncing = true);
-
-    // 1. ProgressDialog 초기화 및 표시
     final dialog = ProgressDialog(context);
     dialog.show(message: '데이터를 동기화하는 중...');
-
     try {
-      // 2. 동기화 API 호출
       await _svc.syncInadequate(_year);
-      
-      // 3. 성공 시 dialog 완료 처리 (내부에서 자동으로 스낵바 띄워줌)
       await dialog.complete(message: '동기화 완료');
-
-      if (mounted) {
-        _page = 1;
-        _loadData(); // 동기화 완료 후 1페이지부터 다시 데이터 불러오기
-      }
+      if (mounted) { _page = 1; _loadData(); }
     } catch (e) {
-      // 4. 실패 시 dialog 에러 표시
       await dialog.error(message: '동기화 실패: $e');
     } finally {
       if (mounted) setState(() => _syncing = false);
+    }
+  }
+
+  Future<void> _doExport() async {
+    setState(() => _exporting = true);
+    try {
+      // 전체 데이터 가져오기 (페이지 없이)
+      final res = await _svc.getInadequateList(
+        _year,
+        region: _selectedRegion,
+        team: _selectedTeam,
+        status: _selectedStatus,
+        page: 1,
+        pageSize: 9999,
+      );
+      final allItems = List<Map<String, dynamic>>.from(res['items'] ?? []);
+
+      // 정렬 적용
+      if (_sortColumn != null) {
+        final col = _sortColumn!;
+        allItems.sort((a, b) {
+          final va = (a[col] ?? '').toString();
+          final vb = (b[col] ?? '').toString();
+          return _sortAsc ? va.compareTo(vb) : vb.compareTo(va);
+        });
+      }
+
+      // Excel 생성
+      final excel = xl.Excel.createExcel();
+      const sheetName = '부적합관리';
+      excel.rename(excel.getDefaultSheet()!, sheetName);
+      final sheet = excel[sheetName];
+
+      final headerStyle = xl.CellStyle(
+        bold: true,
+        backgroundColorHex: xl.ExcelColor.fromHexString('#E53935'),
+      );
+
+      final headers = ['본부', '팀', '허가번호', '호출명칭', '주소', '검사일자', '시정기한', '불합격내용', '불합격상세', '상태', '심의차수'];
+      final keys = ['region', 'ons팀', '허가번호', '호출명칭', '주소', '검사일자', '시정기한', '불합격내용', '불합격상세', 'status', '심의차수'];
+
+      for (int i = 0; i < headers.length; i++) {
+        final cell = sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: i, rowIndex: 0));
+        cell.value = xl.TextCellValue(headers[i]);
+        cell.cellStyle = headerStyle;
+      }
+
+      for (int r = 0; r < allItems.length; r++) {
+        final item = allItems[r];
+        for (int c = 0; c < keys.length; c++) {
+          final cell = sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: c, rowIndex: r + 1));
+          final val = (item[keys[c]] ?? '').toString();
+          cell.value = xl.TextCellValue(val);
+        }
+      }
+
+      final widths = [10.0, 18.0, 14.0, 20.0, 28.0, 12.0, 12.0, 20.0, 28.0, 8.0, 8.0];
+      for (int i = 0; i < widths.length; i++) {
+        sheet.setColumnWidth(i, widths[i]);
+      }
+
+      final bytes = excel.encode();
+      if (bytes == null) throw Exception('Excel 파일 생성 실패');
+      await platform_export.saveExcelFile(Uint8List.fromList(bytes), '부적합관리_$_year.xlsx');
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('엑셀 내보내기 실패: $e'), backgroundColor: Colors.red),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _exporting = false);
     }
   }
 
@@ -148,7 +272,6 @@ class _InadequateManagementScreenState
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // 1. 헤더 영역 (아이콘 + 제목 + 서브타이틀)
                     Row(
                       children: [
                         Container(
@@ -183,8 +306,6 @@ class _InadequateManagementScreenState
                       padding: EdgeInsets.symmetric(vertical: 20),
                       child: Divider(height: 1, color: Color(0xFFE5E7EB)),
                     ),
-
-                    // 2. 정보 요약 카드 (어떤 내용을 수정하는지 참고용)
                     Container(
                       padding: const EdgeInsets.all(16),
                       decoration: BoxDecoration(
@@ -197,7 +318,6 @@ class _InadequateManagementScreenState
                         children: [
                           _buildDialogInfoRow('불합격내용', item['불합격내용']?.toString() ?? '-'),
                           const SizedBox(height: 8),
-                          // 👇 불합격 상세 추가 부분
                           _buildDialogInfoRow('불합격상세', item['불합격상세']?.toString() ?? '-'),
                           const SizedBox(height: 8),
                           _buildDialogInfoRow('시정기한', item['시정기한']?.toString() ?? '-'),
@@ -205,8 +325,6 @@ class _InadequateManagementScreenState
                       ),
                     ),
                     const SizedBox(height: 24),
-
-                    // 3. 상태 선택 버튼 (모던한 탭 스타일)
                     const Text('처리 상태', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF374151))),
                     const SizedBox(height: 10),
                     Row(
@@ -221,9 +339,7 @@ class _InadequateManagementScreenState
                               decoration: BoxDecoration(
                                 color: isSelected ? primaryColor : Colors.white,
                                 borderRadius: BorderRadius.circular(8),
-                                border: Border.all(
-                                  color: isSelected ? primaryColor : const Color(0xFFD1D5DB),
-                                ),
+                                border: Border.all(color: isSelected ? primaryColor : const Color(0xFFD1D5DB)),
                                 boxShadow: isSelected
                                     ? [BoxShadow(color: primaryColor.withValues(alpha: 0.25), blurRadius: 4, offset: const Offset(0, 2))]
                                     : [],
@@ -243,8 +359,6 @@ class _InadequateManagementScreenState
                       }).toList(),
                     ),
                     const SizedBox(height: 24),
-
-                    // 4. 심의차수 입력
                     const Text('심의차수', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF374151))),
                     const SizedBox(height: 10),
                     TextField(
@@ -271,8 +385,6 @@ class _InadequateManagementScreenState
                       style: const TextStyle(fontSize: 14),
                     ),
                     const SizedBox(height: 32),
-
-                    // 5. 하단 액션 버튼
                     Row(
                       mainAxisAlignment: MainAxisAlignment.end,
                       children: [
@@ -297,23 +409,16 @@ class _InadequateManagementScreenState
                           onPressed: () async {
                             final id = item['id'] as int?;
                             if (id == null) return;
-
                             final dialog = ProgressDialog(context);
                             dialog.show(message: '저장 중...');
-
                             try {
                               await _svc.updateInadequate(
                                 id,
                                 status: selectedStatus,
                                 reviewRound: reviewCtrl.text.trim(),
                               );
-
                               await dialog.complete(message: '저장 완료');
-
-                              if (mounted) {
-                                Navigator.pop(ctx);
-                                _loadData();
-                              }
+                              if (mounted) { Navigator.pop(ctx); _loadData(); }
                             } catch (e) {
                               await dialog.error(message: '저장 실패: $e');
                             }
@@ -332,7 +437,6 @@ class _InadequateManagementScreenState
     );
   }
 
-  // 다이얼로그 내부 요약 정보 출력을 위한 헬퍼 위젯 (클래스 내부 아무 곳에나 추가)
   Widget _buildDialogInfoRow(String label, String value) {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -387,7 +491,23 @@ class _InadequateManagementScreenState
             style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: Color(0xFF111827)),
           ),
           const Spacer(),
-          if (_isAdmin)
+          // Excel 내보내기
+          OutlinedButton.icon(
+            onPressed: _exporting ? null : _doExport,
+            icon: _exporting
+                ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+                : const Icon(Icons.download_outlined, size: 16),
+            label: Text(_exporting ? '내보내는 중...' : 'Excel 내보내기'),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: const Color(0xFF16A34A),
+              side: const BorderSide(color: Color(0xFF16A34A)),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              textStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+            ),
+          ),
+          if (_isAdmin) ...[
+            const SizedBox(width: 10),
             ElevatedButton.icon(
               onPressed: _syncing ? null : _doSync,
               icon: _syncing
@@ -402,6 +522,7 @@ class _InadequateManagementScreenState
                 textStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
               ),
             ),
+          ],
         ],
       ),
     );
@@ -417,29 +538,22 @@ class _InadequateManagementScreenState
       _SummaryInfo('대상제외', _excludedCount, const Color(0xFF6B7280), Icons.remove_circle_outline),
     ];
 
-    // 📱 모바일 환경: 접기/펼치기 기능 적용 (터치 물결 효과 추가)
     if (isMobile) {
       return Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
         child: Column(
           children: [
-            // 1) 클릭 가능한 요약 바 (Material + InkWell 적용)
             Material(
-              color: Colors.white, // Container의 배경색을 Material로 이동
+              color: Colors.white,
               borderRadius: BorderRadius.circular(10),
               child: InkWell(
-                onTap: () {
-                  setState(() {
-                    _isSummaryExpanded = !_isSummaryExpanded;
-                  });
-                },
-                borderRadius: BorderRadius.circular(10), // 모서리 둥글게 물결치도록 설정
+                onTap: () => setState(() => _isSummaryExpanded = !_isSummaryExpanded),
+                borderRadius: BorderRadius.circular(10),
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: _border), 
-                    // ⚠️ 여기서 color: Colors.white를 빼야 물결이 보입니다!
+                    border: Border.all(color: _border),
                   ),
                   child: Row(
                     children: [
@@ -452,43 +566,23 @@ class _InadequateManagementScreenState
                           overflow: TextOverflow.ellipsis,
                         ),
                       ),
-                      // 질문자님 예시처럼 좀 더 부드러운 아이콘으로 변경
-                      Icon(
-                        _isSummaryExpanded ? Icons.expand_less : Icons.expand_more,
-                        size: 22,
-                        color: const Color(0xFF9CA3AF),
-                      ),
+                      Icon(_isSummaryExpanded ? Icons.expand_less : Icons.expand_more, size: 22, color: const Color(0xFF9CA3AF)),
                     ],
                   ),
                 ),
               ),
             ),
-            
-            // 2) 펼쳐졌을 때 보이는 카드 영역 (2x2 배열)
             if (_isSummaryExpanded) ...[
               const SizedBox(height: 10),
-              Row(
-                children: [
-                  _buildMobileCard(cards[0]),
-                  const SizedBox(width: 8),
-                  _buildMobileCard(cards[1]),
-                ],
-              ),
+              Row(children: [_buildMobileCard(cards[0]), const SizedBox(width: 8), _buildMobileCard(cards[1])]),
               const SizedBox(height: 8),
-              Row(
-                children: [
-                  _buildMobileCard(cards[2]),
-                  const SizedBox(width: 8),
-                  _buildMobileCard(cards[3]),
-                ],
-              ),
+              Row(children: [_buildMobileCard(cards[2]), const SizedBox(width: 8), _buildMobileCard(cards[3])]),
             ],
           ],
         ),
       );
     }
 
-    // 💻 PC/태블릿 환경: 기존처럼 4개 가로 배치
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
       child: Row(
@@ -519,11 +613,7 @@ class _InadequateManagementScreenState
                       children: [
                         Text(c.label, style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280))),
                         const SizedBox(height: 2),
-                        Text(
-                          '${c.count}건',
-                          style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: c.color),
-                          overflow: TextOverflow.ellipsis,
-                        ),
+                        Text('${c.count}건', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: c.color), overflow: TextOverflow.ellipsis),
                       ],
                     ),
                   ),
@@ -538,82 +628,91 @@ class _InadequateManagementScreenState
 
   Widget _buildFilters() {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 6),
       child: Row(
         children: [
-          // 본부 dropdown
-          SizedBox(
-            width: 150,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                border: Border.all(color: Colors.grey.shade300),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: DropdownButtonHideUnderline(
-                child: DropdownButton<String>(
-                  isExpanded: true,
-                  isDense: true,
-                  icon: Icon(Icons.arrow_drop_down, color: primaryColor, size: 20),
-                  dropdownColor: Colors.white,
-                  style: const TextStyle(color: Colors.black87, fontSize: 13),
-                  value: _selectedRegion,
-                  borderRadius: BorderRadius.circular(10),
-                  items: _regionOptions.map((r) {
-                    return DropdownMenuItem(value: r, child: Text(r.isEmpty ? '전체 본부' : r));
-                  }).toList(),
-                  onChanged: (v) {
-                    setState(() {
-                      _selectedRegion = v ?? '';
-                      _page = 1;
-                    });
-                    _loadData();
-                  },
-                ),
-              ),
-            ),
+          // 본부 필터
+          _buildDropdown(
+            width: 140,
+            value: _selectedRegion,
+            items: _regionOptions,
+            hint: '전체 본부',
+            onChanged: (v) {
+              setState(() {
+                _selectedRegion = v ?? '';
+                _selectedTeam = ''; // 본부 바뀌면 팀 초기화
+                _page = 1;
+              });
+              _loadData();
+            },
           ),
-          const SizedBox(width: 10),
-          // 상태 dropdown
-          SizedBox(
+          const SizedBox(width: 8),
+          // 팀 필터 (본부 선택 시만 활성화)
+          _buildDropdown(
+            width: 175,
+            value: _selectedTeam,
+            items: ['', ..._teamOptions],
+            hint: '전체 팀',
+            enabled: _selectedRegion.isNotEmpty,
+            onChanged: (v) {
+              setState(() { _selectedTeam = v ?? ''; _page = 1; });
+              _loadData();
+            },
+          ),
+          const SizedBox(width: 8),
+          // 상태 필터
+          _buildDropdown(
             width: 130,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                border: Border.all(color: Colors.grey.shade300),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: DropdownButtonHideUnderline(
-                child: DropdownButton<String>(
-                  isExpanded: true,
-                  isDense: true,
-                  icon: Icon(Icons.arrow_drop_down, color: primaryColor, size: 20),
-                  dropdownColor: Colors.white,
-                  style: const TextStyle(color: Colors.black87, fontSize: 13),
-                  value: _selectedStatus,
-                  borderRadius: BorderRadius.circular(10),
-                  items: _statusOptions.map((s) {
-                    return DropdownMenuItem(value: s, child: Text(s.isEmpty ? '전체 상태' : s));
-                  }).toList(),
-                  onChanged: (v) {
-                    setState(() {
-                      _selectedStatus = v ?? '';
-                      _page = 1;
-                    });
-                    _loadData();
-                  },
-                ),
-              ),
-            ),
+            value: _selectedStatus,
+            items: _statusOptions,
+            hint: '전체 상태',
+            onChanged: (v) {
+              setState(() { _selectedStatus = v ?? ''; _page = 1; });
+              _loadData();
+            },
           ),
           const Spacer(),
-          Text(
-            '총 $_totalItems건',
-            style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
-          ),
+          Text('총 $_totalItems건', style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
         ],
+      ),
+    );
+  }
+
+  Widget _buildDropdown({
+    required double width,
+    required String value,
+    required List<String> items,
+    required String hint,
+    required ValueChanged<String?> onChanged,
+    bool enabled = true,
+  }) {
+    return SizedBox(
+      width: width,
+      child: Opacity(
+        opacity: enabled ? 1.0 : 0.4,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            border: Border.all(color: Colors.grey.shade300),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: DropdownButtonHideUnderline(
+            child: DropdownButton<String>(
+              isExpanded: true,
+              isDense: true,
+              icon: Icon(Icons.arrow_drop_down, color: primaryColor, size: 20),
+              dropdownColor: Colors.white,
+              style: const TextStyle(color: Colors.black87, fontSize: 13),
+              value: items.contains(value) ? value : '',
+              borderRadius: BorderRadius.circular(10),
+              items: items.map((r) {
+                return DropdownMenuItem(value: r, child: Text(r.isEmpty ? hint : r));
+              }).toList(),
+              onChanged: enabled ? onChanged : null,
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -624,11 +723,6 @@ class _InadequateManagementScreenState
         child: Text('데이터가 없습니다.', style: TextStyle(fontSize: 14, color: Color(0xFF6B7280))),
       );
     }
-
-    const columns = [
-      '본부', '팀', '허가번호', '호출명칭', '주소', '검사일자',
-      '시정기한', '불합격내용', '불합격상세', '상태', '심의차수',
-    ];
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -643,50 +737,35 @@ class _InadequateManagementScreenState
           child: SingleChildScrollView(
             child: DataTable(
               headingRowColor: WidgetStateProperty.all(const Color(0xFFF9FAFB)),
-              headingTextStyle: const TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-                color: Color(0xFF374151),
-              ),
+              headingTextStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF374151)),
               dataTextStyle: const TextStyle(fontSize: 12, color: Color(0xFF111827)),
               columnSpacing: 16,
               horizontalMargin: 12,
               dataRowMinHeight: 40,
               dataRowMaxHeight: 56,
-              columns: columns.map((c) => DataColumn(label: Text(c))).toList(),
+              sortColumnIndex: _sortColumn != null
+                  ? _columns.indexWhere((c) => c.$2 == _sortColumn)
+                  : null,
+              sortAscending: _sortAsc,
+              columns: _columns.map((c) {
+                return DataColumn(
+                  label: Text(c.$1),
+                  onSort: (i, asc) => _onSort(c.$2),
+                );
+              }).toList(),
               rows: _items.map((item) {
                 return DataRow(
                   onSelectChanged: _isAdmin ? (_) => _showEditDialog(item) : null,
                   cells: [
-                    DataCell(Text(_str(item, 'region') .isNotEmpty ? _str(item, 'region') : _str(item, 'skt본부'), overflow: TextOverflow.ellipsis)),
+                    DataCell(Text(_str(item, 'region').isNotEmpty ? _str(item, 'region') : _str(item, 'skt본부'), overflow: TextOverflow.ellipsis)),
                     DataCell(Text(_str(item, 'ons팀'), overflow: TextOverflow.ellipsis)),
                     DataCell(Text(_str(item, '허가번호'), overflow: TextOverflow.ellipsis)),
-                    DataCell(
-                      ConstrainedBox(
-                        constraints: const BoxConstraints(maxWidth: 140),
-                        child: Text(_str(item, '호출명칭'), overflow: TextOverflow.ellipsis),
-                      ),
-                    ),
-                    DataCell(
-                      ConstrainedBox(
-                        constraints: const BoxConstraints(maxWidth: 180),
-                        child: Text(_str(item, '주소'), overflow: TextOverflow.ellipsis),
-                      ),
-                    ),
+                    DataCell(ConstrainedBox(constraints: const BoxConstraints(maxWidth: 140), child: Text(_str(item, '호출명칭'), overflow: TextOverflow.ellipsis))),
+                    DataCell(ConstrainedBox(constraints: const BoxConstraints(maxWidth: 180), child: Text(_str(item, '주소'), overflow: TextOverflow.ellipsis))),
                     DataCell(Text(_str(item, '검사일자'))),
                     DataCell(_buildDeadlineCell(item)),
-                    DataCell(
-                      ConstrainedBox(
-                        constraints: const BoxConstraints(maxWidth: 140),
-                        child: Text(_str(item, '불합격내용'), overflow: TextOverflow.ellipsis),
-                      ),
-                    ),
-                    DataCell(
-                      ConstrainedBox(
-                        constraints: const BoxConstraints(maxWidth: 180),
-                        child: Text(_str(item, '불합격상세'), overflow: TextOverflow.ellipsis),
-                      ),
-                    ),
+                    DataCell(ConstrainedBox(constraints: const BoxConstraints(maxWidth: 140), child: Text(_str(item, '불합격내용'), overflow: TextOverflow.ellipsis))),
+                    DataCell(ConstrainedBox(constraints: const BoxConstraints(maxWidth: 180), child: Text(_str(item, '불합격상세'), overflow: TextOverflow.ellipsis))),
                     DataCell(_buildStatusChip(_str(item, 'status'))),
                     DataCell(Text(_str(item, '심의차수'))),
                   ],
@@ -707,7 +786,6 @@ class _InadequateManagementScreenState
       final dt = DateTime.parse(deadline.replaceAll('.', '-').replaceAll('/', '-'));
       overdue = dt.isBefore(DateTime.now()) && _str(item, '상태') != '완료';
     } catch (_) {}
-
     return Text(
       deadline,
       style: TextStyle(
@@ -730,26 +808,19 @@ class _InadequateManagementScreenState
         bg = const Color(0xFFF3F4F6);
         fg = const Color(0xFF6B7280);
         break;
-      default: // 미완료
+      default:
         bg = const Color(0xFFFEE2E2);
         fg = const Color(0xFFDC2626);
     }
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-      decoration: BoxDecoration(
-        color: bg,
-        borderRadius: BorderRadius.circular(6),
-      ),
-      child: Text(
-        status.isEmpty ? '미완료' : status,
-        style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: fg),
-      ),
+      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(6)),
+      child: Text(status.isEmpty ? '미완료' : status, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: fg)),
     );
   }
 
   Widget _buildPagination() {
     final totalPages = (_totalItems / _pageSize).ceil().clamp(1, 9999);
-
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
       decoration: const BoxDecoration(
@@ -761,27 +832,14 @@ class _InadequateManagementScreenState
         children: [
           IconButton(
             icon: const Icon(Icons.chevron_left, size: 20),
-            onPressed: _page > 1
-                ? () {
-                    setState(() => _page--);
-                    _loadData();
-                  }
-                : null,
+            onPressed: _page > 1 ? () { setState(() => _page--); _loadData(); } : null,
           ),
           const SizedBox(width: 8),
-          Text(
-            '$_page / $totalPages',
-            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
-          ),
+          Text('$_page / $totalPages', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500)),
           const SizedBox(width: 8),
           IconButton(
             icon: const Icon(Icons.chevron_right, size: 20),
-            onPressed: _page < totalPages
-                ? () {
-                    setState(() => _page++);
-                    _loadData();
-                  }
-                : null,
+            onPressed: _page < totalPages ? () { setState(() => _page++); _loadData(); } : null,
           ),
         ],
       ),
@@ -803,10 +861,7 @@ class _InadequateManagementScreenState
           children: [
             Container(
               padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: c.color.withValues(alpha: 0.08),
-                borderRadius: BorderRadius.circular(8),
-              ),
+              decoration: BoxDecoration(color: c.color.withValues(alpha: 0.08), borderRadius: BorderRadius.circular(8)),
               child: Icon(c.icon, color: c.color, size: 20),
             ),
             const SizedBox(width: 10),
@@ -816,11 +871,7 @@ class _InadequateManagementScreenState
                 children: [
                   Text(c.label, style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280))),
                   const SizedBox(height: 2),
-                  Text(
-                    '${c.count}건',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: c.color),
-                    overflow: TextOverflow.ellipsis,
-                  ),
+                  Text('${c.count}건', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: c.color), overflow: TextOverflow.ellipsis),
                 ],
               ),
             ),
@@ -829,7 +880,6 @@ class _InadequateManagementScreenState
       ),
     );
   }
-
 }
 
 class _SummaryInfo {

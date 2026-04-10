@@ -543,6 +543,7 @@ class InspectionService {
   /// 부적합 목록
   Future<Map<String, dynamic>> getInadequateList(int year, {
     String region = '',
+    String team = '',
     String status = '',
     int page = 1,
     int pageSize = 100,
@@ -551,6 +552,7 @@ class InspectionService {
         queryParameters: {
       'year': '$year',
       if (region.isNotEmpty) 'region': region,
+      if (team.isNotEmpty) 'team': team,
       if (status.isNotEmpty) 'status': status,
       'page': '$page',
       'page_size': '$pageSize',

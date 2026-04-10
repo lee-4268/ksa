@@ -14831,6 +14831,7 @@ async def inadequate_list(
     request: Request,
     year: int = Query(...),
     region: str = Query(""),
+    team: str = Query(""),
     status: str = Query(""),
     page: int = Query(1),
     pageSize: int = Query(100),
@@ -14846,6 +14847,9 @@ async def inadequate_list(
         if region:
             where += " AND region=?"
             params.append(region)
+        if team:
+            where += " AND ons팀=?"
+            params.append(team)
         if status:
             where += " AND status=?"
             params.append(status)
