@@ -840,14 +840,15 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
             };
             final next = (_locationMode + 1) % 3;
             if (next == 0) {
-              // 추적 중지, 마커 제거
+              // 종료: 추적 중지, 마커 제거, 지도 회전 초기화
               _mapKey.currentState?.stopLocationTracking();
               _mapKey.currentState?.clearLocationMarker();
             } else if (next == 1) {
-              // 북쪽 고정: 현재 위치로 이동 + 방향 화살표
+              // 북쪽 고정 모드: 현재 위치로 이동 + 나침반 방향 화살표 (지도 고정)
+              _mapKey.currentState?.resetMapRotation();
               _mapKey.currentState?.moveToCurrentLocation();
             } else {
-              // 실시간 추적: 지도가 내 위치를 따라감
+              // 방향 추적 모드: 지도가 내가 향하는 방향으로 회전, 마커는 항상 위
               _mapKey.currentState?.startLocationTracking();
             }
             setState(() => _locationMode = next);
