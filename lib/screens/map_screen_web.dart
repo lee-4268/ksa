@@ -220,8 +220,8 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
         var customOverlay = new kakao.maps.CustomOverlay({
           position: position,
           content: makeContent(rotation),
-          // yAnchor: 파란 점(전체 높이 40px 중 아래 18px의 중심 = 31/40 = 0.775)
-          yAnchor: 0.775,
+          // yAnchor: 파란 점 중심 기준 (화살표 16px + gap 2px + 점 반지름 9px) / 전체 40px = 0.675
+          yAnchor: 0.675,
           xAnchor: 0.5,
           zIndex: 10
         });
@@ -229,20 +229,7 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
         window['kakaoCurrentLocationMarker_$_containerId'] = customOverlay;
         window['kakaoMakeContent_$_containerId'] = makeContent;
 
-        // 지도 회전 (나침반 방향의 반대 = 지도가 북쪽을 위로)
-        // 카카오맵은 setRotation이 없으므로 CSS transform으로 맵 컨테이너 회전
-        var mapContainer = map.getNode ? map.getNode() : null;
-        if (!mapContainer) {
-          // getNode 없는 버전 대비: 컨테이너 직접 접근
-          mapContainer = document.getElementById('$_containerId');
-        }
-        if (mapContainer) {
-          mapContainer.style.transform = 'rotate(' + (-rotation) + 'deg)';
-          mapContainer.style.transformOrigin = '50% 50%';
-          window['kakaoMapContainer_$_containerId'] = mapContainer;
-        }
-
-        // 나침반 이벤트 등록 (한 번만)
+        // 나침반 이벤트 등록 (한 번만) — 화살표 방향만 업데이트, 지도 회전 없음
         if (!window['kakaoCompassRegistered_$_containerId']) {
           window['kakaoCompassRegistered_$_containerId'] = true;
           var handleOrientation = function(event) {
@@ -253,17 +240,11 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
 
             window['kakaoCompassHeading_$_containerId'] = alpha;
 
-            // 마커 방향 업데이트
+            // 마커 화살표 방향만 업데이트
             var overlay = window['kakaoCurrentLocationMarker_$_containerId'];
             var fn = window['kakaoMakeContent_$_containerId'];
             if (overlay && fn) {
               overlay.setContent(fn(alpha));
-            }
-
-            // 지도 반대 방향 회전 (나침반이 북쪽을 가리키도록)
-            var container = window['kakaoMapContainer_$_containerId'];
-            if (container) {
-              container.style.transform = 'rotate(' + (-alpha) + 'deg)';
             }
           };
 
