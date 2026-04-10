@@ -657,23 +657,26 @@ class _HomeContentState extends State<_HomeContent> {
       if (_commTab) {
         // 공지사항: 사용자 본부에 따라 필터링
         final auth = context.read<AuthService>();
-        final divisionId = auth.currentDivisionId; // null이면 지역본부 아님
+        // notices.division은 '강북','충청' 등 짧은 한글명으로 저장됨
+        final divisionName = auth.currentDivisionShortName; // null이면 지역본부 아님
+        debugPrint('[공지] userDepartment=${auth.userDepartment} | shortName=$divisionName');
 
         Future<List<Map<String, dynamic>>> fetchNotices;
-        if (divisionId != null) {
-          // 지역본부 소속: 전체 공지 + 본부 공지 합쳐서 표시
+        if (divisionName != null) {
+          // 지역본부 소속: '전체' 카테고리 공지 + 본부 카테고리 공지 합쳐서 표시
           fetchNotices = Future.wait([
-            _commSvc.getNotices(pageSize: 20),           // 전체 카테고리
-            _commSvc.getNotices(division: divisionId, pageSize: 20), // 본부 카테고리
+            _commSvc.getNotices(division: '전체', pageSize: 20),       // 전체 카테고리
+            _commSvc.getNotices(division: divisionName, pageSize: 20), // 본부 카테고리
           ]).then((results) {
+            debugPrint('[공지] 전체카테고리 ${(results[0]['notices'] as List?)?.length ?? 0}건, $divisionName카테고리 ${(results[1]['notices'] as List?)?.length ?? 0}건');
+            debugPrint('[공지] 전체카테고리 divisions: ${(results[0]['notices'] as List?)?.map((e) => e['division']).toList()}');
+            debugPrint('[공지] $divisionName카테고리 divisions: ${(results[1]['notices'] as List?)?.map((e) => e['division']).toList()}');
             final all = <Map<String, dynamic>>{};
             for (final res in results) {
               for (final item in List<Map<String, dynamic>>.from(res['notices'] ?? [])) {
-                // id 기준 중복 제거
                 all.add(item);
               }
             }
-            // id로 중복 제거 후 created_at 내림차순 정렬, 5개만
             final seen = <dynamic>{};
             final deduped = all.where((item) => seen.add(item['id'])).toList();
             deduped.sort((a, b) {
@@ -684,8 +687,8 @@ class _HomeContentState extends State<_HomeContent> {
             return deduped.take(5).toList();
           });
         } else {
-          // 지역본부 아님: 전체 카테고리만
-          fetchNotices = _commSvc.getNotices(pageSize: 5).then(
+          // 지역본부 아님: '전체' 카테고리만
+          fetchNotices = _commSvc.getNotices(division: '전체', pageSize: 5).then(
             (res) => List<Map<String, dynamic>>.from(res['notices'] ?? []),
           );
         }

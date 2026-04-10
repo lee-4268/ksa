@@ -106,6 +106,21 @@ class AuthService extends ChangeNotifier {
   String? get currentDivisionId => _getDivisionIdFromName(_userDepartment);
   String? get currentDivisionName => _userDepartment;
 
+  /// notices.division 컬럼과 일치하는 짧은 본부명 반환
+  /// region 값이 '강북본부', '강북Access담당' 등 다양한 형태여도 처리
+  /// 지역본부가 아니면 null 반환
+  static const _shortDivisionNames = [
+    '강남', '강북', '경기', '인천', '강원', '충청', '경북', '경남', '서부',
+  ];
+
+  String? get currentDivisionShortName {
+    if (_userDepartment == null) return null;
+    for (final name in _shortDivisionNames) {
+      if (_userDepartment!.startsWith(name)) return name;
+    }
+    return null;
+  }
+
   /// 본부명으로부터 본부 ID 추출
   static String? _getDivisionIdFromName(String? departmentName) {
     if (departmentName == null) return null;

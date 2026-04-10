@@ -63,6 +63,9 @@ class _InadequateManagementScreenState
   int _pageSize = 100;
   int _totalItems = 0;
 
+  // 복수선택
+  final Set<int> _checkedIds = {};
+
   // 정렬
   String? _sortColumn;
   bool _sortAsc = true;
@@ -107,7 +110,7 @@ class _InadequateManagementScreenState
   }
 
   Future<void> _loadData() async {
-    setState(() { _loading = true; _error = null; });
+    setState(() { _loading = true; _error = null; _checkedIds.clear(); });
     try {
       final results = await Future.wait([
         _svc.getInadequateStats(_year),
@@ -248,6 +251,230 @@ class _InadequateManagementScreenState
     } finally {
       if (mounted) setState(() => _exporting = false);
     }
+  }
+
+  Widget _buildBulkActionBar() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+      decoration: BoxDecoration(
+        color: primaryColor.withValues(alpha: 0.06),
+        border: const Border(
+          bottom: BorderSide(color: Color(0xFFE5E7EB)),
+          top: BorderSide(color: Color(0xFFE5E7EB)),
+        ),
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            decoration: BoxDecoration(
+              color: primaryColor,
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Text(
+              '${_checkedIds.length}건 선택됨',
+              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Colors.white),
+            ),
+          ),
+          const SizedBox(width: 12),
+          ElevatedButton.icon(
+            onPressed: _showBulkEditDialog,
+            icon: const Icon(Icons.edit_outlined, size: 15),
+            label: const Text('일괄 처리'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: primaryColor,
+              foregroundColor: Colors.white,
+              elevation: 0,
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              textStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+          ),
+          const SizedBox(width: 8),
+          TextButton(
+            onPressed: () => setState(() => _checkedIds.clear()),
+            style: TextButton.styleFrom(
+              foregroundColor: const Color(0xFF6B7280),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            ),
+            child: const Text('선택 해제', style: TextStyle(fontSize: 13)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showBulkEditDialog() {
+    String selectedStatus = '';
+    final reviewCtrl = TextEditingController();
+
+    showDialog(
+      context: context,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx2, setDialogState) {
+            return Dialog(
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              elevation: 0,
+              backgroundColor: Colors.white,
+              child: Container(
+                width: 440,
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // 헤더
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                            color: primaryColor.withValues(alpha: 0.1),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: const Icon(Icons.checklist, size: 24, color: primaryColor),
+                        ),
+                        const SizedBox(width: 14),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text('일괄 처리', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF111827))),
+                              const SizedBox(height: 4),
+                              Text('선택된 ${_checkedIds.length}건에 동일하게 적용됩니다', style: const TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                    const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 20),
+                      child: Divider(height: 1, color: Color(0xFFE5E7EB)),
+                    ),
+
+                    // 상태 선택
+                    const Text('처리 상태', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF374151))),
+                    const SizedBox(height: 6),
+                    const Text('변경 없음으로 두면 상태는 유지됩니다', style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF))),
+                    const SizedBox(height: 10),
+                    Row(
+                      children: ['', '미완료', '완료', '대상제외'].map((s) {
+                        final isSelected = selectedStatus == s;
+                        final label = s.isEmpty ? '변경 없음' : s;
+                        return Expanded(
+                          child: GestureDetector(
+                            onTap: () => setDialogState(() => selectedStatus = s),
+                            child: Container(
+                              margin: const EdgeInsets.only(right: 6),
+                              padding: const EdgeInsets.symmetric(vertical: 10),
+                              decoration: BoxDecoration(
+                                color: isSelected ? (s.isEmpty ? const Color(0xFF374151) : primaryColor) : Colors.white,
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(
+                                  color: isSelected ? (s.isEmpty ? const Color(0xFF374151) : primaryColor) : const Color(0xFFD1D5DB),
+                                ),
+                              ),
+                              alignment: Alignment.center,
+                              child: Text(
+                                label,
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
+                                  color: isSelected ? Colors.white : const Color(0xFF4B5563),
+                                ),
+                              ),
+                            ),
+                          ),
+                        );
+                      }).toList(),
+                    ),
+                    const SizedBox(height: 24),
+
+                    // 심의차수
+                    const Text('심의차수', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF374151))),
+                    const SizedBox(height: 6),
+                    const Text('입력하지 않으면 심의차수는 유지됩니다', style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF))),
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: reviewCtrl,
+                      decoration: InputDecoration(
+                        hintText: '예: 1차, 2차...',
+                        hintStyle: const TextStyle(color: Color(0xFF9CA3AF), fontSize: 13),
+                        filled: true,
+                        fillColor: const Color(0xFFF9FAFB),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
+                        enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
+                        focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: primaryColor)),
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                      ),
+                      style: const TextStyle(fontSize: 14),
+                    ),
+                    const SizedBox(height: 32),
+
+                    // 버튼
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(ctx),
+                          style: TextButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                            foregroundColor: const Color(0xFF6B7280),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                          ),
+                          child: const Text('취소', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                        ),
+                        const SizedBox(width: 8),
+                        ElevatedButton(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: primaryColor,
+                            foregroundColor: Colors.white,
+                            elevation: 0,
+                            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                          ),
+                          onPressed: () async {
+                            final ids = _checkedIds.toList();
+                            final status = selectedStatus;
+                            final review = reviewCtrl.text.trim();
+
+                            // 상태도 없고 심의차수도 없으면 무시
+                            if (status.isEmpty && review.isEmpty) {
+                              Navigator.pop(ctx);
+                              return;
+                            }
+
+                            Navigator.pop(ctx);
+
+                            final dialog = ProgressDialog(context);
+                            dialog.show(message: '${ids.length}건 처리 중...');
+                            try {
+                              await Future.wait(
+                                ids.map((id) => _svc.updateInadequate(
+                                  id,
+                                  status: status,
+                                  reviewRound: review,
+                                )),
+                              );
+                              await dialog.complete(message: '${ids.length}건 처리 완료');
+                              if (mounted) _loadData();
+                            } catch (e) {
+                              await dialog.error(message: '처리 실패: $e');
+                            }
+                          },
+                          child: Text('${_checkedIds.length}건 저장', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
   }
 
   void _showEditDialog(Map<String, dynamic> item) {
@@ -466,6 +693,7 @@ class _InadequateManagementScreenState
               color: Colors.red.shade50,
               child: Text(_error!, style: TextStyle(color: Colors.red.shade700, fontSize: 13)),
             ),
+          if (_isAdmin && _checkedIds.isNotEmpty) _buildBulkActionBar(),
           _buildSummaryCards(),
           _buildFilters(),
           Expanded(child: _loading ? const Center(child: CircularProgressIndicator()) : _buildTable()),
@@ -744,19 +972,57 @@ class _InadequateManagementScreenState
               dataRowMinHeight: 40,
               dataRowMaxHeight: 56,
               sortColumnIndex: _sortColumn != null
-                  ? _columns.indexWhere((c) => c.$2 == _sortColumn)
+                  ? _columns.indexWhere((c) => c.$2 == _sortColumn) + (_isAdmin ? 1 : 0)
                   : null,
               sortAscending: _sortAsc,
-              columns: _columns.map((c) {
-                return DataColumn(
+              columns: [
+                if (_isAdmin)
+                  DataColumn(
+                    label: Checkbox(
+                      tristate: true,
+                      value: _checkedIds.isEmpty
+                          ? false
+                          : _checkedIds.length == _items.length
+                              ? true
+                              : null,
+                      activeColor: primaryColor,
+                      onChanged: (v) {
+                        setState(() {
+                          if (v == true) {
+                            _checkedIds.addAll(_items.map((e) => e['id'] as int));
+                          } else {
+                            _checkedIds.clear();
+                          }
+                        });
+                      },
+                    ),
+                  ),
+                ..._columns.map((c) => DataColumn(
                   label: Text(c.$1),
                   onSort: (i, asc) => _onSort(c.$2),
-                );
-              }).toList(),
+                )),
+              ],
               rows: _items.map((item) {
+                final id = item['id'] as int;
+                final checked = _checkedIds.contains(id);
                 return DataRow(
-                  onSelectChanged: _isAdmin ? (_) => _showEditDialog(item) : null,
+                  selected: checked,
+                  color: checked
+                      ? WidgetStateProperty.all(primaryColor.withValues(alpha: 0.06))
+                      : null,
+                  onSelectChanged: _isAdmin
+                      ? (v) {
+                          setState(() {
+                            if (v == true) {
+                              _checkedIds.add(id);
+                            } else {
+                              _checkedIds.remove(id);
+                            }
+                          });
+                        }
+                      : null,
                   cells: [
+                    if (_isAdmin) const DataCell(SizedBox.shrink()),
                     DataCell(Text(_str(item, 'region').isNotEmpty ? _str(item, 'region') : _str(item, 'skt본부'), overflow: TextOverflow.ellipsis)),
                     DataCell(Text(_str(item, 'ons팀'), overflow: TextOverflow.ellipsis)),
                     DataCell(Text(_str(item, '허가번호'), overflow: TextOverflow.ellipsis)),
@@ -766,7 +1032,10 @@ class _InadequateManagementScreenState
                     DataCell(_buildDeadlineCell(item)),
                     DataCell(ConstrainedBox(constraints: const BoxConstraints(maxWidth: 140), child: Text(_str(item, '불합격내용'), overflow: TextOverflow.ellipsis))),
                     DataCell(ConstrainedBox(constraints: const BoxConstraints(maxWidth: 180), child: Text(_str(item, '불합격상세'), overflow: TextOverflow.ellipsis))),
-                    DataCell(_buildStatusChip(_str(item, 'status'))),
+                    DataCell(
+                      _buildStatusChip(_str(item, 'status')),
+                      onTap: _isAdmin ? () => _showEditDialog(item) : null,
+                    ),
                     DataCell(Text(_str(item, '심의차수'))),
                   ],
                 );
