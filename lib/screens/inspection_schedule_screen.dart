@@ -22,70 +22,6 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
   static const Color _blue = Color(0xFF4A90D9);
   static const Color _orange = Color(0xFFFF9800);
 
-  // ── Gemini SaaS 공통 스타일 ───────────────────────────
-  static const Color _darkBtn = Color(0xFF111827);
-  static const Color _primaryBlue = Color(0xFF2563EB);
-
-  ButtonStyle _actionBtnStyle(Color color) => ElevatedButton.styleFrom(
-    backgroundColor: color, foregroundColor: Colors.white,
-    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
-    elevation: 0,
-    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-    textStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
-  );
-
-  ButtonStyle _cancelBtnStyle() => OutlinedButton.styleFrom(
-    foregroundColor: const Color(0xFF374151),
-    side: const BorderSide(color: Color(0xFFD1D5DB)),
-    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
-    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-    textStyle: const TextStyle(fontSize: 13),
-  );
-
-  InputDecoration _flatInputDecoration(String hint, {IconData? prefixIcon}) => InputDecoration(
-    hintText: hint,
-    hintStyle: TextStyle(fontSize: 13, color: Colors.grey.shade400),
-    filled: true, fillColor: Colors.white,
-    border: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: BorderSide(color: Colors.grey.shade300)),
-    enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: BorderSide(color: Colors.grey.shade300)),
-    focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: const BorderSide(color: _primaryBlue, width: 1.5)),
-    isDense: true,
-    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-    prefixIcon: prefixIcon != null ? Icon(prefixIcon, size: 16, color: Colors.grey.shade400) : null,
-  );
-
-  Widget _buildFlatDropdown(String label, String value, List<String> items, void Function(String?) onChanged, {Map<String, String>? displayMap}) {
-    String display(String v) {
-      if (v.isEmpty) return label;
-      return displayMap?[v] ?? v;
-    }
-    final isActive = value.isNotEmpty;
-    return Container(
-      height: 38,
-      padding: const EdgeInsets.symmetric(horizontal: 10),
-      decoration: BoxDecoration(
-        color: isActive ? const Color(0xFFEFF6FF) : Colors.white,
-        border: Border.all(color: isActive ? _primaryBlue : const Color(0xFFD1D5DB)),
-        borderRadius: BorderRadius.circular(6),
-      ),
-      child: DropdownButtonHideUnderline(
-        child: DropdownButton<String>(
-          value: value,
-          isDense: true,
-          icon: Icon(Icons.unfold_more, size: 16, color: isActive ? _primaryBlue : Colors.grey.shade400),
-          dropdownColor: Colors.white,
-          borderRadius: BorderRadius.circular(8),
-          style: TextStyle(fontSize: 13, color: isActive ? _primaryBlue : const Color(0xFF374151)),
-          items: items.map((v) => DropdownMenuItem(
-            value: v,
-            child: Text(display(v), style: TextStyle(color: v.isEmpty ? Colors.grey.shade500 : const Color(0xFF374151))),
-          )).toList(),
-          onChanged: onChanged,
-        ),
-      ),
-    );
-  }
-
   late final InspectionService _svc;
   late final TabController _tabCtrl;
   final _searchCtrl = TextEditingController();
@@ -540,21 +476,10 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
               ]),
             ),
             actions: [
-              OutlinedButton(
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: const Color(0xFF374151),
-                  side: const BorderSide(color: Color(0xFFD1D5DB)),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
-                ),
-                onPressed: () => Navigator.pop(ctx),
-                child: const Text('취소'),
-              ),
+              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('취소')),
               ElevatedButton(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: _primaryBlue, foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
-                  elevation: 0,
-                ),
+                style: ElevatedButton.styleFrom(backgroundColor: _primary, foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
                 onPressed: selMonth != null && selWeek != null
                     ? () => Navigator.pop(ctx, {'month': selMonth!, 'week': selWeek!, '검사관': inspectorCtrl.text.trim(), '조': selJo})
                     : null,
@@ -610,21 +535,10 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
           const Text('수검 일정을 제거하시겠습니까?', style: TextStyle(fontSize: 14)),
         ]),
         actions: [
-          OutlinedButton(
-            style: OutlinedButton.styleFrom(
-              foregroundColor: const Color(0xFF374151),
-              side: const BorderSide(color: Color(0xFFD1D5DB)),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
-            ),
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('취소'),
-          ),
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('취소')),
           ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFFDC2626), foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
-              elevation: 0,
-            ),
+            style: ElevatedButton.styleFrom(backgroundColor: _primary, foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
             onPressed: () => Navigator.pop(ctx, true),
             child: const Text('제거'),
           ),
@@ -657,27 +571,41 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
           return _selectedLicenseNos.contains(no) && !_isScheduled(no);
         }).toList();
 
+    const btnShape = RoundedRectangleBorder(
+      borderRadius: BorderRadius.all(Radius.circular(10)),
+    );
+    const btnPad = EdgeInsets.symmetric(horizontal: 14, vertical: 8);
+
     return [
       if (unscheduledSelected.isNotEmpty)
         ElevatedButton.icon(
-          icon: const Icon(Icons.event_available, size: 15),
+          icon: const Icon(Icons.event_available, size: 16),
           label: Text('${unscheduledSelected.length}건 일정 등록'),
-          style: _actionBtnStyle(_primaryBlue),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: _blue, foregroundColor: Colors.white,
+            shape: btnShape, padding: btnPad,
+          ),
           onPressed: () => _showBulkUpsertDialog(unscheduledSelected, '일정 등록'),
         ),
       if (scheduledSelected.isNotEmpty) ...[
         if (unscheduledSelected.isNotEmpty) const SizedBox(width: 8),
         ElevatedButton.icon(
-          icon: const Icon(Icons.edit_calendar, size: 15),
+          icon: const Icon(Icons.edit_calendar, size: 16),
           label: Text('${scheduledSelected.length}건 일정 수정'),
-          style: _actionBtnStyle(_primaryBlue),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: _blue, foregroundColor: Colors.white,
+            shape: btnShape, padding: btnPad,
+          ),
           onPressed: () => _showBulkUpsertDialog(scheduledSelected, '일정 수정'),
         ),
         const SizedBox(width: 8),
         ElevatedButton.icon(
-          icon: const Icon(Icons.delete_outline, size: 15),
+          icon: const Icon(Icons.delete_outline, size: 16),
           label: Text('${scheduledSelected.length}건 일정 제거'),
-          style: _actionBtnStyle(const Color(0xFFDC2626)),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: _primary, foregroundColor: Colors.white,
+            shape: btnShape, padding: btnPad,
+          ),
           onPressed: () => _showBulkDeleteDialog(scheduledSelected),
         ),
       ],
@@ -769,21 +697,10 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
               ]),
             ),
             actions: [
-              OutlinedButton(
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: const Color(0xFF374151),
-                  side: const BorderSide(color: Color(0xFFD1D5DB)),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
-                ),
-                onPressed: () => Navigator.pop(ctx),
-                child: const Text('취소'),
-              ),
+              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('취소')),
               ElevatedButton(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: _primaryBlue, foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
-                  elevation: 0,
-                ),
+                style: ElevatedButton.styleFrom(backgroundColor: _primary, foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
                 onPressed: selMonth != null && selWeek != null
                     ? () => Navigator.pop(ctx, {'month': selMonth!, 'week': selWeek!, '검사관': inspectorCtrl.text.trim(), '조': selJo})
                     : null,
@@ -870,21 +787,10 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
           ]),
         ),
         actions: [
-          OutlinedButton(
-            style: OutlinedButton.styleFrom(
-              foregroundColor: const Color(0xFF374151),
-              side: const BorderSide(color: Color(0xFFD1D5DB)),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
-            ),
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('취소'),
-          ),
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('취소')),
           ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFFDC2626), foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
-              elevation: 0,
-            ),
+            style: ElevatedButton.styleFrom(backgroundColor: _primary, foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
             onPressed: () => Navigator.pop(ctx, true),
             child: const Text('제거'),
           ),
@@ -1090,23 +996,24 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
   // ── 필터 바 ────────────────────────────────────────────
 
   Widget _buildFilterBar() {
+
     return Container(
       margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-      padding: const EdgeInsets.all(14),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(12),
         border: Border.all(color: const Color(0xFFE5E7EB)),
         boxShadow: [
-          BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 6, offset: const Offset(0, 2)),
+          BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 8, offset: const Offset(0, 2)),
         ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Row 1: 연도, 시트, 검색창, 총건수, 액션 버튼
+          // Row 1: 연도, 시트, 검색창, 총건수, 일괄등록 버튼
           Wrap(
-            spacing: 8,
+            spacing: 10,
             runSpacing: 8,
             crossAxisAlignment: WrapCrossAlignment.center,
             children: [
@@ -1117,44 +1024,69 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                 child: TextField(
                   controller: _searchCtrl,
                   onChanged: (v) => setState(() => _pSearch = v),
-                  decoration: _flatInputDecoration('호출명칭, 허가번호 또는 주소', prefixIcon: Icons.search),
+                  decoration: InputDecoration(
+                    hintText: '호출명칭, 허가번호 또는 주소 (복수검색: 쉼표/공백 구분)',
+                    hintStyle: TextStyle(fontSize: 13, color: Colors.grey.shade400),
+                    isDense: true,
+                    prefixIcon: Icon(Icons.search, size: 18, color: Colors.grey.shade400),
+                    filled: true,
+                    fillColor: const Color(0xFFF9FAFB),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: BorderSide(color: Colors.grey.shade300),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: BorderSide(color: Colors.grey.shade300),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: BorderSide(color: _primary, width: 1.5),
+                    ),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  ),
                   style: const TextStyle(fontSize: 13),
                   onSubmitted: (_) => _applyFilters(),
                 ),
               ),
               if (_total > 0)
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                   decoration: BoxDecoration(
                     color: const Color(0xFFF0F9FF),
-                    borderRadius: BorderRadius.circular(6),
+                    borderRadius: BorderRadius.circular(8),
                     border: Border.all(color: const Color(0xFFBAE6FD)),
                   ),
                   child: Text('${_formatNumber(_total)}건',
-                      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF0369A1))),
+                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF0369A1))),
                 ),
               if (_isAdmin)
-                ElevatedButton.icon(
-                  icon: const Icon(Icons.add, size: 15),
-                  label: const Text('대상 추가'),
-                  style: _actionBtnStyle(_darkBtn),
+                OutlinedButton.icon(
+                  icon: const Icon(Icons.add_circle_outline, size: 16),
+                  label: const Text('대상 추가', style: TextStyle(fontSize: 13)),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: const Color(0xFF7B1FA2),
+                    side: const BorderSide(color: Color(0xFF7B1FA2)),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                  ),
                   onPressed: _showAddFromStagingDialog,
                 ),
               if (_isAdmin && _selectedLicenseNos.isNotEmpty) ..._buildBulkActionButtons(),
             ],
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 12),
           Divider(height: 1, color: Colors.grey.shade200),
-          const SizedBox(height: 10),
-          // Row 2: 필터 드롭다운 + 적용/초기화/Excel/검사내역서
+          const SizedBox(height: 12),
+          // Row 2: 필터 드롭다운 + 적용/초기화
           Wrap(
             spacing: 8,
             runSpacing: 8,
             crossAxisAlignment: WrapCrossAlignment.center,
             children: [
-              _buildFlatDropdown('본부', _pHdqt, ['', ..._hdqts],
+              _filterDropdown('본부', _pHdqt, ['', ..._hdqts],
                   (v) => setState(() { _pHdqt = v!; _pTeam = ''; _currentTeams = _orgMap[v] ?? []; })),
-              _buildFlatDropdown('팀', _pTeam, ['', ..._currentTeams],
+              _filterDropdown('팀', _pTeam, ['', ..._currentTeams],
                   (v) => setState(() => _pTeam = v!)),
               _buildMultiDropdown('분기', _pQuarters, _allQuarters,
                   (v) => setState(() => _pQuarters = v)),
@@ -1162,7 +1094,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                   (v) => setState(() => _pNationGroups = v)),
               _buildMultiDropdown('검토여부', _pKcaResults, _allKcaResults,
                   (v) => setState(() => _pKcaResults = v)),
-              _buildFlatDropdown('일정등록', _pScheduled, const ['', 'Y', 'N'],
+              _filterDropdown('일정등록', _pScheduled, const ['', 'Y', 'N'],
                   (v) => setState(() => _pScheduled = v ?? ''),
                   displayMap: const {'Y': '등록', 'N': '미등록'}),
               Builder(builder: (_) {
@@ -1177,36 +1109,50 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                     final nb = int.tryParse(b.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0;
                     return na.compareTo(nb);
                   })];
-                return _buildFlatDropdown('수검일정', _pSchedWeek, weekOptions,
+                return _filterDropdown('수검일정', _pSchedWeek, weekOptions,
                     (v) => setState(() => _pSchedWeek = v ?? ''));
               }),
-              const SizedBox(width: 2),
+              const SizedBox(width: 4),
               ElevatedButton(
-                style: _actionBtnStyle(_primaryBlue),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: _primary, foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  elevation: 0,
+                ),
                 onPressed: _applyFilters,
-                child: const Text('적용'),
+                child: const Text('적용', style: TextStyle(fontSize: 13)),
               ),
               OutlinedButton(
-                style: _cancelBtnStyle(),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Colors.grey.shade600,
+                  side: BorderSide(color: Colors.grey.shade300),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                ),
                 onPressed: _resetFilters,
-                child: const Text('초기화'),
+                child: const Text('초기화', style: TextStyle(fontSize: 13)),
               ),
               OutlinedButton.icon(
-                icon: const Icon(Icons.file_download, size: 15),
-                label: const Text('Excel'),
+                icon: const Icon(Icons.file_download, size: 16),
+                label: const Text('Excel', style: TextStyle(fontSize: 13)),
                 style: OutlinedButton.styleFrom(
-                  foregroundColor: const Color(0xFF16A34A),
-                  side: const BorderSide(color: Color(0xFF16A34A)),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                  textStyle: const TextStyle(fontSize: 13),
+                  foregroundColor: const Color(0xFF43A047),
+                  side: const BorderSide(color: Color(0xFF43A047)),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                 ),
                 onPressed: _exportExcel,
               ),
-              ElevatedButton.icon(
-                icon: const Icon(Icons.assignment_outlined, size: 15),
-                label: const Text('검사내역서'),
-                style: _actionBtnStyle(_darkBtn),
+              OutlinedButton.icon(
+                icon: const Icon(Icons.assignment, size: 16),
+                label: const Text('검사내역서', style: TextStyle(fontSize: 13)),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: const Color(0xFF1565C0),
+                  side: const BorderSide(color: Color(0xFF1565C0)),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                ),
                 onPressed: _showInspectionReportDialog,
               ),
             ],
@@ -1241,13 +1187,13 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
 
     return Container(
       margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(12),
         border: Border.all(color: const Color(0xFFE5E7EB)),
         boxShadow: [
-          BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 6, offset: const Offset(0, 2)),
+          BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 8, offset: const Offset(0, 2)),
         ],
       ),
       child: Wrap(
@@ -1256,20 +1202,25 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
         crossAxisAlignment: WrapCrossAlignment.center,
         children: [
           _yearDropdown(),
-          _buildFlatDropdown('본부', _mHdqt, ['', ..._hdqts], (v) {
+          _filterDropdown('본부', _mHdqt, ['', ..._hdqts], (v) {
             setState(() { _mHdqt = v ?? ''; _mTeam = ''; });
           }),
-          _buildFlatDropdown('팀', _mTeam, mTeamOpts, (v) {
+          _filterDropdown('팀', _mTeam, mTeamOpts, (v) {
             setState(() => _mTeam = v ?? '');
           }),
-          _buildFlatDropdown('수검일정', _mWeek, weekOptions, (v) {
+          _filterDropdown('수검일정', _mWeek, weekOptions, (v) {
             setState(() => _mWeek = v ?? '');
           }),
           if (_mHdqt.isNotEmpty || _mTeam.isNotEmpty || _mWeek.isNotEmpty)
             OutlinedButton(
-              style: _cancelBtnStyle(),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: Colors.grey.shade600,
+                side: BorderSide(color: Colors.grey.shade300),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              ),
               onPressed: () => setState(() { _mHdqt = ''; _mTeam = ''; _mWeek = ''; }),
-              child: const Text('초기화'),
+              child: const Text('초기화', style: TextStyle(fontSize: 13)),
             ),
         ],
       ),
@@ -1278,21 +1229,21 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
 
   Widget _yearDropdown() {
     return Container(
-      height: 38,
-      padding: const EdgeInsets.symmetric(horizontal: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
       decoration: BoxDecoration(
         color: Colors.white,
-        border: Border.all(color: const Color(0xFFD1D5DB)),
-        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: Colors.grey.shade300),
+        borderRadius: BorderRadius.circular(10),
       ),
       child: DropdownButtonHideUnderline(
         child: DropdownButton<int>(
           value: _year,
           isDense: true,
-          icon: Icon(Icons.unfold_more, size: 16, color: Colors.grey.shade400),
+          icon: Icon(Icons.arrow_drop_down, color: _primary, size: 20),
           dropdownColor: Colors.white,
-          borderRadius: BorderRadius.circular(8),
-          style: const TextStyle(color: Color(0xFF374151), fontSize: 13),
+
+          borderRadius: BorderRadius.circular(12),
+          style: const TextStyle(color: Colors.black87, fontSize: 13),
           items: List.generate(5, (i) => DateTime.now().year - 1 + i)
               .map((y) => DropdownMenuItem(value: y, child: Text('$y년')))
               .toList(),
@@ -1317,21 +1268,21 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
 
   Widget _sheetDropdown() {
     return Container(
-      height: 38,
-      padding: const EdgeInsets.symmetric(horizontal: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
       decoration: BoxDecoration(
         color: Colors.white,
-        border: Border.all(color: const Color(0xFFD1D5DB)),
-        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: Colors.grey.shade300),
+        borderRadius: BorderRadius.circular(10),
       ),
       child: DropdownButtonHideUnderline(
         child: DropdownButton<String>(
           value: _sheet,
           isDense: true,
-          icon: Icon(Icons.unfold_more, size: 16, color: Colors.grey.shade400),
+          icon: Icon(Icons.arrow_drop_down, color: _primary, size: 20),
           dropdownColor: Colors.white,
-          borderRadius: BorderRadius.circular(8),
-          style: const TextStyle(color: Color(0xFF374151), fontSize: 13),
+
+          borderRadius: BorderRadius.circular(12),
+          style: const TextStyle(color: Colors.black87, fontSize: 13),
           items: const [
             DropdownMenuItem(value: 'all', child: Text('전체')),
             DropdownMenuItem(value: 'SKT', child: Text('정기검사')),
@@ -1342,6 +1293,45 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
             setState(() => _sheet = v);
             _loadAll();
           },
+        ),
+      ),
+    );
+  }
+
+  Widget _filterDropdown(String label, String value, List<String> options,
+      void Function(String?) onChanged, {Map<String, String>? displayMap}) {
+    String display(String v) {
+      if (v.isEmpty) return label;
+      return displayMap?[v] ?? v;
+    }
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border.all(color: value.isNotEmpty ? _primary : Colors.grey.shade300),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<String>(
+          value: value,
+          isDense: true,
+          icon: Icon(Icons.arrow_drop_down,
+              color: value.isNotEmpty ? _primary : Colors.grey, size: 20),
+          dropdownColor: Colors.white,
+
+          borderRadius: BorderRadius.circular(12),
+          style: const TextStyle(color: Colors.black87, fontSize: 13),
+          items: options
+              .map((v) => DropdownMenuItem(
+                    value: v,
+                    child: Text(
+                      display(v),
+                      style: TextStyle(
+                          color: v.isEmpty ? Colors.grey.shade500 : Colors.black87),
+                    ),
+                  ))
+              .toList(),
+          onChanged: onChanged,
         ),
       ),
     );
@@ -1362,20 +1352,19 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
         if (result != null) onChanged(result);
       },
       child: Container(
-        height: 38,
-        padding: const EdgeInsets.symmetric(horizontal: 10),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         decoration: BoxDecoration(
-          color: hasVal ? const Color(0xFFEFF6FF) : Colors.white,
-          border: Border.all(color: hasVal ? _primaryBlue : const Color(0xFFD1D5DB)),
-          borderRadius: BorderRadius.circular(6),
+          color: Colors.white,
+          border: Border.all(color: hasVal ? _primary : Colors.grey.shade300),
+          borderRadius: BorderRadius.circular(10),
         ),
         child: Row(mainAxisSize: MainAxisSize.min, children: [
           Text(displayText,
               style: TextStyle(fontSize: 13,
-                  color: hasVal ? _primaryBlue : const Color(0xFF374151))),
+                  color: hasVal ? _primary : Colors.grey.shade600)),
           const SizedBox(width: 4),
-          Icon(Icons.unfold_more,
-              color: hasVal ? _primaryBlue : Colors.grey.shade400, size: 16),
+          Icon(Icons.arrow_drop_down,
+              color: hasVal ? _primary : Colors.grey, size: 20),
         ]),
       ),
     );
@@ -2875,21 +2864,15 @@ class _MultiSelectDialogState extends State<_MultiSelectDialog> {
         ]),
       ),
       actions: [
-        OutlinedButton(
-          style: OutlinedButton.styleFrom(
-            foregroundColor: const Color(0xFF374151),
-            side: const BorderSide(color: Color(0xFFD1D5DB)),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
-          ),
+        TextButton(
           onPressed: () => Navigator.pop(context),
           child: const Text('취소'),
         ),
         ElevatedButton(
           style: ElevatedButton.styleFrom(
-            backgroundColor: const Color(0xFF2563EB),
+            backgroundColor: const Color(0xFFE53935),
             foregroundColor: Colors.white,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
-            elevation: 0,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
           ),
           onPressed: () => Navigator.pop(context, _selected),
           child: const Text('적용'),
@@ -2927,7 +2910,7 @@ class _InspectionReportDialog extends StatefulWidget {
 }
 
 class _InspectionReportDialogState extends State<_InspectionReportDialog> {
-  static const Color _blue = Color(0xFF2563EB);
+  static const Color _blue = Color(0xFF1565C0);
 
   // 필터 상태
   String _hdqt = '', _team = '', _quarter = '', _nationGroup = '', _kcaResult = '';
@@ -3196,11 +3179,11 @@ class _InspectionReportDialogState extends State<_InspectionReportDialog> {
                 const SizedBox(width: 8),
                 ElevatedButton.icon(
                   icon: const Icon(Icons.search, size: 14),
-                  label: const Text('검색', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+                  label: const Text('검색', style: TextStyle(fontSize: 12)),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF2563EB), foregroundColor: Colors.white,
+                    backgroundColor: _blue, foregroundColor: Colors.white,
                     minimumSize: const Size(70, 34),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                     elevation: 0,
                   ),
                   onPressed: _loadCandidates,
@@ -3368,27 +3351,21 @@ class _InspectionReportDialogState extends State<_InspectionReportDialog> {
           // ── 하단: 시트 제목 + 버튼 ──
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            decoration: BoxDecoration(
-              border: Border(top: BorderSide(color: Colors.grey.shade200)),
-            ),
             child: Row(children: [
-              const Text('시트 제목', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF374151))),
+              const Text('시트 제목', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500)),
               const SizedBox(width: 10),
               Expanded(
                 child: SizedBox(
-                  height: 36,
+                  height: 34,
                   child: TextField(
                     controller: _titleCtrl,
                     decoration: InputDecoration(
                       hintText: '예: 남구_동대구(78)_김성욱',
-                      hintStyle: TextStyle(fontSize: 12, color: Colors.grey.shade400),
-                      filled: true, fillColor: Colors.white,
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(6),
+                      hintStyle: TextStyle(fontSize: 11, color: Colors.grey.shade400),
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
                           borderSide: BorderSide(color: Colors.grey.shade300)),
-                      enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(6),
+                      enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
                           borderSide: BorderSide(color: Colors.grey.shade300)),
-                      focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(6),
-                          borderSide: const BorderSide(color: Color(0xFF2563EB), width: 1.5)),
                       contentPadding: const EdgeInsets.symmetric(horizontal: 10),
                       isDense: true,
                     ),
@@ -3396,14 +3373,8 @@ class _InspectionReportDialogState extends State<_InspectionReportDialog> {
                   ),
                 ),
               ),
-              const SizedBox(width: 12),
-              OutlinedButton(
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: const Color(0xFF374151),
-                  side: const BorderSide(color: Color(0xFFD1D5DB)),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                ),
+              const SizedBox(width: 16),
+              TextButton(
                 onPressed: _generating ? null : () => Navigator.pop(context),
                 child: const Text('취소'),
               ),
@@ -3412,14 +3383,14 @@ class _InspectionReportDialogState extends State<_InspectionReportDialog> {
                 icon: _generating
                     ? const SizedBox(width: 14, height: 14,
                         child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                    : const Icon(Icons.download, size: 15),
+                    : const Icon(Icons.download, size: 16),
                 label: Text(_generating ? '생성 중...' : '검사내역서 생성 (${_confirmed.length}건)',
-                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                    style: const TextStyle(fontSize: 13)),
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: _confirmed.isEmpty ? Colors.grey.shade300 : const Color(0xFF111827),
+                  backgroundColor: _confirmed.isEmpty ? Colors.grey.shade400 : _blue,
                   foregroundColor: Colors.white,
                   minimumSize: const Size(160, 38),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                   elevation: 0,
                 ),
                 onPressed: (_confirmed.isEmpty || _generating) ? null : () {
@@ -3463,7 +3434,7 @@ class _AddFromStagingDialog extends StatefulWidget {
 }
 
 class _AddFromStagingDialogState extends State<_AddFromStagingDialog> {
-  static const Color _purple = Color(0xFF111827);
+  static const Color _purple = Color(0xFF7B1FA2);
 
   String _hdqt = '', _team = '', _quarter = '', _nationGroup = '';
   final _searchCtrl = TextEditingController();
@@ -3595,7 +3566,7 @@ class _AddFromStagingDialogState extends State<_AddFromStagingDialog> {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
         decoration: BoxDecoration(
-          color: checked ? const Color(0xFFEFF6FF) : Colors.transparent,
+          color: checked ? Colors.purple.shade50 : Colors.transparent,
           border: Border(bottom: BorderSide(color: Colors.grey.shade100)),
         ),
         child: Row(children: [
@@ -3604,7 +3575,7 @@ class _AddFromStagingDialogState extends State<_AddFromStagingDialog> {
             child: Checkbox(
               value: checked, onChanged: (_) => onTap(),
               materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              activeColor: const Color(0xFF2563EB),
+              activeColor: _purple,
               side: BorderSide(color: Colors.grey.shade400),
             ),
           ),
@@ -3706,11 +3677,11 @@ class _AddFromStagingDialogState extends State<_AddFromStagingDialog> {
                 const SizedBox(width: 8),
                 ElevatedButton.icon(
                   icon: const Icon(Icons.search, size: 14),
-                  label: const Text('검색', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+                  label: const Text('검색', style: TextStyle(fontSize: 12)),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF2563EB), foregroundColor: Colors.white,
+                    backgroundColor: _purple, foregroundColor: Colors.white,
                     minimumSize: const Size(70, 34),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                     elevation: 0,
                   ),
                   onPressed: _loadCandidates,
@@ -3767,7 +3738,7 @@ class _AddFromStagingDialogState extends State<_AddFromStagingDialog> {
                               value: _candidates.isNotEmpty && _leftChecked.length == _candidates.length,
                               onChanged: (_) => _selectAllLeft(),
                               materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                              activeColor: const Color(0xFF2563EB),
+                              activeColor: _purple,
                               side: BorderSide(color: Colors.grey.shade400),
                             ),
                           ),
@@ -3846,7 +3817,7 @@ class _AddFromStagingDialogState extends State<_AddFromStagingDialog> {
                 child: Column(children: [
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                    color: const Color(0xFFEFF6FF),
+                    color: Colors.purple.shade50,
                     child: Row(children: [
                       GestureDetector(
                         onTap: _selectAllRight,
@@ -3862,8 +3833,8 @@ class _AddFromStagingDialogState extends State<_AddFromStagingDialog> {
                             ),
                           ),
                           const SizedBox(width: 6),
-                          Text('추가할 목록', style: const TextStyle(fontSize: 12,
-                              fontWeight: FontWeight.w600, color: Color(0xFF2563EB))),
+                          Text('추가할 목록', style: TextStyle(fontSize: 12,
+                              fontWeight: FontWeight.w600, color: _purple)),
                         ]),
                       ),
                       const Spacer(),
@@ -3896,18 +3867,9 @@ class _AddFromStagingDialogState extends State<_AddFromStagingDialog> {
           // ── 하단 버튼 ──
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            decoration: BoxDecoration(
-              border: Border(top: BorderSide(color: Colors.grey.shade200)),
-            ),
             child: Row(children: [
               const Spacer(),
-              OutlinedButton(
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: const Color(0xFF374151),
-                  side: const BorderSide(color: Color(0xFFD1D5DB)),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                ),
+              TextButton(
                 onPressed: _adding ? null : () => Navigator.pop(context),
                 child: const Text('취소'),
               ),
@@ -3916,14 +3878,14 @@ class _AddFromStagingDialogState extends State<_AddFromStagingDialog> {
                 icon: _adding
                     ? const SizedBox(width: 14, height: 14,
                         child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                    : const Icon(Icons.add, size: 15),
+                    : const Icon(Icons.add_circle_outline, size: 16),
                 label: Text(_adding ? '추가 중...' : '대상 추가 (${_selected.length}건)',
-                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                    style: const TextStyle(fontSize: 13)),
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: _selected.isEmpty ? Colors.grey.shade300 : _purple,
+                  backgroundColor: _selected.isEmpty ? Colors.grey.shade400 : _purple,
                   foregroundColor: Colors.white,
                   minimumSize: const Size(160, 38),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                   elevation: 0,
                 ),
                 onPressed: (_selected.isEmpty || _adding) ? null : () {
