@@ -544,6 +544,11 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
               ),
             ],
           ),
+          const SizedBox(height: 4),
+          Text(
+            '※ 본부코드: 수도권 10 · 강원 40 · 경남 20 · 경북 60 · 충남 50 · 충북 55 · 전남 30 · 전북 70 · 울산 26 · 제주 80',
+            style: TextStyle(fontSize: 10, color: Colors.grey.shade400),
+          ),
           if (outdatedCount > 0) ...[
             const SizedBox(height: 12),
             Container(
@@ -573,7 +578,6 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
             final latest = latestByDivision[divId];
 
             if (latest == null) {
-              // 데이터 없음
               return _buildFreshnessRow(divName, null, null, currentYm);
             }
 
