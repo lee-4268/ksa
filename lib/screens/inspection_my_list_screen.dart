@@ -36,7 +36,8 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
 
   // 본부 관리자용 팀 필터
   bool _isDivisionAdmin = false;
-  bool _isTracking = false;
+  // 0: 꺼짐, 1: 북쪽 고정 + 방향 표시, 2: 실시간 추적 + 방향 표시
+  int _locationMode = 0;
   bool _isSatellite = false;
   String _selectedTeam = '';
   List<String> _teamOptions = [];
@@ -822,10 +823,13 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
           },
         ),
         const SizedBox(height: 8),
-        // 내 위치 / 실시간 추적 토글
+        // 내 위치 모드 버튼 (클릭할 때마다 0→1→2→0 순환)
+        // 0: 꺼짐(my_location), 1: 북쪽고정(navigation), 2: 추적(explore)
         _mapFloatingButton(
-          icon: _isTracking ? Icons.navigation : Icons.my_location,
-          color: _isTracking ? const Color(0xFF4285F4) : Colors.black87,
+          icon: _locationMode == 2 ? Icons.explore
+              : _locationMode == 1 ? Icons.navigation
+              : Icons.my_location,
+          color: _locationMode > 0 ? const Color(0xFF4285F4) : Colors.black87,
           onTap: () {
             _mapKey.currentState?.onGeolocationError = (error) {
               if (mounted) {
@@ -834,13 +838,19 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
                 );
               }
             };
-            if (_isTracking) {
+            final next = (_locationMode + 1) % 3;
+            if (next == 0) {
+              // 추적 중지, 마커 제거
               _mapKey.currentState?.stopLocationTracking();
-              setState(() => _isTracking = false);
+              _mapKey.currentState?.clearLocationMarker();
+            } else if (next == 1) {
+              // 북쪽 고정: 현재 위치로 이동 + 방향 화살표
+              _mapKey.currentState?.moveToCurrentLocation();
             } else {
+              // 실시간 추적: 지도가 내 위치를 따라감
               _mapKey.currentState?.startLocationTracking();
-              setState(() => _isTracking = true);
             }
+            setState(() => _locationMode = next);
           },
         ),
       ],
