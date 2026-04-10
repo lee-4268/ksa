@@ -111,17 +111,18 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
           function(position) {
             var lat = position.coords.latitude;
             var lng = position.coords.longitude;
+            var heading = position.coords.heading; // GPS 이동 방향 (정지 시 null/NaN)
 
             var map = window['kakaoMapInstance_$_containerId'];
             if (map) {
               var moveLatLon = new kakao.maps.LatLng(lat, lng);
               map.setCenter(moveLatLon);
               map.setLevel(3);
-              console.log('Moved to current location: ' + lat + ', ' + lng);
             }
 
-            // 현재 위치 마커 업데이트
-            window.postMessage({type: 'currentLocation', lat: lat, lng: lng}, '*');
+            // heading이 유효하면 함께 전달, 없으면 나침반 값 사용
+            var validHeading = (heading !== null && !isNaN(heading)) ? heading : null;
+            window.postMessage({type: 'currentLocation', lat: lat, lng: lng, heading: validHeading}, '*');
           },
           function(error) {
             var errorMsg = '';
@@ -147,23 +148,20 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
     html.document.body?.append(html.ScriptElement()..text = jsCode);
   }
 
-  /// 현재 위치 마커 표시/업데이트
-  void _showCurrentLocationMarker(double lat, double lng) {
+  /// 현재 위치 마커 표시/업데이트 (heading 포함, 없으면 나침반 방향 사용)
+  void _showCurrentLocationMarker(double lat, double lng, {double? heading}) {
+    final headingVal = heading != null ? heading.toString() : 'null';
     final jsCode = '''
       (function() {
         if (typeof kakao === 'undefined') return;
         var map = window['kakaoMapInstance_$_containerId'];
         if (!map) return;
 
-        // 기존 현재 위치 마커 제거
+        // 기존 현재 위치 마커/원 제거
         var existingMarker = window['kakaoCurrentLocationMarker_$_containerId'];
         var existingCircle = window['kakaoCurrentLocationCircle_$_containerId'];
-        if (existingMarker) {
-          existingMarker.setMap(null);
-        }
-        if (existingCircle) {
-          existingCircle.setMap(null);
-        }
+        if (existingMarker) existingMarker.setMap(null);
+        if (existingCircle) existingCircle.setMap(null);
 
         var position = new kakao.maps.LatLng($lat, $lng);
 
@@ -181,15 +179,44 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
         circle.setMap(map);
         window['kakaoCurrentLocationCircle_$_containerId'] = circle;
 
-        // 현재 위치 마커 (파란 점)
-        var markerContent = '<div style="' +
-          'width: 20px;' +
-          'height: 20px;' +
-          'background: #4285F4;' +
-          'border: 3px solid white;' +
-          'border-radius: 50%;' +
-          'box-shadow: 0 2px 6px rgba(0,0,0,0.3);' +
-          '"></div>';
+        // heading: 파라미터 우선, 없으면 나침반 캐시값 사용
+        var passedHeading = $headingVal;
+        var compassHeading = window['kakaoCompassHeading_$_containerId'];
+        var rotation = 0;
+        var hasDirection = false;
+        if (passedHeading !== null && !isNaN(passedHeading)) {
+          rotation = passedHeading;
+          hasDirection = true;
+        } else if (compassHeading !== null && compassHeading !== undefined && !isNaN(compassHeading)) {
+          rotation = compassHeading;
+          hasDirection = true;
+        }
+
+        // 마커 HTML: 방향 있으면 화살표 + 파란 점, 없으면 파란 점만
+        var arrowHtml = hasDirection
+          ? '<div style="' +
+              'position:absolute;' +
+              'top:-20px;left:50%;' +
+              'transform:translateX(-50%) rotate(' + rotation + 'deg);' +
+              'width:0;height:0;' +
+              'border-left:7px solid transparent;' +
+              'border-right:7px solid transparent;' +
+              'border-bottom:18px solid #4285F4;' +
+              'filter:drop-shadow(0 1px 2px rgba(0,0,0,0.4));' +
+            '"></div>'
+          : '';
+
+        var markerContent =
+          '<div style="position:relative;width:20px;height:20px;">' +
+            arrowHtml +
+            '<div style="' +
+              'width:20px;height:20px;' +
+              'background:#4285F4;' +
+              'border:3px solid white;' +
+              'border-radius:50%;' +
+              'box-shadow:0 2px 6px rgba(0,0,0,0.35);' +
+            '"></div>' +
+          '</div>';
 
         var customOverlay = new kakao.maps.CustomOverlay({
           position: position,
@@ -201,7 +228,44 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
         customOverlay.setMap(map);
         window['kakaoCurrentLocationMarker_$_containerId'] = customOverlay;
 
-        console.log('Current location marker shown at: $lat, $lng');
+        // 나침반 이벤트 등록 (한 번만)
+        if (!window['kakaoCompassRegistered_$_containerId']) {
+          window['kakaoCompassRegistered_$_containerId'] = true;
+          var handleOrientation = function(event) {
+            var alpha = event.webkitCompassHeading || (event.alpha ? (360 - event.alpha) : null);
+            if (alpha !== null && !isNaN(alpha)) {
+              window['kakaoCompassHeading_$_containerId'] = alpha;
+              // 마커가 있으면 방향 실시간 업데이트
+              var overlay = window['kakaoCurrentLocationMarker_$_containerId'];
+              if (overlay) {
+                var newArrow = '<div style="' +
+                  'position:absolute;top:-20px;left:50%;' +
+                  'transform:translateX(-50%) rotate(' + alpha + 'deg);' +
+                  'width:0;height:0;' +
+                  'border-left:7px solid transparent;border-right:7px solid transparent;border-bottom:18px solid #4285F4;' +
+                  'filter:drop-shadow(0 1px 2px rgba(0,0,0,0.4));' +
+                '"></div>';
+                var newContent =
+                  '<div style="position:relative;width:20px;height:20px;">' +
+                    newArrow +
+                    '<div style="width:20px;height:20px;background:#4285F4;border:3px solid white;border-radius:50%;box-shadow:0 2px 6px rgba(0,0,0,0.35);"></div>' +
+                  '</div>';
+                overlay.setContent(newContent);
+              }
+            }
+          };
+          if (typeof DeviceOrientationEvent !== 'undefined' &&
+              typeof DeviceOrientationEvent.requestPermission === 'function') {
+            // iOS 13+ 권한 요청
+            DeviceOrientationEvent.requestPermission().then(function(state) {
+              if (state === 'granted') {
+                window.addEventListener('deviceorientation', handleOrientation, true);
+              }
+            });
+          } else {
+            window.addEventListener('deviceorientation', handleOrientation, true);
+          }
+        }
       })();
     ''';
     html.document.body?.append(html.ScriptElement()..text = jsCode);
@@ -459,11 +523,13 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
             }
           }
         } else if (data['type'] == 'currentLocation') {
-          // 현재 위치 수신 - 마커 표시
+          // 현재 위치 수신 - 마커 표시 (heading 있으면 방향 화살표 함께 표시)
           final lat = data['lat'] as num?;
           final lng = data['lng'] as num?;
+          final heading = data['heading'] as num?;
           if (lat != null && lng != null) {
-            _showCurrentLocationMarker(lat.toDouble(), lng.toDouble());
+            _showCurrentLocationMarker(lat.toDouble(), lng.toDouble(),
+                heading: heading?.toDouble());
           }
         } else if (data['type'] == 'geolocationError') {
           // 위치 오류 처리
