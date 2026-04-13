@@ -5,6 +5,17 @@ import 'dart:ui_web' as ui_web;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 
+/// style 속성을 포함한 모든 속성을 허용하는 NodeValidator
+class _AllowAllValidator implements html.NodeValidator {
+  const _AllowAllValidator();
+  @override
+  bool allowsElement(html.Element element) => true;
+  @override
+  bool allowsAttribute(html.Element element, String attributeName, String value) => true;
+}
+
+const _validator = _AllowAllValidator();
+
 /// 엑셀 복붙을 지원하는 contenteditable 리치텍스트 에디터 (Web 전용)
 class RichContentEditor extends StatefulWidget {
   final String viewId;
@@ -49,42 +60,11 @@ class RichContentEditorState extends State<RichContentEditor> {
         if (cd == null) return;
         final types = cd.types ?? [];
         if (types.contains('text/html')) {
-          var htmlStr = cd.getData('text/html');
+          final htmlStr = cd.getData('text/html');
           if (htmlStr.isNotEmpty) {
-            // body 내부만 추출
-            final tmp = html.DivElement()..innerHtml = htmlStr;
-            final body = tmp.querySelector('body');
-            var inner = body?.innerHtml ?? htmlStr;
-            // mso 조건부 주석 제거
-            inner = inner.replaceAll(
-                RegExp(r'<!--\[if[^\]]*\]>[\s\S]*?<!\[endif\]-->'), '');
-            // <style> 블록에서 xl 클래스(셀 서식)만 추출·보존
-            final styleBuffer = StringBuffer();
-            final styleMatches =
-                RegExp(r'<style[^>]*>([\s\S]*?)<\/style>', caseSensitive: false)
-                    .allMatches(inner);
-            for (final sm in styleMatches) {
-              final rules = sm.group(1) ?? '';
-              final xlMatches =
-                  RegExp(r'\.(xl\w+|x\w+)\s*\{([^}]+)\}').allMatches(rules);
-              for (final rm in xlMatches) {
-                final props = (rm.group(2) ?? '')
-                    .replaceAll(RegExp(r'mso-[^;]+;?'), '')
-                    .trim();
-                if (props.isNotEmpty) {
-                  styleBuffer.write('.${rm.group(1)}{$props}');
-                }
-              }
-            }
-            // style 블록 제거 후 xl 스타일만 다시 삽입
-            inner = inner.replaceAll(
-                RegExp(r'<style[^>]*>[\s\S]*?<\/style>', caseSensitive: false),
-                '');
-            if (styleBuffer.isNotEmpty) {
-              inner = '<style>${styleBuffer.toString()}</style>$inner';
-            }
+            final cleaned = _processExcelHtml(htmlStr);
             // ignore: deprecated_member_use
-            html.document.execCommand('insertHTML', false, inner);
+            html.document.execCommand('insertHTML', false, cleaned);
             return;
           }
         }
@@ -95,18 +75,52 @@ class RichContentEditorState extends State<RichContentEditor> {
         }
       });
 
-      div.innerHtml = widget.initialHtml;
+      if (widget.initialHtml.isNotEmpty) {
+        div.setInnerHtml(widget.initialHtml, validator: _validator);
+      }
       _div = div;
       return div;
     });
+  }
+
+  /// 엑셀 HTML 정제: mso 조건부 주석 제거, xl 클래스 스타일 보존
+  String _processExcelHtml(String raw) {
+    // body 내부만 추출 (정규식으로 처리 — DivElement.innerHtml이 style 제거하므로)
+    final bodyMatch = RegExp(r'<body[^>]*>([\s\S]*?)<\/body>', caseSensitive: false).firstMatch(raw);
+    var inner = bodyMatch?.group(1) ?? raw;
+
+    // mso 조건부 주석 제거
+    inner = inner.replaceAll(RegExp(r'<!--\[if[^\]]*\]>[\s\S]*?<!\[endif\]-->'), '');
+
+    // <style> 블록에서 xl/x 클래스 규칙 추출 (mso- 속성 제거 후 보존)
+    final styleBuffer = StringBuffer();
+    final styleMatches = RegExp(r'<style[^>]*>([\s\S]*?)<\/style>', caseSensitive: false).allMatches(inner);
+    for (final sm in styleMatches) {
+      final rules = sm.group(1) ?? '';
+      final xlMatches = RegExp(r'\.(xl\w+|x\w+)\s*\{([^}]+)\}').allMatches(rules);
+      for (final rm in xlMatches) {
+        final props = (rm.group(2) ?? '').replaceAll(RegExp(r'mso-[^;]+;?\s*'), '').trim();
+        if (props.isNotEmpty) styleBuffer.write('.${rm.group(1)}{$props}');
+      }
+    }
+
+    // style 블록 제거
+    inner = inner.replaceAll(RegExp(r'<style[^>]*>[\s\S]*?<\/style>', caseSensitive: false), '');
+
+    // xl 스타일만 다시 삽입
+    if (styleBuffer.isNotEmpty) {
+      inner = '<style>${styleBuffer.toString()}</style>$inner';
+    }
+
+    return inner;
   }
 
   /// 현재 에디터 HTML 내용 반환
   String getHtml() => _div?.innerHtml ?? '';
 
   /// 에디터 HTML 내용 설정
-  void setHtml(String html) {
-    _div?.innerHtml = html;
+  void setHtml(String htmlContent) {
+    _div?.setInnerHtml(htmlContent, validator: _validator);
   }
 
   @override

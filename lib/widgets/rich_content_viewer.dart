@@ -4,6 +4,17 @@ import 'dart:ui_web' as ui_web;
 
 import 'package:flutter/material.dart';
 
+/// style 속성을 포함한 모든 속성을 허용하는 NodeValidator
+class _AllowAllValidator implements html.NodeValidator {
+  const _AllowAllValidator();
+  @override
+  bool allowsElement(html.Element element) => true;
+  @override
+  bool allowsAttribute(html.Element element, String attributeName, String value) => true;
+}
+
+const _validator = _AllowAllValidator();
+
 /// HTML/평문 컨텐츠를 렌더링하는 뷰어 (Web 전용)
 class RichContentViewer extends StatefulWidget {
   final String viewId;
@@ -47,12 +58,12 @@ class _RichContentViewerState extends State<RichContentViewer> {
             'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;'
             'color:#374151;overflow-x:auto;';
 
-      // 최소 폴백 스타일 (엑셀 inline style이 없을 때만 적용)
+      // 엑셀 inline style이 없을 때 폴백 최소 스타일
       final style = html.StyleElement()
         ..text = 'table{border-collapse:collapse;} td,th{border:1px solid #d1d5db;padding:4px 8px;}';
 
-      final contentDiv = html.DivElement()
-        ..innerHtml = _renderHtml(widget.content);
+      final contentDiv = html.DivElement();
+      contentDiv.setInnerHtml(_renderHtml(widget.content), validator: _validator);
 
       wrap.append(style);
       wrap.append(contentDiv);
@@ -65,7 +76,7 @@ class _RichContentViewerState extends State<RichContentViewer> {
   void didUpdateWidget(RichContentViewer oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.content != widget.content && _contentDiv != null) {
-      _contentDiv!.innerHtml = _renderHtml(widget.content);
+      _contentDiv!.setInnerHtml(_renderHtml(widget.content), validator: _validator);
     }
   }
 
