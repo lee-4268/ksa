@@ -71,11 +71,11 @@ class RichContentEditorState extends State<RichContentEditor> {
         final e = event as html.ClipboardEvent;
         final cd = e.clipboardData;
         if (cd == null) return;
-        final types = cd.types ?? [];
+        final types = (cd.types ?? []).map((t) => t.toString()).toList();
 
         // 1순위: 이미지 (엑셀 캡처 포함)
         final imageType = types.firstWhere(
-          (t) => t.toString().startsWith('image/'),
+          (t) => t.startsWith('image/'),
           orElse: () => '',
         );
         if (imageType.isNotEmpty && widget.onImagePaste != null) {
@@ -114,7 +114,7 @@ class RichContentEditorState extends State<RichContentEditor> {
         }
 
         // 2순위: HTML (일반 텍스트 HTML)
-        if (types.contains('text/html')) {
+        if (types.any((t) => t == 'text/html')) {
           final htmlStr = cd.getData('text/html');
           if (htmlStr.isNotEmpty) {
             final cleaned = _processExcelHtml(htmlStr);
