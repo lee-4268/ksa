@@ -865,7 +865,7 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
         ? '#2E7D32'
         : inspectionStatus == InspectionStatus.failed
             ? '#FF0000'
-            : '#0066CC';
+            : '#757575';
 
     // 검사 상태별 색상 및 아이콘 (InfoWindow용)
     String statusColor;
