@@ -87,15 +87,22 @@ class _RichContentViewerState extends State<RichContentViewer> {
     super.initState();
     _viewType = 'notice-viewer-${widget.viewId}';
     ui_web.platformViewRegistry.registerViewFactory(_viewType, (int id) {
+      // 테이블 테두리 폴백 스타일 — head에 삽입 (platform view 안 style은 무시됨)
+      final fallbackStyle = html.StyleElement()
+        ..id = 'notice-viewer-table-style'
+        ..text = 'table{border-collapse:collapse;} td,th{border:1px solid #d1d5db;padding:4px 8px;white-space:nowrap;}';
+      if (html.document.getElementById('notice-viewer-table-style') == null) {
+        html.document.head!.append(fallbackStyle);
+      }
+
       final wrap = html.DivElement()
         ..style.cssText =
             'width:100%;height:100%;box-sizing:border-box;font-size:14px;'
             'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;'
             'color:#374151;overflow:auto;';
 
-      // 엑셀 inline style이 없을 때 폴백 최소 스타일
-      final style = html.StyleElement()
-        ..text = 'table{border-collapse:collapse;} td,th{border:1px solid #d1d5db;padding:4px 8px;white-space:nowrap;}';
+      // (platform view 내부 style은 적용 안 되므로 head 방식으로 대체)
+      final style = html.StyleElement();
 
       final contentDiv = html.DivElement();
       contentDiv.setInnerHtml(_renderHtml(widget.content), validator: _validator);

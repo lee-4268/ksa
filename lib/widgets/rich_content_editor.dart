@@ -42,6 +42,14 @@ class RichContentEditorState extends State<RichContentEditor> {
     super.initState();
     _viewType = 'notice-editor-${widget.viewId}';
     ui_web.platformViewRegistry.registerViewFactory(_viewType, (int id) {
+      // 테이블 테두리 폴백 스타일 — head에 삽입
+      final fallbackStyle = html.StyleElement()
+        ..id = 'notice-editor-table-style'
+        ..text = 'table{border-collapse:collapse;} td,th{border:1px solid #d1d5db;padding:4px 8px;white-space:nowrap;}';
+      if (html.document.getElementById('notice-editor-table-style') == null) {
+        html.document.head!.append(fallbackStyle);
+      }
+
       final div = html.DivElement()
         ..contentEditable = 'true'
         ..tabIndex = 0
