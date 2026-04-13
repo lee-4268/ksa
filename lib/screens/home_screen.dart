@@ -224,7 +224,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       if (inDrawer) Navigator.pop(context);
                     },
                     borderRadius: BorderRadius.circular(4),
-                    child: const Text('KCA', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: _textPrimary, letterSpacing: 0.5)),
+                    child: const Text('SKO 무선국', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: _textPrimary, letterSpacing: 0.5)),
                   ),
                 ),
                 InkWell(

@@ -93,7 +93,7 @@ await dialog.error(message: '실패');  // X 애니메이션
 - 로딩: CircularProgressIndicator
 - 완료: 파란 원 + 체크마크 애니메이션 (1.2초 후 자동 닫힘)
 - 에러: 빨간 원 + X 아이콘 (1.5초 후 자동 닫힘)
-- SnackBar 대신 사용할 것
+- **SnackBar 사용 금지** — 모든 사용자 피드백(성공/실패/로딩)은 ProgressDialog로 처리할 것
 
 ## 분기 선택 버튼
 
