@@ -1,5 +1,6 @@
 // ignore: avoid_web_libraries_in_flutter
 import 'dart:html' as html;
+import 'dart:typed_data';
 import 'dart:ui_web' as ui_web;
 
 import 'package:flutter/material.dart';
@@ -16,17 +17,22 @@ class _AllowAllValidator implements html.NodeValidator {
 
 const _validator = _AllowAllValidator();
 
-/// 엑셀 복붙을 지원하는 contenteditable 리치텍스트 에디터 (Web 전용)
+/// 엑셀 복붙(이미지/HTML/텍스트)을 지원하는 contenteditable 에디터 (Web 전용)
+///
+/// [onImagePaste]: 이미지가 붙여넣어졌을 때 호출 — 업로드 후 URL 반환
 class RichContentEditor extends StatefulWidget {
   final String viewId;
   final String initialHtml;
   final double height;
+  /// 이미지 업로드 콜백: bytes, filename → 업로드된 이미지 URL 반환
+  final Future<String> Function(Uint8List bytes, String filename)? onImagePaste;
 
   const RichContentEditor({
     super.key,
     required this.viewId,
     this.initialHtml = '',
     this.height = 320,
+    this.onImagePaste,
   });
 
   @override
@@ -60,13 +66,54 @@ class RichContentEditorState extends State<RichContentEditor> {
             'color:#374151;outline:none;overflow:auto;'
             'pointer-events:all;cursor:text;';
 
-      // 엑셀/HTML paste 이벤트
-      div.addEventListener('paste', (event) {
+      div.addEventListener('paste', (event) async {
         event.preventDefault();
         final e = event as html.ClipboardEvent;
         final cd = e.clipboardData;
         if (cd == null) return;
         final types = cd.types ?? [];
+
+        // 1순위: 이미지 (엑셀 캡처 포함)
+        final imageType = types.firstWhere(
+          (t) => t.toString().startsWith('image/'),
+          orElse: () => '',
+        );
+        if (imageType.isNotEmpty && widget.onImagePaste != null) {
+          final file = cd.files?.firstWhere(
+            (f) => f.type.startsWith('image/'),
+            orElse: () => cd.files!.first,
+          );
+          if (file != null) {
+            // 로딩 placeholder 삽입
+            final placeholder = html.SpanElement()
+              ..id = 'img-uploading'
+              ..text = '⏳ 이미지 업로드 중...'
+              ..style.color = '#9CA3AF';
+            // ignore: deprecated_member_use
+            html.document.execCommand('insertHTML', false, placeholder.outerHtml);
+
+            try {
+              final reader = html.FileReader();
+              reader.readAsArrayBuffer(file);
+              await reader.onLoad.first;
+              final buffer = reader.result as ByteBuffer;
+              final uint8 = Uint8List.view(buffer);
+              final ext = file.type.split('/').last;
+              final url = await widget.onImagePaste!(uint8, 'paste_${DateTime.now().millisecondsSinceEpoch}.$ext');
+
+              // placeholder 제거 후 img 삽입
+              div.querySelector('#img-uploading')?.remove();
+              final imgHtml = '<img src="$url" style="max-width:100%;height:auto;display:block;margin:8px 0;" />';
+              // ignore: deprecated_member_use
+              html.document.execCommand('insertHTML', false, imgHtml);
+            } catch (_) {
+              div.querySelector('#img-uploading')?.remove();
+            }
+            return;
+          }
+        }
+
+        // 2순위: HTML (일반 텍스트 HTML)
         if (types.contains('text/html')) {
           final htmlStr = cd.getData('text/html');
           if (htmlStr.isNotEmpty) {
@@ -76,6 +123,8 @@ class RichContentEditorState extends State<RichContentEditor> {
             return;
           }
         }
+
+        // 3순위: 순수 텍스트
         final text = cd.getData('text/plain');
         if (text.isNotEmpty) {
           // ignore: deprecated_member_use
@@ -91,16 +140,11 @@ class RichContentEditorState extends State<RichContentEditor> {
     });
   }
 
-  /// 엑셀 HTML 정제: mso 조건부 주석 제거, xl 클래스 스타일 보존
+  /// 엑셀 HTML 정제
   String _processExcelHtml(String raw) {
-    // body 내부만 추출 (정규식으로 처리 — DivElement.innerHtml이 style 제거하므로)
     final bodyMatch = RegExp(r'<body[^>]*>([\s\S]*?)<\/body>', caseSensitive: false).firstMatch(raw);
     var inner = bodyMatch?.group(1) ?? raw;
-
-    // mso 조건부 주석 제거
     inner = inner.replaceAll(RegExp(r'<!--\[if[^\]]*\]>[\s\S]*?<!\[endif\]-->'), '');
-
-    // <style> 블록에서 xl/x 클래스 규칙 추출 (mso- 속성 제거 후 보존)
     final styleBuffer = StringBuffer();
     final styleMatches = RegExp(r'<style[^>]*>([\s\S]*?)<\/style>', caseSensitive: false).allMatches(inner);
     for (final sm in styleMatches) {
@@ -111,25 +155,19 @@ class RichContentEditorState extends State<RichContentEditor> {
         if (props.isNotEmpty) styleBuffer.write('.${rm.group(1)}{$props}');
       }
     }
-
-    // style 블록 제거
     inner = inner.replaceAll(RegExp(r'<style[^>]*>[\s\S]*?<\/style>', caseSensitive: false), '');
-
-    // <style>은 execCommand('insertHTML')로 삽입 불가 → document.head에 직접 추가
     if (styleBuffer.isNotEmpty) {
       final styleEl = html.StyleElement()
         ..id = 'excel-paste-style-${DateTime.now().millisecondsSinceEpoch}'
         ..text = styleBuffer.toString();
       html.document.head!.append(styleEl);
     }
-
     return inner;
   }
 
-  /// 현재 에디터 HTML 내용 반환 (head의 excel 스타일도 포함)
+  /// 현재 에디터 HTML 반환 (head의 excel 스타일 포함)
   String getHtml() {
     if (_div == null) return '';
-    // head에 삽입된 excel-paste-style 수집
     final styleEls = html.document.head!.querySelectorAll('[id^="excel-paste-style-"]');
     final styleBuf = StringBuffer();
     for (final el in styleEls) {
@@ -138,7 +176,7 @@ class RichContentEditorState extends State<RichContentEditor> {
     return '${styleBuf.toString()}${_div!.innerHtml}';
   }
 
-  /// 에디터 HTML 내용 설정
+  /// 에디터 HTML 설정
   void setHtml(String htmlContent) {
     _div?.setInnerHtml(htmlContent, validator: _validator);
   }

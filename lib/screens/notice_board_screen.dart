@@ -1059,6 +1059,10 @@ class _NoticeBoardScreenState extends State<NoticeBoardScreen> {
                     viewId: _editorViewId,
                     initialHtml: _htmlContent,
                     height: 320,
+                    onImagePaste: (bytes, filename) async {
+                      final res = await _svc.uploadImage(bytes, filename);
+                      return _svc.getImageUrl(res['url'] as String? ?? '');
+                    },
                   ),
                   const SizedBox(height: 24),
 
