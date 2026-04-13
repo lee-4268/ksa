@@ -51,6 +51,8 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
 
   // 매트릭스 탭 전용 필터
   String _mHdqt = '', _mTeam = '', _mWeek = '', _mMonth = '';
+  // 수검일정별 현황 월 네비게이션 (기본: 현재 달)
+  int _navMonth = DateTime.now().month;
 
   // 다중 선택 (일괄 일정 등록)
   final _selectedLicenseNos = <String>{};
@@ -1313,7 +1315,14 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                     style: const TextStyle(fontSize: 13),
                   ),
                 )).toList(),
-                onChanged: (v) => setState(() => _mMonth = v ?? ''),
+                onChanged: (v) {
+                  final val = v ?? '';
+                  final monthNum = int.tryParse(val.replaceAll(RegExp(r'[^0-9]'), ''));
+                  setState(() {
+                    _mMonth = val;
+                    if (monthNum != null && monthNum >= 1 && monthNum <= 12) _navMonth = monthNum;
+                  });
+                },
               ),
             ),
           ),
@@ -1933,18 +1942,19 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
   // ── 수검일정별 현황 (본부/팀별) ────────────────────────────
 
   /// 매트릭스 카드에서 건수 클릭 시 수검 대상 현황 탭으로 전환하며 필터 적용
-  void _navigateToDataTabWithFilter({required String week, required String hdqt}) {
+  void _navigateToDataTabWithFilter({required String week, String hdqt = '', String team = ''}) {
     setState(() {
       // 수검일정 필터 (pending/applied 동기화)
       _pSchedWeek = week; _aSchedWeek = week;
       // 일정등록 여부 필터
       _pScheduled = 'Y'; _aScheduled = 'Y';
-      // 본부 필터: 항상 갱신 (이전 값 덮어씌움, 빈 값이면 초기화)
+      // 본부 필터
       final validHdqt = hdqt.isNotEmpty && hdqt != '미지정' ? hdqt : '';
       _pHdqt = validHdqt; _aHdqt = validHdqt;
       _currentTeams = validHdqt.isNotEmpty ? (_orgMap[validHdqt] ?? []) : [];
-      // 팀 필터 초기화 (주차 변경 시 이전 팀 필터 유지 방지)
-      _pTeam = ''; _aTeam = '';
+      // 팀 필터
+      final validTeam = team.isNotEmpty && team != '미지정' ? team : '';
+      _pTeam = validTeam; _aTeam = validTeam;
       _page = 1;
     });
     _tabCtrl.animateTo(0);
@@ -1963,14 +1973,18 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
       return week.isNotEmpty;
     }).toList();
 
-    // 수검예정주차 → 본부 → 건수
+    // 수검예정주차 → (본부 또는 팀) → 건수
+    // 본부 필터가 걸린 경우 팀별로, 아닌 경우 본부별로 집계
+    final groupByTeam = _mHdqt.isNotEmpty;
     final weekMap = <String, Map<String, int>>{};
     for (final s in filteredSchedules) {
       final week = (s['수검예정주차'] as String? ?? '').trim();
-      final hdqt = (s['access담당'] as String? ?? '').trim();
-      final hdqtKey = hdqt.isEmpty ? '미지정' : hdqt;
+      final groupVal = groupByTeam
+          ? (s['품질개선팀'] as String? ?? '').trim()
+          : (s['access담당'] as String? ?? '').trim();
+      final groupKey = groupVal.isEmpty ? '미지정' : groupVal;
       weekMap.putIfAbsent(week, () => {});
-      weekMap[week]![hdqtKey] = (weekMap[week]![hdqtKey] ?? 0) + 1;
+      weekMap[week]![groupKey] = (weekMap[week]![groupKey] ?? 0) + 1;
     }
 
     // 주차 정렬
@@ -1983,7 +1997,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
 
     final totalFiltered = filteredSchedules.length;
 
-    // 월별 그룹화: "M월 N주차" 형식에서 월 추출
+    // 월별 그룹화
     String extractMonth(String week) {
       final m = RegExp(r'(\d+)월').firstMatch(week);
       return m != null ? '${m.group(1)}월' : '기타';
@@ -2000,22 +2014,42 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
         return na.compareTo(nb);
       });
 
-    // 월 필터 적용: 기본(빈값)=현재±1개월, '전체'=전부, 특정월=해당월만
-    final now = DateTime.now();
-    final nearMonths = <String>{
-      '${now.month - 1 > 0 ? now.month - 1 : 12}월',
-      '${now.month}월',
-      '${now.month + 1 <= 12 ? now.month + 1 : 1}월',
-    };
-    final months = _mMonth == '전체'
+    // 표시 모드 결정
+    // _mMonth == ''    → 네비게이션 모드 (_navMonth 기준 현재 달만)
+    // _mMonth == '전체' → 전체 달 표시 (그룹 헤더 포함)
+    // _mMonth == 'N월' → 해당 달만 표시 (네비게이션 없음)
+    final isNavMode = _mMonth.isEmpty;
+    final isAllMode = _mMonth == '전체';
+
+    final months = isAllMode
         ? allMonths
-        : _mMonth.isNotEmpty
-            ? allMonths.where((m) => m == _mMonth).toList()
-            : allMonths.where((m) => nearMonths.contains(m)).toList();
+        : isNavMode
+            ? allMonths.where((m) {
+                final n = int.tryParse(m.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0;
+                return n == _navMonth;
+              }).toList()
+            : allMonths.where((m) => m == _mMonth).toList();
+
+    // 오늘 기준 현재 주차 레이블 (M월 N주차)
+    final now = DateTime.now();
+    final currentWeekLabel = '${now.month}월 ${((now.day - 1) ~/ 7) + 1}주차';
+
+    // 네비게이션 모드에서 이전/다음 달 계산
+    final prevMonth = _navMonth > 1 ? _navMonth - 1 : 12;
+    final nextMonth = _navMonth < 12 ? _navMonth + 1 : 1;
+    final hasPrev = allMonths.any((m) {
+      final n = int.tryParse(m.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0;
+      return n == prevMonth;
+    });
+    final hasNext = allMonths.any((m) {
+      final n = int.tryParse(m.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0;
+      return n == nextMonth;
+    });
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        // 타이틀 행
         Padding(
           padding: const EdgeInsets.only(bottom: 10),
           child: Row(
@@ -2026,7 +2060,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
               ),
               const SizedBox(width: 8),
               const Text(
-                '수검일정별 현황 (본부별)',
+                '수검일정별 현황',
                 style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF111827)),
               ),
               const SizedBox(width: 8),
@@ -2049,12 +2083,83 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
             ],
           ),
         ),
+
+        // 네비게이션 바 (기본 모드에서만)
+        if (isNavMode)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: Row(
+              children: [
+                // 이전달 버튼
+                _NavButton(
+                  label: '이전달',
+                  icon: Icons.chevron_left,
+                  enabled: hasPrev,
+                  onTap: hasPrev ? () => setState(() => _navMonth = prevMonth) : null,
+                ),
+                const SizedBox(width: 8),
+                // 현재 표시 달
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: _navMonth == now.month
+                        ? _blue.withValues(alpha: 0.1)
+                        : Colors.grey.shade100,
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(
+                      color: _navMonth == now.month
+                          ? _blue.withValues(alpha: 0.4)
+                          : Colors.grey.shade300,
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (_navMonth == now.month) ...[
+                        Container(
+                          width: 6, height: 6,
+                          decoration: BoxDecoration(color: _blue, shape: BoxShape.circle),
+                        ),
+                        const SizedBox(width: 5),
+                      ],
+                      Text(
+                        '$_navMonth월',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                          color: _navMonth == now.month ? _blue : Colors.black87,
+                        ),
+                      ),
+                      if (months.isNotEmpty) ...[
+                        const SizedBox(width: 6),
+                        Text(
+                          '${months.fold<int>(0, (s, mo) => s + (monthGroups[mo]?.fold<int>(0, (a, w) => a + (weekMap[w]?.values.fold<int>(0, (x, y) => x + y) ?? 0)) ?? 0))}건',
+                          style: TextStyle(fontSize: 11, color: _navMonth == now.month ? _blue : Colors.grey.shade600),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                // 다음달 버튼
+                _NavButton(
+                  label: '다음달',
+                  icon: Icons.chevron_right,
+                  iconRight: true,
+                  enabled: hasNext,
+                  onTap: hasNext ? () => setState(() => _navMonth = nextMonth) : null,
+                ),
+              ],
+            ),
+          ),
+
+        // 카드 영역
         if (months.isEmpty)
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 8),
             child: Text(
               weeks.isNotEmpty
-                  ? '해당 월에 일정이 없습니다. 필터에서 월을 변경하거나 "전체 월"을 선택하세요.'
+                  ? '$_navMonth월에 등록된 일정이 없습니다.'
                   : '조건에 맞는 일정이 없습니다.',
               style: TextStyle(fontSize: 13, color: Colors.grey.shade400),
             ),
@@ -2071,50 +2176,49 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 10),
-                      child: Row(
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                            decoration: BoxDecoration(
-                              color: _primary.withValues(alpha: 0.08),
-                              borderRadius: BorderRadius.circular(8),
-                              border: Border.all(color: _primary.withValues(alpha: 0.2)),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(Icons.calendar_month_outlined, size: 14, color: _primary),
-                                const SizedBox(width: 5),
-                                Text(
-                                  month,
-                                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _primary),
-                                ),
-                                const SizedBox(width: 6),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-                                  decoration: BoxDecoration(
-                                    color: _primary,
-                                    borderRadius: BorderRadius.circular(8),
+                    // 전체 달 표시 모드에서만 월 그룹 헤더 표시
+                    if (isAllMode)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 10),
+                        child: Row(
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                              decoration: BoxDecoration(
+                                color: _primary.withValues(alpha: 0.08),
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(color: _primary.withValues(alpha: 0.2)),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(Icons.calendar_month_outlined, size: 14, color: _primary),
+                                  const SizedBox(width: 5),
+                                  Text(month,
+                                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _primary)),
+                                  const SizedBox(width: 6),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                                    decoration: BoxDecoration(color: _primary, borderRadius: BorderRadius.circular(8)),
+                                    child: Text('$monthTotal건',
+                                        style: const TextStyle(fontSize: 11, color: Colors.white, fontWeight: FontWeight.w600)),
                                   ),
-                                  child: Text(
-                                    '$monthTotal건',
-                                    style: const TextStyle(fontSize: 11, color: Colors.white, fontWeight: FontWeight.w600),
-                                  ),
-                                ),
-                              ],
+                                ],
+                              ),
                             ),
-                          ),
-                          const SizedBox(width: 10),
-                          Expanded(child: Container(height: 1, color: const Color(0xFFE5E7EB))),
-                        ],
+                            const SizedBox(width: 10),
+                            Expanded(child: Container(height: 1, color: const Color(0xFFE5E7EB))),
+                          ],
+                        ),
                       ),
-                    ),
                     Wrap(
                       spacing: 12,
                       runSpacing: 12,
-                      children: monthWeeks.map((week) => _buildWeekCard(week, weekMap[week]!)).toList(),
+                      children: monthWeeks.map((week) => _buildWeekCard(
+                        week, weekMap[week]!,
+                        isCurrentWeek: week == currentWeekLabel,
+                        groupByTeam: groupByTeam,
+                      )).toList(),
                     ),
                   ],
                 ),
@@ -2125,100 +2229,158 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     );
   }
 
-  Widget _buildWeekCard(String week, Map<String, int> hdqtData) {
+  Widget _buildWeekCard(String week, Map<String, int> hdqtData, {bool isCurrentWeek = false, bool groupByTeam = false}) {
     final totalCount = hdqtData.values.fold<int>(0, (s, c) => s + c);
     final hdqts = hdqtData.keys.toList()..sort();
 
-    return Container(
-      width: 200,
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFFE5E7EB)),
-        boxShadow: [
-          BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 8, offset: const Offset(0, 2)),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // 카드 헤더 (전체 건수 클릭 → 탭 이동)
-          InkWell(
-            onTap: () => _navigateToDataTabWithFilter(week: week, hdqt: ''),
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-              decoration: BoxDecoration(
-                color: _blue.withValues(alpha: 0.08),
-                borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
-                border: Border(bottom: BorderSide(color: _blue.withValues(alpha: 0.15))),
-              ),
-              child: Row(
-                children: [
-                  Icon(Icons.calendar_today_outlined, size: 14, color: _blue),
-                  const SizedBox(width: 6),
-                  Expanded(
-                    child: Text(
-                      week,
-                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _blue),
-                    ),
-                  ),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                    decoration: BoxDecoration(color: _blue, borderRadius: BorderRadius.circular(10)),
-                    child: Text(
-                      '$totalCount건',
-                      style: const TextStyle(fontSize: 11, color: Colors.white, fontWeight: FontWeight.w600),
-                    ),
-                  ),
-                ],
-              ),
+    // 현재 주차 강조 색상
+    const accentColor = Color(0xFF0D47A1);
+
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        Container(
+          width: 200,
+          decoration: BoxDecoration(
+            color: isCurrentWeek ? const Color(0xFFF0F4FF) : Colors.white,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: isCurrentWeek ? accentColor.withValues(alpha: 0.6) : const Color(0xFFE5E7EB),
+              width: isCurrentWeek ? 1.8 : 1,
             ),
+            boxShadow: isCurrentWeek
+                ? [BoxShadow(color: accentColor.withValues(alpha: 0.15), blurRadius: 12, offset: const Offset(0, 4))]
+                : [BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 8, offset: const Offset(0, 2))],
           ),
-          // 본부별 목록 (각 행 클릭 → 해당 본부+주차 필터로 탭 이동)
-          Padding(
-            padding: const EdgeInsets.all(12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: hdqts.map((hdqt) => InkWell(
-                onTap: () => _navigateToDataTabWithFilter(week: week, hdqt: hdqt),
-                borderRadius: BorderRadius.circular(4),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 2),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // 카드 헤더
+              InkWell(
+                onTap: () => _navigateToDataTabWithFilter(
+                  week: week,
+                  hdqt: groupByTeam ? _mHdqt : '',
+                ),
+                borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: isCurrentWeek
+                        ? accentColor.withValues(alpha: 0.12)
+                        : _blue.withValues(alpha: 0.08),
+                    borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
+                    border: Border(bottom: BorderSide(
+                      color: isCurrentWeek
+                          ? accentColor.withValues(alpha: 0.25)
+                          : _blue.withValues(alpha: 0.15),
+                    )),
+                  ),
                   child: Row(
                     children: [
-                      Container(
-                        width: 6, height: 6,
-                        decoration: BoxDecoration(color: _primary, borderRadius: BorderRadius.circular(3)),
+                      Icon(
+                        isCurrentWeek ? Icons.today : Icons.calendar_today_outlined,
+                        size: 14,
+                        color: isCurrentWeek ? accentColor : _blue,
                       ),
                       const SizedBox(width: 6),
                       Expanded(
                         child: Text(
-                          hdqt,
-                          style: const TextStyle(fontSize: 12, color: Color(0xFF374151)),
+                          week,
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700,
+                            color: isCurrentWeek ? accentColor : _blue,
+                          ),
                         ),
                       ),
                       Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
                         decoration: BoxDecoration(
-                          color: _primary.withValues(alpha: 0.08),
-                          borderRadius: BorderRadius.circular(6),
+                          color: isCurrentWeek ? accentColor : _blue,
+                          borderRadius: BorderRadius.circular(10),
                         ),
                         child: Text(
-                          '${hdqtData[hdqt]}건',
-                          style: TextStyle(fontSize: 12, color: _primary, fontWeight: FontWeight.w600),
+                          '$totalCount건',
+                          style: const TextStyle(fontSize: 11, color: Colors.white, fontWeight: FontWeight.w600),
                         ),
                       ),
-                      const SizedBox(width: 2),
-                      Icon(Icons.arrow_forward_ios, size: 10, color: Colors.grey.shade400),
                     ],
                   ),
                 ),
-              )).toList(),
+              ),
+              // 본부별/팀별 목록
+              Padding(
+                padding: const EdgeInsets.all(12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: hdqts.map((hdqt) => InkWell(
+                    onTap: () => groupByTeam
+                        ? _navigateToDataTabWithFilter(week: week, hdqt: _mHdqt, team: hdqt)
+                        : _navigateToDataTabWithFilter(week: week, hdqt: hdqt),
+                    borderRadius: BorderRadius.circular(4),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 2),
+                      child: Row(
+                        children: [
+                          Container(
+                            width: 6, height: 6,
+                            decoration: BoxDecoration(
+                              color: isCurrentWeek ? accentColor : _primary,
+                              borderRadius: BorderRadius.circular(3),
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(hdqt,
+                                style: const TextStyle(fontSize: 12, color: Color(0xFF374151))),
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                            decoration: BoxDecoration(
+                              color: isCurrentWeek
+                                  ? accentColor.withValues(alpha: 0.08)
+                                  : _primary.withValues(alpha: 0.08),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Text(
+                              '${hdqtData[hdqt]}건',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: isCurrentWeek ? accentColor : _primary,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 2),
+                          Icon(Icons.arrow_forward_ios, size: 10, color: Colors.grey.shade400),
+                        ],
+                      ),
+                    ),
+                  )).toList(),
+                ),
+              ),
+            ],
+          ),
+        ),
+        // 현재 주차 배지
+        if (isCurrentWeek)
+          Positioned(
+            top: -8,
+            right: 8,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                color: accentColor,
+                borderRadius: BorderRadius.circular(8),
+                boxShadow: [BoxShadow(color: accentColor.withValues(alpha: 0.4), blurRadius: 4, offset: const Offset(0, 2))],
+              ),
+              child: const Text(
+                '이번 주',
+                style: TextStyle(fontSize: 10, color: Colors.white, fontWeight: FontWeight.w700),
+              ),
             ),
           ),
-        ],
-      ),
+      ],
     );
   }
 
@@ -4640,3 +4802,53 @@ class _CompareDialogState extends State<_CompareDialog> {
     );
   }
 }
+
+// ── 이전달/다음달 네비게이션 버튼 ──────────────────────────────────
+
+class _NavButton extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final bool iconRight;
+  final bool enabled;
+  final VoidCallback? onTap;
+
+  const _NavButton({
+    required this.label,
+    required this.icon,
+    this.iconRight = false,
+    required this.enabled,
+    this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final color = enabled ? const Color(0xFF374151) : Colors.grey.shade400;
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: enabled ? Colors.white : Colors.grey.shade50,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: enabled ? Colors.grey.shade300 : Colors.grey.shade200),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: iconRight
+              ? [
+                  Text(label, style: TextStyle(fontSize: 12, color: color, fontWeight: FontWeight.w500)),
+                  const SizedBox(width: 2),
+                  Icon(icon, size: 16, color: color),
+                ]
+              : [
+                  Icon(icon, size: 16, color: color),
+                  const SizedBox(width: 2),
+                  Text(label, style: TextStyle(fontSize: 12, color: color, fontWeight: FontWeight.w500)),
+                ],
+        ),
+      ),
+    );
+  }
+}
+
