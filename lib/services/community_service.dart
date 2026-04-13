@@ -262,6 +262,16 @@ class CommunityService {
   /// 첨부파일 다운로드 URL 생성
   String getFileUrl(String fileKey) => '$_baseUrl/community/files/$fileKey';
 
+  /// 첨부파일 바이트 다운로드 (인증 헤더 포함)
+  Future<Uint8List> downloadFile(String fileKey) async {
+    final resp = await http.get(
+      Uri.parse('$_baseUrl/community/files/$fileKey'),
+      headers: _headers,
+    ).timeout(const Duration(minutes: 5));
+    if (resp.statusCode != 200) throw Exception('파일 다운로드 실패');
+    return resp.bodyBytes;
+  }
+
   Future<void> updateRequestStatus(int id, String status) async {
     final resp = await http.put(
       Uri.parse('$_baseUrl/community/requests/$id/status'),

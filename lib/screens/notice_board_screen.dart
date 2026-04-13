@@ -8,6 +8,7 @@ import 'package:provider/provider.dart';
 
 import '../services/auth_service.dart';
 import '../services/community_service.dart';
+import '../widgets/progress_dialog.dart';
 
 /// 공지사항 화면 — 목록 / 상세 / 작성·수정 3가지 뷰를 상태로 전환
 class NoticeBoardScreen extends StatefulWidget {
@@ -246,18 +247,20 @@ class _NoticeBoardScreenState extends State<NoticeBoardScreen> {
       return;
     }
     setState(() => _saving = true);
+    final dialog = ProgressDialog(context);
+    dialog.show(message: _isEditing ? '수정 중...' : '등록 중...');
     try {
       if (_isEditing && _editId != null) {
         await _svc.updateNotice(_editId!, title, content, division: _writeDivision, images: _images, attachments: _attachments);
-        _snack('공지사항이 수정되었습니다.');
+        await dialog.complete(message: '공지사항이 수정되었습니다.');
         _openDetail(_editId!);
       } else {
         final newId = await _svc.createNotice(title, content, division: _writeDivision, images: _images, attachments: _attachments);
-        _snack('공지사항이 등록되었습니다.');
+        await dialog.complete(message: '공지사항이 등록되었습니다.');
         _openDetail(newId);
       }
     } catch (e) {
-      _snack('저장 실패: $e');
+      await dialog.error(message: '저장 실패');
     } finally {
       setState(() => _saving = false);
     }
@@ -279,14 +282,16 @@ class _NoticeBoardScreenState extends State<NoticeBoardScreen> {
         ],
       ),
     );
-    if (ok != true) return;
+    if (ok != true || !mounted) return;
+    final dialog = ProgressDialog(context);
+    dialog.show(message: '삭제 중...');
     try {
       await _svc.deleteNotice(id);
-      _snack('삭제되었습니다.');
+      await dialog.complete(message: '삭제되었습니다.');
       setState(() => _mode = _ViewMode.list);
       _fetchList();
     } catch (e) {
-      _snack('삭제 실패: $e');
+      await dialog.error(message: '삭제 실패');
     }
   }
 
@@ -297,11 +302,16 @@ class _NoticeBoardScreenState extends State<NoticeBoardScreen> {
 
   void _snack(String msg) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(msg),
-      behavior: SnackBarBehavior.floating,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-    ));
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        content: Text(msg, style: const TextStyle(fontSize: 14)),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('확인')),
+        ],
+      ),
+    );
   }
 
   // ── 페이지네이션 ──
@@ -843,11 +853,21 @@ class _NoticeBoardScreenState extends State<NoticeBoardScreen> {
                       return Padding(
                         padding: const EdgeInsets.only(bottom: 6),
                         child: InkWell(
-                          onTap: () {
-                            final url = _svc.getFileUrl(att['url']!);
-                            html.AnchorElement(href: url)
-                              ..setAttribute('download', att['filename'] ?? 'file')
-                              ..click();
+                          onTap: () async {
+                            final dialog = ProgressDialog(context);
+                            dialog.show(message: '다운로드 중...');
+                            try {
+                              final bytes = await _svc.downloadFile(att['url']!);
+                              final blob = html.Blob([bytes]);
+                              final blobUrl = html.Url.createObjectUrlFromBlob(blob);
+                              html.AnchorElement(href: blobUrl)
+                                ..setAttribute('download', att['filename'] ?? 'file')
+                                ..click();
+                              html.Url.revokeObjectUrl(blobUrl);
+                              await dialog.complete(message: '다운로드 완료');
+                            } catch (e) {
+                              await dialog.error(message: '다운로드 실패');
+                            }
                           },
                           borderRadius: BorderRadius.circular(6),
                           child: Container(
