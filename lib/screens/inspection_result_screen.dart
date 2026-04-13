@@ -613,6 +613,8 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
             _failTypeChip('불합격(서류)'),
             const SizedBox(width: 8),
             _failTypeChip('불합격(성능)'),
+            const SizedBox(width: 8),
+            _failTypeChip('불합격(서류+성능)'),
           ]),
         ],
         const SizedBox(height: 16),

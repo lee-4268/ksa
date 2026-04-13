@@ -719,22 +719,18 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // 위치 아이콘 (좌표 유무로 색상 구분)
+            // 위치 아이콘 (상태별 색상 — 마커와 동일)
             Stack(
               children: [
                 Container(
                   width: 56, height: 56,
                   decoration: BoxDecoration(
-                    color: status == '합격'
-                        ? Colors.green.shade50
-                        : (hasCoords ? Colors.blue.shade50 : Colors.grey.shade100),
+                    color: statusColor.withValues(alpha: 0.1),
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: Icon(
                     hasCoords ? Icons.location_on : Icons.location_off,
-                    color: status == '합격'
-                        ? Colors.green
-                        : (hasCoords ? Colors.blue : Colors.grey),
+                    color: statusColor,
                     size: 26,
                   ),
                 ),
@@ -743,8 +739,17 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
                     right: 0, bottom: 0,
                     child: Container(
                       padding: const EdgeInsets.all(2),
-                      decoration: BoxDecoration(color: Colors.green, borderRadius: BorderRadius.circular(4)),
+                      decoration: BoxDecoration(color: statusColor, borderRadius: BorderRadius.circular(4)),
                       child: const Icon(Icons.check, color: Colors.white, size: 12),
+                    ),
+                  ),
+                if (status.startsWith('불합격'))
+                  Positioned(
+                    right: 0, bottom: 0,
+                    child: Container(
+                      padding: const EdgeInsets.all(2),
+                      decoration: BoxDecoration(color: statusColor, borderRadius: BorderRadius.circular(4)),
+                      child: const Icon(Icons.close, color: Colors.white, size: 12),
                     ),
                   ),
               ],
