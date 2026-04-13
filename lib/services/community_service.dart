@@ -77,11 +77,11 @@ class CommunityService {
     }
   }
 
-  Future<int> createNotice(String title, String content, {String division = '전체', List<String> images = const []}) async {
+  Future<int> createNotice(String title, String content, {String division = '전체', List<String> images = const [], List<Map<String, String>> attachments = const []}) async {
     final resp = await http.post(
       Uri.parse('$_baseUrl/community/notices'),
       headers: _headers,
-      body: json.encode({'title': title, 'content': content, 'division': division, 'images': images}),
+      body: json.encode({'title': title, 'content': content, 'division': division, 'images': images, 'attachments': attachments}),
     ).timeout(_apiTimeout);
     final body = json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
     if (resp.statusCode != 200) {
@@ -91,11 +91,11 @@ class CommunityService {
     return (notice?['id'] as num?)?.toInt() ?? 0;
   }
 
-  Future<void> updateNotice(int id, String title, String content, {String division = '전체', List<String> images = const []}) async {
+  Future<void> updateNotice(int id, String title, String content, {String division = '전체', List<String> images = const [], List<Map<String, String>> attachments = const []}) async {
     final resp = await http.put(
       Uri.parse('$_baseUrl/community/notices/$id'),
       headers: _headers,
-      body: json.encode({'title': title, 'content': content, 'division': division, 'images': images}),
+      body: json.encode({'title': title, 'content': content, 'division': division, 'images': images, 'attachments': attachments}),
     ).timeout(_apiTimeout);
     if (resp.statusCode != 200) {
       final body = json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
@@ -244,8 +244,23 @@ class CommunityService {
     return body as Map<String, dynamic>;
   }
 
+  /// 일반 파일 업로드
+  Future<Map<String, dynamic>> uploadFile(Uint8List bytes, String filename) async {
+    final uri = Uri.parse('$_baseUrl/community/upload-file');
+    final request = http.MultipartRequest('POST', uri)
+      ..headers['Authorization'] = 'Bearer ${_authToken ?? ''}'
+      ..files.add(http.MultipartFile.fromBytes('file', bytes, filename: filename));
+    final streamed = await request.send().timeout(const Duration(minutes: 5));
+    final body = json.decode(await streamed.stream.bytesToString());
+    if (streamed.statusCode != 200) throw Exception(body['detail'] ?? '파일 업로드 실패');
+    return body as Map<String, dynamic>;
+  }
+
   /// 이미지 URL 생성
   String getImageUrl(String imageKey) => '$_baseUrl/community/images/$imageKey';
+
+  /// 첨부파일 다운로드 URL 생성
+  String getFileUrl(String fileKey) => '$_baseUrl/community/files/$fileKey';
 
   Future<void> updateRequestStatus(int id, String status) async {
     final resp = await http.put(

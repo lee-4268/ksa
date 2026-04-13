@@ -1,3 +1,5 @@
+// ignore: avoid_web_libraries_in_flutter
+import 'dart:html' as html;
 import 'dart:convert';
 
 import 'package:file_picker/file_picker.dart';
@@ -52,6 +54,7 @@ class _NoticeBoardScreenState extends State<NoticeBoardScreen> {
   String _writeDivision = '전체';
   bool _saving = false;
   List<String> _images = [];
+  List<Map<String, String>> _attachments = []; // {url, filename, ext}
   bool _uploading = false;
 
   @override
@@ -119,6 +122,7 @@ class _NoticeBoardScreenState extends State<NoticeBoardScreen> {
     _contentCtrl.clear();
     _writeDivision = '전체';
     _images = [];
+    _attachments = [];
     setState(() => _mode = _ViewMode.write);
   }
 
@@ -129,6 +133,7 @@ class _NoticeBoardScreenState extends State<NoticeBoardScreen> {
     _contentCtrl.text = item['content'] ?? '';
     _writeDivision = item['division'] ?? '전체';
     _images = _parseImages(item['images']);
+    _attachments = _parseAttachments(item['attachments']);
     setState(() => _mode = _ViewMode.write);
   }
 
@@ -173,6 +178,62 @@ class _NoticeBoardScreenState extends State<NoticeBoardScreen> {
     }
   }
 
+  Future<void> _pickFile() async {
+    if (_attachments.length >= 10) {
+      _snack('파일은 최대 10개까지 첨부할 수 있습니다.');
+      return;
+    }
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.any,
+      withData: true,
+      allowMultiple: true,
+    );
+    if (result == null || result.files.isEmpty) return;
+    for (final file in result.files) {
+      if (_attachments.length >= 10) break;
+      if (file.bytes == null) continue;
+      if (file.bytes!.length > 50 * 1024 * 1024) {
+        _snack('${file.name}: 50MB 이하 파일만 첨부할 수 있습니다.');
+        continue;
+      }
+      setState(() => _uploading = true);
+      try {
+        final res = await _svc.uploadFile(file.bytes!, file.name);
+        final url = res['url'] as String? ?? '';
+        final ext = res['ext'] as String? ?? '';
+        if (url.isNotEmpty) {
+          setState(() => _attachments.add({'url': url, 'filename': file.name, 'ext': ext}));
+        }
+      } catch (e) {
+        _snack('${file.name} 업로드 실패: $e');
+      } finally {
+        setState(() => _uploading = false);
+      }
+    }
+  }
+
+  List<Map<String, String>> _parseAttachments(dynamic raw) {
+    if (raw == null) return [];
+    try {
+      List decoded;
+      if (raw is String) {
+        decoded = json.decode(raw) as List;
+      } else if (raw is List) {
+        decoded = raw;
+      } else {
+        return [];
+      }
+      return decoded.map((e) {
+        if (e is Map) {
+          return {'url': e['url']?.toString() ?? '', 'filename': e['filename']?.toString() ?? '', 'ext': e['ext']?.toString() ?? ''};
+        }
+        return <String, String>{};
+      }).where((e) => e['url']!.isNotEmpty).toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
   Future<void> _save() async {
     final title = _titleCtrl.text.trim();
     final content = _contentCtrl.text.trim();
@@ -187,11 +248,11 @@ class _NoticeBoardScreenState extends State<NoticeBoardScreen> {
     setState(() => _saving = true);
     try {
       if (_isEditing && _editId != null) {
-        await _svc.updateNotice(_editId!, title, content, division: _writeDivision, images: _images);
+        await _svc.updateNotice(_editId!, title, content, division: _writeDivision, images: _images, attachments: _attachments);
         _snack('공지사항이 수정되었습니다.');
         _openDetail(_editId!);
       } else {
-        final newId = await _svc.createNotice(title, content, division: _writeDivision, images: _images);
+        final newId = await _svc.createNotice(title, content, division: _writeDivision, images: _images, attachments: _attachments);
         _snack('공지사항이 등록되었습니다.');
         _openDetail(newId);
       }
@@ -773,6 +834,43 @@ class _NoticeBoardScreenState extends State<NoticeBoardScreen> {
                     ),
                   ],
 
+                  // 첨부파일
+                  if (_parseAttachments(d['attachments']).isNotEmpty) ...[
+                    const SizedBox(height: 40),
+                    Text('첨부파일', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Colors.grey.shade800)),
+                    const SizedBox(height: 12),
+                    ..._parseAttachments(d['attachments']).map((att) {
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 6),
+                        child: InkWell(
+                          onTap: () {
+                            final url = _svc.getFileUrl(att['url']!);
+                            html.AnchorElement(href: url)
+                              ..setAttribute('download', att['filename'] ?? 'file')
+                              ..click();
+                          },
+                          borderRadius: BorderRadius.circular(6),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                            decoration: BoxDecoration(
+                              color: Colors.grey.shade50,
+                              borderRadius: BorderRadius.circular(6),
+                              border: Border.all(color: Colors.grey.shade200),
+                            ),
+                            child: Row(
+                              children: [
+                                Icon(_fileIcon(att['ext'] ?? ''), size: 18, color: _primary),
+                                const SizedBox(width: 10),
+                                Expanded(child: Text(att['filename'] ?? '', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500), overflow: TextOverflow.ellipsis)),
+                                Icon(Icons.download_outlined, size: 16, color: Colors.grey.shade500),
+                              ],
+                            ),
+                          ),
+                        ),
+                      );
+                    }),
+                  ],
+
                   // 수정/삭제 버튼
                   if (isMine || isAdmin) ...[
                     const SizedBox(height: 40),
@@ -1024,6 +1122,61 @@ class _NoticeBoardScreenState extends State<NoticeBoardScreen> {
                       ),
                     ],
                   ),
+                  const SizedBox(height: 24),
+
+                  // 파일 첨부
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      _inputLabel('파일 첨부', paddingBottom: 0),
+                      const SizedBox(width: 12),
+                      Text('${_attachments.length} / 10', style: TextStyle(fontSize: 13, color: Colors.grey.shade500)),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  OutlinedButton.icon(
+                    onPressed: (_uploading || _attachments.length >= 10) ? null : _pickFile,
+                    icon: _uploading
+                        ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+                        : const Icon(Icons.attach_file, size: 16),
+                    label: const Text('파일 선택'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.grey.shade700,
+                      side: BorderSide(color: Colors.grey.shade300),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                      textStyle: const TextStyle(fontSize: 13),
+                    ),
+                  ),
+                  if (_attachments.isNotEmpty) ...[
+                    const SizedBox(height: 10),
+                    ...List.generate(_attachments.length, (i) {
+                      final att = _attachments[i];
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 6),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: Colors.grey.shade50,
+                            borderRadius: BorderRadius.circular(6),
+                            border: Border.all(color: Colors.grey.shade200),
+                          ),
+                          child: Row(
+                            children: [
+                              Icon(_fileIcon(att['ext'] ?? ''), size: 16, color: Colors.grey.shade600),
+                              const SizedBox(width: 8),
+                              Expanded(child: Text(att['filename'] ?? '', style: const TextStyle(fontSize: 13), overflow: TextOverflow.ellipsis)),
+                              InkWell(
+                                onTap: () => setState(() => _attachments.removeAt(i)),
+                                child: Icon(Icons.close, size: 16, color: Colors.grey.shade500),
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    }),
+                  ],
+
                   const SizedBox(height: 40),
                   Divider(color: Colors.grey.shade200),
                   const SizedBox(height: 16),
@@ -1090,6 +1243,18 @@ class _NoticeBoardScreenState extends State<NoticeBoardScreen> {
         borderSide: const BorderSide(color: _primary),
       ),
     );
+  }
+
+  IconData _fileIcon(String ext) {
+    switch (ext.toLowerCase()) {
+      case '.pdf': return Icons.picture_as_pdf_outlined;
+      case '.xlsx': case '.xls': case '.csv': return Icons.table_chart_outlined;
+      case '.pptx': case '.ppt': return Icons.slideshow_outlined;
+      case '.docx': case '.doc': case '.hwp': case '.hwpx': return Icons.description_outlined;
+      case '.zip': return Icons.folder_zip_outlined;
+      case '.jpg': case '.jpeg': case '.png': case '.gif': case '.webp': return Icons.image_outlined;
+      default: return Icons.attach_file;
+    }
   }
 
   // ── Util ──
