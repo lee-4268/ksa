@@ -696,7 +696,7 @@ class _ScheduleScreenState extends State<ScheduleScreen>
           ),
           child: Column(
             children: [
-              // 카테고리 헤더 (탭하면 펼치기/접기)
+              // 카테고리 헤더 (탭하면 펼치기/접기)`
               InkWell(
                 onTap: () {
                   setState(() {
