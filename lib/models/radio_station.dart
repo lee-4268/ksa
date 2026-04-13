@@ -6,13 +6,16 @@ part 'radio_station.g.dart';
 @HiveType(typeId: 1)
 enum InspectionStatus {
   @HiveField(0)
-  pending,    // 검사 대기
+  pending,      // 검사 대기
 
   @HiveField(1)
-  passed,     // 합격
+  passed,       // 합격
 
   @HiveField(2)
-  failed,     // 불합격
+  failed,       // 불합격
+
+  @HiveField(3)
+  inadequate,   // 부적합
 }
 
 @HiveType(typeId: 0)
@@ -268,6 +271,8 @@ class RadioStation extends HiveObject {
         return '합격';
       case InspectionStatus.failed:
         return '불합격';
+      case InspectionStatus.inadequate:
+        return '부적합';
     }
   }
 }

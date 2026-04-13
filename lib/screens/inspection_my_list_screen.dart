@@ -121,7 +121,9 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
             ? InspectionStatus.passed
             : status.startsWith('불합격')
                 ? InspectionStatus.failed
-                : InspectionStatus.pending,
+                : status.startsWith('부적합')
+                    ? InspectionStatus.inadequate
+                    : InspectionStatus.pending,
       ));
     }
     return result;
@@ -582,7 +584,8 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
                     final weekItems = weekGroups[week]!;
                     final weekDone = weekItems.where((it) =>
                         (it['status'] as String?) == '합격' ||
-                        ((it['status'] as String?) ?? '').startsWith('불합격')).length;
+                        ((it['status'] as String?) ?? '').startsWith('불합격') ||
+                        (it['status'] as String?) == '부적합').length;
 
                     // 조별 그룹핑 ('조' 필드 기준, 없으면 '')
                     final joGroups = <String, List<Map<String, dynamic>>>{};
@@ -625,7 +628,8 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
                             final joItems = joGroups[jo]!;
                             final joDone = joItems.where((it) =>
                                 (it['status'] as String?) == '합격' ||
-                                ((it['status'] as String?) ?? '').startsWith('불합격')).length;
+                                ((it['status'] as String?) ?? '').startsWith('불합격') ||
+                                (it['status'] as String?) == '부적합').length;
                             final joLabel = jo.isEmpty ? '조 미지정' : jo;
                             return _buildJoSection(joLabel, joItems, joDone);
                           })
@@ -707,6 +711,9 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
     } else if (status.startsWith('불합격')) {
       statusColor = const Color(0xFFE53935);
       statusIcon  = Icons.cancel_outlined;
+    } else if (status.startsWith('부적합')) {
+      statusColor = const Color(0xFFF57C00);
+      statusIcon  = Icons.warning_amber_outlined;
     } else {
       statusColor = const Color(0xFF9E9E9E);
       statusIcon  = Icons.pending_outlined;
@@ -750,6 +757,15 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
                       padding: const EdgeInsets.all(2),
                       decoration: BoxDecoration(color: statusColor, borderRadius: BorderRadius.circular(4)),
                       child: const Icon(Icons.close, color: Colors.white, size: 12),
+                    ),
+                  ),
+                if (status.startsWith('부적합'))
+                  Positioned(
+                    right: 0, bottom: 0,
+                    child: Container(
+                      padding: const EdgeInsets.all(2),
+                      decoration: BoxDecoration(color: statusColor, borderRadius: BorderRadius.circular(4)),
+                      child: const Icon(Icons.warning_amber, color: Colors.white, size: 12),
                     ),
                   ),
               ],

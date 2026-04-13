@@ -16,6 +16,9 @@ const String _passedMarkerPath = 'images/marker_passed.svg';
 /// 불합격 마커 이미지 경로 (빨간색)
 const String _failedMarkerPath = 'images/marker_inspected.svg';
 
+/// 부적합 마커 이미지 경로 (주황색)
+const String _inadequateMarkerPath = 'images/marker_inadequate.svg';
+
 /// 웹 플랫폼용 카카오맵 위젯
 class PlatformMapWidget extends StatefulWidget {
   final List<RadioStation> stations;
@@ -860,12 +863,16 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
         ? _passedMarkerPath
         : inspectionStatus == InspectionStatus.failed
             ? _failedMarkerPath
-            : _pendingMarkerPath;
+            : inspectionStatus == InspectionStatus.inadequate
+                ? _inadequateMarkerPath
+                : _pendingMarkerPath;
     final labelColor = inspectionStatus == InspectionStatus.passed
         ? '#2E7D32'
         : inspectionStatus == InspectionStatus.failed
             ? '#FF0000'
-            : '#757575';
+            : inspectionStatus == InspectionStatus.inadequate
+                ? '#F57C00'
+                : '#757575';
 
     // 검사 상태별 색상 및 아이콘 (InfoWindow용)
     String statusColor;
