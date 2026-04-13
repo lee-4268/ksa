@@ -46,10 +46,10 @@ class RichContentEditorState extends State<RichContentEditor> {
         ..contentEditable = 'true'
         ..tabIndex = 0
         ..style.cssText =
-            'width:100%;height:100%;min-height:300px;padding:16px;'
+            'width:100%;height:100%;padding:16px;'
             'box-sizing:border-box;font-size:15px;line-height:1.6;'
             'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;'
-            'color:#374151;outline:none;overflow-y:auto;'
+            'color:#374151;outline:none;overflow:auto;'
             'pointer-events:all;cursor:text;';
 
       // 엑셀/HTML paste 이벤트

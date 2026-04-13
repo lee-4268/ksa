@@ -54,9 +54,9 @@ class _RichContentViewerState extends State<RichContentViewer> {
     ui_web.platformViewRegistry.registerViewFactory(_viewType, (int id) {
       final wrap = html.DivElement()
         ..style.cssText =
-            'width:100%;box-sizing:border-box;font-size:14px;'
+            'width:100%;height:100%;box-sizing:border-box;font-size:14px;'
             'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;'
-            'color:#374151;overflow-x:auto;';
+            'color:#374151;overflow:auto;';
 
       // 엑셀 inline style이 없을 때 폴백 최소 스타일
       final style = html.StyleElement()
