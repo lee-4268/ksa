@@ -107,16 +107,28 @@ class RichContentEditorState extends State<RichContentEditor> {
     // style 블록 제거
     inner = inner.replaceAll(RegExp(r'<style[^>]*>[\s\S]*?<\/style>', caseSensitive: false), '');
 
-    // xl 스타일만 다시 삽입
+    // <style>은 execCommand('insertHTML')로 삽입 불가 → document.head에 직접 추가
     if (styleBuffer.isNotEmpty) {
-      inner = '<style>${styleBuffer.toString()}</style>$inner';
+      final styleEl = html.StyleElement()
+        ..id = 'excel-paste-style-${DateTime.now().millisecondsSinceEpoch}'
+        ..text = styleBuffer.toString();
+      html.document.head!.append(styleEl);
     }
 
     return inner;
   }
 
-  /// 현재 에디터 HTML 내용 반환
-  String getHtml() => _div?.innerHtml ?? '';
+  /// 현재 에디터 HTML 내용 반환 (head의 excel 스타일도 포함)
+  String getHtml() {
+    if (_div == null) return '';
+    // head에 삽입된 excel-paste-style 수집
+    final styleEls = html.document.head!.querySelectorAll('[id^="excel-paste-style-"]');
+    final styleBuf = StringBuffer();
+    for (final el in styleEls) {
+      styleBuf.write('<style>${(el as html.StyleElement).text}</style>');
+    }
+    return '${styleBuf.toString()}${_div!.innerHtml}';
+  }
 
   /// 에디터 HTML 내용 설정
   void setHtml(String htmlContent) {

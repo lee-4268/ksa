@@ -46,13 +46,29 @@ class _RichContentViewerState extends State<RichContentViewer> {
           .replaceAll('>', '&gt;');
       return '<pre style="white-space:pre-wrap;font-family:inherit;margin:0">$escaped</pre>';
     }
-    // 테이블 셀에 white-space:nowrap 강제 적용 (엑셀 inline style에 추가)
-    return text.replaceAllMapped(
+
+    var result = text;
+
+    // <style> 블록을 document.head로 이동 (xl 클래스 배경색 등 서식 보존)
+    final styleMatches = RegExp(r'<style[^>]*>([\s\S]*?)<\/style>', caseSensitive: false).allMatches(text);
+    for (final sm in styleMatches) {
+      final styleEl = html.StyleElement()
+        ..id = 'notice-viewer-style-${sm.start}'
+        ..text = sm.group(1) ?? '';
+      // 중복 삽입 방지
+      if (html.document.getElementById('notice-viewer-style-${sm.start}') == null) {
+        html.document.head!.append(styleEl);
+      }
+    }
+    // HTML에서 style 블록 제거 (head로 이동했으므로)
+    result = result.replaceAll(RegExp(r'<style[^>]*>[\s\S]*?<\/style>', caseSensitive: false), '');
+
+    // 테이블 셀에 white-space:nowrap 강제 적용
+    result = result.replaceAllMapped(
       RegExp(r'<(td|th)(\s[^>]*)?>', caseSensitive: false),
       (m) {
         final tag = m.group(1)!;
         final attrs = m.group(2) ?? '';
-        // 이미 style 속성이 있으면 white-space 추가, 없으면 새로 삽입
         if (attrs.contains('style=')) {
           return '<$tag${attrs.replaceFirstMapped(
             RegExp(r'style="([^"]*)"', caseSensitive: false),
@@ -62,6 +78,8 @@ class _RichContentViewerState extends State<RichContentViewer> {
         return '<$tag$attrs style="white-space:nowrap;">';
       },
     );
+
+    return result;
   }
 
   @override
