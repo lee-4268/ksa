@@ -89,6 +89,8 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
         return Colors.green;
       case InspectionStatus.failed:
         return Colors.red;
+      case InspectionStatus.inadequate:
+        return Colors.orange;
     }
   }
 
@@ -101,6 +103,8 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
         return Icons.check_circle;
       case InspectionStatus.failed:
         return Icons.cancel;
+      case InspectionStatus.inadequate:
+        return Icons.warning_amber;
     }
   }
 
@@ -887,8 +891,12 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
         statusIcon = '✗';
         break;
       case InspectionStatus.pending:
-        statusColor = '#FF9800'; // 주황
+        statusColor = '#9E9E9E'; // 회색
         statusIcon = '○';
+        break;
+      case InspectionStatus.inadequate:
+        statusColor = '#F57C00'; // 주황
+        statusIcon = '△';
         break;
     }
 
