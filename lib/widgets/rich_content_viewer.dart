@@ -39,12 +39,29 @@ class _RichContentViewerState extends State<RichContentViewer> {
   String _renderHtml(String text) {
     if (text.isEmpty) return '';
     final hasTag = RegExp(r'<[a-zA-Z][^>]*>').hasMatch(text);
-    if (hasTag) return text;
-    final escaped = text
-        .replaceAll('&', '&amp;')
-        .replaceAll('<', '&lt;')
-        .replaceAll('>', '&gt;');
-    return '<pre style="white-space:pre-wrap;font-family:inherit;margin:0">$escaped</pre>';
+    if (!hasTag) {
+      final escaped = text
+          .replaceAll('&', '&amp;')
+          .replaceAll('<', '&lt;')
+          .replaceAll('>', '&gt;');
+      return '<pre style="white-space:pre-wrap;font-family:inherit;margin:0">$escaped</pre>';
+    }
+    // 테이블 셀에 white-space:nowrap 강제 적용 (엑셀 inline style에 추가)
+    return text.replaceAllMapped(
+      RegExp(r'<(td|th)(\s[^>]*)?>', caseSensitive: false),
+      (m) {
+        final tag = m.group(1)!;
+        final attrs = m.group(2) ?? '';
+        // 이미 style 속성이 있으면 white-space 추가, 없으면 새로 삽입
+        if (attrs.contains('style=')) {
+          return '<$tag${attrs.replaceFirstMapped(
+            RegExp(r'style="([^"]*)"', caseSensitive: false),
+            (sm) => 'style="${sm.group(1)};white-space:nowrap;"',
+          )}>';
+        }
+        return '<$tag$attrs style="white-space:nowrap;">';
+      },
+    );
   }
 
   @override
@@ -60,7 +77,7 @@ class _RichContentViewerState extends State<RichContentViewer> {
 
       // 엑셀 inline style이 없을 때 폴백 최소 스타일
       final style = html.StyleElement()
-        ..text = 'table{border-collapse:collapse;} td,th{border:1px solid #d1d5db;padding:4px 8px;}';
+        ..text = 'table{border-collapse:collapse;} td,th{border:1px solid #d1d5db;padding:4px 8px;white-space:nowrap;}';
 
       final contentDiv = html.DivElement();
       contentDiv.setInnerHtml(_renderHtml(widget.content), validator: _validator);
