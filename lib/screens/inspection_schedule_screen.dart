@@ -76,7 +76,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     null, // 0: 체크박스
     '수검일정', '허가번호', '호출명칭', '국종군', '부서',
     '연도주기', '설치장소', '도로명주소',
-    '장치수', '통시', '공대', '시기조정', '기준연도',
+    '장치수', '통시', '공대', 'zpprac1', '시기조정', '기준연도',
     'SKT본부', 'Access담당', '품질개선팀', '검사결과',
   ];
 
@@ -1658,12 +1658,13 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                       DataColumn(label: Text('장치수', style: headerStyle), onSort: (i, a) => _onScheduleSort(9, a)),
                       DataColumn(label: Text('통시', style: headerStyle), onSort: (i, a) => _onScheduleSort(10, a)),
                       DataColumn(label: Text('공대', style: headerStyle), onSort: (i, a) => _onScheduleSort(11, a)),
-                      DataColumn(label: Text('시기조정', style: headerStyle), onSort: (i, a) => _onScheduleSort(12, a)),
-                      DataColumn(label: Text('기준연도', style: headerStyle), onSort: (i, a) => _onScheduleSort(13, a)),
-                      DataColumn(label: Text('SKT본부', style: headerStyle), onSort: (i, a) => _onScheduleSort(14, a)),
-                      DataColumn(label: Text('Access담당', style: headerStyle), onSort: (i, a) => _onScheduleSort(15, a)),
-                      DataColumn(label: Text('품질개선팀', style: headerStyle), onSort: (i, a) => _onScheduleSort(16, a)),
-                      DataColumn(label: Text('검사결과', style: headerStyle), onSort: (i, a) => _onScheduleSort(17, a)),
+                      DataColumn(label: Text('활용구분', style: headerStyle), onSort: (i, a) => _onScheduleSort(12, a)),
+                      DataColumn(label: Text('시기조정', style: headerStyle), onSort: (i, a) => _onScheduleSort(13, a)),
+                      DataColumn(label: Text('기준연도', style: headerStyle), onSort: (i, a) => _onScheduleSort(14, a)),
+                      DataColumn(label: Text('SKT본부', style: headerStyle), onSort: (i, a) => _onScheduleSort(15, a)),
+                      DataColumn(label: Text('Access담당', style: headerStyle), onSort: (i, a) => _onScheduleSort(16, a)),
+                      DataColumn(label: Text('품질개선팀', style: headerStyle), onSort: (i, a) => _onScheduleSort(17, a)),
+                      DataColumn(label: Text('검사결과', style: headerStyle), onSort: (i, a) => _onScheduleSort(18, a)),
                     ],
                     rows: _items.asMap().entries.map((entry) {
                       final idx = entry.key;
@@ -1692,6 +1693,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                           DataCell(Text('${item['장치수'] ?? ''}', style: cellStyle)),
                           DataCell(Text('${item['통시'] ?? ''}', style: cellStyle)),
                           DataCell(Text('${item['공대'] ?? ''}', style: cellStyle)),
+                          DataCell(Text('${item['zpprac1'] ?? ''}', style: cellStyle)),
                           DataCell(Text('${item['시기조정'] ?? ''}', style: cellStyle)),
                           DataCell(Text('${item['기준연도'] ?? ''}', style: cellStyle)),
                           DataCell(Text('${item['skt본부'] ?? ''}', style: cellStyle)),

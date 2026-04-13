@@ -11674,6 +11674,23 @@ async def inspection_data(request: Request, req: InspectionDataReq):
     if not os.path.exists(_INSP_DB): return {"items": [], "total": 0}
     where_sql, params = _build_insp_where(req.year, req.sheet, req.filters, req.search, req.addr, req.schedule_yn, req.schedule_week)
     def _read():
+        # cert_cache에서 zpcode → zpprac1 매핑 별도 로드
+        zpprac1_map: dict = {}
+        cert_db = _cert_cache_db_path
+        if cert_db and os.path.exists(cert_db):
+            try:
+                cc = sqlite3.connect(cert_db, timeout=10)
+                for row in cc.execute(
+                    "SELECT TRIM(zpcode), zpprac1 FROM cert "
+                    "WHERE zpcode IS NOT NULL AND zpcode != '' "
+                    "GROUP BY TRIM(zpcode)"
+                ):
+                    if row[0]:
+                        zpprac1_map[row[0]] = row[1] or ''
+                cc.close()
+            except Exception:
+                pass
+
         c = sqlite3.connect(_INSP_DB, timeout=60); c.row_factory = sqlite3.Row
         total = c.execute(f'SELECT COUNT(*) FROM inspection_targets WHERE {where_sql}', params).fetchone()[0]
         offset = (req.page - 1) * req.page_size
@@ -11692,7 +11709,14 @@ async def inspection_data(request: Request, req: InspectionDataReq):
             params + [req.page_size, offset]
         ).fetchall()
         c.close()
-        return total, [dict(r) for r in rows]
+
+        items = []
+        for r in rows:
+            d = dict(r)
+            tongsi = (d.get('통시') or '').strip()
+            d['zpprac1'] = zpprac1_map.get(tongsi, '')
+            items.append(d)
+        return total, items
     total, items = await asyncio.to_thread(_read)
     return {"items": items, "total": total, "page": req.page, "page_size": req.page_size}
 
