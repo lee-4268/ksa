@@ -200,18 +200,32 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
           child: Row(
             children: [
-              Container(
-                padding: const EdgeInsets.all(7),
-                decoration: BoxDecoration(
-                  color: _accent,
-                  borderRadius: BorderRadius.circular(9),
+              InkWell(
+                onTap: () {
+                  setState(() => _selectedIndex = 0);
+                  if (inDrawer) Navigator.pop(context);
+                },
+                borderRadius: BorderRadius.circular(9),
+                child: Container(
+                  padding: const EdgeInsets.all(7),
+                  decoration: BoxDecoration(
+                    color: _accent,
+                    borderRadius: BorderRadius.circular(9),
+                  ),
+                  child: const Icon(Icons.cell_tower, color: Colors.white, size: 18),
                 ),
-                child: const Icon(Icons.cell_tower, color: Colors.white, size: 18),
               ),
               if (!collapsed) ...[
                 const SizedBox(width: 10),
-                const Expanded(
-                  child: Text('KCA', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: _textPrimary, letterSpacing: 0.5)),
+                Expanded(
+                  child: InkWell(
+                    onTap: () {
+                      setState(() => _selectedIndex = 0);
+                      if (inDrawer) Navigator.pop(context);
+                    },
+                    borderRadius: BorderRadius.circular(4),
+                    child: const Text('KCA', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: _textPrimary, letterSpacing: 0.5)),
+                  ),
                 ),
                 InkWell(
                   onTap: () => setState(() => _sidebarCollapsed = !_sidebarCollapsed),
