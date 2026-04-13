@@ -804,11 +804,15 @@ class _NoticeBoardScreenState extends State<NoticeBoardScreen> {
                   ),
                   const SizedBox(height: 32),
                   
-                  // 본문
+                  // 본문 — 테이블이면 행 수 기반, 아니면 텍스트 길이 기반으로 높이 추정
                   RichContentViewer(
                     viewId: '${d['id']}_${d['updated_at'] ?? d['created_at'] ?? '0'}',
                     content: content,
-                    height: (content.length / 40 * 28).clamp(120, 1200).toDouble(),
+                    height: () {
+                      final rowCount = RegExp(r'<tr[^>]*>', caseSensitive: false).allMatches(content).length;
+                      if (rowCount > 0) return (rowCount * 36.0 + 80).clamp(120, 2000);
+                      return (content.length / 40 * 24).clamp(120, 2000);
+                    }(),
                   ),
                   
                   // 첨부 이미지

@@ -3,6 +3,7 @@ import 'dart:html' as html;
 import 'dart:ui_web' as ui_web;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 
 /// style 속성을 포함한 모든 속성을 허용하는 NodeValidator
 class _AllowAllValidator implements html.NodeValidator {
@@ -99,7 +100,7 @@ class _RichContentViewerState extends State<RichContentViewer> {
         ..style.cssText =
             'width:100%;height:100%;box-sizing:border-box;font-size:14px;'
             'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;'
-            'color:#374151;overflow:auto;';
+            'color:#374151;overflow:auto;user-select:text;-webkit-user-select:text;';
 
       // (platform view 내부 style은 적용 안 되므로 head 방식으로 대체)
       final style = html.StyleElement();
@@ -126,7 +127,10 @@ class _RichContentViewerState extends State<RichContentViewer> {
   Widget build(BuildContext context) {
     return SizedBox(
       height: widget.height,
-      child: HtmlElementView(viewType: _viewType),
+      child: HtmlElementView(
+        viewType: _viewType,
+        hitTestBehavior: PlatformViewHitTestBehavior.transparent,
+      ),
     );
   }
 }
