@@ -175,6 +175,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     if (_myHdqt.isNotEmpty) {
       _pHdqt = _myHdqt;
       _aHdqt = _myHdqt;
+      _mHdqt = _myHdqt; // 매트릭스 탭 본부 필터 자동 적용
     }
     // member(일반 팀원)인 경우 팀까지 자동 필터 (org_map에 있는 팀만)
     if (!_isAdmin && _myTeam.isNotEmpty) {
@@ -998,7 +999,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
               labelColor: _primary,
               unselectedLabelColor: Colors.grey,
               indicatorColor: _primary,
-              tabs: const [Tab(text: '수검 대상 현황'), Tab(text: '매트릭스')],
+              tabs: const [Tab(text: '매트릭스'), Tab(text: '수검 대상 현황')],
             ),
           ),
           Expanded(
@@ -1019,12 +1020,12 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
       // 탭별 필터바: 수검 대상 현황 탭은 기존 필터, 매트릭스 탭은 별도 필터
       AnimatedBuilder(
         animation: _tabCtrl,
-        builder: (_, __) => _tabCtrl.index == 0 ? _buildFilterBar() : _buildMatrixFilterBar(),
+        builder: (_, __) => _tabCtrl.index == 0 ? _buildMatrixFilterBar() : _buildFilterBar(),
       ),
       Expanded(
         child: TabBarView(
           controller: _tabCtrl,
-          children: [_buildDataTab(), _buildMatrixTab()],
+          children: [_buildMatrixTab(), _buildDataTab()],
         ),
       ),
     ]);
@@ -1326,7 +1327,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
               ),
             ),
           ),
-          if (_mHdqt.isNotEmpty || _mTeam.isNotEmpty || _mWeek.isNotEmpty || _mMonth.isNotEmpty)
+          if ((_isSuperAdmin ? _mHdqt.isNotEmpty : _mHdqt != _myHdqt) || _mTeam.isNotEmpty || _mWeek.isNotEmpty || _mMonth.isNotEmpty)
             OutlinedButton(
               style: OutlinedButton.styleFrom(
                 foregroundColor: Colors.grey.shade600,
@@ -1334,7 +1335,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                 padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
               ),
-              onPressed: () => setState(() { _mHdqt = ''; _mTeam = ''; _mWeek = ''; _mMonth = ''; }),
+              onPressed: () => setState(() { _mHdqt = _isSuperAdmin ? '' : _myHdqt; _mTeam = ''; _mWeek = ''; _mMonth = ''; }),
               child: const Text('초기화', style: TextStyle(fontSize: 13)),
             ),
         ],
@@ -1415,6 +1416,8 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
 
   Widget _filterDropdown(String label, String value, List<String> options,
       void Function(String?) onChanged, {Map<String, String>? displayMap}) {
+    // options에 없는 value면 빈 문자열로 폴백 (로딩 중 assertion 방지)
+    final safeValue = options.contains(value) ? value : '';
     String display(String v) {
       if (v.isEmpty) return label;
       return displayMap?[v] ?? v;
@@ -1423,15 +1426,15 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
       decoration: BoxDecoration(
         color: Colors.white,
-        border: Border.all(color: value.isNotEmpty ? _primary : Colors.grey.shade300),
+        border: Border.all(color: safeValue.isNotEmpty ? _primary : Colors.grey.shade300),
         borderRadius: BorderRadius.circular(10),
       ),
       child: DropdownButtonHideUnderline(
         child: DropdownButton<String>(
-          value: value,
+          value: safeValue,
           isDense: true,
           icon: Icon(Icons.arrow_drop_down,
-              color: value.isNotEmpty ? _primary : Colors.grey, size: 20),
+              color: safeValue.isNotEmpty ? _primary : Colors.grey, size: 20),
           dropdownColor: Colors.white,
 
           borderRadius: BorderRadius.circular(12),
@@ -1849,6 +1852,9 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
       }
     });
 
+    if (_loading) {
+      return const Center(child: CircularProgressIndicator());
+    }
     if (filteredMatrix.isEmpty && _matrix.isEmpty) {
       return const Center(child: Text('데이터 없음', style: TextStyle(color: Colors.black38)));
     }
@@ -1960,7 +1966,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
       _pTeam = validTeam; _aTeam = validTeam;
       _page = 1;
     });
-    _tabCtrl.animateTo(0);
+    _tabCtrl.animateTo(1);
     _loadAll();
   }
 
@@ -2040,14 +2046,9 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     // 네비게이션 모드에서 이전/다음 달 계산
     final prevMonth = _navMonth > 1 ? _navMonth - 1 : 12;
     final nextMonth = _navMonth < 12 ? _navMonth + 1 : 1;
-    final hasPrev = allMonths.any((m) {
-      final n = int.tryParse(m.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0;
-      return n == prevMonth;
-    });
-    final hasNext = allMonths.any((m) {
-      final n = int.tryParse(m.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0;
-      return n == nextMonth;
-    });
+    // 이전/다음달 버튼은 데이터 유무와 무관하게 달 번호 범위로만 판단
+    const hasPrev = true;
+    const hasNext = true;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -2369,17 +2370,20 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
         if (isCurrentWeek)
           Positioned(
             top: -8,
-            right: 8,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-              decoration: BoxDecoration(
-                color: accentColor,
-                borderRadius: BorderRadius.circular(8),
-                boxShadow: [BoxShadow(color: accentColor.withValues(alpha: 0.4), blurRadius: 4, offset: const Offset(0, 2))],
-              ),
-              child: const Text(
-                '이번 주',
-                style: TextStyle(fontSize: 10, color: Colors.white, fontWeight: FontWeight.w700),
+            left: 0,
+            right: 0,
+            child: Center(
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: accentColor,
+                  borderRadius: BorderRadius.circular(8),
+                  boxShadow: [BoxShadow(color: accentColor.withValues(alpha: 0.4), blurRadius: 4, offset: const Offset(0, 2))],
+                ),
+                child: const Text(
+                  '이번 주',
+                  style: TextStyle(fontSize: 10, color: Colors.white, fontWeight: FontWeight.w700),
+                ),
               ),
             ),
           ),
