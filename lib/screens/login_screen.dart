@@ -408,6 +408,7 @@ class _LoginScreenState extends State<LoginScreen> {
       name: acc['name']!,
       region: acc['region']!,
       role: acc['role']!,
+      team: acc['team'] ?? '테스트팀',
     );
     if (!mounted) return;
     if (!success && auth.errorMessage != null) {

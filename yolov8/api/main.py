@@ -11449,21 +11449,110 @@ async def _auto_geocode_background(year: int):
         unique_addrs = list(addr_map.keys())
         logger.info(f"[auto-geocode] {len(rows)}건 중 고유 주소 {len(unique_addrs)}개 (year={year})")
 
-        def _geocode_one(addr):
+        def _clean_addr_auto(addr):
+            import re
+            candidates = [addr]
+            no_paren = re.sub(r'[\(\（][^\)\）]*[\)\）]', '', addr).strip()
+            if no_paren != addr:
+                candidates.append(no_paren)
+            no_comma = re.split(r',', no_paren)[0].strip()
+            if no_comma != no_paren:
+                candidates.append(no_comma)
+            no_bunji = re.sub(r'번지', '', no_comma).strip()
+            if no_bunji != no_comma:
+                candidates.append(no_bunji)
+            else:
+                no_bunji = no_comma
+            no_suffix = re.sub(r'(\d[\d\-]*)\s+[^\d].*$', r'\1', no_bunji).strip()
+            if no_suffix != no_bunji and len(no_suffix) > 5:
+                candidates.append(no_suffix)
+            seen = set()
+            result = []
+            for c in candidates:
+                if c and c not in seen:
+                    seen.add(c)
+                    result.append(c)
+            return result
+
+        _VWORLD_KEY = '60301A2D-7EA7-3C05-9B4D-4BC523408605'
+
+        def _kakao_addr(query):
             try:
-                r = _req.get(
-                    'https://dapi.kakao.com/v2/local/search/address.json',
-                    params={'query': addr, 'size': 1},
-                    headers={'Authorization': f'KakaoAK {KAKAO_KEY}'},
-                    timeout=5)
+                r = _req.get('https://dapi.kakao.com/v2/local/search/address.json',
+                    params={'query': query, 'size': 1},
+                    headers={'Authorization': f'KakaoAK {KAKAO_KEY}'}, timeout=5)
                 if r.status_code == 200:
                     docs = r.json().get('documents', [])
                     if docs:
                         x, y = float(docs[0].get('x', 0)), float(docs[0].get('y', 0))
-                        if x and y:
-                            return addr, (y, x)
-            except Exception:
-                pass
+                        if x and y: return (y, x)
+            except Exception: pass
+            return None
+
+        def _kakao_keyword(query):
+            try:
+                r = _req.get('https://dapi.kakao.com/v2/local/search/keyword.json',
+                    params={'query': query, 'size': 1},
+                    headers={'Authorization': f'KakaoAK {KAKAO_KEY}'}, timeout=5)
+                if r.status_code == 200:
+                    docs = r.json().get('documents', [])
+                    if docs:
+                        x, y = float(docs[0].get('x', 0)), float(docs[0].get('y', 0))
+                        if x and y: return (y, x)
+            except Exception: pass
+            return None
+
+        def _vworld(query):
+            try:
+                r = _req.get('https://api.vworld.kr/req/address',
+                    params={'service': 'address', 'request': 'getcoord', 'version': '2.0',
+                            'crs': 'epsg:4326', 'address': query, 'refine': 'true',
+                            'simple': 'false', 'format': 'json', 'type': 'both',
+                            'key': _VWORLD_KEY}, timeout=5)
+                if r.status_code == 200:
+                    body = r.json().get('response', {})
+                    if body.get('status') == 'OK':
+                        pt = body.get('result', {}).get('point', {})
+                        x, y = float(pt.get('x', 0)), float(pt.get('y', 0))
+                        if x and y: return (y, x)
+            except Exception: pass
+            return None
+
+        _NAVER_ID = 'x0a4aeu0l5'
+        _NAVER_SECRET = 't0yDP6Lbti6Ruplw5wfrYKwkPQS3fI806bRVzkBi'
+
+        def _naver(query):
+            try:
+                r = _req.get('https://maps.apigw.ntruss.com/map-geocode/v2/geocode',
+                    params={'query': query},
+                    headers={'X-NCP-APIGW-API-KEY-ID': _NAVER_ID,
+                             'X-NCP-APIGW-API-KEY': _NAVER_SECRET}, timeout=5)
+                if r.status_code == 200:
+                    addresses = r.json().get('addresses', [])
+                    if addresses:
+                        x, y = float(addresses[0].get('x', 0)), float(addresses[0].get('y', 0))
+                        if x and y: return (y, x)
+            except Exception: pass
+            return None
+
+        def _geocode_one(addr):
+            try:
+                candidates = _clean_addr_auto(addr)
+                for c in candidates:
+                    res = _kakao_addr(c)
+                    if res: return addr, res
+                for c in candidates:
+                    res = _kakao_keyword(c)
+                    if res: return addr, res
+                for c in candidates:
+                    res = _vworld(c)
+                    if res: return addr, res
+                for c in candidates:
+                    res = _naver(c)
+                    if res: return addr, res
+                logger.warning(f"[auto-geocode] 주소 매칭 없음: {addr}")
+            except Exception as e:
+                logger.warning(f"[auto-geocode] 요청 실패: {addr} — {e}")
             return addr, None
 
         updated = 0
@@ -11534,23 +11623,155 @@ async def inspection_geocode_targets(request: Request, year: int):
     import requests as _req
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    def _geocode_one(addr: str):
+    def _clean_addr(addr: str) -> list[str]:
+        """주소 후보 목록 반환 (원본 → 전처리 순)."""
+        import re
+        candidates = [addr]
+        # 괄호 제거: "OO동 123(건물명)" → "OO동 123"
+        no_paren = re.sub(r'[\(\（][^\)\）]*[\)\）]', '', addr).strip()
+        if no_paren != addr:
+            candidates.append(no_paren)
+        # 쉼표 이후 제거: "화합로 1829-14, (율정동)" → "화합로 1829-14"
+        no_comma = re.split(r',', no_paren)[0].strip()
+        if no_comma != no_paren:
+            candidates.append(no_comma)
+        # "번지" 제거: "갈전리 932번지 상록수아파트" → "갈전리 932 상록수아파트" → 이후 suffix도 제거
+        no_bunji = re.sub(r'번지', '', no_comma).strip()
+        if no_bunji != no_comma:
+            candidates.append(no_bunji)
+        else:
+            no_bunji = no_comma
+        # 숫자 뒤 부가설명 제거 (나대지/인근/지하/옥상/동/PIT/건물명 등)
+        no_suffix = re.sub(r'(\d[\d\-]*)\s+[^\d].*$', r'\1', no_bunji).strip()
+        if no_suffix != no_bunji and len(no_suffix) > 5:
+            candidates.append(no_suffix)
+        # 중복 제거 (순서 유지)
+        seen = set()
+        result = []
+        for c in candidates:
+            if c and c not in seen:
+                seen.add(c)
+                result.append(c)
+        return result
+
+    VWORLD_KEY = '60301A2D-7EA7-3C05-9B4D-4BC523408605'
+
+    def _call_kakao_addr(query: str):
         try:
             r = _req.get(
                 'https://dapi.kakao.com/v2/local/search/address.json',
-                params={'query': addr, 'size': 1},
+                params={'query': query, 'size': 1},
                 headers={'Authorization': f'KakaoAK {KAKAO_KEY}'},
                 timeout=5,
             )
             if r.status_code == 200:
                 docs = r.json().get('documents', [])
                 if docs:
-                    x = float(docs[0].get('x', 0))
-                    y = float(docs[0].get('y', 0))
+                    x, y = float(docs[0].get('x', 0)), float(docs[0].get('y', 0))
                     if x and y:
-                        return addr, (y, x)
+                        return (y, x)
         except Exception:
             pass
+        return None
+
+    def _call_kakao_keyword(query: str):
+        try:
+            r = _req.get(
+                'https://dapi.kakao.com/v2/local/search/keyword.json',
+                params={'query': query, 'size': 1},
+                headers={'Authorization': f'KakaoAK {KAKAO_KEY}'},
+                timeout=5,
+            )
+            if r.status_code == 200:
+                docs = r.json().get('documents', [])
+                if docs:
+                    x, y = float(docs[0].get('x', 0)), float(docs[0].get('y', 0))
+                    if x and y:
+                        return (y, x)
+        except Exception:
+            pass
+        return None
+
+    def _call_vworld(query: str):
+        try:
+            r = _req.get(
+                'https://api.vworld.kr/req/address',
+                params={
+                    'service': 'address',
+                    'request': 'getcoord',
+                    'version': '2.0',
+                    'crs': 'epsg:4326',
+                    'address': query,
+                    'refine': 'true',
+                    'simple': 'false',
+                    'format': 'json',
+                    'type': 'both',
+                    'key': VWORLD_KEY,
+                },
+                timeout=5,
+            )
+            if r.status_code == 200:
+                body = r.json().get('response', {})
+                if body.get('status') == 'OK':
+                    pt = body.get('result', {}).get('point', {})
+                    x, y = float(pt.get('x', 0)), float(pt.get('y', 0))
+                    if x and y:
+                        return (y, x)
+        except Exception:
+            pass
+        return None
+
+    NAVER_CLIENT_ID = 'x0a4aeu0l5'
+    NAVER_CLIENT_SECRET = 't0yDP6Lbti6Ruplw5wfrYKwkPQS3fI806bRVzkBi'
+
+    def _call_naver(query: str):
+        try:
+            r = _req.get(
+                'https://maps.apigw.ntruss.com/map-geocode/v2/geocode',
+                params={'query': query},
+                headers={
+                    'X-NCP-APIGW-API-KEY-ID': NAVER_CLIENT_ID,
+                    'X-NCP-APIGW-API-KEY': NAVER_CLIENT_SECRET,
+                },
+                timeout=5,
+            )
+            if r.status_code == 200:
+                addresses = r.json().get('addresses', [])
+                if addresses:
+                    x = float(addresses[0].get('x', 0))
+                    y = float(addresses[0].get('y', 0))
+                    if x and y:
+                        return (y, x)
+        except Exception:
+            pass
+        return None
+
+    def _geocode_one(addr: str):
+        try:
+            candidates = _clean_addr(addr)
+            # 1단계: 카카오 주소검색
+            for candidate in candidates:
+                result = _call_kakao_addr(candidate)
+                if result:
+                    return addr, result
+            # 2단계: 카카오 키워드검색
+            for candidate in candidates:
+                result = _call_kakao_keyword(candidate)
+                if result:
+                    return addr, result
+            # 3단계: Vworld 주소검색
+            for candidate in candidates:
+                result = _call_vworld(candidate)
+                if result:
+                    return addr, result
+            # 4단계: 네이버 지오코딩
+            for candidate in candidates:
+                result = _call_naver(candidate)
+                if result:
+                    return addr, result
+            logger.warning(f"[geocode-targets] 주소 매칭 없음: {addr}")
+        except Exception as e:
+            logger.warning(f"[geocode-targets] 요청 실패: {addr} — {e}")
         return addr, None
 
     # 4. 배치(500개)씩 → ThreadPoolExecutor(10) → OOM 방지
@@ -12253,8 +12474,12 @@ async def inspection_my_list(request: Request, year: int, week: str = "", team: 
             # 본부 관리자 (팀 미선택 → 본부 전체)
             where_parts.append('s.year=? AND s.access담당=?')
             params.extend([year, access_team])
+        elif is_dev and access_team and 품질팀:
+            # 테스트 계정(member): 소속 본부 + 팀 필터
+            where_parts.append('s.year=? AND s.access담당=? AND s.품질개선팀=?')
+            params.extend([year, access_team, 품질팀])
         elif is_dev and access_team:
-            # 테스트 계정(member): 소속 본부 전체
+            # 테스트 계정(member): 소속 본부 전체 (팀 미배정)
             where_parts.append('s.year=? AND s.access담당=?')
             params.extend([year, access_team])
         elif is_dev:
@@ -13578,9 +13803,9 @@ async def inspection_results_analysis(request: Request, year: int = Query(...), 
             rgn_params = (year, region) if region else (year,)
 
             perf_rows = conn.execute(
-                "SELECT 불합격내용, COUNT(*) as cnt FROM inspection_results_raw "
-                f"WHERE year=?{rgn_filter} AND 성능서류='성능' AND 불합격내용 IS NOT NULL AND 불합격내용 != '' "
-                "GROUP BY 불합격내용 ORDER BY cnt DESC",
+                "SELECT 간략불합격, COUNT(*) as cnt FROM inspection_results_raw "
+                f"WHERE year=?{rgn_filter} AND 성능서류='성능' AND 간략불합격 IS NOT NULL AND 간략불합격 != '' "
+                "GROUP BY 간략불합격 ORDER BY cnt DESC",
                 rgn_params
             ).fetchall()
             perf_total = sum(r[1] for r in perf_rows) or 1

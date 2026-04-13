@@ -41,6 +41,10 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
   String _selectedTeam = '';
   List<String> _teamOptions = [];
 
+  // 조/검사관 필터 (클라이언트 필터링)
+  String _selectedJo = '';
+  String _selectedInspector = '';
+
   // 드래그 (모바일)
   double _listHeightRatio = 0.40;
   static const double _minListRatio = 0.15;
@@ -99,10 +103,16 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
     }
   }
 
+  List<Map<String, dynamic>> get _filteredItems => _assignedItems.where((item) {
+    if (_selectedJo.isNotEmpty && (item['조'] as String? ?? '').trim() != _selectedJo) return false;
+    if (_selectedInspector.isNotEmpty && (item['검사관'] as String? ?? '').trim() != _selectedInspector) return false;
+    return true;
+  }).toList();
+
   // 지도 마커: inspection_targets의 위경도(Kakao 지오코딩 결과) 사용
   List<RadioStation> get _markerStations {
     final result = <RadioStation>[];
-    for (final item in _assignedItems) {
+    for (final item in _filteredItems) {
       final ln  = (item['허가번호'] as String? ?? '').trim();
       final lat = (item['위도'] as num?)?.toDouble();
       final lng = (item['경도'] as num?)?.toDouble();
@@ -332,7 +342,12 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
             _buildTeamDropdown(),
             const SizedBox(width: 8),
           ],
-          if (_weekOptions.isNotEmpty) _buildWeekDropdown(),
+          if (_weekOptions.isNotEmpty) ...[
+            _buildWeekDropdown(),
+            const SizedBox(width: 8),
+          ],
+          _buildJoDropdown(),
+          _buildInspectorDropdown(),
           const Spacer(),
           if (_loadingInsp)
             const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
@@ -356,7 +371,7 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
         return GestureDetector(
           onTap: () {
             if (_year != y) {
-              setState(() { _year = y; _selectedWeek = ''; _weekOptions = []; _selectedTeam = ''; _teamOptions = []; });
+              setState(() { _year = y; _selectedWeek = ''; _weekOptions = []; _selectedTeam = ''; _teamOptions = []; _selectedJo = ''; _selectedInspector = ''; });
               if (_isDivisionAdmin) _loadTeams();
               _loadWeeks();
               _loadInspection();
@@ -405,10 +420,83 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
           value: _selectedTeam,
           items: items,
           onChanged: (v) {
-            setState(() { _selectedTeam = v ?? ''; _selectedWeek = ''; _weekOptions = []; });
+            setState(() { _selectedTeam = v ?? ''; _selectedWeek = ''; _weekOptions = []; _selectedJo = ''; _selectedInspector = ''; });
             _loadWeeks();
             _loadInspection();
           },
+        ),
+      ),
+    );
+  }
+
+  Widget _buildJoDropdown() {
+    const primaryColor = Color(0xFFE53935);
+    final joOptions = _assignedItems
+        .map((i) => (i['조'] as String? ?? '').trim())
+        .where((v) => v.isNotEmpty)
+        .toSet()
+        .toList()..sort();
+    if (joOptions.isEmpty) return const SizedBox.shrink();
+    return Container(
+      margin: const EdgeInsets.only(right: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border.all(color: _selectedJo.isNotEmpty ? primaryColor : Colors.grey.shade300),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<String>(
+          isExpanded: false,
+          isDense: true,
+          icon: const Icon(Icons.arrow_drop_down, color: primaryColor, size: 20),
+          dropdownColor: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          style: const TextStyle(color: Colors.black87, fontSize: 13),
+          value: joOptions.contains(_selectedJo) ? _selectedJo : '',
+          items: [
+            const DropdownMenuItem(value: '', child: Text('전체 조')),
+            ...joOptions.map((j) => DropdownMenuItem(value: j, child: Text(j))),
+          ],
+          onChanged: (v) => setState(() { _selectedJo = v ?? ''; _selectedInspector = ''; }),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildInspectorDropdown() {
+    const primaryColor = Color(0xFFE53935);
+    final filtered = _selectedJo.isEmpty
+        ? _assignedItems
+        : _assignedItems.where((i) => (i['조'] as String? ?? '').trim() == _selectedJo).toList();
+    final inspectorOptions = filtered
+        .map((i) => (i['검사관'] as String? ?? '').trim())
+        .where((v) => v.isNotEmpty)
+        .toSet()
+        .toList()..sort();
+    if (inspectorOptions.isEmpty) return const SizedBox.shrink();
+    return Container(
+      margin: const EdgeInsets.only(right: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border.all(color: _selectedInspector.isNotEmpty ? primaryColor : Colors.grey.shade300),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<String>(
+          isExpanded: false,
+          isDense: true,
+          icon: const Icon(Icons.arrow_drop_down, color: primaryColor, size: 20),
+          dropdownColor: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          style: const TextStyle(color: Colors.black87, fontSize: 13),
+          value: inspectorOptions.contains(_selectedInspector) ? _selectedInspector : '',
+          items: [
+            const DropdownMenuItem(value: '', child: Text('전체 검사관')),
+            ...inspectorOptions.map((v) => DropdownMenuItem(value: v, child: Text(v))),
+          ],
+          onChanged: (v) => setState(() => _selectedInspector = v ?? ''),
         ),
       ),
     );
@@ -452,7 +540,7 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
   Widget _buildDetailList({bool isWebLayout = false}) {
     // 주차별 그룹핑
     final weekGroups = <String, List<Map<String, dynamic>>>{};
-    for (final item in _assignedItems) {
+    for (final item in _filteredItems) {
       final key = item['수검예정주차'] as String? ?? '미정';
       weekGroups.putIfAbsent(key, () => []).add(item);
     }
@@ -497,7 +585,7 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
                       Text('수검 대상 $_year년',
                           style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
                       Text(
-                        _inspError != null ? '로드 오류' : '${_assignedItems.length}개 국소',
+                        _inspError != null ? '로드 오류' : '${_filteredItems.length}개 국소',
                         style: TextStyle(
                           fontSize: 12,
                           color: _inspError != null ? Colors.red : Colors.grey[600],
@@ -671,11 +759,28 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
             color: isUnassigned ? Colors.grey.shade400 : blueColor,
           ),
         ),
-        title: Text(joLabel,
-            style: TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-                color: isUnassigned ? Colors.grey.shade500 : blueColor)),
+        title: Row(
+          children: [
+            Text(joLabel,
+                style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: isUnassigned ? Colors.grey.shade500 : blueColor)),
+            if (!isUnassigned) ...[
+              const SizedBox(width: 6),
+              Builder(builder: (_) {
+                final inspectors = items
+                    .map((i) => (i['검사관'] as String? ?? '').trim())
+                    .where((v) => v.isNotEmpty)
+                    .toSet()
+                    .join(', ');
+                if (inspectors.isEmpty) return const SizedBox.shrink();
+                return Text('($inspectors)',
+                    style: TextStyle(fontSize: 12, color: Colors.grey.shade500, fontWeight: FontWeight.normal));
+              }),
+            ],
+          ],
+        ),
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -696,12 +801,14 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
   // ── 수검 아이템 카드 ───────────────────────────────────────────────────
 
   Widget _buildInspectionItem(Map<String, dynamic> item) {
-    final licenseNo = item['허가번호'] as String? ?? '';
-    final callname  = item['호출명칭'] as String? ?? licenseNo;
-    final region    = item['지역'] as String? ?? '';
-    final status    = item['status'] as String? ?? '검사대기';
-    final inspDate  = item['검사일'] as String? ?? '';
-    final hasCoords = (item['위도'] as num? ?? 0) != 0 && (item['경도'] as num? ?? 0) != 0;
+    final licenseNo  = item['허가번호'] as String? ?? '';
+    final callname   = item['호출명칭'] as String? ?? licenseNo;
+    final region     = item['지역'] as String? ?? '';
+    final status     = item['status'] as String? ?? '검사대기';
+    final inspDate   = item['검사일'] as String? ?? '';
+    final hasCoords  = (item['위도'] as num? ?? 0) != 0 && (item['경도'] as num? ?? 0) != 0;
+    final jo         = (item['조'] as String? ?? '').trim();
+    final inspector  = (item['검사관'] as String? ?? '').trim();
 
     final Color statusColor;
     final IconData statusIcon;
@@ -817,6 +924,20 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
                 ],
               ),
             ),
+            if (jo.isNotEmpty || inspector.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(left: 8, right: 4),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    if (jo.isNotEmpty)
+                      Text(jo, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFFE53935))),
+                    if (inspector.isNotEmpty)
+                      Text(inspector, style: TextStyle(fontSize: 11, color: Colors.grey.shade600)),
+                  ],
+                ),
+              ),
             const Icon(Icons.chevron_right, size: 18, color: Colors.black26),
           ],
         ),
