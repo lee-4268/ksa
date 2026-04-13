@@ -106,7 +106,7 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
     dialog.show(message: '저장 중...');
     try {
       // 합격/불합격 저장 시 검사일 자동 세팅
-      if (_status == '합격' || _status.startsWith('불합격')) {
+      if (_status == '합격' || _status.startsWith('불합격') || _status.startsWith('부적합')) {
         if (_inspDateCtrl.text.isEmpty) {
           final now = DateTime.now();
           _inspDateCtrl.text =
@@ -412,8 +412,9 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
                     fontWeight: FontWeight.w500)),
           ),
         if (schedTag.isNotEmpty) const SizedBox(width: 6),
-        if (_status == '합격')           _statusBadge('합격',         _green),
-        if (_status.startsWith('불합격')) _statusBadge(_status,        _primary),
+        if (_status == '합격')            _statusBadge('합격',    _green),
+        if (_status.startsWith('불합격')) _statusBadge(_status,   _primary),
+        if (_status.startsWith('부적합')) _statusBadge(_status,   const Color(0xFFF57C00)),
         if (_status == '검사대기')        _statusBadge('검사대기', Colors.grey.shade500),
       ]),
     ]);
@@ -598,9 +599,11 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
             style: TextStyle(fontSize: 13, color: Colors.black54)),
         const SizedBox(height: 8),
         Row(children: [
-          _statusChip('합격',   _green),
+          _statusChip('합격',    _green),
           const SizedBox(width: 8),
-          _statusChip('불합격', _primary),
+          _statusChip('불합격',  _primary),
+          const SizedBox(width: 8),
+          _statusChip('부적합',  const Color(0xFFF57C00)),
           const SizedBox(width: 8),
           _statusChip('검사대기', Colors.grey),
         ]),
@@ -610,9 +613,24 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
             const Text('불합격 구분',
                 style: TextStyle(fontSize: 12, color: Colors.black45)),
             const SizedBox(width: 10),
-            _failTypeChip('불합격(서류)'),
+            _failTypeChip('불합격(서류)', _primary),
             const SizedBox(width: 8),
-            _failTypeChip('불합격(성능)'),
+            _failTypeChip('불합격(성능)', _primary),
+            const SizedBox(width: 8),
+            _failTypeChip('불합격(All)', _primary),
+          ]),
+        ],
+        if (_status.startsWith('부적합')) ...[
+          const SizedBox(height: 10),
+          Row(children: [
+            const Text('부적합 구분',
+                style: TextStyle(fontSize: 12, color: Colors.black45)),
+            const SizedBox(width: 10),
+            _failTypeChip('부적합(공용화)', const Color(0xFFF57C00)),
+            const SizedBox(width: 8),
+            _failTypeChip('부적합(설치장소)', const Color(0xFFF57C00)),
+            const SizedBox(width: 8),
+            _failTypeChip('부적합(All)', const Color(0xFFF57C00)),
           ]),
         ],
         const SizedBox(height: 16),
@@ -696,12 +714,15 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
   Widget _statusChip(String label, Color color) {
     final selected = label == '불합격'
         ? _status.startsWith('불합격')
-        : _status == label;
+        : label == '부적합'
+            ? _status.startsWith('부적합')
+            : _status == label;
     return GestureDetector(
       onTap: () => setState(() {
         if (label == '불합격') {
-          // 이미 불합격 계열이면 유지, 아니면 기본값으로
           if (!_status.startsWith('불합격')) _status = '불합격(서류)';
+        } else if (label == '부적합') {
+          if (!_status.startsWith('부적합')) _status = '부적합(공용화)';
         } else {
           _status = label;
         }
@@ -726,23 +747,23 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
     );
   }
 
-  Widget _failTypeChip(String label) {
+  Widget _failTypeChip(String label, Color color) {
     final selected = _status == label;
     return GestureDetector(
       onTap: () => setState(() => _status = label),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
         decoration: BoxDecoration(
-          color: selected ? _primary : _primary.withValues(alpha: 0.06),
+          color: selected ? color : color.withValues(alpha: 0.06),
           borderRadius: BorderRadius.circular(16),
           border: Border.all(
-              color: selected ? _primary : _primary.withValues(alpha: 0.25)),
+              color: selected ? color : color.withValues(alpha: 0.25)),
         ),
         child: Text(
           label,
           style: TextStyle(
             fontSize: 12,
-            color: selected ? Colors.white : _primary,
+            color: selected ? Colors.white : color,
             fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
           ),
         ),

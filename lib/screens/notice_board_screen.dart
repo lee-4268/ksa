@@ -1,3 +1,5 @@
+// ignore: avoid_web_libraries_in_flutter
+import 'dart:html' as html;
 import 'dart:convert';
 
 import 'package:file_picker/file_picker.dart';
@@ -6,6 +8,9 @@ import 'package:provider/provider.dart';
 
 import '../services/auth_service.dart';
 import '../services/community_service.dart';
+import '../widgets/progress_dialog.dart';
+import '../widgets/rich_content_editor.dart';
+import '../widgets/rich_content_viewer.dart';
 
 /// 공지사항 화면 — 목록 / 상세 / 작성·수정 3가지 뷰를 상태로 전환
 class NoticeBoardScreen extends StatefulWidget {
@@ -48,10 +53,13 @@ class _NoticeBoardScreenState extends State<NoticeBoardScreen> {
   bool _isEditing = false;
   int? _editId;
   final _titleCtrl = TextEditingController();
-  final _contentCtrl = TextEditingController();
+  String _htmlContent = '';
+  String _editorViewId = '0';
+  final _editorKey = GlobalKey<RichContentEditorState>();
   String _writeDivision = '전체';
   bool _saving = false;
   List<String> _images = [];
+  List<Map<String, String>> _attachments = []; // {url, filename, ext}
   bool _uploading = false;
 
   @override
@@ -68,7 +76,6 @@ class _NoticeBoardScreenState extends State<NoticeBoardScreen> {
   void dispose() {
     _searchCtrl.dispose();
     _titleCtrl.dispose();
-    _contentCtrl.dispose();
     super.dispose();
   }
 
@@ -116,9 +123,11 @@ class _NoticeBoardScreenState extends State<NoticeBoardScreen> {
     _isEditing = false;
     _editId = null;
     _titleCtrl.clear();
-    _contentCtrl.clear();
+    _htmlContent = '';
+    _editorViewId = DateTime.now().millisecondsSinceEpoch.toString();
     _writeDivision = '전체';
     _images = [];
+    _attachments = [];
     setState(() => _mode = _ViewMode.write);
   }
 
@@ -126,9 +135,11 @@ class _NoticeBoardScreenState extends State<NoticeBoardScreen> {
     _isEditing = true;
     _editId = item['id'] as int?;
     _titleCtrl.text = item['title'] ?? '';
-    _contentCtrl.text = item['content'] ?? '';
+    _htmlContent = item['content'] ?? '';
+    _editorViewId = DateTime.now().millisecondsSinceEpoch.toString();
     _writeDivision = item['division'] ?? '전체';
     _images = _parseImages(item['images']);
+    _attachments = _parseAttachments(item['attachments']);
     setState(() => _mode = _ViewMode.write);
   }
 
@@ -173,9 +184,67 @@ class _NoticeBoardScreenState extends State<NoticeBoardScreen> {
     }
   }
 
+  Future<void> _pickFile() async {
+    if (_attachments.length >= 10) {
+      _snack('파일은 최대 10개까지 첨부할 수 있습니다.');
+      return;
+    }
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.any,
+      withData: true,
+      allowMultiple: true,
+    );
+    if (result == null || result.files.isEmpty) return;
+    for (final file in result.files) {
+      if (_attachments.length >= 10) break;
+      if (file.bytes == null) continue;
+      if (file.bytes!.length > 50 * 1024 * 1024) {
+        _snack('${file.name}: 50MB 이하 파일만 첨부할 수 있습니다.');
+        continue;
+      }
+      setState(() => _uploading = true);
+      try {
+        final res = await _svc.uploadFile(file.bytes!, file.name);
+        final url = res['url'] as String? ?? '';
+        final ext = res['ext'] as String? ?? '';
+        if (url.isNotEmpty) {
+          setState(() => _attachments.add({'url': url, 'filename': file.name, 'ext': ext}));
+        }
+      } catch (e) {
+        _snack('${file.name} 업로드 실패: $e');
+      } finally {
+        setState(() => _uploading = false);
+      }
+    }
+  }
+
+  List<Map<String, String>> _parseAttachments(dynamic raw) {
+    if (raw == null) return [];
+    try {
+      List decoded;
+      if (raw is String) {
+        decoded = json.decode(raw) as List;
+      } else if (raw is List) {
+        decoded = raw;
+      } else {
+        return [];
+      }
+      return decoded.map((e) {
+        if (e is Map) {
+          return {'url': e['url']?.toString() ?? '', 'filename': e['filename']?.toString() ?? '', 'ext': e['ext']?.toString() ?? ''};
+        }
+        return <String, String>{};
+      }).where((e) => e['url']!.isNotEmpty).toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
   Future<void> _save() async {
     final title = _titleCtrl.text.trim();
-    final content = _contentCtrl.text.trim();
+    final rawHtml = _editorKey.currentState?.getHtml() ?? _htmlContent;
+    // <br>만 있거나 공백만인 경우 빈 것으로 처리
+    final content = rawHtml.replaceAll(RegExp(r'<br\s*/?>'), '').trim();
     if (title.isEmpty) {
       _snack('제목을 입력해주세요.');
       return;
@@ -185,18 +254,20 @@ class _NoticeBoardScreenState extends State<NoticeBoardScreen> {
       return;
     }
     setState(() => _saving = true);
+    final dialog = ProgressDialog(context);
+    dialog.show(message: _isEditing ? '수정 중...' : '등록 중...');
     try {
       if (_isEditing && _editId != null) {
-        await _svc.updateNotice(_editId!, title, content, division: _writeDivision, images: _images);
-        _snack('공지사항이 수정되었습니다.');
+        await _svc.updateNotice(_editId!, title, content, division: _writeDivision, images: _images, attachments: _attachments);
+        await dialog.complete(message: '공지사항이 수정되었습니다.');
         _openDetail(_editId!);
       } else {
-        final newId = await _svc.createNotice(title, content, division: _writeDivision, images: _images);
-        _snack('공지사항이 등록되었습니다.');
+        final newId = await _svc.createNotice(title, content, division: _writeDivision, images: _images, attachments: _attachments);
+        await dialog.complete(message: '공지사항이 등록되었습니다.');
         _openDetail(newId);
       }
     } catch (e) {
-      _snack('저장 실패: $e');
+      await dialog.error(message: '저장 실패');
     } finally {
       setState(() => _saving = false);
     }
@@ -218,14 +289,16 @@ class _NoticeBoardScreenState extends State<NoticeBoardScreen> {
         ],
       ),
     );
-    if (ok != true) return;
+    if (ok != true || !mounted) return;
+    final dialog = ProgressDialog(context);
+    dialog.show(message: '삭제 중...');
     try {
       await _svc.deleteNotice(id);
-      _snack('삭제되었습니다.');
+      await dialog.complete(message: '삭제되었습니다.');
       setState(() => _mode = _ViewMode.list);
       _fetchList();
     } catch (e) {
-      _snack('삭제 실패: $e');
+      await dialog.error(message: '삭제 실패');
     }
   }
 
@@ -236,11 +309,16 @@ class _NoticeBoardScreenState extends State<NoticeBoardScreen> {
 
   void _snack(String msg) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(msg),
-      behavior: SnackBarBehavior.floating,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-    ));
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        content: Text(msg, style: const TextStyle(fontSize: 14)),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('확인')),
+        ],
+      ),
+    );
   }
 
   // ── 페이지네이션 ──
@@ -726,10 +804,15 @@ class _NoticeBoardScreenState extends State<NoticeBoardScreen> {
                   ),
                   const SizedBox(height: 32),
                   
-                  // 본문
-                  SelectableText(
-                    content,
-                    style: const TextStyle(fontSize: 15, color: Color(0xFF374151), height: 1.8), // 줄간격을 넓혀 가독성 향상
+                  // 본문 — 테이블이면 행 수 기반, 아니면 텍스트 길이 기반으로 높이 추정
+                  RichContentViewer(
+                    viewId: '${d['id']}_${d['updated_at'] ?? d['created_at'] ?? '0'}',
+                    content: content,
+                    height: () {
+                      final rowCount = RegExp(r'<tr[^>]*>', caseSensitive: false).allMatches(content).length;
+                      if (rowCount > 0) return (rowCount * 36.0 + 80).clamp(120, 2000);
+                      return (content.length / 40 * 24).clamp(120, 2000);
+                    }(),
                   ),
                   
                   // 첨부 이미지
@@ -771,6 +854,53 @@ class _NoticeBoardScreenState extends State<NoticeBoardScreen> {
                         );
                       }).toList(),
                     ),
+                  ],
+
+                  // 첨부파일
+                  if (_parseAttachments(d['attachments']).isNotEmpty) ...[
+                    const SizedBox(height: 40),
+                    Text('첨부파일', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Colors.grey.shade800)),
+                    const SizedBox(height: 12),
+                    ..._parseAttachments(d['attachments']).map((att) {
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 6),
+                        child: InkWell(
+                          onTap: () async {
+                            final dialog = ProgressDialog(context);
+                            dialog.show(message: '다운로드 중...');
+                            try {
+                              final bytes = await _svc.downloadFile(att['url']!);
+                              final blob = html.Blob([bytes]);
+                              final blobUrl = html.Url.createObjectUrlFromBlob(blob);
+                              html.AnchorElement(href: blobUrl)
+                                ..setAttribute('download', att['filename'] ?? 'file')
+                                ..click();
+                              html.Url.revokeObjectUrl(blobUrl);
+                              await dialog.complete(message: '다운로드 완료');
+                            } catch (e) {
+                              await dialog.error(message: '다운로드 실패');
+                            }
+                          },
+                          borderRadius: BorderRadius.circular(6),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                            decoration: BoxDecoration(
+                              color: Colors.grey.shade50,
+                              borderRadius: BorderRadius.circular(6),
+                              border: Border.all(color: Colors.grey.shade200),
+                            ),
+                            child: Row(
+                              children: [
+                                Icon(_fileIcon(att['ext'] ?? ''), size: 18, color: _primary),
+                                const SizedBox(width: 10),
+                                Expanded(child: Text(att['filename'] ?? '', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500), overflow: TextOverflow.ellipsis)),
+                                Icon(Icons.download_outlined, size: 16, color: Colors.grey.shade500),
+                              ],
+                            ),
+                          ),
+                        ),
+                      );
+                    }),
                   ],
 
                   // 수정/삭제 버튼
@@ -928,13 +1058,15 @@ class _NoticeBoardScreenState extends State<NoticeBoardScreen> {
 
                   // 내용
                   _inputLabel('내용'),
-                  TextField(
-                    controller: _contentCtrl,
-                    maxLines: 15,
-                    style: const TextStyle(fontSize: 15, height: 1.6), // 글쓰기 시에도 가독성 고려
-                    decoration: _inputDecoration('상세 내용을 입력하세요').copyWith(
-                      contentPadding: const EdgeInsets.all(16),
-                    ),
+                  RichContentEditor(
+                    key: _editorKey,
+                    viewId: _editorViewId,
+                    initialHtml: _htmlContent,
+                    height: 320,
+                    onImagePaste: (bytes, filename) async {
+                      final res = await _svc.uploadImage(bytes, filename);
+                      return _svc.getImageUrl(res['url'] as String? ?? '');
+                    },
                   ),
                   const SizedBox(height: 24),
 
@@ -1024,6 +1156,61 @@ class _NoticeBoardScreenState extends State<NoticeBoardScreen> {
                       ),
                     ],
                   ),
+                  const SizedBox(height: 24),
+
+                  // 파일 첨부
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      _inputLabel('파일 첨부', paddingBottom: 0),
+                      const SizedBox(width: 12),
+                      Text('${_attachments.length} / 10', style: TextStyle(fontSize: 13, color: Colors.grey.shade500)),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  OutlinedButton.icon(
+                    onPressed: (_uploading || _attachments.length >= 10) ? null : _pickFile,
+                    icon: _uploading
+                        ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+                        : const Icon(Icons.attach_file, size: 16),
+                    label: const Text('파일 선택'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.grey.shade700,
+                      side: BorderSide(color: Colors.grey.shade300),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                      textStyle: const TextStyle(fontSize: 13),
+                    ),
+                  ),
+                  if (_attachments.isNotEmpty) ...[
+                    const SizedBox(height: 10),
+                    ...List.generate(_attachments.length, (i) {
+                      final att = _attachments[i];
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 6),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: Colors.grey.shade50,
+                            borderRadius: BorderRadius.circular(6),
+                            border: Border.all(color: Colors.grey.shade200),
+                          ),
+                          child: Row(
+                            children: [
+                              Icon(_fileIcon(att['ext'] ?? ''), size: 16, color: Colors.grey.shade600),
+                              const SizedBox(width: 8),
+                              Expanded(child: Text(att['filename'] ?? '', style: const TextStyle(fontSize: 13), overflow: TextOverflow.ellipsis)),
+                              InkWell(
+                                onTap: () => setState(() => _attachments.removeAt(i)),
+                                child: Icon(Icons.close, size: 16, color: Colors.grey.shade500),
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    }),
+                  ],
+
                   const SizedBox(height: 40),
                   Divider(color: Colors.grey.shade200),
                   const SizedBox(height: 16),
@@ -1090,6 +1277,18 @@ class _NoticeBoardScreenState extends State<NoticeBoardScreen> {
         borderSide: const BorderSide(color: _primary),
       ),
     );
+  }
+
+  IconData _fileIcon(String ext) {
+    switch (ext.toLowerCase()) {
+      case '.pdf': return Icons.picture_as_pdf_outlined;
+      case '.xlsx': case '.xls': case '.csv': return Icons.table_chart_outlined;
+      case '.pptx': case '.ppt': return Icons.slideshow_outlined;
+      case '.docx': case '.doc': case '.hwp': case '.hwpx': return Icons.description_outlined;
+      case '.zip': return Icons.folder_zip_outlined;
+      case '.jpg': case '.jpeg': case '.png': case '.gif': case '.webp': return Icons.image_outlined;
+      default: return Icons.attach_file;
+    }
   }
 
   // ── Util ──

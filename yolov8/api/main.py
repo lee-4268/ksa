@@ -14120,9 +14120,9 @@ def _init_community_db():
             conn.execute(f"ALTER TABLE requests ADD COLUMN {col} TEXT DEFAULT {default}")
         except Exception:
             pass
-    # images, author_role 컬럼 추가
+    # images, author_role, attachments 컬럼 추가
     for tbl in ('notices', 'requests'):
-        for col, dflt in [("images", "'[]'"), ("author_role", "''")]:
+        for col, dflt in [("images", "'[]'"), ("author_role", "''"), ("attachments", "'[]'")]:
             try:
                 conn.execute(f"ALTER TABLE {tbl} ADD COLUMN {col} TEXT DEFAULT {dflt}")
             except Exception:
@@ -14140,6 +14140,7 @@ class NoticeCreate(BaseModel):
     content: str
     division: str = "전체"
     images: list = []
+    attachments: list = []
 
 
 class NoticeUpdate(BaseModel):
@@ -14147,6 +14148,7 @@ class NoticeUpdate(BaseModel):
     content: str
     division: str = "전체"
     images: list = []
+    attachments: list = []
 
 
 class RequestCreate(BaseModel):
@@ -14241,6 +14243,83 @@ async def community_upload_image(request: Request, file: UploadFile = File(...))
         raise HTTPException(500, "이미지 업로드에 실패했습니다")
 
     return {"url": s3_key, "filename": original_filename}
+
+
+_COMMUNITY_FILE_MAX_SIZE = 50 * 1024 * 1024  # 50MB
+_COMMUNITY_FILE_CONTENT_TYPES = {
+    '.pdf': 'application/pdf',
+    '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    '.xls': 'application/vnd.ms-excel',
+    '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    '.ppt': 'application/vnd.ms-powerpoint',
+    '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    '.doc': 'application/msword',
+    '.hwp': 'application/x-hwp',
+    '.hwpx': 'application/x-hwpx',
+    '.zip': 'application/zip',
+    '.txt': 'text/plain',
+    '.csv': 'text/csv',
+    '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png',
+    '.gif': 'image/gif', '.webp': 'image/webp',
+}
+
+
+@app.post("/community/upload-file")
+async def community_upload_file(request: Request, file: UploadFile = File(...)):
+    """커뮤니티 게시판 일반 파일 업로드 → S3"""
+    await _verify_auth(request)
+
+    original_filename = file.filename or "file"
+    ext = os.path.splitext(original_filename)[1].lower()
+    if ext not in _COMMUNITY_FILE_CONTENT_TYPES:
+        raise HTTPException(400, f"허용되지 않는 파일 형식입니다. ({ext})")
+
+    data = await file.read()
+    if len(data) > _COMMUNITY_FILE_MAX_SIZE:
+        raise HTTPException(400, f"파일 크기가 50MB를 초과합니다. ({len(data) / (1024*1024):.1f}MB)")
+
+    safe_name = re.sub(r'[^a-zA-Z0-9._-]', '_', original_filename)
+    s3_key = f"community-files/{uuid.uuid4().hex}_{safe_name}"
+    content_type = _COMMUNITY_FILE_CONTENT_TYPES.get(ext, 'application/octet-stream')
+
+    try:
+        s3_client = get_s3_client()
+        s3_client.put_object(
+            Bucket=S3_BUCKET_NAME,
+            Key=s3_key,
+            Body=data,
+            ContentType=content_type,
+            ContentDisposition=f'attachment; filename="{safe_name}"',
+        )
+        logger.info(f"Community file uploaded: s3://{S3_BUCKET_NAME}/{s3_key} ({len(data)} bytes)")
+    except Exception as e:
+        logger.error(f"Community file upload failed: {e}")
+        raise HTTPException(500, "파일 업로드에 실패했습니다")
+
+    return {"url": s3_key, "filename": original_filename, "size": len(data), "ext": ext}
+
+
+@app.get("/community/files/{file_key:path}")
+async def community_serve_file(file_key: str, request: Request):
+    """커뮤니티 첨부파일 다운로드 — S3에서 스트리밍"""
+    await _verify_auth(request)
+    try:
+        s3_client = get_s3_client()
+        obj = s3_client.get_object(Bucket=S3_BUCKET_NAME, Key=file_key)
+        data = obj['Body'].read()
+        content_type = obj.get('ContentType', 'application/octet-stream')
+        filename = file_key.split('/')[-1]
+        # UUID prefix 제거하여 원본 파일명 복원
+        if '_' in filename:
+            filename = filename[filename.index('_') + 1:]
+        return Response(
+            content=data,
+            media_type=content_type,
+            headers={'Content-Disposition': f'attachment; filename="{filename}"'},
+        )
+    except Exception as e:
+        logger.error(f"Community file serve failed: {e}")
+        raise HTTPException(404, "파일을 찾을 수 없습니다")
 
 
 @app.get("/community/images/{image_key:path}")
@@ -14364,9 +14443,9 @@ async def create_notice(body: NoticeCreate, request: Request):
         conn.row_factory = sqlite3.Row
         try:
             cur = conn.execute(
-                "INSERT INTO notices (title, content, division, author_empno, author_name, author_org, author_role, images, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (body.title, body.content, body.division, empno, user_info["name"], user_info["org"], role, json.dumps(body.images), now, now),
+                "INSERT INTO notices (title, content, division, author_empno, author_name, author_org, author_role, images, attachments, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (body.title, body.content, body.division, empno, user_info["name"], user_info["org"], role, json.dumps(body.images), json.dumps(body.attachments), now, now),
             )
             conn.commit()
             row = conn.execute("SELECT * FROM notices WHERE id = ?", (cur.lastrowid,)).fetchone()
@@ -14393,8 +14472,8 @@ async def update_notice(notice_id: int, body: NoticeUpdate, request: Request):
             if row["author_empno"] != empno:
                 raise HTTPException(403, "작성자만 수정할 수 있습니다")
             conn.execute(
-                "UPDATE notices SET title = ?, content = ?, division = ?, images = ?, updated_at = ? WHERE id = ?",
-                (body.title, body.content, body.division, json.dumps(body.images), now, notice_id),
+                "UPDATE notices SET title = ?, content = ?, division = ?, images = ?, attachments = ?, updated_at = ? WHERE id = ?",
+                (body.title, body.content, body.division, json.dumps(body.images), json.dumps(body.attachments), now, notice_id),
             )
             conn.commit()
             updated = conn.execute("SELECT * FROM notices WHERE id = ?", (notice_id,)).fetchone()

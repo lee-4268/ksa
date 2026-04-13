@@ -139,6 +139,9 @@ class InspectionStatusAdapter extends TypeAdapter<InspectionStatus> {
       case InspectionStatus.failed:
         writer.writeByte(2);
         break;
+      case InspectionStatus.inadequate:
+        writer.writeByte(3);
+        break;
     }
   }
 
