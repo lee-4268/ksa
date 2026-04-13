@@ -48,7 +48,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
   List<String> _aQuarters = [], _aNationGroups = [], _aKcaResults = [];
 
   // 매트릭스 탭 전용 필터
-  String _mHdqt = '', _mTeam = '', _mWeek = '';
+  String _mHdqt = '', _mTeam = '', _mWeek = '', _mMonth = '';
 
   // 다중 선택 (일괄 일정 등록)
   final _selectedLicenseNos = <String>{};
@@ -1182,8 +1182,29 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
         return na.compareTo(nb);
       })];
 
+    // 월 목록: 주차에서 추출
+    String extractMonthLabel(String week) {
+      final m = RegExp(r'(\d+)월').firstMatch(week);
+      return m != null ? '${m.group(1)}월' : '기타';
+    }
+    final allMonths = <String>{};
+    for (final w in allWeeks) {
+      allMonths.add(extractMonthLabel(w));
+    }
+    final monthOptions = <String>['', '전체', ...allMonths.toList()
+      ..sort((a, b) {
+        final na = int.tryParse(a.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0;
+        final nb = int.tryParse(b.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0;
+        return na.compareTo(nb);
+      })];
+
     // 매트릭스 탭 팀 옵션: 선택된 본부 기준
     final mTeamOpts = <String>['', ...(_mHdqt.isNotEmpty ? (_orgMap[_mHdqt] ?? []) : _orgMap.values.expand((v) => v).toSet().toList()..sort())];
+
+    final now = DateTime.now();
+    final String monthHint = _mMonth.isEmpty
+        ? '${now.month - 1 > 0 ? now.month - 1 : 12}~${now.month + 1 <= 12 ? now.month + 1 : 1}월'
+        : _mMonth;
 
     return Container(
       margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
@@ -1211,7 +1232,43 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
           _filterDropdown('수검일정', _mWeek, weekOptions, (v) {
             setState(() => _mWeek = v ?? '');
           }),
-          if (_mHdqt.isNotEmpty || _mTeam.isNotEmpty || _mWeek.isNotEmpty)
+          // 월 필터 (기본: 현재 ±1개월)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              border: Border.all(
+                color: _mMonth.isNotEmpty ? _primary : Colors.grey.shade300,
+                width: _mMonth.isNotEmpty ? 1.5 : 1,
+              ),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: DropdownButtonHideUnderline(
+              child: DropdownButton<String>(
+                value: monthOptions.contains(_mMonth) ? _mMonth : '',
+                isDense: true,
+                icon: Icon(Icons.arrow_drop_down,
+                    color: _mMonth.isNotEmpty ? _primary : Colors.grey.shade500, size: 20),
+                dropdownColor: Colors.white,
+                borderRadius: BorderRadius.circular(12),
+                style: TextStyle(
+                    color: _mMonth.isNotEmpty ? _primary : Colors.black87, fontSize: 13),
+                hint: Text('월 ($monthHint)',
+                    style: TextStyle(
+                        fontSize: 13,
+                        color: _mMonth.isEmpty ? _primary.withValues(alpha: 0.8) : Colors.black87)),
+                items: monthOptions.map((m) => DropdownMenuItem(
+                  value: m,
+                  child: Text(
+                    m.isEmpty ? '기본 (±1개월)' : m == '전체' ? '전체 월' : m,
+                    style: const TextStyle(fontSize: 13),
+                  ),
+                )).toList(),
+                onChanged: (v) => setState(() => _mMonth = v ?? ''),
+              ),
+            ),
+          ),
+          if (_mHdqt.isNotEmpty || _mTeam.isNotEmpty || _mWeek.isNotEmpty || _mMonth.isNotEmpty)
             OutlinedButton(
               style: OutlinedButton.styleFrom(
                 foregroundColor: Colors.grey.shade600,
@@ -1219,7 +1276,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                 padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
               ),
-              onPressed: () => setState(() { _mHdqt = ''; _mTeam = ''; _mWeek = ''; }),
+              onPressed: () => setState(() { _mHdqt = ''; _mTeam = ''; _mWeek = ''; _mMonth = ''; }),
               child: const Text('초기화', style: TextStyle(fontSize: 13)),
             ),
         ],
@@ -1877,6 +1934,36 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
 
     final totalFiltered = filteredSchedules.length;
 
+    // 월별 그룹화: "M월 N주차" 형식에서 월 추출
+    String extractMonth(String week) {
+      final m = RegExp(r'(\d+)월').firstMatch(week);
+      return m != null ? '${m.group(1)}월' : '기타';
+    }
+
+    final monthGroups = <String, List<String>>{};
+    for (final week in weeks) {
+      monthGroups.putIfAbsent(extractMonth(week), () => []).add(week);
+    }
+    final allMonths = monthGroups.keys.toList()
+      ..sort((a, b) {
+        final na = int.tryParse(a.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0;
+        final nb = int.tryParse(b.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0;
+        return na.compareTo(nb);
+      });
+
+    // 월 필터 적용: 기본(빈값)=현재±1개월, '전체'=전부, 특정월=해당월만
+    final now = DateTime.now();
+    final nearMonths = <String>{
+      '${now.month - 1 > 0 ? now.month - 1 : 12}월',
+      '${now.month}월',
+      '${now.month + 1 <= 12 ? now.month + 1 : 1}월',
+    };
+    final months = _mMonth == '전체'
+        ? allMonths
+        : _mMonth.isNotEmpty
+            ? allMonths.where((m) => m == _mMonth).toList()
+            : allMonths.where((m) => nearMonths.contains(m)).toList();
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1913,17 +2000,77 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
             ],
           ),
         ),
-        if (weeks.isEmpty)
+        if (months.isEmpty)
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 8),
-            child: Text('조건에 맞는 일정이 없습니다.',
-                style: TextStyle(fontSize: 13, color: Colors.grey.shade400)),
+            child: Text(
+              weeks.isNotEmpty
+                  ? '해당 월에 일정이 없습니다. 필터에서 월을 변경하거나 "전체 월"을 선택하세요.'
+                  : '조건에 맞는 일정이 없습니다.',
+              style: TextStyle(fontSize: 13, color: Colors.grey.shade400),
+            ),
           )
         else
-          Wrap(
-            spacing: 12,
-            runSpacing: 12,
-            children: weeks.map((week) => _buildWeekCard(week, weekMap[week]!)).toList(),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: months.map((month) {
+              final monthWeeks = monthGroups[month]!;
+              final monthTotal = monthWeeks.fold<int>(0, (s, w) =>
+                  s + (weekMap[w]?.values.fold<int>(0, (a, b) => a + b) ?? 0));
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 10),
+                      child: Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                            decoration: BoxDecoration(
+                              color: _primary.withValues(alpha: 0.08),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: _primary.withValues(alpha: 0.2)),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.calendar_month_outlined, size: 14, color: _primary),
+                                const SizedBox(width: 5),
+                                Text(
+                                  month,
+                                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _primary),
+                                ),
+                                const SizedBox(width: 6),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                                  decoration: BoxDecoration(
+                                    color: _primary,
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  child: Text(
+                                    '$monthTotal건',
+                                    style: const TextStyle(fontSize: 11, color: Colors.white, fontWeight: FontWeight.w600),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(child: Container(height: 1, color: const Color(0xFFE5E7EB))),
+                        ],
+                      ),
+                    ),
+                    Wrap(
+                      spacing: 12,
+                      runSpacing: 12,
+                      children: monthWeeks.map((week) => _buildWeekCard(week, weekMap[week]!)).toList(),
+                    ),
+                  ],
+                ),
+              );
+            }).toList(),
           ),
       ],
     );
