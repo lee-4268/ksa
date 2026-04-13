@@ -5,6 +5,7 @@ import 'dart:ui_web' as ui;
 // ignore: depend_on_referenced_packages
 import 'package:js/js.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 
 @JS('noticeEditorMount')
 // ignore: non_constant_identifier_names
@@ -75,7 +76,10 @@ class RichContentEditorState extends State<RichContentEditor> {
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(6),
-        child: HtmlElementView(viewType: _viewType),
+        child: HtmlElementView(
+          viewType: _viewType,
+          hitTestBehavior: PlatformViewHitTestBehavior.transparent,
+        ),
       ),
     );
   }
