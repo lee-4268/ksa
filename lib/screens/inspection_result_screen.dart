@@ -106,7 +106,7 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
     dialog.show(message: '저장 중...');
     try {
       // 합격/불합격 저장 시 검사일 자동 세팅
-      if (_status == '합격' || _status == '불합격') {
+      if (_status == '합격' || _status.startsWith('불합격')) {
         if (_inspDateCtrl.text.isEmpty) {
           final now = DateTime.now();
           _inspDateCtrl.text =
@@ -412,9 +412,9 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
                     fontWeight: FontWeight.w500)),
           ),
         if (schedTag.isNotEmpty) const SizedBox(width: 6),
-        if (_status == '합격')    _statusBadge('합격',    _green),
-        if (_status == '불합격')  _statusBadge('불합격',  _primary),
-        if (_status == '검사대기') _statusBadge('검사대기', Colors.grey.shade500),
+        if (_status == '합격')           _statusBadge('합격',         _green),
+        if (_status.startsWith('불합격')) _statusBadge(_status,        _primary),
+        if (_status == '검사대기')        _statusBadge('검사대기', Colors.grey.shade500),
       ]),
     ]);
   }
@@ -604,6 +604,17 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
           const SizedBox(width: 8),
           _statusChip('검사대기', Colors.grey),
         ]),
+        if (_status.startsWith('불합격')) ...[
+          const SizedBox(height: 10),
+          Row(children: [
+            const Text('불합격 구분',
+                style: TextStyle(fontSize: 12, color: Colors.black45)),
+            const SizedBox(width: 10),
+            _failTypeChip('불합격(서류)'),
+            const SizedBox(width: 8),
+            _failTypeChip('불합격(성능)'),
+          ]),
+        ],
         const SizedBox(height: 16),
 
         // 특이사항 메모
@@ -683,9 +694,18 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
   }
 
   Widget _statusChip(String label, Color color) {
-    final selected = _status == label;
+    final selected = label == '불합격'
+        ? _status.startsWith('불합격')
+        : _status == label;
     return GestureDetector(
-      onTap: () => setState(() => _status = label),
+      onTap: () => setState(() {
+        if (label == '불합격') {
+          // 이미 불합격 계열이면 유지, 아니면 기본값으로
+          if (!_status.startsWith('불합격')) _status = '불합격(서류)';
+        } else {
+          _status = label;
+        }
+      }),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         decoration: BoxDecoration(
@@ -706,40 +726,132 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
     );
   }
 
+  Widget _failTypeChip(String label) {
+    final selected = _status == label;
+    return GestureDetector(
+      onTap: () => setState(() => _status = label),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+        decoration: BoxDecoration(
+          color: selected ? _primary : _primary.withValues(alpha: 0.06),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+              color: selected ? _primary : _primary.withValues(alpha: 0.25)),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 12,
+            color: selected ? Colors.white : _primary,
+            fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
+          ),
+        ),
+      ),
+    );
+  }
+
   // ── 메모 편집 다이얼로그 ────────────────────────────────
 
   Future<void> _editMemo() async {
     final ctrl = TextEditingController(text: _memoCtrl.text);
+    final screenWidth = MediaQuery.of(context).size.width;
+
     final result = await showDialog<String>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: Colors.white,
-        surfaceTintColor: Colors.white,
+      builder: (ctx) => Dialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('특이사항 메모'),
-        content: TextField(
-          controller: ctrl,
-          maxLines: 5,
-          autofocus: true,
-          decoration: InputDecoration(
-            border:
-                OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-            hintText: '특이사항을 입력하세요',
+        elevation: 0,
+        backgroundColor: Colors.white,
+        child: Container(
+          width: screenWidth < 500 ? screenWidth * 0.9 : 440,
+          padding: EdgeInsets.all(screenWidth < 500 ? 16 : 24),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: _primary.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Icon(Icons.edit_note, size: 24, color: _primary),
+                    ),
+                    const SizedBox(width: 14),
+                    const Text(
+                      '특이사항 메모',
+                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF111827)),
+                    ),
+                  ],
+                ),
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 20),
+                  child: Divider(height: 1, color: Color(0xFFE5E7EB)),
+                ),
+                const Text('메모 내용', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF374151))),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: ctrl,
+                  maxLines: 5,
+                  autofocus: true,
+                  style: const TextStyle(fontSize: 14, color: Color(0xFF374151)),
+                  decoration: InputDecoration(
+                    hintText: '특이사항을 입력하세요',
+                    hintStyle: const TextStyle(color: Color(0xFF9CA3AF), fontSize: 13),
+                    filled: true,
+                    fillColor: const Color(0xFFF9FAFB),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: const BorderSide(color: Color(0xFFE5E7EB)),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: const BorderSide(color: Color(0xFFE5E7EB)),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: BorderSide(color: _primary),
+                    ),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                  ),
+                ),
+                const SizedBox(height: 32),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(ctx),
+                      style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                        foregroundColor: const Color(0xFF6B7280),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                      ),
+                      child: const Text('취소', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                    ),
+                    const SizedBox(width: 8),
+                    ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: _primary,
+                        foregroundColor: Colors.white,
+                        elevation: 0,
+                        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                      ),
+                      onPressed: () => Navigator.pop(ctx, ctrl.text),
+                      child: const Text('저장', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ),
         ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('취소')),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-                backgroundColor: _primary, foregroundColor: Colors.white),
-            onPressed: () => Navigator.pop(ctx, ctrl.text),
-            child: const Text('확인'),
-          ),
-        ],
       ),
     );
+
     if (result != null) setState(() => _memoCtrl.text = result);
   }
 
@@ -862,17 +974,7 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
       ),
       child: Column(mainAxisSize: MainAxisSize.min, children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
-          child: Row(children: [
-            _bottomBtn('검사대기', Icons.hourglass_empty_rounded, Colors.grey),
-            const SizedBox(width: 8),
-            _bottomBtn('합격',    Icons.check_circle_outline,   _green),
-            const SizedBox(width: 8),
-            _bottomBtn('불합격',  Icons.cancel_outlined,        _primary),
-          ]),
-        ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
+          padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
           child: (context.read<AuthService>().isSuperAdmin || context.read<AuthService>().isDivisionAdmin)
               ? Row(
                   children: [
@@ -937,35 +1039,6 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
                 ),
         ),
       ]),
-    );
-  }
-
-  Widget _bottomBtn(String label, IconData icon, Color color) {
-    final selected = _status == label;
-    return Expanded(
-      child: GestureDetector(
-        onTap: () => setState(() => _status = label),
-        child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 10),
-          decoration: BoxDecoration(
-            color: selected ? color : Colors.white,
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(
-                color: selected ? color : Colors.grey.shade300),
-          ),
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            Icon(icon, size: 22,
-                color: selected ? Colors.white : color),
-            const SizedBox(height: 4),
-            Text(label,
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  color: selected ? Colors.white : color,
-                )),
-          ]),
-        ),
-      ),
     );
   }
 

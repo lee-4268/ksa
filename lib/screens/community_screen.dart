@@ -21,7 +21,7 @@ class _CommunityScreenState extends State<CommunityScreen> {
 
   final _svc = CommunityService();
   bool _statsLoading = true;
-  int _selectedTab = 0; // 0 = 요청 및 문의, 1 = 공지
+  int _selectedTab = 0; // 0 = 공지, 1 = 요청 및 문의
 
   // 통계
   int _myTotal = 0;
@@ -80,6 +80,8 @@ class _CommunityScreenState extends State<CommunityScreen> {
     return Material(
       color: _bg,
       child: Column(
+        // 👇 start 대신 stretch를 사용해야 에러가 나지 않고 화면 너비를 안전하게 확보합니다!
+        crossAxisAlignment: CrossAxisAlignment.stretch, 
         children: [
           Padding(
             padding: EdgeInsets.fromLTRB(hPad, vTop, hPad, 0),
@@ -89,7 +91,7 @@ class _CommunityScreenState extends State<CommunityScreen> {
 
           Padding(
             padding: EdgeInsets.symmetric(horizontal: hPad),
-            child: _buildTabBar(),
+            child: _buildTabBar(), // 여기에 걸어둔 Align 덕분에 탭은 왼쪽에 붙습니다.
           ),
           SizedBox(height: narrow ? 8 : 12),
 
@@ -97,8 +99,8 @@ class _CommunityScreenState extends State<CommunityScreen> {
             child: IndexedStack(
               index: _selectedTab,
               children: const [
-                RequestBoardScreen(showHeader: false),
                 NoticeBoardScreen(showHeader: false),
+                RequestBoardScreen(showHeader: false),
               ],
             ),
           ),
@@ -328,20 +330,24 @@ class _CommunityScreenState extends State<CommunityScreen> {
     );
   }
 
-  Widget _buildTabBar() {
-    return Container(
-      padding: const EdgeInsets.all(4),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: _border),
-      ),
-      child: Row(
-        children: [
-          Expanded(child: _buildTab('요청 및 문의', 0)),
-          const SizedBox(width: 4),
-          Expanded(child: _buildTab('공지', 1)),
-        ],
+Widget _buildTabBar() {
+    return Align(
+      alignment: Alignment.centerLeft, // 왼쪽 정렬 (요약 카드 시작선과 맞춤)
+      child: Container(
+        padding: const EdgeInsets.all(4),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: _border),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min, // 💡 핵심: 내부 요소 크기만큼만 너비 차지
+          children: [
+            _buildTab('공지', 0), // Expanded 제거
+            const SizedBox(width: 4),
+            _buildTab('요청 및 문의', 1), // Expanded 제거
+          ],
+        ),
       ),
     );
   }
@@ -357,6 +363,8 @@ class _CommunityScreenState extends State<CommunityScreen> {
       borderRadius: BorderRadius.circular(8),
       child: Container(
         height: 38,
+        // 💡 핵심: 고정된 비율 대신 텍스트 양옆에 여백을 주어 버튼 크기 생성
+        padding: const EdgeInsets.symmetric(horizontal: 24), 
         alignment: Alignment.center,
         decoration: BoxDecoration(
           color: selected ? _primary : Colors.transparent,
