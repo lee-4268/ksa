@@ -9,6 +9,8 @@ import 'package:provider/provider.dart';
 import '../services/auth_service.dart';
 import '../services/community_service.dart';
 import '../widgets/progress_dialog.dart';
+import '../widgets/rich_content_editor.dart';
+import '../widgets/rich_content_viewer.dart';
 
 /// 공지사항 화면 — 목록 / 상세 / 작성·수정 3가지 뷰를 상태로 전환
 class NoticeBoardScreen extends StatefulWidget {
@@ -51,7 +53,9 @@ class _NoticeBoardScreenState extends State<NoticeBoardScreen> {
   bool _isEditing = false;
   int? _editId;
   final _titleCtrl = TextEditingController();
-  final _contentCtrl = TextEditingController();
+  String _htmlContent = '';
+  String _editorViewId = '0';
+  final _editorKey = GlobalKey<RichContentEditorState>();
   String _writeDivision = '전체';
   bool _saving = false;
   List<String> _images = [];
@@ -72,7 +76,6 @@ class _NoticeBoardScreenState extends State<NoticeBoardScreen> {
   void dispose() {
     _searchCtrl.dispose();
     _titleCtrl.dispose();
-    _contentCtrl.dispose();
     super.dispose();
   }
 
@@ -120,7 +123,8 @@ class _NoticeBoardScreenState extends State<NoticeBoardScreen> {
     _isEditing = false;
     _editId = null;
     _titleCtrl.clear();
-    _contentCtrl.clear();
+    _htmlContent = '';
+    _editorViewId = DateTime.now().millisecondsSinceEpoch.toString();
     _writeDivision = '전체';
     _images = [];
     _attachments = [];
@@ -131,7 +135,8 @@ class _NoticeBoardScreenState extends State<NoticeBoardScreen> {
     _isEditing = true;
     _editId = item['id'] as int?;
     _titleCtrl.text = item['title'] ?? '';
-    _contentCtrl.text = item['content'] ?? '';
+    _htmlContent = item['content'] ?? '';
+    _editorViewId = DateTime.now().millisecondsSinceEpoch.toString();
     _writeDivision = item['division'] ?? '전체';
     _images = _parseImages(item['images']);
     _attachments = _parseAttachments(item['attachments']);
@@ -237,7 +242,9 @@ class _NoticeBoardScreenState extends State<NoticeBoardScreen> {
 
   Future<void> _save() async {
     final title = _titleCtrl.text.trim();
-    final content = _contentCtrl.text.trim();
+    final rawHtml = _editorKey.currentState?.getHtml() ?? _htmlContent;
+    // <br>만 있거나 공백만인 경우 빈 것으로 처리
+    final content = rawHtml.replaceAll(RegExp(r'<br\s*/?>'), '').trim();
     if (title.isEmpty) {
       _snack('제목을 입력해주세요.');
       return;
@@ -798,9 +805,10 @@ class _NoticeBoardScreenState extends State<NoticeBoardScreen> {
                   const SizedBox(height: 32),
                   
                   // 본문
-                  SelectableText(
-                    content,
-                    style: const TextStyle(fontSize: 15, color: Color(0xFF374151), height: 1.8), // 줄간격을 넓혀 가독성 향상
+                  RichContentViewer(
+                    viewId: '${d['id']}_${d['updated_at'] ?? d['created_at'] ?? '0'}',
+                    content: content,
+                    height: (content.length / 40 * 28).clamp(120, 1200).toDouble(),
                   ),
                   
                   // 첨부 이미지
@@ -1046,13 +1054,11 @@ class _NoticeBoardScreenState extends State<NoticeBoardScreen> {
 
                   // 내용
                   _inputLabel('내용'),
-                  TextField(
-                    controller: _contentCtrl,
-                    maxLines: 15,
-                    style: const TextStyle(fontSize: 15, height: 1.6), // 글쓰기 시에도 가독성 고려
-                    decoration: _inputDecoration('상세 내용을 입력하세요').copyWith(
-                      contentPadding: const EdgeInsets.all(16),
-                    ),
+                  RichContentEditor(
+                    key: _editorKey,
+                    viewId: _editorViewId,
+                    initialHtml: _htmlContent,
+                    height: 320,
                   ),
                   const SizedBox(height: 24),
 
