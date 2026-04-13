@@ -620,7 +620,7 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
             _failTypeChip('불합격(All)', _primary),
           ]),
         ],
-        if (_status == '부적합') ...[
+        if (_status.startsWith('부적합')) ...[
           const SizedBox(height: 10),
           Row(children: [
             const Text('부적합 구분',
