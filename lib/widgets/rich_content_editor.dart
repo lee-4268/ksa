@@ -145,17 +145,32 @@ class RichContentEditorState extends State<RichContentEditor> {
     final bodyMatch = RegExp(r'<body[^>]*>([\s\S]*?)<\/body>', caseSensitive: false).firstMatch(raw);
     var inner = bodyMatch?.group(1) ?? raw;
     inner = inner.replaceAll(RegExp(r'<!--\[if[^\]]*\]>[\s\S]*?<!\[endif\]-->'), '');
+
+    // 모든 <style> 블록에서 xl 클래스 추출 (블록이 2개 이상일 수 있음)
     final styleBuffer = StringBuffer();
-    final styleMatches = RegExp(r'<style[^>]*>([\s\S]*?)<\/style>', caseSensitive: false).allMatches(inner);
+    // raw 전체에서 style 블록 탐색 (body 밖 head의 style도 포함)
+    final styleMatches = RegExp(r'<style[^>]*>([\s\S]*?)<\/style>', caseSensitive: false).allMatches(raw);
     for (final sm in styleMatches) {
       final rules = sm.group(1) ?? '';
-      final xlMatches = RegExp(r'\.(xl\w+|x\w+)\s*\{([^}]+)\}').allMatches(rules);
+      // xl 클래스 전체 규칙 추출
+      final xlMatches = RegExp(r'\.(xl\w+)\s*\{([^}]+)\}').allMatches(rules);
       for (final rm in xlMatches) {
-        final props = (rm.group(2) ?? '').replaceAll(RegExp(r'mso-[^;]+;?\s*'), '').trim();
-        if (props.isNotEmpty) styleBuffer.write('.${rm.group(1)}{$props}');
+        var props = rm.group(2) ?? '';
+        // mso- 속성 제거 (mso-pattern 포함 — 이게 있으면 background 무시됨)
+        props = props.replaceAll(RegExp(r'mso-[^;:]+:[^;]+;?\s*'), '');
+        // windowtext → inherit (브라우저가 인식 못하는 색상)
+        props = props.replaceAll('windowtext', 'inherit');
+        props = props.trim();
+        if (props.isNotEmpty) {
+          styleBuffer.write('.${rm.group(1)}{$props}');
+        }
       }
     }
+
+    // inner에서 style 블록 제거
     inner = inner.replaceAll(RegExp(r'<style[^>]*>[\s\S]*?<\/style>', caseSensitive: false), '');
+
+    // xl 스타일을 document.head에 삽입
     if (styleBuffer.isNotEmpty) {
       final styleEl = html.StyleElement()
         ..id = 'excel-paste-style-${DateTime.now().millisecondsSinceEpoch}'
