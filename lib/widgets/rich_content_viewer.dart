@@ -1,22 +1,10 @@
 // ignore: avoid_web_libraries_in_flutter
 import 'dart:html' as html;
-import 'dart:ui_web' as ui;
+import 'dart:ui_web' as ui_web;
 
-// ignore: depend_on_referenced_packages
-import 'package:js/js.dart';
 import 'package:flutter/material.dart';
 
-@JS('noticeViewerMount')
-// ignore: non_constant_identifier_names
-external html.Element _jsViewerMount(String viewId, String html);
-
-@JS('noticeViewerUpdate')
-// ignore: non_constant_identifier_names
-external void _jsViewerUpdate(String viewId, String html);
-
 /// HTML/평문 컨텐츠를 렌더링하는 뷰어 (Web 전용)
-/// - HTML 태그가 포함된 경우 HTML로 렌더링 (엑셀 테이블 포함)
-/// - 순수 텍스트인 경우 <pre>로 래핑해 렌더링
 class RichContentViewer extends StatefulWidget {
   final String viewId;
   final String content;
@@ -35,24 +23,49 @@ class RichContentViewer extends StatefulWidget {
 
 class _RichContentViewerState extends State<RichContentViewer> {
   late final String _viewType;
+  html.DivElement? _contentDiv;
+
+  String _renderHtml(String text) {
+    if (text.isEmpty) return '';
+    final hasTag = RegExp(r'<[a-zA-Z][^>]*>').hasMatch(text);
+    if (hasTag) return text;
+    final escaped = text
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;');
+    return '<pre style="white-space:pre-wrap;font-family:inherit;margin:0">$escaped</pre>';
+  }
 
   @override
   void initState() {
     super.initState();
     _viewType = 'notice-viewer-${widget.viewId}';
-    // ignore: undefined_prefixed_name
-    ui.platformViewRegistry.registerViewFactory(_viewType, (int id) {
-      return _jsViewerMount(_viewType, widget.content);
+    ui_web.platformViewRegistry.registerViewFactory(_viewType, (int id) {
+      final wrap = html.DivElement()
+        ..style.cssText =
+            'width:100%;box-sizing:border-box;font-size:14px;'
+            'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;'
+            'color:#374151;overflow-x:auto;';
+
+      // 최소 폴백 스타일 (엑셀 inline style이 없을 때만 적용)
+      final style = html.StyleElement()
+        ..text = 'table{border-collapse:collapse;} td,th{border:1px solid #d1d5db;padding:4px 8px;}';
+
+      final contentDiv = html.DivElement()
+        ..innerHtml = _renderHtml(widget.content);
+
+      wrap.append(style);
+      wrap.append(contentDiv);
+      _contentDiv = contentDiv;
+      return wrap;
     });
   }
 
   @override
   void didUpdateWidget(RichContentViewer oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.content != widget.content) {
-      try {
-        _jsViewerUpdate(_viewType, widget.content);
-      } catch (_) {}
+    if (oldWidget.content != widget.content && _contentDiv != null) {
+      _contentDiv!.innerHtml = _renderHtml(widget.content);
     }
   }
 
