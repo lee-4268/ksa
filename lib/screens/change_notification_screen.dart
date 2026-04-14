@@ -83,19 +83,22 @@ class _ChangeNotificationScreenState extends State<ChangeNotificationScreen> {
         final bytes = await streamed.stream.toBytes();
         final changeCount = streamed.headers['x-change-count'] ?? '0';
         final targetCount = streamed.headers['x-target-count'] ?? '0';
+        final changeTypes = streamed.headers['x-change-types'] ?? '';
+        final typeLabel = changeTypes.isNotEmpty ? changeTypes : '변경';
+        final fileName = '변경적용($typeLabel)_DS파일.xlsx';
 
         // Auto download
         final blob = html.Blob([bytes],
             'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
         final url = html.Url.createObjectUrlFromBlob(blob);
         html.AnchorElement(href: url)
-          ..setAttribute('download', '변경적용_DS파일.xlsx')
+          ..setAttribute('download', fileName)
           ..click();
         html.Url.revokeObjectUrl(url);
 
         await dialog.complete(message: '변경 완료\n대상 $targetCount건, 적용 $changeCount건');
         setState(() => _result =
-            '변경 대상: $targetCount건, 변경 적용: $changeCount건\n파일이 다운로드되었습니다.');
+            '변경 대상: $targetCount건, 변경 적용: $changeCount건\n$fileName 다운로드 완료');
       } else {
         final body = await streamed.stream.bytesToString();
         await dialog.error(message: '처리 실패');

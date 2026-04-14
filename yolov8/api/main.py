@@ -1241,6 +1241,7 @@ app.add_middleware(
         "Content-Disposition",
         "X-Change-Count",
         "X-Target-Count",
+        "X-Change-Types",
     ],
     max_age=3600,
 )
@@ -14433,38 +14434,68 @@ async def document_change_notification(request: Request, file1: UploadFile = Fil
 
         # 4. 변경후 값 파싱 헬퍼
         def _parse_value(변경내역, 변경후):
-            """변경내역 유형에 따라 값 추출 + 대상 시트/컬럼 결정."""
+            """변경후(F열) 우선으로 값/대상 시트를 판별."""
             v = 변경후.strip()
+            chg = 변경내역.strip()
+            v_norm = v.replace('\r\n', '\n').replace('\r', '\n').strip()
+            v_upper = v_norm.upper()
 
-            if '형식검정' in 변경내역 or '형검' in v:
-                # "형검 : MSIP-CRI-LE1-RRUS12B3-20M" → 값만
-                if ':' in v:
-                    v = v.split(':', 1)[1].strip()
-                return {'sheet': '장치', 'col': 11, 'value': v, 'type': '형식검정번호'}
+            def _extract_after_colon(text):
+                return text.split(':', 1)[1].strip() if ':' in text else text.strip()
 
-            elif '일련번호' in 변경내역 or '일련번호' in v:
-                # "일련번호 : CB4T159642" → 값만
-                if ':' in v:
-                    v = v.split(':', 1)[1].strip()
-                return {'sheet': '장치', 'col': 8, 'value': v, 'type': '일련번호'}
-
-            elif '설치장소' in 변경내역:
-                # 주소 그대로
-                return {'sheet': '설치장소', 'col': 6, 'value': v, 'type': '설치장소'}
-
-            elif '설치형태' in 변경내역 or '설치형태' in v:
-                # "설치형태 : 간이폴, 분산폴 및 비기준 설치대" → 코드 변환
-                if ':' in v:
-                    v = v.split(':', 1)[1].strip()
-                # 매핑
-                code = 설치형태_MAP.get(v, '')
+            def _parse_install_type(text):
+                raw = _extract_after_colon(text)
+                code = 설치형태_MAP.get(raw, '')
                 if not code:
-                    # 부분 매칭
                     for k, c in 설치형태_MAP.items():
-                        if k in v or v in k:
+                        if k in raw or raw in k:
                             code = c
                             break
-                return {'sheet': '안테나', 'col': 28, 'value': code or v, 'type': '설치형태'}
+                return {'sheet': '안테나', 'col': 28, 'value': code or raw, 'type': '설치형태'}
+
+            # F열에 설치형태가 직접 들어온 경우
+            if '설치형태' in v_norm:
+                return _parse_install_type(v_norm)
+
+            # F열에 형식검정번호가 직접 들어온 경우
+            if '형검' in v_norm or '형식검정' in v_norm:
+                return {'sheet': '장치', 'col': 11, 'value': _extract_after_colon(v_norm), 'type': '형식검정번호'}
+
+            # F열에 일련번호가 직접 들어온 경우
+            if '일련번호' in v_norm:
+                return {'sheet': '장치', 'col': 8, 'value': _extract_after_colon(v_norm), 'type': '일련번호'}
+
+            # F열 값 패턴 기반 판별 (문구가 "송수신장치 변경" 등으로 오는 케이스 대응)
+            if (
+                v_upper.startswith('MSIP-')
+                or v_upper.startswith('RRA-')
+                or v_upper.startswith('KCC-')
+                or '-CRI-' in v_upper
+                or '-CRM-' in v_upper
+            ):
+                return {'sheet': '장치', 'col': 11, 'value': v_norm, 'type': '형식검정번호'}
+
+            if any(tok in v_norm for tok in ('특별시', '광역시', '특별자치시', '특별자치도', '시 ', '군 ', '구 ', '읍 ', '면 ', '동 ', '리 ')):
+                return {'sheet': '설치장소', 'col': 6, 'value': v_norm, 'type': '설치장소'}
+
+            if any(k in v_norm or v_norm in k for k in 설치형태_MAP.keys()):
+                return _parse_install_type(v_norm)
+
+            # 영숫자(하이픈 포함) 위주면 일련번호로 간주
+            alnum = ''.join(ch for ch in v_norm if ch.isalnum())
+            if len(alnum) >= 6 and not any(ch in v_norm for ch in (' ', '\n', '특별시', '광역시', '시', '군', '구', '읍', '면', '동', '리')):
+                return {'sheet': '장치', 'col': 8, 'value': v_norm, 'type': '일련번호'}
+
+            # 최후 fallback: D열(변경내역) 기준
+            if '형식검정' in chg:
+                return {'sheet': '장치', 'col': 11, 'value': _extract_after_colon(v_norm), 'type': '형식검정번호'}
+            elif '일련번호' in chg:
+                return {'sheet': '장치', 'col': 8, 'value': _extract_after_colon(v_norm), 'type': '일련번호'}
+            elif '설치장소' in chg:
+                # 주소 그대로
+                return {'sheet': '설치장소', 'col': 6, 'value': v_norm, 'type': '설치장소'}
+            elif '설치형태' in chg:
+                return _parse_install_type(v_norm)
 
             return None
 
@@ -14608,15 +14639,18 @@ async def document_change_notification(request: Request, file1: UploadFile = Fil
         out_wb.save(buf)
         out_wb.close()
         buf.seek(0)
-        return buf.getvalue(), len(change_log), len(changes)
+        # 변경 유형 수집
+        types = list(set(c['type'] for c in change_log)) if change_log else []
+        return buf.getvalue(), len(change_log), len(changes), types
 
     try:
-        data, change_count, target_count = await asyncio.to_thread(_process)
+        data, change_count, target_count, change_types = await asyncio.to_thread(_process)
     except ValueError as e:
         raise HTTPException(400, str(e))
 
     from urllib.parse import quote as _q
-    filename = "변경적용_DS파일.xlsx"
+    type_label = ','.join(change_types) if change_types else '변경'
+    filename = f"변경적용({type_label})_DS파일.xlsx"
     return Response(
         content=data,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -14624,6 +14658,7 @@ async def document_change_notification(request: Request, file1: UploadFile = Fil
             "Content-Disposition": f"attachment; filename*=UTF-8''{_q(filename)}",
             "X-Change-Count": str(change_count),
             "X-Target-Count": str(target_count),
+            "X-Change-Types": ','.join(change_types) if change_types else '',
         }
     )
 
