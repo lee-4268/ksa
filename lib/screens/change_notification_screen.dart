@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:provider/provider.dart';
 import '../services/auth_service.dart';
+import '../widgets/progress_dialog.dart';
 
 /// 변경개설신고 관리 화면
 class ChangeNotificationScreen extends StatefulWidget {
@@ -36,7 +37,7 @@ class _ChangeNotificationScreenState extends State<ChangeNotificationScreen> {
     );
     if (result == null) return;
     if (result.files.length != 2) {
-      _showSnack('파일 2개를 선택해주세요 (변경개설신고 파일 + DS 파일)');
+      _showAlert('파일 2개를 선택해주세요', '변경개설신고 파일과 DS 파일을 함께 선택해주세요.');
       return;
     }
     setState(() {
@@ -48,15 +49,12 @@ class _ChangeNotificationScreenState extends State<ChangeNotificationScreen> {
 
   Future<void> _process() async {
     if (_selectedFiles.length != 2) {
-      _showSnack('파일 2개를 먼저 선택해주세요.');
+      _showAlert('파일 미선택', '파일 2개를 먼저 선택해주세요.');
       return;
     }
 
-    setState(() {
-      _processing = true;
-      _result = null;
-      _error = null;
-    });
+    final dialog = ProgressDialog(context);
+    dialog.show(message: '변경 적용 중...');
 
     try {
       final token = context.read<AuthService>().authToken;
@@ -79,6 +77,8 @@ class _ChangeNotificationScreenState extends State<ChangeNotificationScreen> {
       final streamed =
           await request.send().timeout(const Duration(minutes: 5));
 
+      if (!mounted) return;
+
       if (streamed.statusCode == 200) {
         final bytes = await streamed.stream.toBytes();
         final changeCount = streamed.headers['x-change-count'] ?? '0';
@@ -93,17 +93,31 @@ class _ChangeNotificationScreenState extends State<ChangeNotificationScreen> {
           ..click();
         html.Url.revokeObjectUrl(url);
 
+        await dialog.complete(message: '변경 완료\n대상 $targetCount건, 적용 $changeCount건');
         setState(() => _result =
             '변경 대상: $targetCount건, 변경 적용: $changeCount건\n파일이 다운로드되었습니다.');
       } else {
         final body = await streamed.stream.bytesToString();
+        await dialog.error(message: '처리 실패');
         setState(() => _error = '처리 실패: $body');
       }
     } catch (e) {
+      if (mounted) await dialog.error(message: '오류 발생');
       setState(() => _error = '오류: $e');
-    } finally {
-      setState(() => _processing = false);
     }
+  }
+
+  void _showAlert(String title, String message) {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Text(title, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+        content: Text(message, style: const TextStyle(fontSize: 14)),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('확인')),
+        ],
+      ),
+    );
   }
 
   void _showSnack(String msg) {

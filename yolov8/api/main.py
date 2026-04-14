@@ -1236,7 +1236,12 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "Accept", "X-Admin-Key", "X-Filename", "X-Refreshed-Token"],
-    expose_headers=["Content-Length", "Content-Disposition"],
+    expose_headers=[
+        "Content-Length",
+        "Content-Disposition",
+        "X-Change-Count",
+        "X-Target-Count",
+    ],
     max_age=3600,
 )
 
@@ -14347,18 +14352,23 @@ async def document_change_notification(request: Request, file1: UploadFile = Fil
                 sheets = wb.sheet_names()
                 if len(sheets) >= 5:  # DS파일은 보통 9개 시트
                     return 'B', wb
-                # 1-2개 시트이면 헤더로 확인
+                # 1-3개 시트이면 헤더로 확인 (Row 0~3 검사)
                 ws = wb.sheet_by_index(0)
-                if ws.ncols > 5:
-                    headers = [str(ws.cell_value(0, ci)).strip() for ci in range(min(ws.ncols, 11))]
-                    if any('변경내역' in h or '변경후' in h for h in headers):
-                        return 'A', wb
+                for ri in range(min(4, ws.nrows)):
+                    if ws.ncols > 3:
+                        row_vals = [str(ws.cell_value(ri, ci)).strip() for ci in range(min(ws.ncols, 11))]
+                        if any('변경내역' in v or '변경후' in v for v in row_vals):
+                            return 'A', wb
+                # 시트 이름으로도 확인
+                if any('변경' in sn or '신고' in sn for sn in sheets):
+                    return 'A', wb
                 return 'B', wb  # fallback
             except:
                 return None, None
 
         type1, wb1 = _identify(file1_bytes)
         type2, wb2 = _identify(file2_bytes)
+        logger.info(f"변경개설신고: file1={type1}(sheets={wb1.sheet_names() if wb1 else 'None'}), file2={type2}(sheets={wb2.sheet_names() if wb2 else 'None'})")
 
         if type1 == type2:
             raise ValueError("A파일(변경개설신고)과 B파일(DS파일)을 각각 하나씩 업로드해주세요.")
@@ -14367,13 +14377,31 @@ async def document_change_notification(request: Request, file1: UploadFile = Fil
         b_wb = wb1 if type1 == 'B' else wb2
         b_bytes = file1_bytes if type1 == 'B' else file2_bytes
 
-        # 2. A파일 파싱: 허가번호 → [{변경내역, 변경전, 변경후}, ...]
+        # 2. A파일 파싱: 헤더 행 동적 탐색 후 데이터 추출
         a_ws = a_wb.sheet_by_index(0)
         changes = {}  # {허가번호: [{변경내역, 변경후}, ...]}
-        for ri in range(1, a_ws.nrows):
-            허가번호 = str(a_ws.cell_value(ri, 2) if a_ws.ncols > 2 else '').strip()
-            변경내역 = str(a_ws.cell_value(ri, 3) if a_ws.ncols > 3 else '').strip()
-            변경후 = str(a_ws.cell_value(ri, 5) if a_ws.ncols > 5 else '').strip()
+        # 헤더 행 찾기 (변경내역/변경후 포함하는 행)
+        header_ri = 0
+        for ri in range(min(5, a_ws.nrows)):
+            row_vals = [str(a_ws.cell_value(ri, ci)).strip() for ci in range(min(a_ws.ncols, 11))]
+            if any('변경내역' in v for v in row_vals):
+                header_ri = ri
+                break
+        # 컬럼 인덱스 매핑
+        col_map = {}
+        for ci in range(min(a_ws.ncols, 11)):
+            h = str(a_ws.cell_value(header_ri, ci)).replace('\n', '').strip()
+            if '허가번호' in h: col_map['허가번호'] = ci
+            elif '변경내역' in h: col_map['변경내역'] = ci
+            elif '변경후' in h: col_map['변경후'] = ci
+        hn_ci = col_map.get('허가번호', 2)
+        chg_ci = col_map.get('변경내역', 3)
+        after_ci = col_map.get('변경후', 5)
+
+        for ri in range(header_ri + 1, a_ws.nrows):
+            허가번호 = str(a_ws.cell_value(ri, hn_ci) if a_ws.ncols > hn_ci else '').strip()
+            변경내역 = str(a_ws.cell_value(ri, chg_ci) if a_ws.ncols > chg_ci else '').strip()
+            변경후 = str(a_ws.cell_value(ri, after_ci) if a_ws.ncols > after_ci else '').strip()
             if not 허가번호 or not 변경후:
                 continue
             changes.setdefault(허가번호, []).append({
@@ -14381,6 +14409,7 @@ async def document_change_notification(request: Request, file1: UploadFile = Fil
                 '변경후': 변경후,
             })
 
+        logger.info(f"변경개설신고: A파일 {len(changes)}건 허가번호 파싱, 샘플={list(changes.keys())[:3]}")
         if not changes:
             raise ValueError("A파일에 변경 데이터가 없습니다.")
 
@@ -14439,45 +14468,82 @@ async def document_change_notification(request: Request, file1: UploadFile = Fil
 
             return None
 
-        # 5. B파일을 openpyxl로 로드 (xlrd는 읽기전용, openpyxl로 수정)
-        # xlrd로 읽은 데이터를 openpyxl workbook으로 복사
+        # 5. 허가번호 하이픈 제거 매핑 (A↔B 매칭용)
+        changes_norm = {}
+        for hn, chg_list in changes.items():
+            norm = hn.replace('-', '')
+            changes_norm[norm] = chg_list
+        logger.info(f"변경개설신고: norm keys 샘플={list(changes_norm.keys())[:3]}")
+
+        # 6. B파일을 openpyxl로 복사 + 서식 적용
+        from openpyxl.styles import Font, Alignment, Border, Side
         out_wb = Workbook()
-        out_wb.remove(out_wb.active)  # 기본 시트 제거
+        out_wb.remove(out_wb.active)
 
         yellow_fill = PatternFill(start_color='FFFFFF00', end_color='FFFFFF00', fill_type='solid')
+        _ds_font = Font(name='Arial', size=10)
+        _ds_align = Alignment(horizontal='center', vertical='center', wrap_text=True)
+        _ds_border = Border(
+            left=Side(style='thin'), right=Side(style='thin'),
+            top=Side(style='thin'), bottom=Side(style='thin'))
 
-        # B파일 시트별 데이터 복사 + 변경 적용
-        change_log = []  # 변경 이력
+        change_log = []
+        # 허가번호→변경내역 매핑 (일반사항 AU열 기입용)
+        au_entries = {}  # {norm_hn: 변경내역 text}
 
+        def _norm_hn(val):
+            """허가번호 정규화: float→int, 하이픈 제거."""
+            if isinstance(val, float):
+                return str(int(val))
+            return str(val).strip().replace('-', '')
+
+        def _line_count(val):
+            text = '' if val is None else str(val)
+            # 엑셀 줄바꿈(Alt+Enter)은 내부적으로 \r\n 또는 \n 모두 사용될 수 있음
+            text = text.replace('\r\n', '\n').replace('\r', '\n')
+            return max(1, text.count('\n') + 1)
+
+        from openpyxl.utils import get_column_letter
+
+        # Pass 1: 모든 시트 복사 + 대상 시트에서 값 변경
+        out_sheets = {}  # {시트명: openpyxl worksheet}
         for si in range(len(b_wb.sheet_names())):
             sn = b_wb.sheet_names()[si]
             b_ws = b_wb.sheet_by_index(si)
             o_ws = out_wb.create_sheet(title=sn[:31])
+            out_sheets[sn] = o_ws
 
-            # 허가번호 컬럼 인덱스 (보통 0)
-            hn_col = 0
+            for ci in range(1, max(b_ws.ncols + 1, 48)):
+                o_ws.column_dimensions[get_column_letter(ci)].width = 19.29
+            o_ws.sheet_format.defaultRowHeight = 12.75
 
             for ri in range(b_ws.nrows):
+                max_lines = 1
                 for ci in range(b_ws.ncols):
                     val = b_ws.cell_value(ri, ci)
-                    # 날짜 처리
                     if b_ws.cell_type(ri, ci) == xlrd.XL_CELL_DATE:
                         try:
                             dt = xlrd.xldate_as_datetime(val, b_wb.datemode)
                             val = dt.strftime('%Y-%m-%d')
                         except:
                             pass
-                    o_ws.cell(row=ri+1, column=ci+1, value=val)
+                    max_lines = max(max_lines, _line_count(val))
+                    cell = o_ws.cell(row=ri+1, column=ci+1, value=val)
+                    cell.font = _ds_font
+                    cell.alignment = _ds_align
+                    cell.border = _ds_border
+
+                o_ws.row_dimensions[ri + 1].height = 12.75 * max_lines
 
                 if ri == 0:
                     continue
 
-                # 허가번호 매칭
-                허가번호 = str(b_ws.cell_value(ri, hn_col)).strip()
-                if 허가번호 not in changes:
+                hn_norm = _norm_hn(b_ws.cell_value(ri, 0))
+                chg_list = changes_norm.get(hn_norm)
+                if not chg_list:
                     continue
 
-                for chg in changes[허가번호]:
+                for chg in chg_list:
                     parsed = _parse_value(chg['변경내역'], chg['변경후'])
                     if not parsed:
                         continue
@@ -14488,22 +14554,54 @@ async def document_change_notification(request: Request, file1: UploadFile = Fil
                     new_val = parsed['value']
                     old_val = str(b_ws.cell_value(ri, target_col) if target_col < b_ws.ncols else '').strip()
 
-                    # 값 변경 + 노란색
                     cell = o_ws.cell(row=ri+1, column=target_col+1)
                     cell.value = new_val
                     cell.fill = yellow_fill
+                    cell.font = _ds_font
+                    cell.alignment = _ds_align
+                    cell.border = _ds_border
+                    max_lines = max(max_lines, _line_count(new_val))
+                    o_ws.row_dimensions[ri + 1].height = 12.75 * max_lines
 
-                    # AU열에 A파일의 변경내역(D열) 값 그대로 기입
-                    au_col = 46  # AU = 47번째 컬럼 (0-based 46)
-                    o_ws.cell(row=ri+1, column=au_col+1, value=chg['변경내역'])
+                    # AU열 기입 대상 기록
+                    au_entries[hn_norm] = chg['변경내역']
 
                     change_log.append({
-                        '허가번호': 허가번호,
+                        '허가번호': hn_norm,
                         'sheet': sn,
                         'type': parsed['type'],
                         'old': old_val,
                         'new': new_val,
                     })
+
+        # Pass 2: "일반사항" 시트에 AU열(47번째 컬럼) 기입
+        일반_sn = None
+        for sn in b_wb.sheet_names():
+            if '일반사항' in sn or '일반' in sn:
+                일반_sn = sn
+                break
+        if 일반_sn and 일반_sn in out_sheets and au_entries:
+            o_ws = out_sheets[일반_sn]
+            b_ws = b_wb.sheet_by_name(일반_sn)
+            au_col = 47  # AU = 47번째 (1-based)
+            for ri in range(1, b_ws.nrows):
+                hn_norm = _norm_hn(b_ws.cell_value(ri, 0))
+                if hn_norm in au_entries:
+                    au_val = au_entries[hn_norm]
+                    au_cell = o_ws.cell(row=ri+1, column=au_col, value=au_val)
+                    au_cell.font = _ds_font
+                    au_cell.alignment = _ds_align
+                    au_cell.border = _ds_border
+                    au_cell.fill = yellow_fill
+                    # AU열 기입으로 줄 수가 늘어난 경우 행 높이 보정
+                    try:
+                        cur_h = o_ws.row_dimensions[ri + 1].height or 12.75
+                    except Exception:
+                        cur_h = 12.75
+                    new_h = 12.75 * _line_count(au_val)
+                    if new_h > cur_h:
+                        o_ws.row_dimensions[ri + 1].height = new_h
+            logger.info(f"변경개설신고: 일반사항 AU열 {len(au_entries)}건 기입")
 
         # 6. 결과 바이트 반환
         buf = io.BytesIO()
