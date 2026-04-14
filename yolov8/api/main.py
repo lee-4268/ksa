@@ -13,7 +13,7 @@ import sqlite3
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import List, Optional, Dict, Union
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from decimal import Decimal
 import logging
 import zipfile
@@ -10380,6 +10380,17 @@ def _init_inspection_db():
     )''')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_inad_year ON inadequate_management(year)')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_inad_region ON inadequate_management(region)')
+    # ── menu_usage_log 테이블 (메뉴 접속 로그) ──
+    conn.execute('''CREATE TABLE IF NOT EXISTS menu_usage_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT,
+        user_name TEXT,
+        menu_name TEXT,
+        accessed_at TEXT
+    )''')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_mul_menu ON menu_usage_log(menu_name)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_mul_user ON menu_usage_log(user_id)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_mul_date ON menu_usage_log(accessed_at)')
     # 24시간 지난 완료/에러 잡 정리
     conn.execute(
         "DELETE FROM inspection_jobs WHERE status IN ('complete','error') "
@@ -14313,6 +14324,213 @@ async def inspection_results_export_xlsx(request: Request, req: InspectionResult
 
 
 # ============================================================
+# 변경개설신고 자동 변경 (A파일 + B파일 → 변경적용 DS)
+# ============================================================
+
+@app.post("/document/change-notification")
+async def document_change_notification(request: Request, file1: UploadFile = File(...), file2: UploadFile = File(...)):
+    """무선국 변경개설신고 자동 반영 — A파일(신고서) + B파일(DS) 업로드 → 변경된 DS 반환."""
+    await _verify_auth(request)
+
+    file1_bytes = await file1.read()
+    file2_bytes = await file2.read()
+
+    def _process():
+        import xlrd
+        from openpyxl import Workbook
+        from openpyxl.styles import PatternFill
+
+        # 1. 파일 식별 (A: 1시트+변경내역 헤더, B: 9시트)
+        def _identify(data):
+            try:
+                wb = xlrd.open_workbook(file_contents=data)
+                sheets = wb.sheet_names()
+                if len(sheets) >= 5:  # DS파일은 보통 9개 시트
+                    return 'B', wb
+                # 1-2개 시트이면 헤더로 확인
+                ws = wb.sheet_by_index(0)
+                if ws.ncols > 5:
+                    headers = [str(ws.cell_value(0, ci)).strip() for ci in range(min(ws.ncols, 11))]
+                    if any('변경내역' in h or '변경후' in h for h in headers):
+                        return 'A', wb
+                return 'B', wb  # fallback
+            except:
+                return None, None
+
+        type1, wb1 = _identify(file1_bytes)
+        type2, wb2 = _identify(file2_bytes)
+
+        if type1 == type2:
+            raise ValueError("A파일(변경개설신고)과 B파일(DS파일)을 각각 하나씩 업로드해주세요.")
+
+        a_wb = wb1 if type1 == 'A' else wb2
+        b_wb = wb1 if type1 == 'B' else wb2
+        b_bytes = file1_bytes if type1 == 'B' else file2_bytes
+
+        # 2. A파일 파싱: 허가번호 → [{변경내역, 변경전, 변경후}, ...]
+        a_ws = a_wb.sheet_by_index(0)
+        changes = {}  # {허가번호: [{변경내역, 변경후}, ...]}
+        for ri in range(1, a_ws.nrows):
+            허가번호 = str(a_ws.cell_value(ri, 2) if a_ws.ncols > 2 else '').strip()
+            변경내역 = str(a_ws.cell_value(ri, 3) if a_ws.ncols > 3 else '').strip()
+            변경후 = str(a_ws.cell_value(ri, 5) if a_ws.ncols > 5 else '').strip()
+            if not 허가번호 or not 변경후:
+                continue
+            changes.setdefault(허가번호, []).append({
+                '변경내역': 변경내역,
+                '변경후': 변경후,
+            })
+
+        if not changes:
+            raise ValueError("A파일에 변경 데이터가 없습니다.")
+
+        # 3. 설치형태 코드 매핑
+        설치형태_MAP = {
+            '철탑(지면)': '1', '철탑': '1',
+            '강관주': '2',
+            '통신주': '3',
+            '원폴(건물)': '4', '원폴': '4',
+            '옥내, 터널, 지하, 차량': '6', '옥내': '6', '터널': '6', '지하': '6', '차량': '6',
+            '쌍통신주': '8',
+            '기설물': '9',
+            '옥내외 혼합형': '11', '옥내외혼합형': '11',
+            '간이폴 및 비기준 설치대': '12', '간이폴': '12', '간이폴, 분산폴 및 비기준 설치대': '12',
+            '한전주(KT통신주)': '13', '한전주': '13',
+            '철탑(건물)': '14',
+            '프레임': '15',
+            '복합형(원폴,분산프레임 등)': '21', '복합형': '21',
+            '모노폴': '25',
+        }
+
+        # 4. 변경후 값 파싱 헬퍼
+        def _parse_value(변경내역, 변경후):
+            """변경내역 유형에 따라 값 추출 + 대상 시트/컬럼 결정."""
+            v = 변경후.strip()
+
+            if '형식검정' in 변경내역 or '형검' in v:
+                # "형검 : MSIP-CRI-LE1-RRUS12B3-20M" → 값만
+                if ':' in v:
+                    v = v.split(':', 1)[1].strip()
+                return {'sheet': '장치', 'col': 11, 'value': v, 'type': '형식검정번호'}
+
+            elif '일련번호' in 변경내역 or '일련번호' in v:
+                # "일련번호 : CB4T159642" → 값만
+                if ':' in v:
+                    v = v.split(':', 1)[1].strip()
+                return {'sheet': '장치', 'col': 8, 'value': v, 'type': '일련번호'}
+
+            elif '설치장소' in 변경내역:
+                # 주소 그대로
+                return {'sheet': '설치장소', 'col': 6, 'value': v, 'type': '설치장소'}
+
+            elif '설치형태' in 변경내역 or '설치형태' in v:
+                # "설치형태 : 간이폴, 분산폴 및 비기준 설치대" → 코드 변환
+                if ':' in v:
+                    v = v.split(':', 1)[1].strip()
+                # 매핑
+                code = 설치형태_MAP.get(v, '')
+                if not code:
+                    # 부분 매칭
+                    for k, c in 설치형태_MAP.items():
+                        if k in v or v in k:
+                            code = c
+                            break
+                return {'sheet': '안테나', 'col': 28, 'value': code or v, 'type': '설치형태'}
+
+            return None
+
+        # 5. B파일을 openpyxl로 로드 (xlrd는 읽기전용, openpyxl로 수정)
+        # xlrd로 읽은 데이터를 openpyxl workbook으로 복사
+        out_wb = Workbook()
+        out_wb.remove(out_wb.active)  # 기본 시트 제거
+
+        yellow_fill = PatternFill(start_color='FFFFFF00', end_color='FFFFFF00', fill_type='solid')
+
+        # B파일 시트별 데이터 복사 + 변경 적용
+        change_log = []  # 변경 이력
+
+        for si in range(len(b_wb.sheet_names())):
+            sn = b_wb.sheet_names()[si]
+            b_ws = b_wb.sheet_by_index(si)
+            o_ws = out_wb.create_sheet(title=sn[:31])
+
+            # 허가번호 컬럼 인덱스 (보통 0)
+            hn_col = 0
+
+            for ri in range(b_ws.nrows):
+                for ci in range(b_ws.ncols):
+                    val = b_ws.cell_value(ri, ci)
+                    # 날짜 처리
+                    if b_ws.cell_type(ri, ci) == xlrd.XL_CELL_DATE:
+                        try:
+                            dt = xlrd.xldate_as_datetime(val, b_wb.datemode)
+                            val = dt.strftime('%Y-%m-%d')
+                        except:
+                            pass
+                    o_ws.cell(row=ri+1, column=ci+1, value=val)
+
+                if ri == 0:
+                    continue
+
+                # 허가번호 매칭
+                허가번호 = str(b_ws.cell_value(ri, hn_col)).strip()
+                if 허가번호 not in changes:
+                    continue
+
+                for chg in changes[허가번호]:
+                    parsed = _parse_value(chg['변경내역'], chg['변경후'])
+                    if not parsed:
+                        continue
+                    if parsed['sheet'] != sn:
+                        continue
+
+                    target_col = parsed['col']
+                    new_val = parsed['value']
+                    old_val = str(b_ws.cell_value(ri, target_col) if target_col < b_ws.ncols else '').strip()
+
+                    # 값 변경 + 노란색
+                    cell = o_ws.cell(row=ri+1, column=target_col+1)
+                    cell.value = new_val
+                    cell.fill = yellow_fill
+
+                    # AU열에 A파일의 변경내역(D열) 값 그대로 기입
+                    au_col = 46  # AU = 47번째 컬럼 (0-based 46)
+                    o_ws.cell(row=ri+1, column=au_col+1, value=chg['변경내역'])
+
+                    change_log.append({
+                        '허가번호': 허가번호,
+                        'sheet': sn,
+                        'type': parsed['type'],
+                        'old': old_val,
+                        'new': new_val,
+                    })
+
+        # 6. 결과 바이트 반환
+        buf = io.BytesIO()
+        out_wb.save(buf)
+        out_wb.close()
+        buf.seek(0)
+        return buf.getvalue(), len(change_log), len(changes)
+
+    try:
+        data, change_count, target_count = await asyncio.to_thread(_process)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+    from urllib.parse import quote as _q
+    filename = "변경적용_DS파일.xlsx"
+    return Response(
+        content=data,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{_q(filename)}",
+            "X-Change-Count": str(change_count),
+            "X-Target-Count": str(target_count),
+        }
+    )
+
+
+# ============================================================
 # Community Board (공지사항/요청사항)
 # ============================================================
 
@@ -15423,6 +15641,77 @@ async def inadequate_export_xlsx(
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f"attachment; filename*=UTF-8''{_q(filename)}"}
     )
+
+
+# ============================================================
+# Menu Usage Logging
+# ============================================================
+
+@app.post("/admin/menu-log")
+async def admin_menu_log(request: Request):
+    """메뉴 접속 로그 기록."""
+    empno = await _verify_auth(request)
+    body = await request.json()
+    menu_name = body.get("menu", "")
+    if not menu_name:
+        return {"ok": True}
+
+    # Get user name
+    user_info = await asyncio.to_thread(_get_user_info_for_community, empno)
+    now = datetime.now(timezone.utc).isoformat()
+
+    def _log():
+        conn = sqlite3.connect(_INSP_DB, timeout=30)
+        conn.execute(
+            "INSERT INTO menu_usage_log (user_id, user_name, menu_name, accessed_at) VALUES (?,?,?,?)",
+            (empno, user_info.get("name", empno), menu_name, now),
+        )
+        conn.commit()
+        conn.close()
+
+    await asyncio.to_thread(_log)
+    return {"ok": True}
+
+
+@app.get("/admin/menu-stats")
+async def admin_menu_stats(request: Request, days: int = Query(30)):
+    """메뉴 사용 통계 (관리자용)."""
+    empno = await _verify_auth(request)
+    role = await asyncio.to_thread(_get_user_role_sync, empno)
+    if role != "admin":
+        raise HTTPException(403, "관리자만 조회 가능")
+
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+
+    def _stats():
+        conn = sqlite3.connect(_INSP_DB, timeout=60)
+        conn.row_factory = sqlite3.Row
+        # 메뉴별 접속 횟수
+        menu_counts = conn.execute(
+            "SELECT menu_name, COUNT(*) as cnt FROM menu_usage_log "
+            "WHERE accessed_at >= ? GROUP BY menu_name ORDER BY cnt DESC",
+            (cutoff,),
+        ).fetchall()
+        # 사용자별 접속 횟수
+        user_counts = conn.execute(
+            "SELECT user_id, user_name, COUNT(*) as cnt FROM menu_usage_log "
+            "WHERE accessed_at >= ? GROUP BY user_id ORDER BY cnt DESC LIMIT 20",
+            (cutoff,),
+        ).fetchall()
+        # 일별 접속 추이
+        daily = conn.execute(
+            "SELECT DATE(accessed_at) as day, COUNT(*) as cnt FROM menu_usage_log "
+            "WHERE accessed_at >= ? GROUP BY DATE(accessed_at) ORDER BY day",
+            (cutoff,),
+        ).fetchall()
+        conn.close()
+        return {
+            "menu_counts": [dict(r) for r in menu_counts],
+            "user_counts": [dict(r) for r in user_counts],
+            "daily": [dict(r) for r in daily],
+        }
+
+    return await asyncio.to_thread(_stats)
 
 
 # ============================================================

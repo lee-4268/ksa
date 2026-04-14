@@ -1,7 +1,9 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:typed_data';
 // ignore: avoid_web_libraries_in_flutter
 import 'dart:html' as html;
+import 'package:http/http.dart' as http;
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -417,6 +419,23 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
                   context,
                   MaterialPageRoute(
                     builder: (_) => const AuditLogScreen(),
+                  ),
+                );
+              },
+            ),
+
+          // 메뉴 사용 통계 (최고 관리자만)
+          if (authService.userRole == AppUserRole.superAdmin)
+            _buildMenuCard(
+              icon: Icons.analytics_outlined,
+              iconColor: Colors.indigo,
+              title: '메뉴 사용 통계',
+              subtitle: '사용자별/메뉴별 접속 현황',
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => const MenuUsageStatsScreen(),
                   ),
                 );
               },
@@ -1523,4 +1542,335 @@ class _KcaStagingFilterDialogState extends State<_KcaStagingFilterDialog> {
 
   static String _fmtN(int n) => n.toString()
       .replaceAllMapped(RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'), (m) => '${m[1]},');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 메뉴 사용 통계 화면
+// ═══════════════════════════════════════════════════════════════
+
+class MenuUsageStatsScreen extends StatefulWidget {
+  const MenuUsageStatsScreen({super.key});
+
+  @override
+  State<MenuUsageStatsScreen> createState() => _MenuUsageStatsScreenState();
+}
+
+class _MenuUsageStatsScreenState extends State<MenuUsageStatsScreen> {
+  bool _loading = true;
+  int _days = 30;
+  List<Map<String, dynamic>> _menuCounts = [];
+  List<Map<String, dynamic>> _userCounts = [];
+  List<Map<String, dynamic>> _daily = [];
+
+  // 디자인 컬러 팔레트
+  static const _bgColor = Color(0xFFF3F4F6);
+  static const _cardColor = Colors.white;
+  static const _menuColor = Color(0xFF3B82F6); // 모던 블루
+  static const _userColor = Color(0xFF8B5CF6); // 퍼플
+  static const _dailyColor = Color(0xFF10B981); // 에메랄드 그린
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    if (!mounted) return;
+    setState(() => _loading = true);
+    
+    try {
+      final token = context.read<AuthService>().authToken;
+      final uri = Uri.parse('https://api-sko-kca.skons.net/admin/menu-stats')
+          .replace(queryParameters: {'days': '$_days'});
+          
+      final resp = await http.get(uri, headers: {
+        'Authorization': 'Bearer ${token ?? ''}',
+        'Content-Type': 'application/json',
+      });
+      
+      if (resp.statusCode == 200) {
+        final body = json.decode(utf8.decode(resp.bodyBytes));
+        if (mounted) {
+          setState(() {
+            _menuCounts = List<Map<String, dynamic>>.from(body['menu_counts'] ?? []);
+            _userCounts = List<Map<String, dynamic>>.from(body['user_counts'] ?? []);
+            _daily = List<Map<String, dynamic>>.from(body['daily'] ?? []);
+          });
+        }
+      }
+    } catch (e) {
+      debugPrint('Stats Load Error: $e');
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: _bgColor,
+      appBar: AppBar(
+        title: const Text('메뉴 사용 통계', style: TextStyle(fontWeight: FontWeight.w600)),
+        backgroundColor: Colors.white,
+        foregroundColor: const Color(0xFF1F2937),
+        elevation: 0,
+        centerTitle: false,
+        actions: [
+          _buildDaysDropdown(),
+          const SizedBox(width: 16),
+        ],
+      ),
+      body: _loading
+          ? const Center(
+              child: CircularProgressIndicator(strokeWidth: 3, color: _menuColor),
+            )
+          : RefreshIndicator(
+              onRefresh: _load,
+              color: _menuColor,
+              child: SingleChildScrollView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    _buildDataCard(
+                      title: '메뉴별 접속 횟수',
+                      icon: Icons.dashboard_rounded,
+                      iconColor: _menuColor,
+                      child: _buildHorizontalList(_menuCounts, 'menu_name', _menuColor),
+                    ),
+                    const SizedBox(height: 16),
+                    _buildDataCard(
+                      title: '사용자별 접속 횟수 (Top 20)',
+                      icon: Icons.people_alt_rounded,
+                      iconColor: _userColor,
+                      child: _buildHorizontalList(_userCounts, 'user_name', _userColor, fallbackKey: 'user_id'),
+                    ),
+                    const SizedBox(height: 16),
+                    _buildDataCard(
+                      title: '일별 접속 추이',
+                      icon: Icons.insights_rounded,
+                      iconColor: _dailyColor,
+                      child: _buildDailyChart(),
+                    ),
+                    const SizedBox(height: 24),
+                  ],
+                ),
+              ),
+            ),
+    );
+  }
+
+  /// 상단 기간 선택 드롭다운 (세련된 버튼 스타일)
+  Widget _buildDaysDropdown() {
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      decoration: BoxDecoration(
+        color: _bgColor,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<int>(
+          value: _days,
+          icon: const Icon(Icons.keyboard_arrow_down_rounded, size: 20),
+          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF374151)),
+          items: const [
+            DropdownMenuItem(value: 7, child: Text('최근 7일')),
+            DropdownMenuItem(value: 30, child: Text('최근 30일')),
+            DropdownMenuItem(value: 90, child: Text('최근 90일')),
+          ],
+          onChanged: (v) {
+            if (v != null && v != _days) {
+              _days = v;
+              _load();
+            }
+          },
+        ),
+      ),
+    );
+  }
+
+  /// 섹션을 감싸는 공통 카드 위젯
+  Widget _buildDataCard({
+    required String title,
+    required IconData icon,
+    required Color iconColor,
+    required Widget child,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: _cardColor,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.03),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(color: iconColor.withOpacity(0.1), shape: BoxShape.circle),
+                child: Icon(icon, size: 20, color: iconColor),
+              ),
+              const SizedBox(width: 12),
+              Text(
+                title,
+                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Color(0xFF1F2937)),
+              ),
+            ],
+          ),
+          const SizedBox(height: 20),
+          child,
+        ],
+      ),
+    );
+  }
+
+  /// 가로 막대 그래프 리스트 (메뉴별, 사용자별 공통)
+  Widget _buildHorizontalList(List<Map<String, dynamic>> data, String labelKey, Color color, {String? fallbackKey}) {
+    if (data.isEmpty) return const Center(child: Text('데이터가 없습니다.', style: TextStyle(color: Colors.grey)));
+
+    final maxCount = (data.first['cnt'] as num?)?.toInt() ?? 1;
+
+    return ListView.separated(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      itemCount: data.length,
+      separatorBuilder: (_, __) => const SizedBox(height: 12),
+      itemBuilder: (context, index) {
+        final item = data[index];
+        final label = item[labelKey]?.toString() ?? (fallbackKey != null ? item[fallbackKey]?.toString() : null) ?? '-';
+        final count = (item['cnt'] as num?)?.toInt() ?? 0;
+        final ratio = maxCount > 0 ? (count / maxCount).clamp(0.0, 1.0) : 0.0;
+
+        return Row(
+          children: [
+            SizedBox(
+              width: 100,
+              child: Text(
+                label,
+                style: const TextStyle(fontSize: 13, color: Color(0xFF4B5563), fontWeight: FontWeight.w500),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Stack(
+                alignment: Alignment.centerLeft,
+                children: [
+                  Container(
+                    height: 12,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF3F4F6),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                  ),
+                  FractionallySizedBox(
+                    widthFactor: ratio == 0 ? 0.01 : ratio,
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 500),
+                      curve: Curves.easeOutCubic,
+                      height: 12,
+                      decoration: BoxDecoration(
+                        color: color,
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 12),
+            SizedBox(
+              width: 40,
+              child: Text(
+                '$count',
+                textAlign: TextAlign.right,
+                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF1F2937)),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  /// 일별 접속 추이 (세로 막대 그래프)
+  Widget _buildDailyChart() {
+    if (_daily.isEmpty) return const Center(child: Padding(padding: EdgeInsets.all(20), child: Text('데이터가 없습니다.', style: TextStyle(color: Colors.grey))));
+
+    // 반복문 밖에서 최대값 한 번만 계산하여 성능 최적화
+    final maxDailyCnt = _daily.fold<int>(1, (m, e) {
+      final v = (e['cnt'] as num?)?.toInt() ?? 0;
+      return v > m ? v : m;
+    });
+
+    return SizedBox(
+      height: 180,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.end,
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: _daily.map((d) {
+          final cnt = (d['cnt'] as num?)?.toInt() ?? 0;
+          final heightRatio = maxDailyCnt > 0 ? (cnt / maxDailyCnt) : 0.0;
+          final displayHeight = (heightRatio * 130).clamp(4.0, 130.0);
+          
+          String dayStr = d['day']?.toString() ?? '';
+          if (dayStr.length >= 5) dayStr = dayStr.substring(5).replaceFirst('-', '/'); // "MM/DD" 형태
+
+          return Expanded(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 2),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  Text(
+                    cnt > 0 ? '$cnt' : '', // 0일 경우 숫자 숨김 처리
+                    style: const TextStyle(fontSize: 10, color: Color(0xFF6B7280), fontWeight: FontWeight.w600),
+                  ),
+                  const SizedBox(height: 4),
+                  AnimatedContainer(
+                    duration: const Duration(milliseconds: 600),
+                    curve: Curves.easeOutBack,
+                    height: displayHeight,
+                    width: double.infinity,
+                    constraints: const BoxConstraints(maxWidth: 24),
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: [
+                          _dailyColor.withOpacity(0.7),
+                          _dailyColor,
+                        ],
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                      ),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    dayStr,
+                    style: const TextStyle(fontSize: 9, color: Color(0xFF9CA3AF)),
+                    maxLines: 1,
+                    overflow: TextOverflow.visible,
+                  ),
+                ],
+              ),
+            ),
+          );
+        }).toList(),
+      ),
+    );
+  }
 }

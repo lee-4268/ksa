@@ -70,6 +70,8 @@ class PlatformMapWidgetState extends State<PlatformMapWidget>
         return Colors.green;
       case InspectionStatus.failed:
         return Colors.red;
+      case InspectionStatus.inadequate:
+        return Colors.purple;
     }
   }
 
