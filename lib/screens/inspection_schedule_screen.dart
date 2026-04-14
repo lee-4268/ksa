@@ -2137,26 +2137,22 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                 final pct = (item['percent'] as num).toDouble();
                 final total = item['total'] as int;
                 final completed = item['completed'] as int;
-                final c = pct >= 80
-                    ? const Color(0xFF43A047)
-                    : pct >= 50
-                        ? const Color(0xFFFF9800)
-                        : const Color(0xFFE53935);
+                const c = Color(0xFF4A90D9);
                 return Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                   decoration: BoxDecoration(
-                    color: c.withValues(alpha: 0.06),
+                    color: c.withValues(alpha: 0.07),
                     borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: c.withValues(alpha: 0.25)),
+                    border: Border.all(color: c.withValues(alpha: 0.3)),
                   ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(hdqt, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: c)),
-                      const SizedBox(height: 2),
+                      Text(hdqt, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: Color(0xFF1F2937))),
+                      const SizedBox(height: 3),
                       Text(
                         '$completed/$total (${pct.toStringAsFixed(1)}%)',
-                        style: TextStyle(fontSize: 11, color: c),
+                        style: const TextStyle(fontSize: 13, color: c),
                       ),
                     ],
                   ),
@@ -2272,51 +2268,46 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     const hasPrev = true;
     const hasNext = true;
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        // 타이틀 행
-        Padding(
-          padding: const EdgeInsets.only(bottom: 10),
-          child: Row(
-            children: [
-              Container(
-                width: 3, height: 16,
-                decoration: BoxDecoration(color: _primary, borderRadius: BorderRadius.circular(2)),
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFE5E7EB)),
+        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 8, offset: const Offset(0, 2))],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // 헤더
+          Row(children: [
+            const Icon(Icons.event_note_outlined, size: 18, color: Color(0xFF374151)),
+            const SizedBox(width: 6),
+            const Text('수검일정별 현황', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: Color(0xFF374151))),
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+              decoration: BoxDecoration(
+                color: _primary.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(8),
               ),
-              const SizedBox(width: 8),
-              const Text(
-                '수검일정별 현황',
-                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF111827)),
+              child: Text(
+                '$totalFiltered건',
+                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: _primary),
               ),
-              const SizedBox(width: 8),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                decoration: BoxDecoration(
-                  color: _primary.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Text(
-                  '$totalFiltered건',
-                  style: TextStyle(fontSize: 11, color: _primary, fontWeight: FontWeight.w600),
-                ),
-              ),
-              const SizedBox(width: 8),
-              Text(
-                '건수 클릭 시 해당 조건으로 이동',
-                style: TextStyle(fontSize: 11, color: Colors.grey.shade500),
-              ),
-            ],
-          ),
-        ),
+            ),
+            const Spacer(),
+            Text(
+              '건수 클릭 시 이동',
+              style: TextStyle(fontSize: 11, color: Colors.grey.shade400),
+            ),
+          ]),
 
-        // 네비게이션 바 (기본 모드에서만)
-        if (isNavMode)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 12),
-            child: Row(
+          // 네비게이션 바 (기본 모드에서만)
+          if (isNavMode) ...[
+            const SizedBox(height: 12),
+            Row(
               children: [
-                // 이전달 버튼
                 _NavButton(
                   label: '이전달',
                   icon: Icons.chevron_left,
@@ -2324,7 +2315,6 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                   onTap: hasPrev ? () => setState(() => _navMonth = prevMonth) : null,
                 ),
                 const SizedBox(width: 8),
-                // 현재 표시 달
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
                   decoration: BoxDecoration(
@@ -2367,7 +2357,6 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                   ),
                 ),
                 const SizedBox(width: 8),
-                // 다음달 버튼
                 _NavButton(
                   label: '다음달',
                   icon: Icons.chevron_right,
@@ -2377,81 +2366,82 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                 ),
               ],
             ),
-          ),
+          ],
 
-        // 카드 영역
-        if (months.isEmpty)
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 8),
-            child: Text(
+          const SizedBox(height: 14),
+          Container(height: 1, color: const Color(0xFFF3F4F6)),
+          const SizedBox(height: 14),
+
+          // 카드 영역
+          if (months.isEmpty)
+            Text(
               weeks.isNotEmpty
                   ? '$_navMonth월에 등록된 일정이 없습니다.'
                   : '조건에 맞는 일정이 없습니다.',
               style: TextStyle(fontSize: 13, color: Colors.grey.shade400),
-            ),
-          )
-        else
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: months.map((month) {
-              final monthWeeks = monthGroups[month]!;
-              final monthTotal = monthWeeks.fold<int>(0, (s, w) =>
-                  s + (weekMap[w]?.values.fold<int>(0, (a, b) => a + b) ?? 0));
-              return Padding(
-                padding: const EdgeInsets.only(bottom: 16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // 전체 달 표시 모드에서만 월 그룹 헤더 표시
-                    if (isAllMode)
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 10),
-                        child: Row(
-                          children: [
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                              decoration: BoxDecoration(
-                                color: _primary.withValues(alpha: 0.08),
-                                borderRadius: BorderRadius.circular(8),
-                                border: Border.all(color: _primary.withValues(alpha: 0.2)),
+            )
+          else
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: months.map((month) {
+                final monthWeeks = monthGroups[month]!;
+                final monthTotal = monthWeeks.fold<int>(0, (s, w) =>
+                    s + (weekMap[w]?.values.fold<int>(0, (a, b) => a + b) ?? 0));
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      if (isAllMode)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 10),
+                          child: Row(
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                                decoration: BoxDecoration(
+                                  color: _primary.withValues(alpha: 0.08),
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(color: _primary.withValues(alpha: 0.2)),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(Icons.calendar_month_outlined, size: 14, color: _primary),
+                                    const SizedBox(width: 5),
+                                    Text(month,
+                                        style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _primary)),
+                                    const SizedBox(width: 6),
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                                      decoration: BoxDecoration(color: _primary, borderRadius: BorderRadius.circular(8)),
+                                      child: Text('$monthTotal건',
+                                          style: const TextStyle(fontSize: 11, color: Colors.white, fontWeight: FontWeight.w600)),
+                                    ),
+                                  ],
+                                ),
                               ),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Icon(Icons.calendar_month_outlined, size: 14, color: _primary),
-                                  const SizedBox(width: 5),
-                                  Text(month,
-                                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _primary)),
-                                  const SizedBox(width: 6),
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-                                    decoration: BoxDecoration(color: _primary, borderRadius: BorderRadius.circular(8)),
-                                    child: Text('$monthTotal건',
-                                        style: const TextStyle(fontSize: 11, color: Colors.white, fontWeight: FontWeight.w600)),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            const SizedBox(width: 10),
-                            Expanded(child: Container(height: 1, color: const Color(0xFFE5E7EB))),
-                          ],
+                              const SizedBox(width: 10),
+                              Expanded(child: Container(height: 1, color: const Color(0xFFE5E7EB))),
+                            ],
+                          ),
                         ),
+                      Wrap(
+                        spacing: 12,
+                        runSpacing: 12,
+                        children: monthWeeks.map((week) => _buildWeekCard(
+                          week, weekMap[week]!,
+                          isCurrentWeek: week == currentWeekLabel,
+                          groupByTeam: groupByTeam,
+                        )).toList(),
                       ),
-                    Wrap(
-                      spacing: 12,
-                      runSpacing: 12,
-                      children: monthWeeks.map((week) => _buildWeekCard(
-                        week, weekMap[week]!,
-                        isCurrentWeek: week == currentWeekLabel,
-                        groupByTeam: groupByTeam,
-                      )).toList(),
-                    ),
-                  ],
-                ),
-              );
-            }).toList(),
-          ),
-      ],
+                    ],
+                  ),
+                );
+              }).toList(),
+            ),
+        ],
+      ),
     );
   }
 
