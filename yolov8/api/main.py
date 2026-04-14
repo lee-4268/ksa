@@ -738,6 +738,22 @@ def _verify_token(token: str) -> str | None:
 _daily_visitors: set = set()
 _daily_visitors_date: str = ""
 
+def _count_daily_visitors() -> int:
+    """오늘 고유 접속자 수 (menu_usage_log 기반, 서버 재시작해도 유지)."""
+    try:
+        if not os.path.exists(_INSP_DB):
+            return len(_daily_visitors)
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        conn = sqlite3.connect(_INSP_DB, timeout=10)
+        cnt = conn.execute(
+            "SELECT COUNT(DISTINCT user_id) FROM menu_usage_log WHERE accessed_at >= ?",
+            (today,)
+        ).fetchone()[0]
+        conn.close()
+        return cnt
+    except Exception:
+        return len(_daily_visitors)
+
 def _track_daily_visitor(empno: str):
     global _daily_visitors, _daily_visitors_date
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -12380,13 +12396,12 @@ async def inspection_my_list_weeks(request: Request, year: int, team: str = ""):
         user_data = user_item.get("Item", {})
     access_team = user_data.get("region", "").replace("Access담당", "").strip()
     품질팀 = user_data.get("team", "")
-    user_role = user_data.get("role", "member")
     is_dev = _dev_users.get(empno) is not None
+    user_role = await asyncio.to_thread(_get_user_role_sync, empno)
     is_manager = user_role in ("admin", "manager")
 
-    # 본부 관리자: team 파라미터 있으면 해당 팀, 없으면 본부 전체
     if is_manager:
-        품질팀 = team  # team 없으면 '' → 본부 전체
+        품질팀 = team
 
     if not is_dev and not access_team and not 품질팀 and not is_manager:
         return {"weeks": []}
@@ -12461,13 +12476,16 @@ async def inspection_my_list(request: Request, year: int, week: str = "", team: 
     # region: "경북Access담당" → "경북" (inspection_schedules.access담당과 매칭)
     access_team = user_data.get("region", "").replace("Access담당", "").strip()
     품질팀 = user_data.get("team", "")
-    user_role = user_data.get("role", "member")
     is_dev = _dev_users.get(empno) is not None
+    # role은 user_roles 테이블에서 조회 (권한 설정과 동일한 소스)
+    user_role = await asyncio.to_thread(_get_user_role_sync, empno)
     is_manager = user_role in ("admin", "manager")
 
     # 본부 관리자: team 파라미터 있으면 해당 팀, 없으면 본부 전체
     if is_manager:
-        품질팀 = team  # team 파라미터 없으면 '' → 본부 전체
+        품질팀 = team
+
+    logger.info(f"my-list: empno={empno}, access_team='{access_team}', 품질팀='{품질팀}', is_dev={is_dev}, is_manager={is_manager}, role={user_role}")
 
     if not is_dev and not access_team and not 품질팀 and not is_manager:
         return {"items": [], "message": "팀 배정 없음"}
@@ -15135,7 +15153,7 @@ async def community_stats(request: Request):
                 "my": {"total": my_total, "접수": my_접수, "처리중": my_처리중, "완료": my_완료},
                 "all": {"total": all_total, "접수": all_접수, "처리중": all_처리중, "완료": all_완료},
                 "notices": notice_total,
-                "daily_visitors": len(_daily_visitors),
+                "daily_visitors": _count_daily_visitors(),
             }
         finally:
             conn.close()

@@ -452,6 +452,15 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
     return vals.join('\n');
   }
 
+  String _typeApprovalNumbers(List<dynamic> list) {
+    final seen = <String>{};
+    final vals = list
+        .map((a) => (a as Map<String, dynamic>)['형식검정번호']?.toString().trim() ?? '')
+        .where((v) => v.isNotEmpty && seen.add(v))
+        .toList();
+    return vals.join('\n');
+  }
+
   String _fmtDate(String raw) {
     if (raw.length == 8 && RegExp(r'^\d{8}$').hasMatch(raw)) {
       return '${raw.substring(0, 4)}-${raw.substring(4, 6)}-${raw.substring(6, 8)}';
@@ -520,6 +529,8 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
         if (gain.isNotEmpty)      _infoRow('이득(dB)', gain),
         if (antCount.isNotEmpty)  _infoRow('기수',     antCount),
         if (mountType.isNotEmpty) _infoRow('설치대',   mountType),
+        if (_typeApprovalNumbers(deviceList).isNotEmpty)
+          _infoRow('형식검정번호', _typeApprovalNumbers(deviceList)),
         if (facilityNames.isNotEmpty || serial.isNotEmpty)
           _infoRow('일련번호 및 통합시설명칭',
               facilityNames.isNotEmpty ? facilityNames.join('\n') : serial),
