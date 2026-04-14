@@ -206,6 +206,13 @@ class InspectionService {
     return json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
   }
 
+  Future<void> updateTargetReview(int year, String licenseNo, String value) async {
+    final uri = Uri.parse('$_baseUrl/inspection/target-review').replace(
+        queryParameters: {'year': '$year', '허가번호': licenseNo, '시기조정': value});
+    final resp = await http.patch(uri, headers: _headers).timeout(_apiTimeout);
+    if (resp.statusCode != 200) throw Exception('검토 결과 저장 실패');
+  }
+
   // ── Schedule ─────────────────────────────────────────────
 
   Future<void> upsertSchedule(Map<String, dynamic> data) async {

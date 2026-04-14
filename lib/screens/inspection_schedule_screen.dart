@@ -1684,7 +1684,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                       DataColumn(label: Text('장치수', style: headerStyle), onSort: (i, a) => _onScheduleSort(9, a)),
                       DataColumn(label: Text('통시', style: headerStyle), onSort: (i, a) => _onScheduleSort(10, a)),
                       DataColumn(label: Text('공대', style: headerStyle), onSort: (i, a) => _onScheduleSort(11, a)),
-                      DataColumn(label: Text('활용구분', style: headerStyle), onSort: (i, a) => _onScheduleSort(12, a)),
+                      DataColumn(label: Text('ERP활용구분', style: headerStyle), onSort: (i, a) => _onScheduleSort(12, a)),
                       DataColumn(label: Text('시기조정', style: headerStyle), onSort: (i, a) => _onScheduleSort(13, a)),
                       DataColumn(label: Text('기준연도', style: headerStyle), onSort: (i, a) => _onScheduleSort(14, a)),
                       DataColumn(label: Text('SKT본부', style: headerStyle), onSort: (i, a) => _onScheduleSort(15, a)),

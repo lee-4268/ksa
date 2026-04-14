@@ -12123,8 +12123,9 @@ async def inspection_detail(request: Request, year: int, 허가번호: str):
             try: result['사진S3키'] = _j.loads(result['사진S3키'])
             except Exception: result['사진S3키'] = []
 
-    # 4. callname_matching_cache에서 통합시설명칭 조회 (zpwino=허가번호)
+    # 4. callname_matching_cache에서 통합시설명칭 + zpprac1(ERP활용구분) 조회
     callname_list: list = []
+    zpprac1_val: str = ''
     if _cert_cache_db_path and os.path.exists(_cert_cache_db_path):
         def _read_zpcname():
             import sqlite3 as _sq
@@ -12133,11 +12134,39 @@ async def inspection_detail(request: Request, year: int, 허가번호: str):
                 "SELECT eqp_ser_no, zpcname FROM cert WHERE zpwino=? AND zpcname!=''",
                 (허가번호,)
             ).fetchall()
+            # zpprac1: 통시(zpcode) 기준 매핑
+            tongsi = (target or {}).get('통시', '') or ''
+            prac1 = ''
+            if tongsi:
+                r2 = c.execute(
+                    "SELECT zpprac1 FROM cert WHERE TRIM(zpcode)=? LIMIT 1",
+                    (tongsi.strip(),)
+                ).fetchone()
+                if r2: prac1 = r2['zpprac1'] or ''
             c.close()
-            return [{"eqp_ser_no": r["eqp_ser_no"], "zpcname": r["zpcname"]} for r in rows]
-        callname_list = await asyncio.to_thread(_read_zpcname)
+            return [{"eqp_ser_no": r["eqp_ser_no"], "zpcname": r["zpcname"]} for r in rows], prac1
+        callname_list, zpprac1_val = await asyncio.to_thread(_read_zpcname)
+    if target is not None:
+        target['zpprac1'] = zpprac1_val
 
     return {"target": target, "ds": ds_info, "schedule": schedule, "result": result, "callname_list": callname_list}
+
+@app.patch("/inspection/target-review")
+async def inspection_target_review(request: Request, year: int, 허가번호: str, 시기조정: str = ""):
+    """수검 검토 결과(시기조정) 업데이트."""
+    await _verify_auth(request)
+    if not os.path.exists(_INSP_DB):
+        raise HTTPException(404, "수검 데이터 없음")
+    def _update():
+        c = sqlite3.connect(_INSP_DB, timeout=60)
+        c.execute(
+            "UPDATE inspection_targets SET 시기조정=? WHERE year=? AND 허가번호=?",
+            (시기조정, year, 허가번호)
+        )
+        c.commit(); c.close()
+    await asyncio.to_thread(_update)
+    return {"ok": True}
+
 
 def _geocode_target_sync(year: int, 허가번호: str):
     """일정 등록된 국소 1건 지오코딩 (좌표 이미 있으면 스킵 — 캐시 역할).
