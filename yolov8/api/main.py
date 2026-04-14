@@ -14658,7 +14658,7 @@ async def document_change_notification(request: Request, file1: UploadFile = Fil
             "Content-Disposition": f"attachment; filename*=UTF-8''{_q(filename)}",
             "X-Change-Count": str(change_count),
             "X-Target-Count": str(target_count),
-            "X-Change-Types": ','.join(change_types) if change_types else '',
+            "X-Change-Types": _q(','.join(change_types)) if change_types else '',
         }
     )
 

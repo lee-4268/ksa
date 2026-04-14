@@ -83,8 +83,8 @@ class _ChangeNotificationScreenState extends State<ChangeNotificationScreen> {
         final bytes = await streamed.stream.toBytes();
         final changeCount = streamed.headers['x-change-count'] ?? '0';
         final targetCount = streamed.headers['x-target-count'] ?? '0';
-        final changeTypes = streamed.headers['x-change-types'] ?? '';
-        final typeLabel = changeTypes.isNotEmpty ? changeTypes : '변경';
+        final changeTypesRaw = streamed.headers['x-change-types'] ?? '';
+        final typeLabel = changeTypesRaw.isNotEmpty ? Uri.decodeComponent(changeTypesRaw) : '변경';
         final fileName = '변경적용($typeLabel)_DS파일.xlsx';
 
         // Auto download
