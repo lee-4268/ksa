@@ -7,6 +7,7 @@ import '../services/auth_service.dart';
 import '../services/ds_data_service.dart';
 import '../services/erp_ds_compare_service.dart';
 import '../services/inspection_service.dart';
+import '../widgets/progress_dialog.dart';
 import 'inspection_result_screen.dart';
 // ignore: avoid_web_libraries_in_flutter
 import 'dart:html' as html;
@@ -385,13 +386,16 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     _loadAll();
   }
 
-  void _showSnack(String msg, {bool isError = false}) {
+  Future<void> _showSuccess(String msg) async {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(msg),
-      backgroundColor: isError ? Colors.red.shade700 : Colors.black87,
-      behavior: SnackBarBehavior.floating,
-    ));
+    final d = ProgressDialog(context);
+    await d.complete(message: msg);
+  }
+
+  Future<void> _showError(String msg) async {
+    if (!mounted) return;
+    final d = ProgressDialog(context);
+    await d.error(message: msg);
   }
 
   /// 로딩 팝업을 띄우면서 비동기 작업 실행 후 팝업 자동 닫기
@@ -432,20 +436,18 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
   // ── Schedule 등록 ───────────────────────────────────────
 
   Future<void> _showScheduleDialog(Map<String, dynamic> item) async {
-    final existing = item['schedule']?['수검예정주차'] as String? ?? '';
-    final match = RegExp(r'(\d+)월\s*(\d+)주차').firstMatch(existing);
-    final initMonth = match != null ? int.tryParse(match.group(1)!) : null;
-    final initWeek = match != null ? int.tryParse(match.group(2)!) : null;
+    final existingWeek = _extractScheduleWeek(item);
+    final (initMonth, initWeek) = _parseWeekParts(existingWeek);
 
-    final existingInspector = item['schedule']?['검사관'] as String? ?? '';
-    final existingJo = item['schedule']?['조'] as String? ?? '';
+    final existingInspector = _extractScheduleText(item, '검사관');
+    final existingJo = _extractScheduleText(item, '조');
     final inspectorCtrl = TextEditingController(text: existingInspector);
+    final joCtrl = TextEditingController(text: existingJo);
     final result = await showDialog<Map<String, dynamic>>(
       context: context,
       builder: (ctx) {
         int? selMonth = initMonth;
         int? selWeek = initWeek;
-        String selJo = existingJo;
         return StatefulBuilder(
           builder: (ctx, setDlgState) => AlertDialog(
             backgroundColor: Colors.white,
@@ -485,10 +487,16 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                   ),
                 ],
                 const SizedBox(height: 16),
-                _weekDropdown('조 (선택)', selJo.isEmpty ? null : int.tryParse(selJo.replaceAll('조', '')),
-                    [1, 2, 3, 4, 5], (i) => '$i조',
-                    (v) => setDlgState(() => selJo = v != null ? '$v조' : ''),
-                    nullable: true),
+                TextField(
+                  controller: joCtrl,
+                  decoration: InputDecoration(
+                    labelText: '조 (선택)',
+                    hintText: '조 입력',
+                    isDense: true,
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                  ),
+                  style: const TextStyle(fontSize: 13),
+                ),
                 const SizedBox(height: 16),
                 TextField(
                   controller: inspectorCtrl,
@@ -508,7 +516,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                 style: ElevatedButton.styleFrom(backgroundColor: _primary, foregroundColor: Colors.white,
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
                 onPressed: selMonth != null && selWeek != null
-                    ? () => Navigator.pop(ctx, {'month': selMonth!, 'week': selWeek!, '검사관': inspectorCtrl.text.trim(), '조': selJo})
+                    ? () => Navigator.pop(ctx, {'month': selMonth!, 'week': selWeek!, '검사관': inspectorCtrl.text.trim(), '조': joCtrl.text.trim()})
                     : null,
                 child: const Text('저장'),
               ),
@@ -517,6 +525,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
         );
       },
     );
+    joCtrl.dispose();
     inspectorCtrl.dispose();
     if (result == null) return;
     final weekStr = '${result['month']}월 ${result['week']}주차';
@@ -536,14 +545,14 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
         '검사관': result['검사관'] ?? '',
         '조': result['조'] ?? '',
       }));
-      _showSnack('일정이 저장되었습니다.');
+      await _showSuccess('일정이 저장되었습니다.');
       await Future.wait([
         _loadData(),
         if (_detailLicenseNo != null) _loadDetail(_detailLicenseNo!),
         _loadScheduledNos(),
       ]);
     } catch (e) {
-      _showSnack('저장 실패: $e', isError: true);
+      await _showError('저장 실패: $e');
     }
   }
 
@@ -575,14 +584,14 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     if (ok != true) return;
     try {
       await _withLoading('일정 삭제 중...', () => _svc.deleteSchedule(_year, licenseNo));
-      _showSnack('일정이 제거되었습니다.');
+      await _showSuccess('일정이 제거되었습니다.');
       await Future.wait([
         _loadData(),
         if (_detailLicenseNo != null) _loadDetail(_detailLicenseNo!),
         _loadScheduledNos(),
       ]);
     } catch (e) {
-      _showSnack('제거 실패: $e', isError: true);
+      await _showError('제거 실패: $e');
     }
   }
 
@@ -676,13 +685,17 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
   Future<void> _showBulkUpsertDialog(List<Map<String, dynamic>> targetItems, String actionTitle) async {
     if (targetItems.isEmpty) return;
 
-    final inspectorCtrl = TextEditingController();
+    final commonInspector = _resolveCommonScheduleText(targetItems, '검사관');
+    final commonJo = _resolveCommonScheduleText(targetItems, '조');
+    final commonWeek = _resolveCommonScheduleWeek(targetItems);
+    final (initMonth, initWeek) = _parseWeekParts(commonWeek);
+    final inspectorCtrl = TextEditingController(text: commonInspector);
+    final joCtrl = TextEditingController(text: commonJo);
     final result = await showDialog<Map<String, dynamic>>(
       context: context,
       builder: (ctx) {
-        int? selMonth;
-        int? selWeek;
-        String selJo = '';
+        int? selMonth = initMonth;
+        int? selWeek = initWeek;
         return StatefulBuilder(
           builder: (ctx, setDlgState) => AlertDialog(
             backgroundColor: Colors.white,
@@ -740,10 +753,16 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                   ),
                 ],
                 const SizedBox(height: 16),
-                _weekDropdown('조 (선택)', selJo.isEmpty ? null : int.tryParse(selJo.replaceAll('조', '')),
-                    [1, 2, 3, 4, 5], (i) => '$i조',
-                    (v) => setDlgState(() => selJo = v != null ? '$v조' : ''),
-                    nullable: true),
+                TextField(
+                  controller: joCtrl,
+                  decoration: InputDecoration(
+                    labelText: '조 (선택)',
+                    hintText: '조 입력',
+                    isDense: true,
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                  ),
+                  style: const TextStyle(fontSize: 13),
+                ),
                 const SizedBox(height: 16),
                 TextField(
                   controller: inspectorCtrl,
@@ -763,7 +782,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                 style: ElevatedButton.styleFrom(backgroundColor: _primary, foregroundColor: Colors.white,
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
                 onPressed: selMonth != null && selWeek != null
-                    ? () => Navigator.pop(ctx, {'month': selMonth!, 'week': selWeek!, '검사관': inspectorCtrl.text.trim(), '조': selJo})
+                    ? () => Navigator.pop(ctx, {'month': selMonth!, 'week': selWeek!, '검사관': inspectorCtrl.text.trim(), '조': joCtrl.text.trim()})
                     : null,
                 child: const Text('저장'),
               ),
@@ -772,6 +791,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
         );
       },
     );
+    joCtrl.dispose();
     inspectorCtrl.dispose();
     if (result == null) return;
     final weekStr = '${result['month']}월 ${result['week']}주차';
@@ -803,10 +823,76 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     setState(() => _selectedLicenseNos.clear());
     await Future.wait([_loadData(), _loadScheduledNos()]);
     if (failCount == 0) {
-      _showSnack('$successCount건 일정이 저장되었습니다.');
+      await _showSuccess('$successCount건 일정이 저장되었습니다.');
     } else {
-      _showSnack('$successCount건 저장, $failCount건 실패', isError: true);
+      await _showError('$successCount건 저장, $failCount건 실패');
     }
+  }
+
+  String _extractScheduleText(Map<String, dynamic> item, String key) {
+    final schedule = item['schedule'];
+    if (schedule is Map) {
+      final value = schedule[key];
+      if (value != null && value.toString().trim().isNotEmpty) {
+        return value.toString().trim();
+      }
+    }
+    final directValue = item[key];
+    if (directValue != null && directValue.toString().trim().isNotEmpty) {
+      return directValue.toString().trim();
+    }
+    final licenseNo = '${item['허가번호'] ?? ''}'.trim();
+    if (licenseNo.isNotEmpty) {
+      for (final s in _schedules) {
+        final no = '${s['허가번호'] ?? ''}'.trim();
+        if (no != licenseNo) continue;
+        final value = s[key];
+        if (value != null && value.toString().trim().isNotEmpty) {
+          return value.toString().trim();
+        }
+      }
+    }
+    return '';
+  }
+
+  String _extractScheduleWeek(Map<String, dynamic> item) {
+    final fromSchedule = _extractScheduleText(item, '수검예정주차');
+    if (fromSchedule.isNotEmpty) return fromSchedule;
+    final licenseNo = '${item['허가번호'] ?? ''}'.trim();
+    if (licenseNo.isNotEmpty) {
+      final fromMap = _scheduleWeekMap[licenseNo]?.trim() ?? '';
+      if (fromMap.isNotEmpty) return fromMap;
+    }
+    return '';
+  }
+
+  String _resolveCommonScheduleText(List<Map<String, dynamic>> items, String key) {
+    final values = items
+        .map((item) => _extractScheduleText(item, key))
+        .where((v) => v.isNotEmpty)
+        .toSet()
+        .toList();
+    if (values.length == 1) return values.first;
+    return '';
+  }
+
+  String _resolveCommonScheduleWeek(List<Map<String, dynamic>> items) {
+    final values = items
+        .map(_extractScheduleWeek)
+        .where((v) => v.isNotEmpty)
+        .toSet()
+        .toList();
+    if (values.length == 1) return values.first;
+    return '';
+  }
+
+  (int?, int?) _parseWeekParts(String weekText) {
+    final match = RegExp(r'(\d+)월\s*(\d+)주차').firstMatch(weekText);
+    if (match == null) return (null, null);
+    return (
+      int.tryParse(match.group(1)!),
+      int.tryParse(match.group(2)!),
+    );
   }
 
   Future<void> _showBulkDeleteDialog(List<Map<String, dynamic>> targetItems) async {
@@ -873,19 +959,20 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     setState(() => _selectedLicenseNos.clear());
     await Future.wait([_loadData(), _loadScheduledNos()]);
     if (failCount == 0) {
-      _showSnack('$successCount건 일정이 제거되었습니다.');
+      await _showSuccess('$successCount건 일정이 제거되었습니다.');
     } else {
-      _showSnack('$successCount건 제거, $failCount건 실패', isError: true);
+      await _showError('$successCount건 제거, $failCount건 실패');
     }
   }
 
   Future<void> _exportExcel() async {
     if (_aHdqt.isEmpty) {
-      _showSnack('Excel 다운로드를 하려면 본부 필터를 선택하세요.', isError: true);
+      await _showError('Excel 다운로드를 하려면 본부 필터를 선택하세요.');
       return;
     }
+    final dlg = ProgressDialog(context);
     try {
-      _showSnack('Excel 다운로드 중...');
+      dlg.show(message: 'Excel 다운로드 중...');
       final bytes = await _svc.exportXlsx(
         year: _year, sheet: _sheet,
         filters: _activeFilters,
@@ -899,8 +986,9 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
         ..setAttribute('download', '수검대상_$_year년.xlsx')
         ..click();
       html.Url.revokeObjectUrl(url);
+      await dlg.complete(message: 'Excel 다운로드 완료');
     } catch (e) {
-      _showSnack('Excel 다운로드 실패: $e', isError: true);
+      await dlg.error(message: 'Excel 다운로드 실패: $e');
     }
   }
 
@@ -926,7 +1014,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
           }
           _loadData();
           _loadOrgMap();
-          _showSnack('$ok건이 수검 대상에 추가되었습니다 (검토여부: 대상 추가)');
+          _showSuccess('$ok건이 수검 대상에 추가되었습니다 (검토여부: 대상 추가)');
         },
       ),
     );
@@ -956,8 +1044,9 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     List<String> licenseNos = const [],
     String sheetTitle = '',
   }) async {
+    final dlg = ProgressDialog(context);
     try {
-      _showSnack('검사내역서 생성 중...');
+      dlg.show(message: '검사내역서 생성 중...');
       final bytes = await _svc.exportInspectionReport(
         year: _year,
         licenseNos: licenseNos,
@@ -971,9 +1060,9 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
         ..setAttribute('download', '검사내역서_${_year}년_$label.xlsx')
         ..click();
       html.Url.revokeObjectUrl(url);
-      _showSnack('검사내역서 다운로드 완료');
+      await dlg.complete(message: '검사내역서 다운로드 완료');
     } catch (e) {
-      _showSnack('검사내역서 생성 실패: $e', isError: true);
+      await dlg.error(message: '검사내역서 생성 실패: $e');
     }
   }
 

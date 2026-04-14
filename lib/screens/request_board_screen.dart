@@ -159,7 +159,7 @@ class _RequestBoardScreenState extends State<RequestBoardScreen> {
 
   Future<void> _pickImage() async {
     if (_images.length >= 5) {
-      _showSnack('이미지는 최대 5개까지 첨부할 수 있습니다.');
+      _showValidation('이미지는 최대 5개까지 첨부할 수 있습니다.');
       return;
     }
     final result = await FilePicker.platform.pickFiles(
@@ -170,7 +170,7 @@ class _RequestBoardScreenState extends State<RequestBoardScreen> {
     final file = result.files.first;
     if (file.bytes == null) return;
     if (file.bytes!.length > 5 * 1024 * 1024) {
-      _showSnack('이미지 크기는 5MB 이하만 가능합니다.');
+      _showValidation('이미지 크기는 5MB 이하만 가능합니다.');
       return;
     }
     setState(() => _uploading = true);
@@ -181,7 +181,7 @@ class _RequestBoardScreenState extends State<RequestBoardScreen> {
         setState(() => _images.add(url));
       }
     } catch (e) {
-      _showSnack('이미지 업로드 실패: $e');
+      if (mounted) { final d = ProgressDialog(context); await d.error(message: '이미지 업로드 실패: $e'); }
     } finally {
       setState(() => _uploading = false);
     }
@@ -191,23 +191,23 @@ class _RequestBoardScreenState extends State<RequestBoardScreen> {
     final title = _titleController.text.trim();
     final content = _contentController.text.trim();
     if (title.isEmpty || content.isEmpty) {
-      _showSnack('제목과 내용을 입력해주세요.');
+      _showValidation('제목과 내용을 입력해주세요.');
       return;
     }
     setState(() => _loading = true);
     try {
       if (_editId != null) {
         await _svc.updateRequest(_editId!, title, content, images: _images);
-        _showSnack('수정되었습니다.');
+        if (mounted) { final d = ProgressDialog(context); await d.complete(message: '수정되었습니다.'); }
       } else {
         await _svc.createRequest(title, content, isSecret: _isSecret, secretPassword: _passwordController.text.trim(), images: _images);
-        _showSnack('등록되었습니다.');
+        if (mounted) { final d = ProgressDialog(context); await d.complete(message: '등록되었습니다.'); }
       }
       _page = 1;
       await _fetchList();
       setState(() => _viewMode = _ViewMode.list);
     } catch (e) {
-      _showSnack('저장 실패: $e');
+      if (mounted) { final d = ProgressDialog(context); await d.error(message: '저장 실패: $e'); }
       setState(() => _loading = false);
     }
   }
@@ -233,12 +233,12 @@ class _RequestBoardScreenState extends State<RequestBoardScreen> {
     setState(() => _loading = true);
     try {
       await _svc.deleteRequest(id);
-      _showSnack('삭제되었습니다.');
+      if (mounted) { final d = ProgressDialog(context); await d.complete(message: '삭제되었습니다.'); }
       _page = 1;
       await _fetchList();
       setState(() => _viewMode = _ViewMode.list);
     } catch (e) {
-      _showSnack('삭제 실패: $e');
+      if (mounted) { final d = ProgressDialog(context); await d.error(message: '삭제 실패: $e'); }
       setState(() => _loading = false);
     }
   }
@@ -265,7 +265,7 @@ class _RequestBoardScreenState extends State<RequestBoardScreen> {
       final comments = await _svc.getComments(requestId);
       setState(() => _comments = comments);
     } catch (e) {
-      _showSnack('댓글 등록 실패: $e');
+      if (mounted) { final d = ProgressDialog(context); await d.error(message: '댓글 등록 실패: $e'); }
     }
   }
 
@@ -275,18 +275,22 @@ class _RequestBoardScreenState extends State<RequestBoardScreen> {
       final comments = await _svc.getComments(requestId);
       setState(() => _comments = comments);
     } catch (e) {
-      _showSnack('댓글 삭제 실패: $e');
+      if (mounted) { final d = ProgressDialog(context); await d.error(message: '댓글 삭제 실패: $e'); }
     }
   }
 
-  void _showSnack(String msg) {
+  void _showValidation(String msg) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(msg),
-      behavior: SnackBarBehavior.floating,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-      duration: const Duration(seconds: 2),
-    ));
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        content: Text(msg, style: const TextStyle(fontSize: 14)),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('확인')),
+        ],
+      ),
+    );
   }
 
   // ── 빌드 ──

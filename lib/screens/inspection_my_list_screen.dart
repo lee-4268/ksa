@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../models/radio_station.dart';
 import '../services/auth_service.dart';
 import '../services/inspection_service.dart';
+import '../widgets/progress_dialog.dart';
 import '../widgets/user_profile_button.dart';
 import 'inspection_result_screen.dart';
 
@@ -30,6 +31,7 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
   String? _inspError;
 
   String _sortOrder = '최신순';
+  String _selectedInspectionDate = '';
 
   String _selectedWeek = '';
   List<String> _weekOptions = [];
@@ -106,8 +108,41 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
   List<Map<String, dynamic>> get _filteredItems => _assignedItems.where((item) {
     if (_selectedJo.isNotEmpty && (item['조'] as String? ?? '').trim() != _selectedJo) return false;
     if (_selectedInspector.isNotEmpty && (item['검사관'] as String? ?? '').trim() != _selectedInspector) return false;
+    if (_selectedInspectionDate.isNotEmpty) {
+      final inspectionDate = _normalizeInspectionDate(item['검사일'] as String? ?? '');
+      if (inspectionDate != _selectedInspectionDate) return false;
+    }
     return true;
   }).toList();
+
+  String _normalizeInspectionDate(String value) {
+    final digits = value.replaceAll(RegExp(r'[^0-9]'), '');
+    if (digits.length == 8) {
+      return digits.substring(2);
+    }
+    if (digits.length == 6) {
+      return digits;
+    }
+    return value.trim();
+  }
+
+  String _displayInspectionDate(String value) {
+    final normalized = _normalizeInspectionDate(value);
+    if (normalized.length == 6 && RegExp(r'^\d{6}$').hasMatch(normalized)) {
+      return normalized;
+    }
+    return value.trim();
+  }
+
+  List<String> get _inspectionDateOptions {
+    final dates = _assignedItems
+        .map((item) => _normalizeInspectionDate(item['검사일'] as String? ?? ''))
+        .where((date) => date.isNotEmpty)
+        .toSet()
+        .toList()
+      ..sort((a, b) => b.compareTo(a));
+    return dates;
+  }
 
   // 지도 마커: inspection_targets의 위경도(Kakao 지오코딩 결과) 사용
   List<RadioStation> get _markerStations {
@@ -538,6 +573,8 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
   // ── 상세 리스트 ────────────────────────────────────────────────────────
 
   Widget _buildDetailList({bool isWebLayout = false}) {
+    final inspectionDateOptions = _inspectionDateOptions;
+
     // 주차별 그룹핑
     final weekGroups = <String, List<Map<String, dynamic>>>{};
     for (final item in _filteredItems) {
@@ -570,55 +607,116 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
           // 헤더
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            child: Row(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(color: Colors.red.shade50, borderRadius: BorderRadius.circular(8)),
-                  child: Icon(Icons.assignment_outlined, color: Colors.red.shade400, size: 24),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('수검 대상 $_year년',
-                          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                      Text(
-                        _inspError != null ? '로드 오류' : '${_filteredItems.length}개 국소',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: _inspError != null ? Colors.red : Colors.grey[600],
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(color: Colors.red.shade50, borderRadius: BorderRadius.circular(8)),
+                      child: Icon(Icons.assignment_outlined, color: Colors.red.shade400, size: 24),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('수검 대상 $_year년',
+                              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                          Text(
+                            _inspError != null ? '로드 오류' : '${_filteredItems.length}개 국소',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: _inspError != null ? Colors.red : Colors.grey[600],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        border: Border.all(color: Colors.grey.shade300),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: DropdownButtonHideUnderline(
+                        child: DropdownButton<String>(
+                          isDense: true,
+                          value: _sortOrder,
+                          icon: Icon(Icons.arrow_drop_down, color: const Color(0xFFE53935), size: 20),
+                          dropdownColor: Colors.white,
+                          borderRadius: BorderRadius.circular(12),
+                          style: const TextStyle(color: Colors.black87, fontSize: 13),
+                          items: const [
+                            DropdownMenuItem(value: '최신순', child: Text('최신순')),
+                            DropdownMenuItem(value: '주차순', child: Text('주차순')),
+                          ],
+                          onChanged: (v) {
+                            if (v != null) setState(() => _sortOrder = v);
+                          },
                         ),
                       ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    border: Border.all(color: Colors.grey.shade300),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: DropdownButtonHideUnderline(
-                    child: DropdownButton<String>(
-                      isDense: true,
-                      value: _sortOrder,
-                      icon: Icon(Icons.arrow_drop_down, color: const Color(0xFFE53935), size: 20),
-                      dropdownColor: Colors.white,
-                      borderRadius: BorderRadius.circular(12),
-                      style: const TextStyle(color: Colors.black87, fontSize: 13),
-                      items: const [
-                        DropdownMenuItem(value: '최신순', child: Text('최신순')),
-                        DropdownMenuItem(value: '주차순', child: Text('주차순')),
-                      ],
-                      onChanged: (v) {
-                        if (v != null) setState(() => _sortOrder = v);
-                      },
+                if (inspectionDateOptions.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: _selectedInspectionDate.isNotEmpty
+                            ? const Color(0xFF4A90D9).withValues(alpha: 0.10)
+                            : Colors.white,
+                        border: Border.all(
+                          color: _selectedInspectionDate.isNotEmpty
+                              ? const Color(0xFF4A90D9)
+                              : Colors.grey.shade300,
+                        ),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: DropdownButtonHideUnderline(
+                        child: DropdownButton<String>(
+                          isDense: true,
+                          value: _selectedInspectionDate,
+                          icon: Icon(
+                            Icons.arrow_drop_down,
+                            color: _selectedInspectionDate.isNotEmpty
+                                ? const Color(0xFF4A90D9)
+                                : const Color(0xFFE53935),
+                            size: 20,
+                          ),
+                          dropdownColor: Colors.white,
+                          borderRadius: BorderRadius.circular(12),
+                          style: TextStyle(
+                            color: _selectedInspectionDate.isNotEmpty
+                                ? const Color(0xFF4A90D9)
+                                : Colors.black87,
+                            fontSize: 13,
+                            fontWeight: _selectedInspectionDate.isNotEmpty
+                                ? FontWeight.w600
+                                : FontWeight.w400,
+                          ),
+                          items: [
+                            const DropdownMenuItem(value: '', child: Text('전체 검사일')),
+                            ...inspectionDateOptions.map(
+                              (date) => DropdownMenuItem(
+                                value: date,
+                                child: Text(date),
+                              ),
+                            ),
+                          ],
+                          onChanged: (v) {
+                            setState(() => _selectedInspectionDate = v ?? '');
+                          },
+                        ),
+                      ),
                     ),
                   ),
-                ),
+                ],
               ],
             ),
           ),
@@ -805,7 +903,7 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
     final callname   = item['호출명칭'] as String? ?? licenseNo;
     final region     = item['지역'] as String? ?? '';
     final status     = item['status'] as String? ?? '검사대기';
-    final inspDate   = item['검사일'] as String? ?? '';
+    final inspDate   = _displayInspectionDate(item['검사일'] as String? ?? '');
     final hasCoords  = (item['위도'] as num? ?? 0) != 0 && (item['경도'] as num? ?? 0) != 0;
     final jo         = (item['조'] as String? ?? '').trim();
     final inspector  = (item['검사관'] as String? ?? '').trim();
@@ -968,9 +1066,8 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
           onTap: () {
             _mapKey.currentState?.onGeolocationError = (error) {
               if (mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text(error), backgroundColor: Colors.red),
-                );
+                final d = ProgressDialog(context);
+                d.error(message: error);
               }
             };
             if (_isLocationActive) {

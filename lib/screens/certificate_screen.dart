@@ -9,6 +9,7 @@ import 'dart:html' as html;
 
 import '../services/auth_service.dart';
 import '../services/certificate_service.dart';
+import '../widgets/progress_dialog.dart';
 import 'certificate_download_stub.dart'
     if (dart.library.html) 'certificate_download_web.dart' as dl;
 
@@ -258,11 +259,11 @@ class _IndividualTabState extends State<_IndividualTab>
   Future<void> _fetchActaDrawing() async {
     final zpwino = _zpwinoCtrl.text.trim();
     if (zpwino.isEmpty) {
-      _showSnack('먼저 허가번호를 조회하세요.');
+      _showValidation('먼저 허가번호를 조회하세요.');
       return;
     }
     if (_actaToken == null) {
-      _showSnack('ACTA 로그인이 필요합니다.');
+      _showValidation('ACTA 로그인이 필요합니다.');
       return;
     }
     setState(() => _isActaLoading = true);
@@ -274,7 +275,7 @@ class _IndividualTabState extends State<_IndividualTab>
           _actaFileNm = res['fileNm'];
           _actaViewerUrl = res['viewerUrl'];
         });
-        _showSnack('도면 연동 완료: ${_actaFileNm ?? ''}');
+        if (mounted) { final d = ProgressDialog(context); await d.complete(message: '도면 연동 완료: ${_actaFileNm ?? ''}'); }
       } else {
         final msg = res['msg'] as String? ?? '해당 국소의 ACTA 도면을 찾을 수 없습니다.';
         if (mounted) {
@@ -289,7 +290,7 @@ class _IndividualTabState extends State<_IndividualTab>
         }
       }
     } catch (e) {
-      _showSnack(e.toString().replaceFirst('Exception: ', ''));
+      if (mounted) { final d = ProgressDialog(context); await d.error(message: e.toString().replaceFirst('Exception: ', '')); }
     } finally {
       if (mounted) setState(() => _isActaLoading = false);
     }
@@ -389,7 +390,7 @@ class _IndividualTabState extends State<_IndividualTab>
 
   Future<void> _generate(String format) async {
     if (_zpwinoCtrl.text.trim().isEmpty && _zpwinaCtrl.text.trim().isEmpty) {
-      _showSnack('먼저 허가번호를 조회하거나 입력하세요.');
+      _showValidation('먼저 허가번호를 조회하거나 입력하세요.');
       return;
     }
     setState(() => _isGenerating = true);
@@ -405,17 +406,26 @@ class _IndividualTabState extends State<_IndividualTab>
       final ext = format == 'hwpx' ? 'hwpx' : 'pdf';
       final zpwino = _zpwinoCtrl.text.isNotEmpty ? _zpwinoCtrl.text : 'cert';
       dl.downloadFileBytes(bytes, '$zpwino.$ext');
-      if (mounted) _showSnack('설치확인서 다운로드 완료');
+      if (mounted) { final d = ProgressDialog(context); await d.complete(message: '설치확인서 다운로드 완료'); }
     } catch (e) {
-      if (mounted) _showSnack(e.toString().replaceFirst('Exception: ', ''));
+      if (mounted) { final d = ProgressDialog(context); await d.error(message: e.toString().replaceFirst('Exception: ', '')); }
     } finally {
       if (mounted) setState(() => _isGenerating = false);
     }
   }
 
-  void _showSnack(String msg) {
-    ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(content: Text(msg), duration: const Duration(seconds: 3)));
+  void _showValidation(String msg) {
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        content: Text(msg, style: const TextStyle(fontSize: 14)),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('확인')),
+        ],
+      ),
+    );
   }
 
   @override
@@ -1262,7 +1272,7 @@ class _BatchTabState extends State<_BatchTab>
 
   Future<void> _startBatchGenerate() async {
     final foundItems = _lookupItems.where((it) => it['found'] == true).toList();
-    if (foundItems.isEmpty) { _showSnack('조회된 항목이 없습니다.'); return; }
+    if (foundItems.isEmpty) { _showValidation('조회된 항목이 없습니다.'); return; }
     setState(() {
       _step = 2; _isGenerating = true; _progress = 0;
       _genCurrent = 0; _genTotal = foundItems.length; _genDone = false; _genError = null;
@@ -1309,9 +1319,9 @@ class _BatchTabState extends State<_BatchTab>
       final res = await widget.service.getDownloadUrl(_resultJobId!);
       final url = res['url'] as String?;
       final filename = res['filename'] as String? ?? '설치확인서.zip';
-      if (url != null) { dl.openDownloadUrl(url, filename); if (mounted) _showSnack('다운로드 시작'); }
+      if (url != null) { dl.openDownloadUrl(url, filename); if (mounted) { final d = ProgressDialog(context); await d.complete(message: '다운로드 시작'); } }
     } catch (e) {
-      if (mounted) _showSnack(e.toString().replaceFirst('Exception: ', ''));
+      if (mounted) { final d = ProgressDialog(context); await d.error(message: e.toString().replaceFirst('Exception: ', '')); }
     } finally {
       if (mounted) setState(() => _isDownloading = false);
     }
@@ -1325,8 +1335,18 @@ class _BatchTabState extends State<_BatchTab>
     });
   }
 
-  void _showSnack(String msg) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), duration: const Duration(seconds: 3)));
+  void _showValidation(String msg) {
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        content: Text(msg, style: const TextStyle(fontSize: 14)),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('확인')),
+        ],
+      ),
+    );
   }
 
   @override

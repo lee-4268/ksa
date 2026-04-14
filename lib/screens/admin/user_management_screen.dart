@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import '../../services/auth_service.dart';
 import '../../services/admin_service.dart';
 import '../../services/team_context_service.dart';
+import '../../widgets/progress_dialog.dart';
 
 /// 사용자 관리 화면 (필터링, 검색, 권한 설정)
 class UserManagementScreen extends StatefulWidget {
@@ -894,19 +895,12 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
     final success = await adminService.changeUserRole(user.id, newRole);
 
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            success
-                ? '${user.name ?? user.email}의 권한이 ${_getRoleName(newRole)}(으)로 변경되었습니다.'
-                : '권한 변경 실패: ${adminService.errorMessage}',
-          ),
-          backgroundColor: success ? Colors.green : Colors.red,
-        ),
-      );
-
+      final d = ProgressDialog(context);
       if (success) {
+        await d.complete(message: '${user.name ?? user.email}의 권한이 ${_getRoleName(newRole)}(으)로 변경되었습니다.');
         _applyFilters();
+      } else {
+        await d.error(message: '권한 변경 실패: ${adminService.errorMessage}');
       }
     }
   }
@@ -914,10 +908,12 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
   Future<void> _undormantUser(AppUserProfile user) async {
     final ok = await context.read<AdminService>().undormantUser(user.id);
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(ok ? '${user.name ?? user.id} 휴면 해제 완료' : '휴면 해제 실패'),
-      backgroundColor: ok ? Colors.green.shade700 : Colors.red.shade700,
-    ));
+    final d = ProgressDialog(context);
+    if (ok) {
+      await d.complete(message: '${user.name ?? user.id} 휴면 해제 완료');
+    } else {
+      await d.error(message: '휴면 해제 실패');
+    }
   }
 
   String _formatLoginTime(String isoStr) {

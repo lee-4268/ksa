@@ -10,6 +10,7 @@ import '../services/ds_upload_service.dart';
 import '../services/ds_export_service_stub.dart'
     if (dart.library.html) '../services/ds_export_service_web.dart' as platform_export;
 import 'ds_data_screen.dart';
+import '../widgets/progress_dialog.dart';
 import '../widgets/user_profile_button.dart';
 
 /// DS 데이터 관리 대시보드 - 업로드 + 조회 + Export + 삭제
@@ -228,10 +229,8 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
               if (data['building'] == true) {
                 if (mounted) {
                   setState(() => _exportingId = null);
-                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                    content: Text('xlsx 빌드가 진행 중입니다. 잠시 후 다시 시도해 주세요.'),
-                    backgroundColor: Colors.orange,
-                  ));
+                  final d = ProgressDialog(context);
+                  await d.error(message: 'xlsx 빌드가 진행 중입니다. 잠시 후 다시 시도해 주세요.');
                 }
                 return;
               }
@@ -253,8 +252,8 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
               );
               if (mounted) {
                 setState(() => _exportingId = null);
-                ScaffoldMessenger.of(context)
-                    .showSnackBar(SnackBar(content: Text(result)));
+                final d = ProgressDialog(context);
+                await d.complete(message: result);
               }
               return;
             }
@@ -269,8 +268,8 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
               );
               if (mounted) {
                 setState(() => _exportingId = null);
-                ScaffoldMessenger.of(context)
-                    .showSnackBar(SnackBar(content: Text(result)));
+                final d = ProgressDialog(context);
+                await d.complete(message: result);
               }
               return;
             }
@@ -293,16 +292,14 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
 
       if (mounted) {
         setState(() => _exportingId = null);
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(result)));
+        final d = ProgressDialog(context);
+        await d.complete(message: result);
       }
     } catch (e) {
       if (mounted) {
         setState(() => _exportingId = null);
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Export 실패: ${e.toString().replaceFirst("Exception: ", "")}'),
-          backgroundColor: Colors.red,
-        ));
+        final d = ProgressDialog(context);
+        await d.error(message: 'Export 실패: ${e.toString().replaceFirst("Exception: ", "")}');
       }
     }
   }
@@ -1091,11 +1088,8 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
           userId: userId,
         );
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('삭제되었습니다. DynamoDB 레코드는 백그라운드에서 정리됩니다.'),
-            ),
-          );
+          final d = ProgressDialog(context);
+          await d.complete(message: '삭제되었습니다.');
           _loadStats();
           // 백그라운드 삭제 완료 후 재갱신 (혹시 남아있는 데이터 반영)
           Future.delayed(const Duration(seconds: 15), () {
@@ -1104,9 +1098,8 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
         }
       } catch (e) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('삭제 실패: $e'), backgroundColor: Colors.red),
-          );
+          final d = ProgressDialog(context);
+          await d.error(message: '삭제 실패: $e');
         }
       }
     }
