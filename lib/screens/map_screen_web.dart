@@ -278,6 +278,56 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
           navigator.geolocation.clearWatch(window['kakaoWatchId_$_containerId']);
         }
 
+        // 자동 중심 이동 상태 초기화
+        window['kakaoAutoCenterEnabled_$_containerId'] = true;
+        if (window['kakaoAutoCenterResumeTimer_$_containerId']) {
+          clearTimeout(window['kakaoAutoCenterResumeTimer_$_containerId']);
+          window['kakaoAutoCenterResumeTimer_$_containerId'] = null;
+        }
+
+        // 기존 드래그 이벤트 핸들러 제거 후 재등록
+        if (window['kakaoDragStartHandler_$_containerId']) {
+          kakao.maps.event.removeListener(
+            map,
+            'dragstart',
+            window['kakaoDragStartHandler_$_containerId']
+          );
+        }
+        if (window['kakaoDragEndHandler_$_containerId']) {
+          kakao.maps.event.removeListener(
+            map,
+            'dragend',
+            window['kakaoDragEndHandler_$_containerId']
+          );
+        }
+
+        window['kakaoDragStartHandler_$_containerId'] = function() {
+          window['kakaoAutoCenterEnabled_$_containerId'] = false;
+          if (window['kakaoAutoCenterResumeTimer_$_containerId']) {
+            clearTimeout(window['kakaoAutoCenterResumeTimer_$_containerId']);
+          }
+        };
+        window['kakaoDragEndHandler_$_containerId'] = function() {
+          if (window['kakaoAutoCenterResumeTimer_$_containerId']) {
+            clearTimeout(window['kakaoAutoCenterResumeTimer_$_containerId']);
+          }
+          window['kakaoAutoCenterResumeTimer_$_containerId'] = setTimeout(function() {
+            window['kakaoAutoCenterEnabled_$_containerId'] = true;
+            window['kakaoAutoCenterResumeTimer_$_containerId'] = null;
+          }, 10000);
+        };
+
+        kakao.maps.event.addListener(
+          map,
+          'dragstart',
+          window['kakaoDragStartHandler_$_containerId']
+        );
+        kakao.maps.event.addListener(
+          map,
+          'dragend',
+          window['kakaoDragEndHandler_$_containerId']
+        );
+
         if (!window['kakaoCompassRegistered_$_containerId']) {
           window['kakaoCompassRegistered_$_containerId'] = true;
           var handleOrientation = function(event) {
@@ -316,7 +366,9 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
             }
 
             var moveLatLon = new kakao.maps.LatLng(lat, lng);
-            map.setCenter(moveLatLon);
+            if (window['kakaoAutoCenterEnabled_$_containerId'] !== false) {
+              map.setCenter(moveLatLon);
+            }
 
             if (window['kakaoCurrentLocationMarker_$_containerId']) window['kakaoCurrentLocationMarker_$_containerId'].setMap(null);
             if (window['kakaoCurrentLocationCircle_$_containerId']) window['kakaoCurrentLocationCircle_$_containerId'].setMap(null);
@@ -356,6 +408,28 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
           navigator.geolocation.clearWatch(window['kakaoWatchId_$_containerId']);
           window['kakaoWatchId_$_containerId'] = null;
         }
+        var map = window['kakaoMapInstance_$_containerId'];
+        if (map && window['kakaoDragStartHandler_$_containerId']) {
+          kakao.maps.event.removeListener(
+            map,
+            'dragstart',
+            window['kakaoDragStartHandler_$_containerId']
+          );
+        }
+        if (map && window['kakaoDragEndHandler_$_containerId']) {
+          kakao.maps.event.removeListener(
+            map,
+            'dragend',
+            window['kakaoDragEndHandler_$_containerId']
+          );
+        }
+        window['kakaoDragStartHandler_$_containerId'] = null;
+        window['kakaoDragEndHandler_$_containerId'] = null;
+        if (window['kakaoAutoCenterResumeTimer_$_containerId']) {
+          clearTimeout(window['kakaoAutoCenterResumeTimer_$_containerId']);
+          window['kakaoAutoCenterResumeTimer_$_containerId'] = null;
+        }
+        window['kakaoAutoCenterEnabled_$_containerId'] = true;
       })();
     ''';
     html.document.body?.append(html.ScriptElement()..text = jsCode);
