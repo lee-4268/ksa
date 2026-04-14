@@ -12819,6 +12819,8 @@ async def inspection_export_report(request: Request, req: InspectionReportReq):
         zpcode_by_active: dict = {} # key: "허가번호" → zpcode (zpprac1=운용)
         zpcode_by_name: dict = {}   # key: "허가번호|호출명칭" → zpcode
         zpcode_fallback: dict = {}  # key: "허가번호" → zpcode
+        def _norm_serno(v):
+            return re.sub(r'[^0-9A-Za-z]', '', str(v or '').upper())
         if _cert_cache_db_path and os.path.exists(_cert_cache_db_path):
             import sqlite3 as _sq2
             c2 = _sq2.connect(_cert_cache_db_path)
@@ -12826,7 +12828,8 @@ async def inspection_export_report(request: Request, req: InspectionReportReq):
                 f'SELECT TRIM(zpwino), TRIM(zpwina), zpcode, TRIM(eqp_ser_no), TRIM(COALESCE(zpprac1,"")) FROM cert WHERE TRIM(zpwino) IN ({ph})',
                 license_nos).fetchall()
             for r in rows:
-                k = str(r[0] or '').strip()
+                k_raw = str(r[0] or '').strip()
+                k = k_raw.replace('-', '')
                 name = str(r[1] or '').strip()
                 code = str(r[2] or '').strip()
                 eqp = str(r[3] or '').strip()
@@ -12836,6 +12839,9 @@ async def inspection_export_report(request: Request, req: InspectionReportReq):
                 # 1) 기기일련번호 매칭
                 if eqp:
                     zpcode_by_eqp[f"{k}|{eqp}"] = code
+                    eqp_norm = _norm_serno(eqp)
+                    if eqp_norm:
+                        zpcode_by_eqp[f"{k}|{eqp_norm}"] = code
                 # 2) 운용 상태
                 if '운용' in status and k not in zpcode_by_active:
                     zpcode_by_active[k] = code
@@ -12948,6 +12954,7 @@ async def inspection_export_report(request: Request, req: InspectionReportReq):
         for seq, t in enumerate(targets, 1):
             r = seq + 3
             hn = t['허가번호']
+            hn_norm = str(hn or '').replace('-', '')
 
             # DS 데이터 조합
             jt_list  = ds_장치_map.get(hn, [])
@@ -13022,20 +13029,33 @@ async def inspection_export_report(request: Request, req: InspectionReportReq):
                     _seen_ant.add(_k); deduped_ant.append(_ant)
 
             _callname = str(t['호출명칭'] or '').strip()
-            # tosi_code 우선순위: 1) 기기일련번호 매칭 → 2) 운용 상태 → 3) 호출명칭 → 4) fallback
+            # tosi_code 우선순위:
+            # 1) DS 기기일련번호별 cert(eqp_ser_no) 매칭 결과를 다건(줄바꿈)으로 반영
+            # 2) 매칭값이 전혀 없을 때만 운용/호출명칭/fallback 단건 적용
             tosi_code = ''
             if unique_장치:
+                _tosi_lines = []
+                _has_serial_matched = False
                 for _uj in unique_장치:
                     _eqp = str(_uj.get('기기일련번호') or '').strip()
-                    if _eqp and f"{hn}|{_eqp}" in zpcode_by_eqp:
-                        tosi_code = zpcode_by_eqp[f"{hn}|{_eqp}"]
-                        break
+                    _code = ''
+                    if _eqp:
+                        _code = zpcode_by_eqp.get(f"{hn_norm}|{_eqp}", '')
+                        if not _code:
+                            _eqp_norm = _norm_serno(_eqp)
+                            if _eqp_norm:
+                                _code = zpcode_by_eqp.get(f"{hn_norm}|{_eqp_norm}", '')
+                    if _code:
+                        _has_serial_matched = True
+                    _tosi_lines.append(_code)
+                if _has_serial_matched:
+                    tosi_code = '\n'.join(_tosi_lines)
             if not tosi_code:
-                tosi_code = zpcode_by_active.get(hn, '')
+                tosi_code = zpcode_by_active.get(hn_norm, '')
             if not tosi_code:
-                tosi_code = zpcode_by_name.get(f"{hn}|{_callname}", '')
+                tosi_code = zpcode_by_name.get(f"{hn_norm}|{_callname}", '')
             if not tosi_code:
-                tosi_code = zpcode_fallback.get(hn, '')
+                tosi_code = zpcode_fallback.get(hn_norm, '')
             설치형태     = ant_list[0].get('공중선주설치형태명', '') if ant_list else ''
             공중선장치   = _join_all(deduped_ant, '장치번호')
             # 공중선형식: SECTOR만 괄호 안 값 추출, 나머지는 그대로
@@ -13096,9 +13116,9 @@ async def inspection_export_report(request: Request, req: InspectionReportReq):
                 if c_idx == 2:  # B열: 빨간 글씨 + 노란 배경 + 셀에 맞춤
                     _set(r, c_idx, val, font=_font_red, fill=_fill_yellow,
                          border=_thin_border, align=_al_shrink)
-                elif c_idx == 3:  # C열: 셀에 맞춤
+                elif c_idx == 3:  # C열(tosi_code): 줄바꿈 표시(일련번호 행 순서와 정렬)
                     _set(r, c_idx, val, font=_font_base,
-                         border=_thin_border, align=_al_shrink)
+                         border=_thin_border, align=_al_center)
                 elif c_idx in (7, 20):  # G(특이사항), T(설치장소): 왼쪽 정렬
                     _set(r, c_idx, val, font=_font_base,
                          border=_thin_border, align=_al_left)
