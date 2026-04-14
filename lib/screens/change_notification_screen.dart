@@ -123,10 +123,6 @@ class _ChangeNotificationScreenState extends State<ChangeNotificationScreen> {
     );
   }
 
-  void _showSnack(String msg) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(

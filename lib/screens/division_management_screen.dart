@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/division_data_service.dart';
 import '../services/auth_service.dart';
+import '../widgets/progress_dialog.dart';
 
 /// 전체 대상 관리 화면 (본부 담당자 전용)
 class DivisionManagementScreen extends StatefulWidget {
@@ -709,14 +710,12 @@ class _DivisionManagementScreenState extends State<DivisionManagementScreen>
     final success = await service.importFromExcel();
 
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(success
-              ? '${service.targets.length}개 대상을 가져왔습니다.'
-              : service.errorMessage ?? 'Import 실패'),
-          backgroundColor: success ? _greenColor : Colors.red,
-        ),
-      );
+      final d = ProgressDialog(context);
+      if (success) {
+        await d.complete(message: '${service.targets.length}개 대상을 가져왔습니다.');
+      } else {
+        await d.error(message: service.errorMessage ?? 'Import 실패');
+      }
     }
   }
 
@@ -724,14 +723,12 @@ class _DivisionManagementScreenState extends State<DivisionManagementScreen>
     final filePath = await service.exportWithOriginalFormat();
 
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(filePath != null
-              ? 'Excel 파일이 저장되었습니다.'
-              : service.errorMessage ?? 'Export 실패'),
-          backgroundColor: filePath != null ? _greenColor : Colors.red,
-        ),
-      );
+      final d = ProgressDialog(context);
+      if (filePath != null) {
+        await d.complete(message: 'Excel 파일이 저장되었습니다.');
+      } else {
+        await d.error(message: service.errorMessage ?? 'Export 실패');
+      }
     }
   }
 
@@ -762,8 +759,15 @@ class _DivisionManagementScreenState extends State<DivisionManagementScreen>
 
   void _showBulkAssignDialog() {
     // TODO: 팀 일괄 배정 다이얼로그 구현
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('팀 일괄 배정 기능은 추후 구현됩니다.')),
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        content: const Text('팀 일괄 배정 기능은 추후 구현됩니다.', style: TextStyle(fontSize: 14)),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('확인')),
+        ],
+      ),
     );
   }
 
@@ -1023,7 +1027,7 @@ class _TargetDetailSheetState extends State<_TargetDetailSheet> {
     }
   }
 
-  void _saveChanges() {
+  Future<void> _saveChanges() async {
     widget.service.updateTarget(
       widget.target.id,
       memo: _memoController.text.isNotEmpty ? _memoController.text : null,
@@ -1032,12 +1036,8 @@ class _TargetDetailSheetState extends State<_TargetDetailSheet> {
       scheduledDate: _scheduledDate,
     );
 
-    Navigator.pop(context);
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('저장되었습니다.'),
-        backgroundColor: Color(0xFF43A047),
-      ),
-    );
+    final d = ProgressDialog(context);
+    await d.complete(message: '저장되었습니다.');
+    if (mounted) Navigator.pop(context);
   }
 }

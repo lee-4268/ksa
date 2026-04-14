@@ -11,6 +11,7 @@ import 'package:provider/provider.dart';
 import '../../services/auth_service.dart';
 import '../../services/callname_service.dart';
 import '../../services/inspection_service.dart';
+import '../../widgets/progress_dialog.dart';
 import 'user_management_screen.dart';
 import 'audit_log_screen.dart';
 
@@ -185,25 +186,19 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
               ),
             );
             if (confirmed == true) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('수검대상 Import 완료'), backgroundColor: Colors.green));
+              if (mounted) { final d = ProgressDialog(context); await d.complete(message: '수검대상 Import 완료'); }
               _loadKcaMeta();
             }
           }
           return;
         } else if (status['status'] == 'error') {
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text('Import 실패: ${status['stage'] ?? ''}'), backgroundColor: Colors.red));
-          }
+          if (mounted) { final d = ProgressDialog(context); await d.error(message: 'Import 실패: ${status['stage'] ?? ''}'); }
           return;
         }
       }
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('시간 초과 — 나중에 확인하세요.'), backgroundColor: Colors.orange));
+      if (mounted) { final d = ProgressDialog(context); await d.error(message: '시간 초과 — 나중에 확인하세요.'); }
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('오류: $e'), backgroundColor: Colors.red));
+      if (mounted) { final d = ProgressDialog(context); await d.error(message: '오류: $e'); }
     } finally {
       if (mounted) setState(() { _kcaImporting = false; _kcaProgress = 0; _kcaStage = ''; });
     }
@@ -223,11 +218,7 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
         builder: (ctx) => _KcaPreviewDialog(year: year, items: items, total: total),
       );
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('미리보기 실패: $e'), backgroundColor: Colors.red),
-        );
-      }
+      if (mounted) { final d = ProgressDialog(context); await d.error(message: '미리보기 실패: $e'); }
     } finally {
       if (mounted) setState(() => _kcaPreviewLoading = false);
     }
@@ -296,27 +287,21 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
           final result = job['result'] as Map<String, dynamic>?;
           final msg = result?['message'] as String? ?? '업로드 완료';
           if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text(msg), backgroundColor: Colors.green),
-            );
+            final d = ProgressDialog(context);
+            await d.complete(message: msg);
             _loadDbStatus();
           }
           break;
         } else if (status == 'failed') {
           if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text(stage), backgroundColor: Colors.red),
-            );
+            final d = ProgressDialog(context);
+            await d.error(message: stage);
           }
           break;
         }
       }
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('업로드 실패: $e'), backgroundColor: Colors.red),
-        );
-      }
+      if (mounted) { final d = ProgressDialog(context); await d.error(message: '업로드 실패: $e'); }
     } finally {
       if (mounted) {
         setState(() {
@@ -342,9 +327,8 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
 
       final files = preview['files'] as List<dynamic>? ?? [];
       if (files.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('미리볼 데이터가 없습니다.')),
-        );
+        final d = ProgressDialog(context);
+        await d.error(message: '미리볼 데이터가 없습니다.');
         return;
       }
 
@@ -355,9 +339,8 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
     } catch (e) {
       if (mounted) {
         Navigator.pop(context);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('미리보기 실패: $e'), backgroundColor: Colors.red),
-        );
+        final d = ProgressDialog(context);
+        await d.error(message: '미리보기 실패: $e');
       }
     }
   }
@@ -1195,9 +1178,8 @@ class _KcaStagingFilterDialogState extends State<_KcaStagingFilterDialog> {
       if (mounted) Navigator.pop(context, true);
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('확정 실패: $e'), backgroundColor: Colors.red),
-        );
+        final d = ProgressDialog(context);
+        await d.error(message: '확정 실패: $e');
         setState(() => _confirming = false);
       }
     }

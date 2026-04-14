@@ -136,13 +136,14 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
     }
   }
 
-  void _showSnack(String msg, {bool isError = false}) {
+  Future<void> _showSnack(String msg, {bool isError = false}) async {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(msg),
-      backgroundColor: isError ? Colors.red.shade700 : Colors.black87,
-      behavior: SnackBarBehavior.floating,
-    ));
+    final d = ProgressDialog(context);
+    if (isError) {
+      await d.error(message: msg);
+    } else {
+      await d.complete(message: msg);
+    }
   }
 
   // ── 로드뷰 ─────────────────────────────────────────────
@@ -184,10 +185,8 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
         resolvedLng = result.lng;
       } else {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text('주소로 위치를 찾을 수 없습니다.'),
-            backgroundColor: Colors.red,
-          ));
+          final d = ProgressDialog(context);
+          await d.error(message: '주소로 위치를 찾을 수 없습니다.');
         }
         return;
       }

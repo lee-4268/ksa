@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 
 import '../services/auth_service.dart';
 import '../services/callname_service.dart';
+import '../widgets/progress_dialog.dart';
 import 'callname_download_stub.dart'
     if (dart.library.html) 'callname_download_web.dart' as download_helper;
 
@@ -289,9 +290,8 @@ class _CallnameScreenState extends State<CallnameScreen> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('다운로드 실패: $e')),
-        );
+        final d = ProgressDialog(context);
+        await d.error(message: '다운로드 실패: $e');
       }
     }
   }

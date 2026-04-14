@@ -9,6 +9,7 @@ import '../services/erp_ds_compare_service.dart';
 import '../services/excel_export_stub.dart'
     if (dart.library.io) '../services/excel_export_mobile.dart'
     if (dart.library.html) '../services/excel_export_web.dart' as platform_export;
+import '../widgets/progress_dialog.dart';
 import '../widgets/user_profile_button.dart';
 
 class ErpDsCompareScreen extends StatefulWidget {
@@ -848,21 +849,13 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
       await platform_export.saveExcelFile(Uint8List.fromList(bytes), fileName);
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('$fileName 다운로드 완료'),
-            backgroundColor: _greenColor,
-          ),
-        );
+        final d = ProgressDialog(context);
+        await d.complete(message: '$fileName 다운로드 완료');
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('엑셀 다운로드 실패: $e'),
-            backgroundColor: _primaryColor,
-          ),
-        );
+        final d = ProgressDialog(context);
+        await d.error(message: '엑셀 다운로드 실패: $e');
       }
     }
   }

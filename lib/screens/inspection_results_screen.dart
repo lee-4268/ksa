@@ -383,14 +383,6 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
     }
   }
 
-  void _snack(String msg, {bool isError = false}) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(msg, style: const TextStyle(fontSize: 13)),
-      backgroundColor: isError ? Colors.red.shade700 : _primary,
-      duration: Duration(seconds: isError ? 4 : 2),
-    ));
-  }
 
   // ── 숫자 포맷 ──
 

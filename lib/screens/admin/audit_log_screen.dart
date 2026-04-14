@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
 import '../../services/auth_service.dart';
 import '../../services/audit_service.dart';
+import '../../widgets/progress_dialog.dart';
 
 /// 감사 로그 화면
 class AuditLogScreen extends StatefulWidget {
@@ -94,12 +95,12 @@ class _AuditLogScreenState extends State<AuditLogScreen> {
     final success = await auditService.rollback(log.id);
 
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(success ? '롤백 완료' : '롤백 실패'),
-          backgroundColor: success ? Colors.green : Colors.red,
-        ),
-      );
+      final d = ProgressDialog(context);
+      if (success) {
+        await d.complete(message: '롤백 완료');
+      } else {
+        await d.error(message: '롤백 실패');
+      }
 
       if (success) {
         _loadLogs();

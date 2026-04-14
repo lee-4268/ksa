@@ -39,6 +39,7 @@ class _MapScreenState extends State<MapScreen>
   RadioStation? _initialMapStation; // 맵 초기 위치 스테이션
   int? _initialMapZoomLevel; // 맵 초기 줌 레벨
   String _sortOrder = '최신순'; // 정렬 순서
+  String? _selectedInspectionDate; // 검사일 필터
   bool _isEditMode = false; // 편집 모드
   bool _isSearchMode = false; // 상세 화면 검색 모드
   String _detailSearchQuery = ''; // 상세 화면 검색어
@@ -981,6 +982,13 @@ class _MapScreenState extends State<MapScreen>
     return sorted;
   }
 
+  String _formatInspectionDateShort(DateTime date) {
+    final yy = (date.year % 100).toString().padLeft(2, '0');
+    final mm = date.month.toString().padLeft(2, '0');
+    final dd = date.day.toString().padLeft(2, '0');
+    return '$yy$mm$dd';
+  }
+
   /// 상세 리스트 (deep.png 스타일)
   Widget _buildDetailList(StationProvider provider, List<RadioStation> stations, {bool isWebLayout = false}) {
     // 검색어 필터링 적용
@@ -993,7 +1001,23 @@ class _MapScreenState extends State<MapScreen>
                (s.stationName.toLowerCase().contains(query));
       }).toList();
     }
+    // 검사일 필터 적용
+    if (_selectedInspectionDate != null) {
+      filteredStations = filteredStations.where((s) {
+        if (s.inspectionDate == null) return false;
+        final formatted = _formatInspectionDateShort(s.inspectionDate!);
+        return formatted == _selectedInspectionDate;
+      }).toList();
+    }
     final sortedStations = _getSortedStations(filteredStations);
+    // 검사일 목록 수집 (필터 드롭다운용)
+    final inspectionDates = <String>{};
+    for (final s in stations) {
+      if (s.inspectionDate != null) {
+        inspectionDates.add(_formatInspectionDateShort(s.inspectionDate!));
+      }
+    }
+    final sortedDates = inspectionDates.toList()..sort((a, b) => b.compareTo(a));
 
     return Container(
       decoration: BoxDecoration(
@@ -1162,34 +1186,87 @@ class _MapScreenState extends State<MapScreen>
           else
             // 필터 탭 (전체만)
             Container(
-              height: 40,
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-              child: Row(
+              padding: const EdgeInsets.fromLTRB(8, 6, 8, 8),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _buildFilterChip('전체', true),
-                  const Spacer(),
-                  // 정렬 드롭다운
-                  PopupMenuButton<String>(
-                    onSelected: (value) {
-                      setState(() {
-                        _sortOrder = value;
-                      });
-                    },
-                    itemBuilder: (context) => [
-                      PopupMenuItem(value: '최신순', child: Text('최신순')),
-                      PopupMenuItem(value: '주소순', child: Text('주소순')),
-                    ],
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          _sortOrder,
-                          style: TextStyle(fontSize: 13, color: Colors.grey[600]),
+                  Row(
+                    children: [
+                      _buildFilterChip('전체', true),
+                      const Spacer(),
+                      // 정렬 드롭다운
+                      PopupMenuButton<String>(
+                        onSelected: (value) {
+                          setState(() {
+                            _sortOrder = value;
+                          });
+                        },
+                        itemBuilder: (context) => [
+                          PopupMenuItem(value: '최신순', child: Text('최신순')),
+                          PopupMenuItem(value: '주소순', child: Text('주소순')),
+                        ],
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              _sortOrder,
+                              style: TextStyle(fontSize: 13, color: Colors.grey[600]),
+                            ),
+                            Icon(Icons.keyboard_arrow_down, size: 18, color: Colors.grey[600]),
+                          ],
                         ),
-                        Icon(Icons.keyboard_arrow_down, size: 18, color: Colors.grey[600]),
-                      ],
-                    ),
+                      ),
+                    ],
                   ),
+                  if (sortedDates.isNotEmpty) ...[
+                    const SizedBox(height: 6),
+                    PopupMenuButton<String?>(
+                      onSelected: (value) {
+                        setState(() {
+                          _selectedInspectionDate = value;
+                        });
+                      },
+                      itemBuilder: (context) => [
+                        PopupMenuItem<String?>(value: null, child: Text('전체 검사일')),
+                        ...sortedDates.map((d) => PopupMenuItem<String?>(value: d, child: Text(d))),
+                      ],
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: _selectedInspectionDate != null ? Colors.blue.shade50 : Colors.grey.shade100,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: _selectedInspectionDate != null ? Colors.blue.shade300 : Colors.grey.shade300,
+                          ),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.calendar_today,
+                              size: 12,
+                              color: _selectedInspectionDate != null ? Colors.blue.shade700 : Colors.grey[600],
+                            ),
+                            const SizedBox(width: 6),
+                            Text(
+                              _selectedInspectionDate ?? '전체 검사일',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: _selectedInspectionDate != null ? Colors.blue.shade700 : Colors.grey[700],
+                                fontWeight: _selectedInspectionDate != null ? FontWeight.w600 : FontWeight.w400,
+                              ),
+                            ),
+                            const SizedBox(width: 2),
+                            Icon(
+                              Icons.keyboard_arrow_down,
+                              size: 16,
+                              color: _selectedInspectionDate != null ? Colors.blue.shade700 : Colors.grey[600],
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -1442,6 +1519,8 @@ class _MapScreenState extends State<MapScreen>
                         _buildSmallTag('${station.gain}dB'),
                       if (station.antennaCount != null && station.antennaCount!.isNotEmpty)
                         _buildSmallTag('${station.antennaCount}기'),
+                      if (station.inspectionDate != null)
+                        _buildSmallTag(_formatInspectionDateShort(station.inspectionDate!)),
                       if (station.licenseNumber.isNotEmpty && station.licenseNumber != '-')
                         _buildSmallTag(station.licenseNumber),
                     ],

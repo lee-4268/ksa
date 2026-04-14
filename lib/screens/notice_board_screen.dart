@@ -95,7 +95,7 @@ class _NoticeBoardScreenState extends State<NoticeBoardScreen> {
         _total = res['total'] ?? 0;
       });
     } catch (e) {
-      _snack('공지사항 조회 실패: $e');
+      if (mounted) { final d = ProgressDialog(context); await d.error(message: '공지사항 조회 실패: $e'); }
     } finally {
       setState(() => _loading = false);
     }
@@ -112,7 +112,7 @@ class _NoticeBoardScreenState extends State<NoticeBoardScreen> {
       final data = await _svc.getNotice(id);
       setState(() => _detail = data);
     } catch (e) {
-      _snack('상세 조회 실패: $e');
+      if (mounted) { final d = ProgressDialog(context); await d.error(message: '상세 조회 실패: $e'); }
       setState(() => _mode = _ViewMode.list);
     } finally {
       setState(() => _detailLoading = false);
@@ -178,7 +178,7 @@ class _NoticeBoardScreenState extends State<NoticeBoardScreen> {
         setState(() => _images.add(url));
       }
     } catch (e) {
-      _snack('이미지 업로드 실패: $e');
+      if (mounted) { final d = ProgressDialog(context); await d.error(message: '이미지 업로드 실패: $e'); }
     } finally {
       setState(() => _uploading = false);
     }
@@ -211,7 +211,7 @@ class _NoticeBoardScreenState extends State<NoticeBoardScreen> {
           setState(() => _attachments.add({'url': url, 'filename': file.name, 'ext': ext}));
         }
       } catch (e) {
-        _snack('${file.name} 업로드 실패: $e');
+        if (mounted) { final d = ProgressDialog(context); await d.error(message: '${file.name} 업로드 실패: $e'); }
       } finally {
         setState(() => _uploading = false);
       }
