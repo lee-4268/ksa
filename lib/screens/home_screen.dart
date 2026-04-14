@@ -1,4 +1,6 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 import 'package:provider/provider.dart';
 import '../providers/station_provider.dart';
 import '../services/auth_service.dart';
@@ -11,6 +13,7 @@ import 'callname_screen.dart';
 import 'certificate_screen.dart';
 import 'erp_ds_compare_screen.dart';
 import 'inadequate_management_screen.dart';
+import 'change_notification_screen.dart';
 import 'inspection_schedule_screen.dart';
 import 'inspection_my_list_screen.dart';
 import 'inspection_results_screen.dart';
@@ -56,6 +59,19 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  // ── 메뉴 접속 로그 ──
+
+  void _logMenuAccess(String menuName) {
+    // Fire and forget — don't await
+    final token = context.read<AuthService>().authToken;
+    if (token == null) return;
+    http.post(
+      Uri.parse('${const String.fromEnvironment('API_BASE_URL', defaultValue: 'https://api-sko-kca.skons.net')}/admin/menu-log'),
+      headers: {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'},
+      body: json.encode({'menu': menuName}),
+    ).ignore();
+  }
+
   // ── 메뉴 정의 ──
 
   List<_MenuItem> _buildMenuItems(AuthService auth) {
@@ -70,6 +86,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _MenuItem('설치확인서', Icons.description_outlined, const Color(0xFF06B6D4), description: '설치확인서 조회 및 관리'),
       _MenuItem('전산비교', Icons.compare_outlined, const Color(0xFF2563EB), description: 'ERP·DS 전산 데이터 비교'),
       _MenuItem('부적합 관리', Icons.warning_amber_outlined, const Color(0xFFE53935), description: '부적합 현황 관리'),
+      _MenuItem('변경개설신고', Icons.swap_horiz_outlined, const Color(0xFFE53935), description: '변경개설신고 파일 비교 및 적용'),
       _MenuItem('커뮤니티', Icons.forum_outlined, const Color(0xFFE53935), description: '공지사항 및 요청사항'),
       if (auth.isSuperAdmin)
         _MenuItem('관리자', Icons.settings_outlined, const Color(0xFF6366F1), description: '시스템 설정 및 사용자 관리'),
@@ -80,7 +97,7 @@ class _HomeScreenState extends State<HomeScreen> {
   static const _menuGroups = [
     _MenuGroup('수검 관리', Icons.map_outlined, Color(0xFF3B82F6), ['실적 관리', '일정 및 통계', '현장 수검 Map']),
     _MenuGroup('허가현황 관리', Icons.storage_outlined, Color(0xFF8B5CF6), ['DS 데이터', 'DS 병합']),
-    _MenuGroup('서류 관리', Icons.folder_outlined, Color(0xFFEF4444), ['호출명칭', '설치확인서', '전산비교', '부적합 관리']),
+    _MenuGroup('서류 관리', Icons.folder_outlined, Color(0xFFEF4444), ['호출명칭', '설치확인서', '전산비교', '부적합 관리', '변경개설신고']),
   ];
 
   Widget _buildPage(int index, AuthService auth) {
@@ -90,7 +107,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final title = items[index].title;
 
     switch (title) {
-      case '홈': return _HomeContent(onNavigate: (i) => setState(() => _selectedIndex = i), menuItems: items);
+      case '홈': return _HomeContent(onNavigate: (i) { setState(() => _selectedIndex = i); _logMenuAccess(items[i].title); }, menuItems: items);
       case '실적 관리': return const InspectionResultsScreen();
       case '일정 및 통계': return const InspectionScheduleScreen();
       case '현장 수검 Map': return const InspectionMyListScreen();
@@ -100,9 +117,10 @@ class _HomeScreenState extends State<HomeScreen> {
       case '설치확인서': return const CertificateScreen();
       case '전산비교': return const ErpDsCompareScreen();
       case '부적합 관리': return const InadequateManagementScreen();
+      case '변경개설신고': return const ChangeNotificationScreen();
       case '커뮤니티': return const CommunityScreen();
       case '관리자': return const AdminPanelScreen();
-      default: return _HomeContent(onNavigate: (i) => setState(() => _selectedIndex = i), menuItems: items);
+      default: return _HomeContent(onNavigate: (i) { setState(() => _selectedIndex = i); _logMenuAccess(items[i].title); }, menuItems: items);
     }
   }
 
@@ -203,6 +221,7 @@ class _HomeScreenState extends State<HomeScreen> {
               InkWell(
                 onTap: () {
                   setState(() => _selectedIndex = 0);
+                  _logMenuAccess('홈');
                   if (inDrawer) Navigator.pop(context);
                 },
                 borderRadius: BorderRadius.circular(9),
@@ -221,6 +240,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   child: InkWell(
                     onTap: () {
                       setState(() => _selectedIndex = 0);
+                      _logMenuAccess('홈');
                       if (inDrawer) Navigator.pop(context);
                     },
                     borderRadius: BorderRadius.circular(4),
@@ -274,6 +294,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         child: InkWell(
                           onTap: () {
                             setState(() => _selectedIndex = i);
+                            _logMenuAccess(item.title);
                             if (inDrawer) Navigator.pop(context);
                           },
                           borderRadius: BorderRadius.circular(8),
@@ -325,6 +346,7 @@ class _HomeScreenState extends State<HomeScreen> {
         child: InkWell(
           onTap: () {
             setState(() => _selectedIndex = i);
+            _logMenuAccess(item.title);
             if (inDrawer) Navigator.pop(context);
           },
           borderRadius: BorderRadius.circular(8),
@@ -399,6 +421,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 child: InkWell(
                   onTap: () {
                     setState(() => _selectedIndex = idx);
+                    _logMenuAccess(item.title);
                     if (inDrawer) Navigator.pop(context);
                   },
                   borderRadius: BorderRadius.circular(6),

@@ -1470,6 +1470,8 @@ class _MapScreenState extends State<MapScreen>
         return Colors.green;
       case InspectionStatus.failed:
         return Colors.red;
+      case InspectionStatus.inadequate:
+        return Colors.purple;
     }
   }
 

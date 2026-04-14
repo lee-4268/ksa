@@ -173,7 +173,14 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
     if (result == null || result.files.isEmpty) return;
 
     final files = result.files.where((f) => f.bytes != null).toList();
-    if (files.isEmpty) return;
+    if (files.isEmpty) {
+      if (mounted) {
+        final dialog = ProgressDialog(context);
+        dialog.show(message: '파일 읽기 실패');
+        await dialog.error(message: '파일을 읽을 수 없습니다.\n파일을 다시 선택해주세요.');
+      }
+      return;
+    }
 
     final dialog = ProgressDialog(context);
     setState(() => _uploading = true);
@@ -182,19 +189,17 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
     final errors = <String>[];
 
     try {
+      dialog.show(message: '업로드 중...\n(1/${files.length})\n${files.first.name}');
       for (int i = 0; i < files.length; i++) {
         final file = files[i];
         try {
-          dialog.show(message: '업로드 중...\n(${i + 1}/${files.length})\n${file.name}');
           final resp = await _svc.uploadResults(
             Uint8List.fromList(file.bytes!),
             file.name,
           );
           totalCount += (resp['count'] as int?) ?? 0;
           successCount++;
-          dialog.dismiss();
         } catch (e) {
-          dialog.dismiss();
           errors.add('${file.name}: $e');
         }
       }

@@ -13,7 +13,7 @@ import sqlite3
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import List, Optional, Dict, Union
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from decimal import Decimal
 import logging
 import zipfile
@@ -738,6 +738,22 @@ def _verify_token(token: str) -> str | None:
 _daily_visitors: set = set()
 _daily_visitors_date: str = ""
 
+def _count_daily_visitors() -> int:
+    """오늘 고유 접속자 수 (menu_usage_log 기반, 서버 재시작해도 유지)."""
+    try:
+        if not os.path.exists(_INSP_DB):
+            return len(_daily_visitors)
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        conn = sqlite3.connect(_INSP_DB, timeout=10)
+        cnt = conn.execute(
+            "SELECT COUNT(DISTINCT user_id) FROM menu_usage_log WHERE accessed_at >= ?",
+            (today,)
+        ).fetchone()[0]
+        conn.close()
+        return cnt
+    except Exception:
+        return len(_daily_visitors)
+
 def _track_daily_visitor(empno: str):
     global _daily_visitors, _daily_visitors_date
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -1236,7 +1252,13 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "Accept", "X-Admin-Key", "X-Filename", "X-Refreshed-Token"],
-    expose_headers=["Content-Length", "Content-Disposition"],
+    expose_headers=[
+        "Content-Length",
+        "Content-Disposition",
+        "X-Change-Count",
+        "X-Target-Count",
+        "X-Change-Types",
+    ],
     max_age=3600,
 )
 
@@ -10380,6 +10402,17 @@ def _init_inspection_db():
     )''')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_inad_year ON inadequate_management(year)')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_inad_region ON inadequate_management(region)')
+    # ── menu_usage_log 테이블 (메뉴 접속 로그) ──
+    conn.execute('''CREATE TABLE IF NOT EXISTS menu_usage_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT,
+        user_name TEXT,
+        menu_name TEXT,
+        accessed_at TEXT
+    )''')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_mul_menu ON menu_usage_log(menu_name)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_mul_user ON menu_usage_log(user_id)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_mul_date ON menu_usage_log(accessed_at)')
     # 24시간 지난 완료/에러 잡 정리
     conn.execute(
         "DELETE FROM inspection_jobs WHERE status IN ('complete','error') "
@@ -11449,21 +11482,110 @@ async def _auto_geocode_background(year: int):
         unique_addrs = list(addr_map.keys())
         logger.info(f"[auto-geocode] {len(rows)}건 중 고유 주소 {len(unique_addrs)}개 (year={year})")
 
-        def _geocode_one(addr):
+        def _clean_addr_auto(addr):
+            import re
+            candidates = [addr]
+            no_paren = re.sub(r'[\(\（][^\)\）]*[\)\）]', '', addr).strip()
+            if no_paren != addr:
+                candidates.append(no_paren)
+            no_comma = re.split(r',', no_paren)[0].strip()
+            if no_comma != no_paren:
+                candidates.append(no_comma)
+            no_bunji = re.sub(r'번지', '', no_comma).strip()
+            if no_bunji != no_comma:
+                candidates.append(no_bunji)
+            else:
+                no_bunji = no_comma
+            no_suffix = re.sub(r'(\d[\d\-]*)\s+[^\d].*$', r'\1', no_bunji).strip()
+            if no_suffix != no_bunji and len(no_suffix) > 5:
+                candidates.append(no_suffix)
+            seen = set()
+            result = []
+            for c in candidates:
+                if c and c not in seen:
+                    seen.add(c)
+                    result.append(c)
+            return result
+
+        _VWORLD_KEY = '60301A2D-7EA7-3C05-9B4D-4BC523408605'
+
+        def _kakao_addr(query):
             try:
-                r = _req.get(
-                    'https://dapi.kakao.com/v2/local/search/address.json',
-                    params={'query': addr, 'size': 1},
-                    headers={'Authorization': f'KakaoAK {KAKAO_KEY}'},
-                    timeout=5)
+                r = _req.get('https://dapi.kakao.com/v2/local/search/address.json',
+                    params={'query': query, 'size': 1},
+                    headers={'Authorization': f'KakaoAK {KAKAO_KEY}'}, timeout=5)
                 if r.status_code == 200:
                     docs = r.json().get('documents', [])
                     if docs:
                         x, y = float(docs[0].get('x', 0)), float(docs[0].get('y', 0))
-                        if x and y:
-                            return addr, (y, x)
-            except Exception:
-                pass
+                        if x and y: return (y, x)
+            except Exception: pass
+            return None
+
+        def _kakao_keyword(query):
+            try:
+                r = _req.get('https://dapi.kakao.com/v2/local/search/keyword.json',
+                    params={'query': query, 'size': 1},
+                    headers={'Authorization': f'KakaoAK {KAKAO_KEY}'}, timeout=5)
+                if r.status_code == 200:
+                    docs = r.json().get('documents', [])
+                    if docs:
+                        x, y = float(docs[0].get('x', 0)), float(docs[0].get('y', 0))
+                        if x and y: return (y, x)
+            except Exception: pass
+            return None
+
+        def _vworld(query):
+            try:
+                r = _req.get('https://api.vworld.kr/req/address',
+                    params={'service': 'address', 'request': 'getcoord', 'version': '2.0',
+                            'crs': 'epsg:4326', 'address': query, 'refine': 'true',
+                            'simple': 'false', 'format': 'json', 'type': 'both',
+                            'key': _VWORLD_KEY}, timeout=5)
+                if r.status_code == 200:
+                    body = r.json().get('response', {})
+                    if body.get('status') == 'OK':
+                        pt = body.get('result', {}).get('point', {})
+                        x, y = float(pt.get('x', 0)), float(pt.get('y', 0))
+                        if x and y: return (y, x)
+            except Exception: pass
+            return None
+
+        _NAVER_ID = 'x0a4aeu0l5'
+        _NAVER_SECRET = 't0yDP6Lbti6Ruplw5wfrYKwkPQS3fI806bRVzkBi'
+
+        def _naver(query):
+            try:
+                r = _req.get('https://maps.apigw.ntruss.com/map-geocode/v2/geocode',
+                    params={'query': query},
+                    headers={'X-NCP-APIGW-API-KEY-ID': _NAVER_ID,
+                             'X-NCP-APIGW-API-KEY': _NAVER_SECRET}, timeout=5)
+                if r.status_code == 200:
+                    addresses = r.json().get('addresses', [])
+                    if addresses:
+                        x, y = float(addresses[0].get('x', 0)), float(addresses[0].get('y', 0))
+                        if x and y: return (y, x)
+            except Exception: pass
+            return None
+
+        def _geocode_one(addr):
+            try:
+                candidates = _clean_addr_auto(addr)
+                for c in candidates:
+                    res = _kakao_addr(c)
+                    if res: return addr, res
+                for c in candidates:
+                    res = _kakao_keyword(c)
+                    if res: return addr, res
+                for c in candidates:
+                    res = _vworld(c)
+                    if res: return addr, res
+                for c in candidates:
+                    res = _naver(c)
+                    if res: return addr, res
+                logger.warning(f"[auto-geocode] 주소 매칭 없음: {addr}")
+            except Exception as e:
+                logger.warning(f"[auto-geocode] 요청 실패: {addr} — {e}")
             return addr, None
 
         updated = 0
@@ -11534,23 +11656,155 @@ async def inspection_geocode_targets(request: Request, year: int):
     import requests as _req
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    def _geocode_one(addr: str):
+    def _clean_addr(addr: str) -> list[str]:
+        """주소 후보 목록 반환 (원본 → 전처리 순)."""
+        import re
+        candidates = [addr]
+        # 괄호 제거: "OO동 123(건물명)" → "OO동 123"
+        no_paren = re.sub(r'[\(\（][^\)\）]*[\)\）]', '', addr).strip()
+        if no_paren != addr:
+            candidates.append(no_paren)
+        # 쉼표 이후 제거: "화합로 1829-14, (율정동)" → "화합로 1829-14"
+        no_comma = re.split(r',', no_paren)[0].strip()
+        if no_comma != no_paren:
+            candidates.append(no_comma)
+        # "번지" 제거: "갈전리 932번지 상록수아파트" → "갈전리 932 상록수아파트" → 이후 suffix도 제거
+        no_bunji = re.sub(r'번지', '', no_comma).strip()
+        if no_bunji != no_comma:
+            candidates.append(no_bunji)
+        else:
+            no_bunji = no_comma
+        # 숫자 뒤 부가설명 제거 (나대지/인근/지하/옥상/동/PIT/건물명 등)
+        no_suffix = re.sub(r'(\d[\d\-]*)\s+[^\d].*$', r'\1', no_bunji).strip()
+        if no_suffix != no_bunji and len(no_suffix) > 5:
+            candidates.append(no_suffix)
+        # 중복 제거 (순서 유지)
+        seen = set()
+        result = []
+        for c in candidates:
+            if c and c not in seen:
+                seen.add(c)
+                result.append(c)
+        return result
+
+    VWORLD_KEY = '60301A2D-7EA7-3C05-9B4D-4BC523408605'
+
+    def _call_kakao_addr(query: str):
         try:
             r = _req.get(
                 'https://dapi.kakao.com/v2/local/search/address.json',
-                params={'query': addr, 'size': 1},
+                params={'query': query, 'size': 1},
                 headers={'Authorization': f'KakaoAK {KAKAO_KEY}'},
                 timeout=5,
             )
             if r.status_code == 200:
                 docs = r.json().get('documents', [])
                 if docs:
-                    x = float(docs[0].get('x', 0))
-                    y = float(docs[0].get('y', 0))
+                    x, y = float(docs[0].get('x', 0)), float(docs[0].get('y', 0))
                     if x and y:
-                        return addr, (y, x)
+                        return (y, x)
         except Exception:
             pass
+        return None
+
+    def _call_kakao_keyword(query: str):
+        try:
+            r = _req.get(
+                'https://dapi.kakao.com/v2/local/search/keyword.json',
+                params={'query': query, 'size': 1},
+                headers={'Authorization': f'KakaoAK {KAKAO_KEY}'},
+                timeout=5,
+            )
+            if r.status_code == 200:
+                docs = r.json().get('documents', [])
+                if docs:
+                    x, y = float(docs[0].get('x', 0)), float(docs[0].get('y', 0))
+                    if x and y:
+                        return (y, x)
+        except Exception:
+            pass
+        return None
+
+    def _call_vworld(query: str):
+        try:
+            r = _req.get(
+                'https://api.vworld.kr/req/address',
+                params={
+                    'service': 'address',
+                    'request': 'getcoord',
+                    'version': '2.0',
+                    'crs': 'epsg:4326',
+                    'address': query,
+                    'refine': 'true',
+                    'simple': 'false',
+                    'format': 'json',
+                    'type': 'both',
+                    'key': VWORLD_KEY,
+                },
+                timeout=5,
+            )
+            if r.status_code == 200:
+                body = r.json().get('response', {})
+                if body.get('status') == 'OK':
+                    pt = body.get('result', {}).get('point', {})
+                    x, y = float(pt.get('x', 0)), float(pt.get('y', 0))
+                    if x and y:
+                        return (y, x)
+        except Exception:
+            pass
+        return None
+
+    NAVER_CLIENT_ID = 'x0a4aeu0l5'
+    NAVER_CLIENT_SECRET = 't0yDP6Lbti6Ruplw5wfrYKwkPQS3fI806bRVzkBi'
+
+    def _call_naver(query: str):
+        try:
+            r = _req.get(
+                'https://maps.apigw.ntruss.com/map-geocode/v2/geocode',
+                params={'query': query},
+                headers={
+                    'X-NCP-APIGW-API-KEY-ID': NAVER_CLIENT_ID,
+                    'X-NCP-APIGW-API-KEY': NAVER_CLIENT_SECRET,
+                },
+                timeout=5,
+            )
+            if r.status_code == 200:
+                addresses = r.json().get('addresses', [])
+                if addresses:
+                    x = float(addresses[0].get('x', 0))
+                    y = float(addresses[0].get('y', 0))
+                    if x and y:
+                        return (y, x)
+        except Exception:
+            pass
+        return None
+
+    def _geocode_one(addr: str):
+        try:
+            candidates = _clean_addr(addr)
+            # 1단계: 카카오 주소검색
+            for candidate in candidates:
+                result = _call_kakao_addr(candidate)
+                if result:
+                    return addr, result
+            # 2단계: 카카오 키워드검색
+            for candidate in candidates:
+                result = _call_kakao_keyword(candidate)
+                if result:
+                    return addr, result
+            # 3단계: Vworld 주소검색
+            for candidate in candidates:
+                result = _call_vworld(candidate)
+                if result:
+                    return addr, result
+            # 4단계: 네이버 지오코딩
+            for candidate in candidates:
+                result = _call_naver(candidate)
+                if result:
+                    return addr, result
+            logger.warning(f"[geocode-targets] 주소 매칭 없음: {addr}")
+        except Exception as e:
+            logger.warning(f"[geocode-targets] 요청 실패: {addr} — {e}")
         return addr, None
 
     # 4. 배치(500개)씩 → ThreadPoolExecutor(10) → OOM 방지
@@ -12142,13 +12396,12 @@ async def inspection_my_list_weeks(request: Request, year: int, team: str = ""):
         user_data = user_item.get("Item", {})
     access_team = user_data.get("region", "").replace("Access담당", "").strip()
     품질팀 = user_data.get("team", "")
-    user_role = user_data.get("role", "member")
     is_dev = _dev_users.get(empno) is not None
+    user_role = await asyncio.to_thread(_get_user_role_sync, empno)
     is_manager = user_role in ("admin", "manager")
 
-    # 본부 관리자: team 파라미터 있으면 해당 팀, 없으면 본부 전체
     if is_manager:
-        품질팀 = team  # team 없으면 '' → 본부 전체
+        품질팀 = team
 
     if not is_dev and not access_team and not 품질팀 and not is_manager:
         return {"weeks": []}
@@ -12223,13 +12476,16 @@ async def inspection_my_list(request: Request, year: int, week: str = "", team: 
     # region: "경북Access담당" → "경북" (inspection_schedules.access담당과 매칭)
     access_team = user_data.get("region", "").replace("Access담당", "").strip()
     품질팀 = user_data.get("team", "")
-    user_role = user_data.get("role", "member")
     is_dev = _dev_users.get(empno) is not None
+    # role은 user_roles 테이블에서 조회 (권한 설정과 동일한 소스)
+    user_role = await asyncio.to_thread(_get_user_role_sync, empno)
     is_manager = user_role in ("admin", "manager")
 
     # 본부 관리자: team 파라미터 있으면 해당 팀, 없으면 본부 전체
     if is_manager:
-        품질팀 = team  # team 파라미터 없으면 '' → 본부 전체
+        품질팀 = team
+
+    logger.info(f"my-list: empno={empno}, access_team='{access_team}', 품질팀='{품질팀}', is_dev={is_dev}, is_manager={is_manager}, role={user_role}")
 
     if not is_dev and not access_team and not 품질팀 and not is_manager:
         return {"items": [], "message": "팀 배정 없음"}
@@ -12253,8 +12509,12 @@ async def inspection_my_list(request: Request, year: int, week: str = "", team: 
             # 본부 관리자 (팀 미선택 → 본부 전체)
             where_parts.append('s.year=? AND s.access담당=?')
             params.extend([year, access_team])
+        elif is_dev and access_team and 품질팀:
+            # 테스트 계정(member): 소속 본부 + 팀 필터
+            where_parts.append('s.year=? AND s.access담당=? AND s.품질개선팀=?')
+            params.extend([year, access_team, 품질팀])
         elif is_dev and access_team:
-            # 테스트 계정(member): 소속 본부 전체
+            # 테스트 계정(member): 소속 본부 전체 (팀 미배정)
             where_parts.append('s.year=? AND s.access담당=?')
             params.extend([year, access_team])
         elif is_dev:
@@ -13633,9 +13893,9 @@ async def inspection_results_analysis(request: Request, year: int = Query(...), 
             rgn_params = (year, region) if region else (year,)
 
             perf_rows = conn.execute(
-                "SELECT 불합격내용, COUNT(*) as cnt FROM inspection_results_raw "
-                f"WHERE year=?{rgn_filter} AND 성능서류='성능' AND 불합격내용 IS NOT NULL AND 불합격내용 != '' "
-                "GROUP BY 불합격내용 ORDER BY cnt DESC",
+                "SELECT 간략불합격, COUNT(*) as cnt FROM inspection_results_raw "
+                f"WHERE year=?{rgn_filter} AND 성능서류='성능' AND 간략불합격 IS NOT NULL AND 간략불합격 != '' "
+                "GROUP BY 간략불합격 ORDER BY cnt DESC",
                 rgn_params
             ).fetchall()
             perf_total = sum(r[1] for r in perf_rows) or 1
@@ -14143,6 +14403,340 @@ async def inspection_results_export_xlsx(request: Request, req: InspectionResult
 
 
 # ============================================================
+# 변경개설신고 자동 변경 (A파일 + B파일 → 변경적용 DS)
+# ============================================================
+
+@app.post("/document/change-notification")
+async def document_change_notification(request: Request, file1: UploadFile = File(...), file2: UploadFile = File(...)):
+    """무선국 변경개설신고 자동 반영 — A파일(신고서) + B파일(DS) 업로드 → 변경된 DS 반환."""
+    await _verify_auth(request)
+
+    file1_bytes = await file1.read()
+    file2_bytes = await file2.read()
+
+    def _process():
+        import xlrd
+        from openpyxl import Workbook
+        from openpyxl.styles import PatternFill
+
+        # 1. 파일 식별 (A: 1시트+변경내역 헤더, B: 9시트)
+        def _identify(data):
+            try:
+                wb = xlrd.open_workbook(file_contents=data)
+                sheets = wb.sheet_names()
+                if len(sheets) >= 5:  # DS파일은 보통 9개 시트
+                    return 'B', wb
+                # 1-3개 시트이면 헤더로 확인 (Row 0~3 검사)
+                ws = wb.sheet_by_index(0)
+                for ri in range(min(4, ws.nrows)):
+                    if ws.ncols > 3:
+                        row_vals = [str(ws.cell_value(ri, ci)).strip() for ci in range(min(ws.ncols, 11))]
+                        if any('변경내역' in v or '변경후' in v for v in row_vals):
+                            return 'A', wb
+                # 시트 이름으로도 확인
+                if any('변경' in sn or '신고' in sn for sn in sheets):
+                    return 'A', wb
+                return 'B', wb  # fallback
+            except:
+                return None, None
+
+        type1, wb1 = _identify(file1_bytes)
+        type2, wb2 = _identify(file2_bytes)
+        logger.info(f"변경개설신고: file1={type1}(sheets={wb1.sheet_names() if wb1 else 'None'}), file2={type2}(sheets={wb2.sheet_names() if wb2 else 'None'})")
+
+        if type1 == type2:
+            raise ValueError("A파일(변경개설신고)과 B파일(DS파일)을 각각 하나씩 업로드해주세요.")
+
+        a_wb = wb1 if type1 == 'A' else wb2
+        b_wb = wb1 if type1 == 'B' else wb2
+        b_bytes = file1_bytes if type1 == 'B' else file2_bytes
+
+        # 2. A파일 파싱: 헤더 행 동적 탐색 후 데이터 추출
+        a_ws = a_wb.sheet_by_index(0)
+        changes = {}  # {허가번호: [{변경내역, 변경후}, ...]}
+        # 헤더 행 찾기 (변경내역/변경후 포함하는 행)
+        header_ri = 0
+        for ri in range(min(5, a_ws.nrows)):
+            row_vals = [str(a_ws.cell_value(ri, ci)).strip() for ci in range(min(a_ws.ncols, 11))]
+            if any('변경내역' in v for v in row_vals):
+                header_ri = ri
+                break
+        # 컬럼 인덱스 매핑
+        col_map = {}
+        for ci in range(min(a_ws.ncols, 11)):
+            h = str(a_ws.cell_value(header_ri, ci)).replace('\n', '').strip()
+            if '허가번호' in h: col_map['허가번호'] = ci
+            elif '변경내역' in h: col_map['변경내역'] = ci
+            elif '변경후' in h: col_map['변경후'] = ci
+        hn_ci = col_map.get('허가번호', 2)
+        chg_ci = col_map.get('변경내역', 3)
+        after_ci = col_map.get('변경후', 5)
+
+        for ri in range(header_ri + 1, a_ws.nrows):
+            허가번호 = str(a_ws.cell_value(ri, hn_ci) if a_ws.ncols > hn_ci else '').strip()
+            변경내역 = str(a_ws.cell_value(ri, chg_ci) if a_ws.ncols > chg_ci else '').strip()
+            변경후 = str(a_ws.cell_value(ri, after_ci) if a_ws.ncols > after_ci else '').strip()
+            if not 허가번호 or not 변경후:
+                continue
+            changes.setdefault(허가번호, []).append({
+                '변경내역': 변경내역,
+                '변경후': 변경후,
+            })
+
+        logger.info(f"변경개설신고: A파일 {len(changes)}건 허가번호 파싱, 샘플={list(changes.keys())[:3]}")
+        if not changes:
+            raise ValueError("A파일에 변경 데이터가 없습니다.")
+
+        # 3. 설치형태 코드 매핑
+        설치형태_MAP = {
+            '철탑(지면)': '1', '철탑': '1',
+            '강관주': '2',
+            '통신주': '3',
+            '원폴(건물)': '4', '원폴': '4',
+            '옥내, 터널, 지하, 차량': '6', '옥내': '6', '터널': '6', '지하': '6', '차량': '6',
+            '쌍통신주': '8',
+            '기설물': '9',
+            '옥내외 혼합형': '11', '옥내외혼합형': '11',
+            '간이폴 및 비기준 설치대': '12', '간이폴': '12', '간이폴, 분산폴 및 비기준 설치대': '12',
+            '한전주(KT통신주)': '13', '한전주': '13',
+            '철탑(건물)': '14',
+            '프레임': '15',
+            '복합형(원폴,분산프레임 등)': '21', '복합형': '21',
+            '모노폴': '25',
+        }
+
+        # 4. 변경후 값 파싱 헬퍼
+        def _parse_value(변경내역, 변경후):
+            """변경후(F열) 우선으로 값/대상 시트를 판별."""
+            v = 변경후.strip()
+            chg = 변경내역.strip()
+            v_norm = v.replace('\r\n', '\n').replace('\r', '\n').strip()
+            v_upper = v_norm.upper()
+
+            def _extract_after_colon(text):
+                return text.split(':', 1)[1].strip() if ':' in text else text.strip()
+
+            def _parse_install_type(text):
+                raw = _extract_after_colon(text)
+                code = 설치형태_MAP.get(raw, '')
+                if not code:
+                    for k, c in 설치형태_MAP.items():
+                        if k in raw or raw in k:
+                            code = c
+                            break
+                return {'sheet': '안테나', 'col': 28, 'value': code or raw, 'type': '설치형태'}
+
+            # F열에 설치형태가 직접 들어온 경우
+            if '설치형태' in v_norm:
+                return _parse_install_type(v_norm)
+
+            # F열에 형식검정번호가 직접 들어온 경우
+            if '형검' in v_norm or '형식검정' in v_norm:
+                return {'sheet': '장치', 'col': 11, 'value': _extract_after_colon(v_norm), 'type': '형식검정번호'}
+
+            # F열에 일련번호가 직접 들어온 경우
+            if '일련번호' in v_norm:
+                return {'sheet': '장치', 'col': 8, 'value': _extract_after_colon(v_norm), 'type': '일련번호'}
+
+            # F열 값 패턴 기반 판별 (문구가 "송수신장치 변경" 등으로 오는 케이스 대응)
+            if (
+                v_upper.startswith('MSIP-')
+                or v_upper.startswith('RRA-')
+                or v_upper.startswith('KCC-')
+                or '-CRI-' in v_upper
+                or '-CRM-' in v_upper
+            ):
+                return {'sheet': '장치', 'col': 11, 'value': v_norm, 'type': '형식검정번호'}
+
+            if any(tok in v_norm for tok in ('특별시', '광역시', '특별자치시', '특별자치도', '시 ', '군 ', '구 ', '읍 ', '면 ', '동 ', '리 ')):
+                return {'sheet': '설치장소', 'col': 6, 'value': v_norm, 'type': '설치장소'}
+
+            if any(k in v_norm or v_norm in k for k in 설치형태_MAP.keys()):
+                return _parse_install_type(v_norm)
+
+            # 영숫자(하이픈 포함) 위주면 일련번호로 간주
+            alnum = ''.join(ch for ch in v_norm if ch.isalnum())
+            if len(alnum) >= 6 and not any(ch in v_norm for ch in (' ', '\n', '특별시', '광역시', '시', '군', '구', '읍', '면', '동', '리')):
+                return {'sheet': '장치', 'col': 8, 'value': v_norm, 'type': '일련번호'}
+
+            # 최후 fallback: D열(변경내역) 기준
+            if '형식검정' in chg:
+                return {'sheet': '장치', 'col': 11, 'value': _extract_after_colon(v_norm), 'type': '형식검정번호'}
+            elif '일련번호' in chg:
+                return {'sheet': '장치', 'col': 8, 'value': _extract_after_colon(v_norm), 'type': '일련번호'}
+            elif '설치장소' in chg:
+                # 주소 그대로
+                return {'sheet': '설치장소', 'col': 6, 'value': v_norm, 'type': '설치장소'}
+            elif '설치형태' in chg:
+                return _parse_install_type(v_norm)
+
+            return None
+
+        # 5. 허가번호 하이픈 제거 매핑 (A↔B 매칭용)
+        changes_norm = {}
+        for hn, chg_list in changes.items():
+            norm = hn.replace('-', '')
+            changes_norm[norm] = chg_list
+        logger.info(f"변경개설신고: norm keys 샘플={list(changes_norm.keys())[:3]}")
+
+        # 6. B파일을 openpyxl로 복사 + 서식 적용
+        from openpyxl.styles import Font, Alignment, Border, Side
+        out_wb = Workbook()
+        out_wb.remove(out_wb.active)
+
+        yellow_fill = PatternFill(start_color='FFFFFF00', end_color='FFFFFF00', fill_type='solid')
+        _ds_font = Font(name='Arial', size=10)
+        _ds_align = Alignment(horizontal='center', vertical='center', wrap_text=True)
+        _ds_border = Border(
+            left=Side(style='thin'), right=Side(style='thin'),
+            top=Side(style='thin'), bottom=Side(style='thin'))
+
+        change_log = []
+        # 허가번호→변경내역 매핑 (일반사항 AU열 기입용)
+        au_entries = {}  # {norm_hn: 변경내역 text}
+
+        def _norm_hn(val):
+            """허가번호 정규화: float→int, 하이픈 제거."""
+            if isinstance(val, float):
+                return str(int(val))
+            return str(val).strip().replace('-', '')
+
+        def _line_count(val):
+            text = '' if val is None else str(val)
+            # 엑셀 줄바꿈(Alt+Enter)은 내부적으로 \r\n 또는 \n 모두 사용될 수 있음
+            text = text.replace('\r\n', '\n').replace('\r', '\n')
+            return max(1, text.count('\n') + 1)
+
+        from openpyxl.utils import get_column_letter
+
+        # Pass 1: 모든 시트 복사 + 대상 시트에서 값 변경
+        out_sheets = {}  # {시트명: openpyxl worksheet}
+        for si in range(len(b_wb.sheet_names())):
+            sn = b_wb.sheet_names()[si]
+            b_ws = b_wb.sheet_by_index(si)
+            o_ws = out_wb.create_sheet(title=sn[:31])
+            out_sheets[sn] = o_ws
+
+            for ci in range(1, max(b_ws.ncols + 1, 48)):
+                o_ws.column_dimensions[get_column_letter(ci)].width = 19.29
+            o_ws.sheet_format.defaultRowHeight = 12.75
+
+            for ri in range(b_ws.nrows):
+                max_lines = 1
+                for ci in range(b_ws.ncols):
+                    val = b_ws.cell_value(ri, ci)
+                    if b_ws.cell_type(ri, ci) == xlrd.XL_CELL_DATE:
+                        try:
+                            dt = xlrd.xldate_as_datetime(val, b_wb.datemode)
+                            val = dt.strftime('%Y-%m-%d')
+                        except:
+                            pass
+                    max_lines = max(max_lines, _line_count(val))
+                    cell = o_ws.cell(row=ri+1, column=ci+1, value=val)
+                    cell.font = _ds_font
+                    cell.alignment = _ds_align
+                    cell.border = _ds_border
+
+                o_ws.row_dimensions[ri + 1].height = 12.75 * max_lines
+
+                if ri == 0:
+                    continue
+
+                hn_norm = _norm_hn(b_ws.cell_value(ri, 0))
+                chg_list = changes_norm.get(hn_norm)
+                if not chg_list:
+                    continue
+
+                for chg in chg_list:
+                    parsed = _parse_value(chg['변경내역'], chg['변경후'])
+                    if not parsed:
+                        continue
+                    if parsed['sheet'] != sn:
+                        continue
+
+                    target_col = parsed['col']
+                    new_val = parsed['value']
+                    old_val = str(b_ws.cell_value(ri, target_col) if target_col < b_ws.ncols else '').strip()
+
+                    cell = o_ws.cell(row=ri+1, column=target_col+1)
+                    cell.value = new_val
+                    cell.fill = yellow_fill
+                    cell.font = _ds_font
+                    cell.alignment = _ds_align
+                    cell.border = _ds_border
+                    max_lines = max(max_lines, _line_count(new_val))
+                    o_ws.row_dimensions[ri + 1].height = 12.75 * max_lines
+
+                    # AU열 기입 대상 기록
+                    au_entries[hn_norm] = chg['변경내역']
+
+                    change_log.append({
+                        '허가번호': hn_norm,
+                        'sheet': sn,
+                        'type': parsed['type'],
+                        'old': old_val,
+                        'new': new_val,
+                    })
+
+        # Pass 2: "일반사항" 시트에 AU열(47번째 컬럼) 기입
+        일반_sn = None
+        for sn in b_wb.sheet_names():
+            if '일반사항' in sn or '일반' in sn:
+                일반_sn = sn
+                break
+        if 일반_sn and 일반_sn in out_sheets and au_entries:
+            o_ws = out_sheets[일반_sn]
+            b_ws = b_wb.sheet_by_name(일반_sn)
+            au_col = 47  # AU = 47번째 (1-based)
+            for ri in range(1, b_ws.nrows):
+                hn_norm = _norm_hn(b_ws.cell_value(ri, 0))
+                if hn_norm in au_entries:
+                    au_val = au_entries[hn_norm]
+                    au_cell = o_ws.cell(row=ri+1, column=au_col, value=au_val)
+                    au_cell.font = _ds_font
+                    au_cell.alignment = _ds_align
+                    au_cell.border = _ds_border
+                    au_cell.fill = yellow_fill
+                    # AU열 기입으로 줄 수가 늘어난 경우 행 높이 보정
+                    try:
+                        cur_h = o_ws.row_dimensions[ri + 1].height or 12.75
+                    except Exception:
+                        cur_h = 12.75
+                    new_h = 12.75 * _line_count(au_val)
+                    if new_h > cur_h:
+                        o_ws.row_dimensions[ri + 1].height = new_h
+            logger.info(f"변경개설신고: 일반사항 AU열 {len(au_entries)}건 기입")
+
+        # 6. 결과 바이트 반환
+        buf = io.BytesIO()
+        out_wb.save(buf)
+        out_wb.close()
+        buf.seek(0)
+        # 변경 유형 수집
+        types = list(set(c['type'] for c in change_log)) if change_log else []
+        return buf.getvalue(), len(change_log), len(changes), types
+
+    try:
+        data, change_count, target_count, change_types = await asyncio.to_thread(_process)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+    from urllib.parse import quote as _q
+    type_label = ','.join(change_types) if change_types else '변경'
+    filename = f"변경적용({type_label})_DS파일.xlsx"
+    return Response(
+        content=data,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{_q(filename)}",
+            "X-Change-Count": str(change_count),
+            "X-Target-Count": str(target_count),
+            "X-Change-Types": _q(','.join(change_types)) if change_types else '',
+        }
+    )
+
+
+# ============================================================
 # Community Board (공지사항/요청사항)
 # ============================================================
 
@@ -14614,7 +15208,7 @@ async def community_stats(request: Request):
                 "my": {"total": my_total, "접수": my_접수, "처리중": my_처리중, "완료": my_완료},
                 "all": {"total": all_total, "접수": all_접수, "처리중": all_처리중, "완료": all_완료},
                 "notices": notice_total,
-                "daily_visitors": len(_daily_visitors),
+                "daily_visitors": _count_daily_visitors(),
             }
         finally:
             conn.close()
@@ -15253,6 +15847,77 @@ async def inadequate_export_xlsx(
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f"attachment; filename*=UTF-8''{_q(filename)}"}
     )
+
+
+# ============================================================
+# Menu Usage Logging
+# ============================================================
+
+@app.post("/admin/menu-log")
+async def admin_menu_log(request: Request):
+    """메뉴 접속 로그 기록."""
+    empno = await _verify_auth(request)
+    body = await request.json()
+    menu_name = body.get("menu", "")
+    if not menu_name:
+        return {"ok": True}
+
+    # Get user name
+    user_info = await asyncio.to_thread(_get_user_info_for_community, empno)
+    now = datetime.now(timezone.utc).isoformat()
+
+    def _log():
+        conn = sqlite3.connect(_INSP_DB, timeout=30)
+        conn.execute(
+            "INSERT INTO menu_usage_log (user_id, user_name, menu_name, accessed_at) VALUES (?,?,?,?)",
+            (empno, user_info.get("name", empno), menu_name, now),
+        )
+        conn.commit()
+        conn.close()
+
+    await asyncio.to_thread(_log)
+    return {"ok": True}
+
+
+@app.get("/admin/menu-stats")
+async def admin_menu_stats(request: Request, days: int = Query(30)):
+    """메뉴 사용 통계 (관리자용)."""
+    empno = await _verify_auth(request)
+    role = await asyncio.to_thread(_get_user_role_sync, empno)
+    if role != "admin":
+        raise HTTPException(403, "관리자만 조회 가능")
+
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+
+    def _stats():
+        conn = sqlite3.connect(_INSP_DB, timeout=60)
+        conn.row_factory = sqlite3.Row
+        # 메뉴별 접속 횟수
+        menu_counts = conn.execute(
+            "SELECT menu_name, COUNT(*) as cnt FROM menu_usage_log "
+            "WHERE accessed_at >= ? GROUP BY menu_name ORDER BY cnt DESC",
+            (cutoff,),
+        ).fetchall()
+        # 사용자별 접속 횟수
+        user_counts = conn.execute(
+            "SELECT user_id, user_name, COUNT(*) as cnt FROM menu_usage_log "
+            "WHERE accessed_at >= ? GROUP BY user_id ORDER BY cnt DESC LIMIT 20",
+            (cutoff,),
+        ).fetchall()
+        # 일별 접속 추이
+        daily = conn.execute(
+            "SELECT DATE(accessed_at) as day, COUNT(*) as cnt FROM menu_usage_log "
+            "WHERE accessed_at >= ? GROUP BY DATE(accessed_at) ORDER BY day",
+            (cutoff,),
+        ).fetchall()
+        conn.close()
+        return {
+            "menu_counts": [dict(r) for r in menu_counts],
+            "user_counts": [dict(r) for r in user_counts],
+            "daily": [dict(r) for r in daily],
+        }
+
+    return await asyncio.to_thread(_stats)
 
 
 # ============================================================
