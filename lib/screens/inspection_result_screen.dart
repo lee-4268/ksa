@@ -52,7 +52,7 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
 
   List<Map<String, dynamic>> _photos = [];
   bool _photoLoading = false;
-  bool _reviewSaving = false;
+  String _pendingReview = '';
 
   @override
   void initState() {
@@ -73,6 +73,7 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
 
   void _applyData(Map<String, dynamic> d) {
     _data = d;
+    _pendingReview = (d['target'] as Map<String, dynamic>?)?['시기조정']?.toString() ?? '';
     final result = d['result'] as Map<String, dynamic>?;
     if (result != null) {
       _towerTypeCtrl.text = result['철탑형태'] ?? '';
@@ -115,14 +116,17 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
               '${now.day.toString().padLeft(2, '0')}';
         }
       }
-      await _svc.upsertResult({
-        'year'   : widget.year,
-        '허가번호': widget.licenseNo,
-        'status' : _status,
-        '철탑형태': _towerTypeCtrl.text,
-        '메모'   : _memoCtrl.text,
-        '검사일' : _inspDateCtrl.text,
-      });
+      await Future.wait([
+        _svc.upsertResult({
+          'year'   : widget.year,
+          '허가번호': widget.licenseNo,
+          'status' : _status,
+          '철탑형태': _towerTypeCtrl.text,
+          '메모'   : _memoCtrl.text,
+          '검사일' : _inspDateCtrl.text,
+        }),
+        _svc.updateTargetReview(widget.year, widget.licenseNo, _pendingReview),
+      ]);
       await dialog.complete(message: '저장 완료');
       await _loadData();
     } catch (e) {
@@ -591,83 +595,51 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
   static const _reviewColor   = Color(0xFFFF9800);
 
   Widget _buildReviewCard(Map<String, dynamic>? target) {
-    final licenseNo = target?['허가번호']?.toString() ?? widget.licenseNo;
-    final tongsi    = target?['통시']?.toString()    ?? '';
-    final erp       = target?['zpprac1']?.toString() ?? '';
-    final current   = target?['시기조정']?.toString() ?? '';
+    final tongsi = target?['통시']?.toString()    ?? '';
+    final erp    = target?['zpprac1']?.toString() ?? '';
 
     return _card(
       title: '수검 검토',
       icon: Icons.rate_review_outlined,
       iconColor: _reviewColor,
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        if (tongsi.isNotEmpty) _infoRow('통시', tongsi),
-        if (erp.isNotEmpty)    _infoRow('ERP활용구분', erp),
-        const SizedBox(height: 8),
+        _infoRow('통시',       tongsi.isNotEmpty ? tongsi : '-'),
+        _infoRow('ERP활용구분', erp.isNotEmpty   ? erp    : '-'),
+        const SizedBox(height: 12),
         const Text('검토 결과',
             style: TextStyle(fontSize: 13, color: Colors.black54)),
         const SizedBox(height: 8),
-        Wrap(
-          spacing: 6,
-          runSpacing: 6,
-          children: _reviewOptions.map((opt) {
-            final selected = current == opt;
-            return InkWell(
-              borderRadius: BorderRadius.circular(8),
-              onTap: _reviewSaving ? null : () => _updateReview(licenseNo, target, selected ? '' : opt),
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 150),
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        Row(children: _reviewOptions.map((opt) {
+          final color = opt.startsWith('검사제외') ? _primary : _reviewColor;
+          final selected = _pendingReview == opt;
+          return Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: GestureDetector(
+              onTap: () => setState(() =>
+                  _pendingReview = selected ? '' : opt),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                 decoration: BoxDecoration(
-                  color: selected ? _reviewColor.withValues(alpha: 0.12) : Colors.transparent,
-                  borderRadius: BorderRadius.circular(8),
+                  color: selected ? color : color.withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(20),
                   border: Border.all(
-                    color: selected ? _reviewColor : const Color(0xFFD1D5DB),
-                    width: selected ? 1.5 : 1.0,
+                    color: selected ? color : color.withValues(alpha: 0.3),
                   ),
                 ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    if (selected) ...[
-                      const Icon(Icons.check_circle, size: 13, color: _reviewColor),
-                      const SizedBox(width: 4),
-                    ],
-                    Text(
-                      opt,
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
-                        color: selected ? _reviewColor : const Color(0xFF374151),
-                      ),
-                    ),
-                  ],
+                child: Text(
+                  opt,
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: selected ? Colors.white : color,
+                    fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
+                  ),
                 ),
               ),
-            );
-          }).toList(),
-        ),
+            ),
+          );
+        }).toList()),
       ]),
     );
-  }
-
-  Future<void> _updateReview(String licenseNo, Map<String, dynamic>? target, String value) async {
-    setState(() => _reviewSaving = true);
-    try {
-      await _svc.updateTargetReview(widget.year, licenseNo, value);
-      if (!mounted) return;
-      setState(() {
-        if (target != null) target['시기조정'] = value;
-      });
-    } catch (_) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('저장 실패'), backgroundColor: Colors.red),
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _reviewSaving = false);
-    }
   }
 
   // ── 수검 일정 ───────────────────────────────────────────

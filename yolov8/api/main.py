@@ -1250,7 +1250,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "Accept", "X-Admin-Key", "X-Filename", "X-Refreshed-Token"],
     expose_headers=[
         "Content-Length",
@@ -12134,15 +12134,12 @@ async def inspection_detail(request: Request, year: int, 허가번호: str):
                 "SELECT eqp_ser_no, zpcname FROM cert WHERE zpwino=? AND zpcname!=''",
                 (허가번호,)
             ).fetchall()
-            # zpprac1: 통시(zpcode) 기준 매핑
-            tongsi = (target or {}).get('통시', '') or ''
-            prac1 = ''
-            if tongsi:
-                r2 = c.execute(
-                    "SELECT zpprac1 FROM cert WHERE TRIM(zpcode)=? LIMIT 1",
-                    (tongsi.strip(),)
-                ).fetchone()
-                if r2: prac1 = r2['zpprac1'] or ''
+            # zpprac1: zpwino(허가번호) 기준으로 직접 조회
+            r2 = c.execute(
+                "SELECT zpprac1 FROM cert WHERE zpwino=? AND zpprac1 != '' LIMIT 1",
+                (허가번호,)
+            ).fetchone()
+            prac1 = (r2['zpprac1'] if r2 else '') or ''
             c.close()
             return [{"eqp_ser_no": r["eqp_ser_no"], "zpcname": r["zpcname"]} for r in rows], prac1
         callname_list, zpprac1_val = await asyncio.to_thread(_read_zpcname)
