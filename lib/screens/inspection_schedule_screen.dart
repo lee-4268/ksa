@@ -101,6 +101,13 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
   List<String> _quarters = [];
   List<Map<String, dynamic>> _schedules = [];
 
+  // 진도율 현황
+  int _progressTotal = 0;
+  int _progressCompleted = 0;
+  double _progressPercent = 0.0;
+  List<Map<String, dynamic>> _progressByHdqt = [];
+  bool _progressLoading = false;
+
   // 미배정 현황
   int _unassignedTotal = 0;
   Map<String, dynamic> _unassignedByRegion = {};
@@ -202,12 +209,14 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
       _fetchSummary(),
       _fetchUnassigned(),
       _fetchScheduledNos(),
+      _fetchProgressByResult(),
     ]);
     if (!mounted) return;
-    final dataRes   = results[0] as Map<String, dynamic>?;
-    final summRes   = results[1] as Map<String, dynamic>?;
-    final unassRes  = results[2] as Map<String, dynamic>?;
+    final dataRes    = results[0] as Map<String, dynamic>?;
+    final summRes    = results[1] as Map<String, dynamic>?;
+    final unassRes   = results[2] as Map<String, dynamic>?;
     final schedResult = results[3] as ({Set<String> nos, Map<String, String> weekMap, List<Map<String, dynamic>> schedules})?;
+    final progRes    = results[4] as Map<String, dynamic>?;
     setState(() {
       _loading = false;
       if (dataRes != null) {
@@ -232,7 +241,19 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
         _scheduleWeekMap = schedResult.weekMap;
         _schedules = schedResult.schedules;
       }
+      if (progRes != null) {
+        _progressTotal = (progRes['total'] as num?)?.toInt() ?? 0;
+        _progressCompleted = (progRes['completed'] as num?)?.toInt() ?? 0;
+        _progressPercent = (progRes['percent'] as num?)?.toDouble() ?? 0.0;
+        _progressByHdqt = List<Map<String, dynamic>>.from(progRes['by_hdqt'] ?? []);
+      }
     });
+  }
+
+  Future<Map<String, dynamic>?> _fetchProgressByResult() async {
+    try {
+      return await _svc.getProgressByResult(_year);
+    } catch (_) { return null; }
   }
 
   Future<Map<String, dynamic>?> _fetchData() async {
@@ -349,6 +370,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     _aNationGroups = List.from(_pNationGroups);
     _aKcaResults = List.from(_pKcaResults);
     _page = 1;
+    _selectedLicenseNos.clear();
     _loadAll();
   }
 
@@ -648,6 +670,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
         dsService: dsService,
       ),
     );
+    if (mounted) setState(() => _selectedLicenseNos.clear());
   }
 
   Future<void> _showBulkUpsertDialog(List<Map<String, dynamic>> targetItems, String actionTitle) async {
@@ -1506,49 +1529,49 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
 
     if (_aHdqt.isNotEmpty) {
       addChip('본부', _aHdqt, () {
-        setState(() { _pHdqt = ''; _aHdqt = ''; _pTeam = ''; _aTeam = ''; _page = 1; });
+        setState(() { _pHdqt = ''; _aHdqt = ''; _pTeam = ''; _aTeam = ''; _page = 1; _selectedLicenseNos.clear(); });
         _loadAll();
       });
     }
     if (_aTeam.isNotEmpty) {
       addChip('팀', _aTeam, () {
-        setState(() { _pTeam = ''; _aTeam = ''; _page = 1; });
+        setState(() { _pTeam = ''; _aTeam = ''; _page = 1; _selectedLicenseNos.clear(); });
         _loadAll();
       });
     }
     if (_aQuarters.isNotEmpty) {
       addChip('분기', _aQuarters.join(', '), () {
-        setState(() { _pQuarters = []; _aQuarters = []; _page = 1; });
+        setState(() { _pQuarters = []; _aQuarters = []; _page = 1; _selectedLicenseNos.clear(); });
         _loadAll();
       });
     }
     if (_aNationGroups.isNotEmpty) {
       addChip('밴드', _aNationGroups.join(', '), () {
-        setState(() { _pNationGroups = []; _aNationGroups = []; _page = 1; });
+        setState(() { _pNationGroups = []; _aNationGroups = []; _page = 1; _selectedLicenseNos.clear(); });
         _loadAll();
       });
     }
     if (_aKcaResults.isNotEmpty) {
       addChip('검토여부', _aKcaResults.join(', '), () {
-        setState(() { _pKcaResults = []; _aKcaResults = []; _page = 1; });
+        setState(() { _pKcaResults = []; _aKcaResults = []; _page = 1; _selectedLicenseNos.clear(); });
         _loadAll();
       });
     }
     if (_aSearch.isNotEmpty) {
       addChip('검색', _aSearch, () {
-        setState(() { _pSearch = ''; _aSearch = ''; _searchCtrl.clear(); _page = 1; });
+        setState(() { _pSearch = ''; _aSearch = ''; _searchCtrl.clear(); _page = 1; _selectedLicenseNos.clear(); });
         _loadAll();
       });
     }
     if (_aScheduled.isNotEmpty) {
       addChip('일정등록', _aScheduled == 'Y' ? '등록됨' : '미등록', () {
-        _pScheduled = ''; _aScheduled = ''; _page = 1;
+        setState(() { _pScheduled = ''; _aScheduled = ''; _page = 1; _selectedLicenseNos.clear(); });
         _loadAll();
       });
     }
     if (_aSchedWeek.isNotEmpty) {
       addChip('수검일정', _aSchedWeek, () {
-        setState(() { _pSchedWeek = ''; _aSchedWeek = ''; _page = 1; });
+        setState(() { _pSchedWeek = ''; _aSchedWeek = ''; _page = 1; _selectedLicenseNos.clear(); });
         _loadAll();
       });
     }
@@ -1918,6 +1941,11 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
             _buildUnassignedBanner(),
             const SizedBox(height: 16),
           ],
+          // 진도율 현황 카드
+          if (_progressTotal > 0) ...[
+            _buildProgressSection(),
+            const SizedBox(height: 16),
+          ],
           // 수검일정별 현황 카드 (필터 적용)
           if (_schedules.isNotEmpty) ...[
             _buildScheduleStatusSection(),
@@ -1948,6 +1976,110 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     );
   }
 
+  // ── 진도율 현황 ──────────────────────────────────────────
+
+  Widget _buildProgressSection() {
+    final percent = _progressPercent;
+    final color = percent >= 80
+        ? const Color(0xFF43A047)
+        : percent >= 50
+            ? const Color(0xFFFF9800)
+            : const Color(0xFFE53935);
+
+    // 매트릭스 필터(본부/팀) 적용된 본부 목록만 표시
+    final filteredByHdqt = _progressByHdqt.where((item) {
+      if (_mHdqt.isNotEmpty && item['본부'] != _mHdqt) return false;
+      return true;
+    }).toList();
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFE5E7EB)),
+        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 8, offset: const Offset(0, 2))],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // 헤더
+          Row(children: [
+            const Icon(Icons.trending_up, size: 18, color: Color(0xFF374151)),
+            const SizedBox(width: 6),
+            const Text('진도율 현황', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: Color(0xFF374151))),
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+              decoration: BoxDecoration(
+                color: color.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(
+                '${percent.toStringAsFixed(1)}%',
+                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: color),
+              ),
+            ),
+            const Spacer(),
+            Text(
+              '$_progressCompleted건 / $_progressTotal건',
+              style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
+            ),
+          ]),
+          const SizedBox(height: 10),
+          // 전체 진도율 바
+          ClipRRect(
+            borderRadius: BorderRadius.circular(6),
+            child: LinearProgressIndicator(
+              value: percent / 100,
+              minHeight: 10,
+              backgroundColor: Colors.grey.shade100,
+              valueColor: AlwaysStoppedAnimation<Color>(color),
+            ),
+          ),
+          // 본부별 진도율
+          if (filteredByHdqt.isNotEmpty) ...[
+            const SizedBox(height: 14),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: filteredByHdqt.map((item) {
+                final hdqt = item['본부'] as String;
+                final pct = (item['percent'] as num).toDouble();
+                final total = item['total'] as int;
+                final completed = item['completed'] as int;
+                final c = pct >= 80
+                    ? const Color(0xFF43A047)
+                    : pct >= 50
+                        ? const Color(0xFFFF9800)
+                        : const Color(0xFFE53935);
+                return Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: c.withValues(alpha: 0.06),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: c.withValues(alpha: 0.25)),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(hdqt, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: c)),
+                      const SizedBox(height: 2),
+                      Text(
+                        '$completed/$total (${pct.toStringAsFixed(1)}%)',
+                        style: TextStyle(fontSize: 11, color: c),
+                      ),
+                    ],
+                  ),
+                );
+              }).toList(),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
   // ── 수검일정별 현황 (본부/팀별) ────────────────────────────
 
   /// 매트릭스 카드에서 건수 클릭 시 수검 대상 현황 탭으로 전환하며 필터 적용
@@ -1965,6 +2097,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
       final validTeam = team.isNotEmpty && team != '미지정' ? team : '';
       _pTeam = validTeam; _aTeam = validTeam;
       _page = 1;
+      _selectedLicenseNos.clear();
     });
     _tabCtrl.animateTo(1);
     _loadAll();

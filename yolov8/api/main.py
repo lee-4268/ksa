@@ -12332,6 +12332,61 @@ async def inspection_progress(request: Request, year: int):
     return {"items": items}
 
 
+@app.get("/inspection/progress-by-result")
+async def inspection_progress_by_result(request: Request, year: int):
+    """검사결과(합격/불합격/부적합) 기준 전체 및 본부별 진도율."""
+    await _verify_auth(request)
+    if not os.path.exists(_INSP_DB):
+        return {"total": 0, "completed": 0, "percent": 0.0, "by_hdqt": []}
+
+    DONE_VALUES = ('합격', '불합격', '부적합')
+
+    def _query():
+        c = sqlite3.connect(_INSP_DB, timeout=60); c.row_factory = sqlite3.Row
+        irr_sub = """
+            SELECT year, REPLACE(허가번호,'-','') AS 허가번호, MIN(합불여부) AS 합불여부
+            FROM inspection_results_raw
+            WHERE 합불여부 != ''
+            GROUP BY year, REPLACE(허가번호,'-','')
+        """
+        rows = c.execute(f"""
+            SELECT t.access담당,
+                   COUNT(*) AS total,
+                   SUM(CASE WHEN COALESCE(r.status, irr.합불여부) IN ('합격','불합격','부적합') THEN 1 ELSE 0 END) AS completed
+            FROM inspection_targets t
+            LEFT JOIN inspection_results r ON r.year = t.year AND r.허가번호 = t.허가번호
+            LEFT JOIN ({irr_sub}) irr ON irr.year = t.year AND irr.허가번호 = REPLACE(t.허가번호,'-','')
+            WHERE t.year = ?
+            GROUP BY t.access담당
+        """, (year,)).fetchall()
+        c.close()
+        return rows
+
+    rows = await asyncio.to_thread(_query)
+    by_hdqt = []
+    grand_total = 0
+    grand_completed = 0
+    for r in rows:
+        hdqt = r['access담당'] or '미배정'
+        total = r['total'] or 0
+        completed = r['completed'] or 0
+        grand_total += total
+        grand_completed += completed
+        by_hdqt.append({
+            "본부": hdqt,
+            "total": total,
+            "completed": completed,
+            "percent": round(completed / total * 100, 1) if total > 0 else 0.0,
+        })
+    by_hdqt.sort(key=lambda x: x['본부'])
+    return {
+        "total": grand_total,
+        "completed": grand_completed,
+        "percent": round(grand_completed / grand_total * 100, 1) if grand_total > 0 else 0.0,
+        "by_hdqt": by_hdqt,
+    }
+
+
 class InspectionReportReq(BaseModel):
     year: int
     허가번호_list: list = []   # 빈 리스트이면 필터 기반 전체 조회

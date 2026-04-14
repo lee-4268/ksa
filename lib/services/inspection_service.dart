@@ -337,6 +337,13 @@ class InspectionService {
     return List<Map<String, dynamic>>.from(body['items'] ?? []);
   }
 
+  Future<Map<String, dynamic>> getProgressByResult(int year) async {
+    final uri = Uri.parse('$_baseUrl/inspection/progress-by-result').replace(
+        queryParameters: {'year': '$year'});
+    final resp = await http.get(uri, headers: _headers).timeout(_apiTimeout);
+    return json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+  }
+
   Future<Map<String, dynamic>> geocodeTargets(int year) async {
     final resp = await http.post(
       Uri.parse('$_baseUrl/inspection/geocode-targets').replace(
