@@ -12951,6 +12951,7 @@ async def inspection_export_report(request: Request, req: InspectionReportReq):
 
         # ── 데이터 행 ────────────────────────────────────────
         _LINE_HEIGHT = 13.5  # 1줄 높이
+        max_tosi_line_len = 0
         for seq, t in enumerate(targets, 1):
             r = seq + 3
             hn = t['허가번호']
@@ -13056,6 +13057,11 @@ async def inspection_export_report(request: Request, req: InspectionReportReq):
                 tosi_code = zpcode_by_name.get(f"{hn_norm}|{_callname}", '')
             if not tosi_code:
                 tosi_code = zpcode_fallback.get(hn_norm, '')
+            if tosi_code:
+                for _line in str(tosi_code).split('\n'):
+                    _line_len = len(_line.strip())
+                    if _line_len > max_tosi_line_len:
+                        max_tosi_line_len = _line_len
             설치형태     = ant_list[0].get('공중선주설치형태명', '') if ant_list else ''
             공중선장치   = _join_all(deduped_ant, '장치번호')
             # 공중선형식: SECTOR만 괄호 안 값 추출, 나머지는 그대로
@@ -13116,8 +13122,8 @@ async def inspection_export_report(request: Request, req: InspectionReportReq):
                 if c_idx == 2:  # B열: 빨간 글씨 + 노란 배경 + 셀에 맞춤
                     _set(r, c_idx, val, font=_font_red, fill=_fill_yellow,
                          border=_thin_border, align=_al_shrink)
-                elif c_idx == 3:  # C열(tosi_code): 줄바꿈 표시(일련번호 행 순서와 정렬)
-                    _set(r, c_idx, val, font=_font_base,
+                elif c_idx == 3:  # C열(tosi_code): 10pt + 줄바꿈 표시
+                    _set(r, c_idx, val, font=_font_base10,
                          border=_thin_border, align=_al_center)
                 elif c_idx in (7, 20):  # G(특이사항), T(설치장소): 왼쪽 정렬
                     _set(r, c_idx, val, font=_font_base,
@@ -13128,6 +13134,10 @@ async def inspection_export_report(request: Request, req: InspectionReportReq):
                 else:
                     _set(r, c_idx, val, font=_font_base,
                          border=_thin_border, align=_al_center)
+
+        # C열(tosi_code) 너비 자동 조정: 기본 9.0 유지, 내용 길이에 따라 확장(최대 22)
+        if max_tosi_line_len > 0:
+            ws.column_dimensions['C'].width = max(9.0, min(22.0, max_tosi_line_len * 1.1 + 1.5))
 
         # Excel 자동 필터 설정 (3행 하위 헤더 기준, 샘플과 동일)
         last_row = len(targets) + 3
