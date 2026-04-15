@@ -83,13 +83,20 @@ class _ChangeNotificationScreenState extends State<ChangeNotificationScreen> {
         final bytes = await streamed.stream.toBytes();
         final changeCount = streamed.headers['x-change-count'] ?? '0';
         final targetCount = streamed.headers['x-target-count'] ?? '0';
-        final changeTypesRaw = streamed.headers['x-change-types'] ?? '';
-        final typeLabel = changeTypesRaw.isNotEmpty ? Uri.decodeComponent(changeTypesRaw) : '변경';
-        final fileName = '변경적용($typeLabel)_DS파일.xlsx';
+
+        // 파일명: Content-Disposition 헤더에서 추출
+        final disposition = streamed.headers['content-disposition'] ?? '';
+        String fileName;
+        final fnMatch = RegExp(r"filename\*=UTF-8''(.+)").firstMatch(disposition);
+        if (fnMatch != null) {
+          fileName = Uri.decodeComponent(fnMatch.group(1)!);
+        } else {
+          final fn2 = RegExp(r'filename="?([^"]+)"?').firstMatch(disposition);
+          fileName = fn2 != null ? fn2.group(1)! : '변경적용_DS파일.xls';
+        }
 
         // Auto download
-        final blob = html.Blob([bytes],
-            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        final blob = html.Blob([bytes], 'application/vnd.ms-excel');
         final url = html.Url.createObjectUrlFromBlob(blob);
         html.AnchorElement(href: url)
           ..setAttribute('download', fileName)
@@ -97,8 +104,7 @@ class _ChangeNotificationScreenState extends State<ChangeNotificationScreen> {
         html.Url.revokeObjectUrl(url);
 
         await dialog.complete(message: '변경 완료\n대상 $targetCount건, 적용 $changeCount건');
-        setState(() => _result =
-            '변경 대상: $targetCount건, 변경 적용: $changeCount건\n$fileName 다운로드 완료');
+        setState(() => _result = '변경 대상: $targetCount건, 변경 적용: $changeCount건\n$fileName 다운로드 완료');
       } else {
         final body = await streamed.stream.bytesToString();
         await dialog.error(message: '처리 실패');

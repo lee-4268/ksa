@@ -14472,8 +14472,6 @@ async def document_change_notification(request: Request, file1: UploadFile = Fil
 
     def _process():
         import xlrd
-        from openpyxl import Workbook
-        from openpyxl.styles import PatternFill
 
         # 1. 파일 식별 (A: 1시트+변경내역 헤더, B: 9시트)
         def _identify(data):
@@ -14635,173 +14633,173 @@ async def document_change_notification(request: Request, file1: UploadFile = Fil
             changes_norm[norm] = chg_list
         logger.info(f"변경개설신고: norm keys 샘플={list(changes_norm.keys())[:3]}")
 
-        # 6. B파일을 openpyxl로 복사 + 서식 적용
-        from openpyxl.styles import Font, Alignment, Border, Side
-        out_wb = Workbook()
-        out_wb.remove(out_wb.active)
+        # 6. B파일을 xlwt로 복사 + 서식 적용 (실제 xls 포맷)
+        import xlwt
 
-        yellow_fill = PatternFill(start_color='FFFFFF00', end_color='FFFFFF00', fill_type='solid')
-        _ds_font = Font(name='Arial', size=10)
-        _ds_align = Alignment(horizontal='center', vertical='center', wrap_text=True)
-        _ds_border = Border(
-            left=Side(style='thin'), right=Side(style='thin'),
-            top=Side(style='thin'), bottom=Side(style='thin'))
+        out_wb = xlwt.Workbook(encoding='utf-8')
+
+        # xlwt 스타일 생성
+        def _make_style(yellow=False):
+            style = xlwt.XFStyle()
+            fnt = xlwt.Font()
+            fnt.name = 'Arial'
+            fnt.height = 200  # 10pt
+            style.font = fnt
+            al = xlwt.Alignment()
+            al.horz = xlwt.Alignment.HORZ_CENTER
+            al.vert = xlwt.Alignment.VERT_CENTER
+            al.wrap = xlwt.Alignment.WRAP_AT_RIGHT
+            style.alignment = al
+            brd = xlwt.Borders()
+            brd.left = brd.right = brd.top = brd.bottom = xlwt.Borders.THIN
+            style.borders = brd
+            if yellow:
+                pat = xlwt.Pattern()
+                pat.pattern = xlwt.Pattern.SOLID_PATTERN
+                pat.pattern_fore_colour = 13  # yellow
+                style.pattern = pat
+            return style
+
+        _st = _make_style(yellow=False)
+        _st_y = _make_style(yellow=True)
 
         change_log = []
-        # 허가번호→변경내역 매핑 (일반사항 AU열 기입용)
         au_entries = {}  # {norm_hn: 변경내역 text}
 
         def _norm_hn(val):
-            """허가번호 정규화: float→int, 하이픈 제거."""
             if isinstance(val, float):
                 return str(int(val))
             return str(val).strip().replace('-', '')
 
         def _line_count(val):
             text = '' if val is None else str(val)
-            # 엑셀 줄바꿈(Alt+Enter)은 내부적으로 \r\n 또는 \n 모두 사용될 수 있음
             text = text.replace('\r\n', '\n').replace('\r', '\n')
             return max(1, text.count('\n') + 1)
 
-        from openpyxl.utils import get_column_letter
+        def _write(ws, r, c, val, style):
+            if val is None:
+                ws.write(r, c, '', style)
+            elif isinstance(val, float) and val == int(val):
+                ws.write(r, c, int(val), style)
+            else:
+                ws.write(r, c, val, style)
 
-        # Pass 1: 모든 시트 복사 + 대상 시트에서 값 변경
-        out_sheets = {}  # {시트명: openpyxl worksheet}
+        # 일반사항 시트명 사전 파악
+        일반_sn_pre = None
+        for _sn in b_wb.sheet_names():
+            if '일반사항' in _sn or '일반' in _sn:
+                일반_sn_pre = _sn
+                break
+
+        AU_0 = 46  # AU열 0-based 인덱스
+
+        # Pass 1: 모든 시트 복사 + 변경 적용
         for si in range(len(b_wb.sheet_names())):
             sn = b_wb.sheet_names()[si]
             b_ws = b_wb.sheet_by_index(si)
-            o_ws = out_wb.create_sheet(title=sn[:31])
-            out_sheets[sn] = o_ws
+            o_ws = out_wb.add_sheet(sn[:31])
+            is_일반 = (sn == 일반_sn_pre)
 
-            for ci in range(1, max(b_ws.ncols + 1, 48)):
-                o_ws.column_dimensions[get_column_letter(ci)].width = 19.29
-            o_ws.sheet_format.defaultRowHeight = 12.75
+            # 열 너비 (xlwt 단위 256 = 1문자, 19.29문자 ≈ 4938)
+            col_out_count = b_ws.ncols + (2 if is_일반 else 0)
+            for ci in range(max(col_out_count, 49 if is_일반 else b_ws.ncols)):
+                o_ws.col(ci).width = 4938
+
+            seen_hn = set()
+            out_ri = 0
 
             for ri in range(b_ws.nrows):
+                # 일반사항: 중복 허가번호 스킵
+                if is_일반 and ri > 0:
+                    hn_check = _norm_hn(b_ws.cell_value(ri, 0))
+                    if hn_check in seen_hn:
+                        continue
+                    seen_hn.add(hn_check)
+
+                # 이 행의 오버라이드 {0-based 출력열: (value, yellow)}
+                overrides = {}
+
+                if ri > 0:
+                    hn_norm = _norm_hn(b_ws.cell_value(ri, 0))
+                    chg_list = changes_norm.get(hn_norm)
+
+                    if chg_list:
+                        # 철거구분 공통
+                        _철거구분_col = {'장치': 24, '전파형식': 8, '주파수': 9}.get(sn)
+                        if _철거구분_col is not None:
+                            overrides[_철거구분_col] = ('N', False)
+
+                        for chg in chg_list:
+                            parsed = _parse_value(chg['변경내역'], chg['변경후'])
+                            if not parsed or parsed['sheet'] != sn:
+                                continue
+
+                            target_col = parsed['col']  # 0-based
+                            new_val = parsed['value']
+                            old_val = str(b_ws.cell_value(ri, target_col) if target_col < b_ws.ncols else '').strip()
+
+                            if parsed['type'] == '설치형태':
+                                j_val = str(b_ws.cell_value(ri, 9) if b_ws.ncols > 9 else '').strip()
+                                ab_0 = 27  # AB열 0-based
+                                if not j_val:
+                                    overrides[target_col] = ('', False)
+                                    overrides[ab_0] = ('', False)
+                                    continue
+                                ab_val = '1' if new_val in ('6', '11') else '2'
+                                overrides[ab_0] = (ab_val, False)
+                                _고도_기본값 = {
+                                    '3': '16', '4': '6', '6': '1', '8': '16',
+                                    '11': '2', '12': '3', '13': '16', '15': '2', '25': '2',
+                                }
+                                _고도_val = _고도_기본값.get(new_val)
+                                if _고도_val:
+                                    for _고도_0 in (14, 21, 29):  # O, V, AD 0-based
+                                        overrides[_고도_0] = (_고도_val, False)
+
+                            overrides[target_col] = (new_val, True)
+                            au_entries[hn_norm] = chg['변경내역']
+                            change_log.append({
+                                '허가번호': hn_norm, 'sheet': sn,
+                                'type': parsed['type'], 'old': old_val, 'new': new_val,
+                            })
+
+                    # 일반사항: AU열에 변경내역 기입
+                    if is_일반 and hn_norm in au_entries:
+                        overrides[AU_0] = (au_entries[hn_norm], True)
+
+                # 셀 쓰기 — 일반사항은 AU열(0-based=46) 이후 출력열을 +2 오프셋
                 max_lines = 1
+                out_ci = 0
                 for ci in range(b_ws.ncols):
                     val = b_ws.cell_value(ri, ci)
                     if b_ws.cell_type(ri, ci) == xlrd.XL_CELL_DATE:
                         try:
-                            dt = xlrd.xldate_as_datetime(val, b_wb.datemode)
-                            val = dt.strftime('%Y-%m-%d')
+                            val = xlrd.xldate_as_datetime(val, b_wb.datemode).strftime('%Y-%m-%d')
                         except:
                             pass
+                    if ci in overrides:
+                        val, yellow = overrides[ci]
+                    else:
+                        yellow = False
                     max_lines = max(max_lines, _line_count(val))
-                    cell = o_ws.cell(row=ri+1, column=ci+1, value=val)
-                    cell.font = _ds_font
-                    cell.alignment = _ds_align
-                    cell.border = _ds_border
+                    _write(o_ws, out_ri, out_ci, val, _st_y if yellow else _st)
+                    out_ci += 1
+                    # 일반사항: AU열 직후 빈 열 2개 삽입
+                    if is_일반 and ci == AU_0:
+                        _write(o_ws, out_ri, out_ci, '', _st)
+                        _write(o_ws, out_ri, out_ci + 1, '', _st)
+                        out_ci += 2
 
-                o_ws.row_dimensions[ri + 1].height = 12.75 * max_lines
+                # 행 높이 (xlwt: 1/20pt, 12.75pt → 255)
+                o_ws.row(out_ri).height_mismatch = True
+                o_ws.row(out_ri).height = int(255 * max_lines)
+                out_ri += 1
 
-                if ri == 0:
-                    continue
-
-                hn_norm = _norm_hn(b_ws.cell_value(ri, 0))
-                chg_list = changes_norm.get(hn_norm)
-                if not chg_list:
-                    continue
-
-                # 4가지 변경 공통: 철거구분 열을 'N'으로 강제 설정
-                _철거구분_col = {'장치': 24, '전파형식': 8, '주파수': 9}.get(sn)
-                if _철거구분_col is not None:
-                    _gc = o_ws.cell(row=ri+1, column=_철거구분_col+1, value='N')
-                    _gc.font = _ds_font
-                    _gc.alignment = _ds_align
-                    _gc.border = _ds_border
-
-                for chg in chg_list:
-                    parsed = _parse_value(chg['변경내역'], chg['변경후'])
-                    if not parsed:
-                        continue
-                    if parsed['sheet'] != sn:
-                        continue
-
-                    target_col = parsed['col']
-                    new_val = parsed['value']
-                    old_val = str(b_ws.cell_value(ri, target_col) if target_col < b_ws.ncols else '').strip()
-
-                    # 설치형태 변경: J열(기, col=9) 기준 AC/AB열 처리
-                    if parsed['type'] == '설치형태':
-                        j_val = str(b_ws.cell_value(ri, 9) if b_ws.ncols > 9 else '').strip()
-                        ab_col = 28   # AB열 (1-based)
-                        if not j_val:
-                            # J열 비어있으면 AC, AB 모두 비움
-                            o_ws.cell(row=ri+1, column=target_col+1).value = None
-                            o_ws.cell(row=ri+1, column=ab_col).value = None
-                            continue
-                        # J열 있으면 AC열 변경 후 AC값 기준으로 AB열 결정
-                        ab_val = '1' if new_val in ('6', '11') else '2'
-                        ab_cell = o_ws.cell(row=ri+1, column=ab_col)
-                        ab_cell.value = ab_val
-                        ab_cell.font = _ds_font
-                        ab_cell.alignment = _ds_align
-                        ab_cell.border = _ds_border
-
-                    cell = o_ws.cell(row=ri+1, column=target_col+1)
-                    cell.value = new_val
-                    cell.fill = yellow_fill
-                    cell.font = _ds_font
-                    cell.alignment = _ds_align
-                    cell.border = _ds_border
-                    max_lines = max(max_lines, _line_count(new_val))
-                    o_ws.row_dimensions[ri + 1].height = 12.75 * max_lines
-
-                    # AU열 기입 대상 기록
-                    au_entries[hn_norm] = chg['변경내역']
-
-                    change_log.append({
-                        '허가번호': hn_norm,
-                        'sheet': sn,
-                        'type': parsed['type'],
-                        'old': old_val,
-                        'new': new_val,
-                    })
-
-        # Pass 2: "일반사항" 시트에 AU열(47번째 컬럼) 기입
-        일반_sn = None
-        for sn in b_wb.sheet_names():
-            if '일반사항' in sn or '일반' in sn:
-                일반_sn = sn
-                break
-        if 일반_sn and 일반_sn in out_sheets:
-            o_ws = out_sheets[일반_sn]
-            au_col = 47  # AU = 47번째 (1-based)
-            if au_entries:
-                b_ws = b_wb.sheet_by_name(일반_sn)
-                for ri in range(1, b_ws.nrows):
-                    hn_norm = _norm_hn(b_ws.cell_value(ri, 0))
-                    if hn_norm in au_entries:
-                        au_val = au_entries[hn_norm]
-                        au_cell = o_ws.cell(row=ri+1, column=au_col, value=au_val)
-                        au_cell.font = _ds_font
-                        au_cell.alignment = _ds_align
-                        au_cell.border = _ds_border
-                        au_cell.fill = yellow_fill
-                        # AU열 기입으로 줄 수가 늘어난 경우 행 높이 보정
-                        try:
-                            cur_h = o_ws.row_dimensions[ri + 1].height or 12.75
-                        except Exception:
-                            cur_h = 12.75
-                        new_h = 12.75 * _line_count(au_val)
-                        if new_h > cur_h:
-                            o_ws.row_dimensions[ri + 1].height = new_h
-                logger.info(f"변경개설신고: 일반사항 AU열 {len(au_entries)}건 기입")
-            # AU열 바로 뒤(AV, 48번째)에 빈 열 2개 삽입 (변경내용↔공용화구분코드 사이)
-            o_ws.insert_cols(au_col + 1, 2)
-            for _new_ci in range(au_col + 1, au_col + 3):  # AV, AW (1-based)
-                for _ri in range(1, o_ws.max_row + 1):
-                    _c = o_ws.cell(row=_ri, column=_new_ci)
-                    _c.font = _ds_font
-                    _c.alignment = _ds_align
-                    _c.border = _ds_border
-            logger.info("변경개설신고: 일반사항 AU열 우측에 빈 열 2개 삽입")
+        logger.info(f"변경개설신고: {len(au_entries)}건 AU열 기입, {len(change_log)}건 변경 적용, 일반사항 빈열 2개 삽입")
 
         # 6. 결과 바이트 반환
         buf = io.BytesIO()
         out_wb.save(buf)
-        out_wb.close()
         buf.seek(0)
         # 변경 유형 수집
         types = list(set(c['type'] for c in change_log)) if change_log else []
