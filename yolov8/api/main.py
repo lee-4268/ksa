@@ -14534,7 +14534,7 @@ async def document_change_notification(request: Request, file1: UploadFile = Fil
 
         # 2. A파일 파싱: 헤더 행 동적 탐색 후 데이터 추출
         a_ws = a_wb.sheet_by_index(0)
-        changes = {}  # {허가번호: [{변경내역, 변경후}, ...]}
+        changes = {}  # {허가번호: [{변경내역, 변경전, 변경후, 장치번호}, ...]}
         # 헤더 행 찾기 (변경내역/변경후 포함하는 행)
         header_ri = 0
         for ri in range(min(5, a_ws.nrows)):
@@ -14542,26 +14542,39 @@ async def document_change_notification(request: Request, file1: UploadFile = Fil
             if any('변경내역' in v for v in row_vals):
                 header_ri = ri
                 break
-        # 컬럼 인덱스 매핑
+        # 컬럼 인덱스 매핑 (G열=장치번호 추가)
         col_map = {}
         for ci in range(min(a_ws.ncols, 11)):
             h = str(a_ws.cell_value(header_ri, ci)).replace('\n', '').strip()
             if '허가번호' in h: col_map['허가번호'] = ci
             elif '변경내역' in h: col_map['변경내역'] = ci
+            elif '변경전' in h: col_map['변경전'] = ci
             elif '변경후' in h: col_map['변경후'] = ci
+            elif '장치번호' in h: col_map['장치번호'] = ci
         hn_ci = col_map.get('허가번호', 2)
         chg_ci = col_map.get('변경내역', 3)
+        before_ci = col_map.get('변경전', 4)
         after_ci = col_map.get('변경후', 5)
+        device_ci = col_map.get('장치번호', 6)  # G열 (없으면 공란)
 
         for ri in range(header_ri + 1, a_ws.nrows):
             허가번호 = str(a_ws.cell_value(ri, hn_ci) if a_ws.ncols > hn_ci else '').strip()
             변경내역 = str(a_ws.cell_value(ri, chg_ci) if a_ws.ncols > chg_ci else '').strip()
+            변경전 = str(a_ws.cell_value(ri, before_ci) if a_ws.ncols > before_ci else '').strip()
             변경후 = str(a_ws.cell_value(ri, after_ci) if a_ws.ncols > after_ci else '').strip()
+            # 장치번호: 숫자로 올 수 있으므로 int 변환 후 문자열화
+            _dev_raw = a_ws.cell_value(ri, device_ci) if a_ws.ncols > device_ci else ''
+            if isinstance(_dev_raw, float) and _dev_raw == int(_dev_raw):
+                장치번호 = str(int(_dev_raw))
+            else:
+                장치번호 = str(_dev_raw).strip()
             if not 허가번호 or not 변경후:
                 continue
             changes.setdefault(허가번호, []).append({
                 '변경내역': 변경내역,
+                '변경전': 변경전,
                 '변경후': 변경후,
+                '장치번호': 장치번호,
             })
 
         logger.info(f"변경개설신고: A파일 {len(changes)}건 허가번호 파싱, 샘플={list(changes.keys())[:3]}")
@@ -14800,6 +14813,13 @@ async def document_change_notification(request: Request, file1: UploadFile = Fil
                             continue  # 이 행 출력 스킵
 
                     if chg_list:
+                        # B파일 현재 행의 장치번호(C열=2), 일련번호(I열=8), 형검번호(L열=11) 미리 추출
+                        b_device_no = str(b_ws.cell_value(ri, 2) if b_ws.ncols > 2 else '').strip()
+                        if b_device_no and isinstance(b_ws.cell_value(ri, 2), float):
+                            b_device_no = str(int(b_ws.cell_value(ri, 2)))
+                        b_serial = str(b_ws.cell_value(ri, 8) if b_ws.ncols > 8 else '').strip()
+                        b_형검 = str(b_ws.cell_value(ri, 11) if b_ws.ncols > 11 else '').strip()
+
                         for chg in chg_list:
                             parsed = _parse_value(chg['변경내역'], chg['변경후'])
                             if not parsed or parsed['sheet'] != sn:
@@ -14808,6 +14828,23 @@ async def document_change_notification(request: Request, file1: UploadFile = Fil
                             target_col = parsed['col']  # 0-based
                             new_val = parsed['value']
                             old_val = str(b_ws.cell_value(ri, target_col) if target_col < b_ws.ncols else '').strip()
+
+                            # ── 장치번호 기반 행 특정 (일련번호/형검번호) ──
+                            # A파일에 장치번호가 있으면 → 허가번호 + 장치번호로 행 특정
+                            # A파일에 장치번호 없고 일련번호 변경이면 → 변경전 값으로 행 특정
+                            a_device = chg.get('장치번호', '').strip()
+                            a_before = chg.get('변경전', '').strip()
+
+                            if parsed['type'] in ('일련번호', '형식검정번호'):
+                                if a_device:
+                                    # 장치번호가 명시된 경우: B파일 C열(장치번호)과 비교
+                                    if b_device_no != a_device:
+                                        continue  # 장치번호 불일치 → 이 행 건너뜀
+                                elif parsed['type'] == '일련번호' and a_before:
+                                    # 장치번호 없고 변경전 일련번호 있으면 → 일련번호로 행 특정
+                                    if b_serial != a_before:
+                                        continue  # 일련번호 불일치 → 이 행 건너뜀
+                                # 장치번호도 없고 변경전도 없으면 → 허가번호만으로 전체 적용 (기존 동작)
 
                             if parsed['type'] == '설치형태':
                                 j_val = str(b_ws.cell_value(ri, 9) if b_ws.ncols > 9 else '').strip()
