@@ -14740,28 +14740,32 @@ async def document_change_notification(request: Request, file1: UploadFile = Fil
             if '일반사항' in sn or '일반' in sn:
                 일반_sn = sn
                 break
-        if 일반_sn and 일반_sn in out_sheets and au_entries:
+        if 일반_sn and 일반_sn in out_sheets:
             o_ws = out_sheets[일반_sn]
-            b_ws = b_wb.sheet_by_name(일반_sn)
             au_col = 47  # AU = 47번째 (1-based)
-            for ri in range(1, b_ws.nrows):
-                hn_norm = _norm_hn(b_ws.cell_value(ri, 0))
-                if hn_norm in au_entries:
-                    au_val = au_entries[hn_norm]
-                    au_cell = o_ws.cell(row=ri+1, column=au_col, value=au_val)
-                    au_cell.font = _ds_font
-                    au_cell.alignment = _ds_align
-                    au_cell.border = _ds_border
-                    au_cell.fill = yellow_fill
-                    # AU열 기입으로 줄 수가 늘어난 경우 행 높이 보정
-                    try:
-                        cur_h = o_ws.row_dimensions[ri + 1].height or 12.75
-                    except Exception:
-                        cur_h = 12.75
-                    new_h = 12.75 * _line_count(au_val)
-                    if new_h > cur_h:
-                        o_ws.row_dimensions[ri + 1].height = new_h
-            logger.info(f"변경개설신고: 일반사항 AU열 {len(au_entries)}건 기입")
+            if au_entries:
+                b_ws = b_wb.sheet_by_name(일반_sn)
+                for ri in range(1, b_ws.nrows):
+                    hn_norm = _norm_hn(b_ws.cell_value(ri, 0))
+                    if hn_norm in au_entries:
+                        au_val = au_entries[hn_norm]
+                        au_cell = o_ws.cell(row=ri+1, column=au_col, value=au_val)
+                        au_cell.font = _ds_font
+                        au_cell.alignment = _ds_align
+                        au_cell.border = _ds_border
+                        au_cell.fill = yellow_fill
+                        # AU열 기입으로 줄 수가 늘어난 경우 행 높이 보정
+                        try:
+                            cur_h = o_ws.row_dimensions[ri + 1].height or 12.75
+                        except Exception:
+                            cur_h = 12.75
+                        new_h = 12.75 * _line_count(au_val)
+                        if new_h > cur_h:
+                            o_ws.row_dimensions[ri + 1].height = new_h
+                logger.info(f"변경개설신고: 일반사항 AU열 {len(au_entries)}건 기입")
+            # AU열 바로 뒤(AV, 48번째)에 빈 열 2개 삽입 (변경내용↔공용화구분코드 사이)
+            o_ws.insert_cols(au_col + 1, 2)
+            logger.info("변경개설신고: 일반사항 AU열 우측에 빈 열 2개 삽입")
 
         # 6. 결과 바이트 반환
         buf = io.BytesIO()
