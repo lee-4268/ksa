@@ -174,12 +174,14 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
       backgroundColor: const Color(0xFFFAFAFB),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(20),
-        child: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 1200),
-            child: _step == 0 ? _buildInputStep() : _buildResultStep(),
-          ),
-        ),
+        child: _step == 0
+            ? Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 1200),
+                  child: _buildInputStep(),
+                ),
+              )
+            : _buildResultStep(),
       ),
     );
   }

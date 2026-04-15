@@ -9814,28 +9814,29 @@ def _erp_ds_compare_sync(
     else:
         warnings.append("DS 데이터가 아직 빌드되지 않았습니다. DS 파일을 업로드해주세요.")
 
-    # 4-2) inspection_schedules에서 통시/공대 조회
+    # 4-2) inspection_targets + staging에서 통시/공대 조회
     insp_info = {}  # {허가번호(하이픈제거): {"통시": ..., "공대": ...}}
     try:
         conn_insp = sqlite3.connect(_INSP_DB, timeout=30)
         conn_insp.row_factory = sqlite3.Row
         all_nos = list({n for raw in zpwino_list for n in (raw, raw.replace('-', ''))})
         BATCH = 900
-        for i in range(0, len(all_nos), BATCH):
-            batch = all_nos[i:i + BATCH]
-            ph = ','.join('?' * len(batch))
-            for row in conn_insp.execute(
-                f"SELECT 허가번호, 통시, 공대 FROM inspection_schedules WHERE 허가번호 IN ({ph})", batch
-            ):
-                z = str(row['허가번호'] or '').replace('-', '').strip()
-                if z and z not in insp_info:
-                    insp_info[z] = {
-                        "통시": str(row['통시'] or '').strip(),
-                        "공대": str(row['공대'] or '').strip(),
-                    }
+        for tbl in ('inspection_targets', 'inspection_targets_staging'):
+            for i in range(0, len(all_nos), BATCH):
+                batch = all_nos[i:i + BATCH]
+                ph = ','.join('?' * len(batch))
+                for row in conn_insp.execute(
+                    f"SELECT 허가번호, 통시, 공대 FROM {tbl} WHERE 허가번호 IN ({ph})", batch
+                ):
+                    z = str(row['허가번호'] or '').replace('-', '').strip()
+                    if z and z not in insp_info:
+                        insp_info[z] = {
+                            "통시": str(row['통시'] or '').strip(),
+                            "공대": str(row['공대'] or '').strip(),
+                        }
         conn_insp.close()
     except Exception as e:
-        logger.warning(f"inspection_schedules 통시/공대 조회 실패: {e}")
+        logger.warning(f"inspection_targets 통시/공대 조회 실패: {e}")
 
     # 5) 비교 결과 생성
     items = []
@@ -14733,12 +14734,25 @@ async def document_change_notification(request: Request, file1: UploadFile = Fil
                     if parsed:
                         au_entries[hn_norm] = chg['변경내역']
 
+        # 설치장소 시트 사전 집계: 허가번호별 행 수 (4개 이상이면 04행 스킵)
+        설치장소_hn_count = {}  # {hn_norm: count}
+        for si in range(len(b_wb.sheet_names())):
+            sn = b_wb.sheet_names()[si]
+            if '설치장소' not in sn:
+                continue
+            b_ws = b_wb.sheet_by_index(si)
+            for ri in range(1, b_ws.nrows):
+                hn = _norm_hn(b_ws.cell_value(ri, 0))
+                설치장소_hn_count[hn] = 설치장소_hn_count.get(hn, 0) + 1
+
         # Pass 1: 모든 시트 복사 + 변경 적용
         for si in range(len(b_wb.sheet_names())):
             sn = b_wb.sheet_names()[si]
             b_ws = b_wb.sheet_by_index(si)
             o_ws = out_wb.add_sheet(sn[:31])
             is_일반 = (sn == 일반_sn_pre)
+            is_설치장소 = '설치장소' in sn
+            is_안테나 = '안테나' in sn
 
             # 열 너비 (xlwt 단위 256 = 1문자, 19.29문자 ≈ 4938)
             col_out_count = b_ws.ncols + (2 if is_일반 else 0)
@@ -14763,12 +14777,29 @@ async def document_change_notification(request: Request, file1: UploadFile = Fil
                     hn_norm = _norm_hn(b_ws.cell_value(ri, 0))
                     chg_list = changes_norm.get(hn_norm)
 
+                    # ── 공통 선제 적용 ──
+
+                    # [공통2] 장치/전파형식/주파수: 변경 대상 허가번호 행이면 철거구분 N
                     if chg_list:
-                        # 철거구분 공통
                         _철거구분_col = {'장치': 24, '전파형식': 8, '주파수': 9}.get(sn)
                         if _철거구분_col is not None:
                             overrides[_철거구분_col] = ('N', False)
 
+                    # [공통3] 안테나: AC열(설치형태, 0-based=28) 값 있고 AB열(0-based=27) 비어있으면 AB 채우기
+                    if is_안테나 and chg_list:
+                        ac_val = str(b_ws.cell_value(ri, 28) if b_ws.ncols > 28 else '').strip()
+                        ab_cur = str(b_ws.cell_value(ri, 27) if b_ws.ncols > 27 else '').strip()
+                        if ac_val and not ab_cur:
+                            ab_fill = '1' if ac_val in ('6', '11') else '2'
+                            overrides[27] = (ab_fill, False)
+
+                    # [공통4] 설치장소: 허가번호당 4행이면 D열(0-based=3)이 '04'인 행 스킵
+                    if is_설치장소 and 설치장소_hn_count.get(hn_norm, 0) >= 4:
+                        d_val = str(b_ws.cell_value(ri, 3) if b_ws.ncols > 3 else '').strip()
+                        if d_val == '04':
+                            continue  # 이 행 출력 스킵
+
+                    if chg_list:
                         for chg in chg_list:
                             parsed = _parse_value(chg['변경내역'], chg['변경후'])
                             if not parsed or parsed['sheet'] != sn:
