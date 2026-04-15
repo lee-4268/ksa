@@ -14703,6 +14703,14 @@ async def document_change_notification(request: Request, file1: UploadFile = Fil
                 if not chg_list:
                     continue
 
+                # 4가지 변경 공통: 철거구분 열을 'N'으로 강제 설정
+                _철거구분_col = {'장치': 24, '전파형식': 8, '주파수': 9}.get(sn)
+                if _철거구분_col is not None:
+                    _gc = o_ws.cell(row=ri+1, column=_철거구분_col+1, value='N')
+                    _gc.font = _ds_font
+                    _gc.alignment = _ds_align
+                    _gc.border = _ds_border
+
                 for chg in chg_list:
                     parsed = _parse_value(chg['변경내역'], chg['변경후'])
                     if not parsed:
@@ -14713,6 +14721,23 @@ async def document_change_notification(request: Request, file1: UploadFile = Fil
                     target_col = parsed['col']
                     new_val = parsed['value']
                     old_val = str(b_ws.cell_value(ri, target_col) if target_col < b_ws.ncols else '').strip()
+
+                    # 설치형태 변경: J열(기, col=9) 기준 AC/AB열 처리
+                    if parsed['type'] == '설치형태':
+                        j_val = str(b_ws.cell_value(ri, 9) if b_ws.ncols > 9 else '').strip()
+                        ab_col = 28   # AB열 (1-based)
+                        if not j_val:
+                            # J열 비어있으면 AC, AB 모두 비움
+                            o_ws.cell(row=ri+1, column=target_col+1).value = None
+                            o_ws.cell(row=ri+1, column=ab_col).value = None
+                            continue
+                        # J열 있으면 AC열 변경 후 AC값 기준으로 AB열 결정
+                        ab_val = '1' if new_val in ('6', '11') else '2'
+                        ab_cell = o_ws.cell(row=ri+1, column=ab_col)
+                        ab_cell.value = ab_val
+                        ab_cell.font = _ds_font
+                        ab_cell.alignment = _ds_align
+                        ab_cell.border = _ds_border
 
                     cell = o_ws.cell(row=ri+1, column=target_col+1)
                     cell.value = new_val
