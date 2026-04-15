@@ -14963,6 +14963,20 @@ def _init_community_db():
             except Exception:
                 pass
     conn.execute('PRAGMA foreign_keys = ON')
+    # notifications 테이블
+    conn.execute('''CREATE TABLE IF NOT EXISTS notifications (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_empno   TEXT NOT NULL,
+        type         TEXT NOT NULL,
+        title        TEXT NOT NULL,
+        body         TEXT NOT NULL,
+        related_type TEXT DEFAULT '',
+        related_id   INTEGER DEFAULT 0,
+        is_read      INTEGER DEFAULT 0,
+        created_at   TEXT NOT NULL
+    )''')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_notif_user ON notifications(user_empno, is_read)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_notif_created ON notifications(created_at)')
     conn.commit()
     conn.close()
 
@@ -15284,11 +15298,51 @@ async def create_notice(body: NoticeCreate, request: Request):
             )
             conn.commit()
             row = conn.execute("SELECT * FROM notices WHERE id = ?", (cur.lastrowid,)).fetchone()
-            return dict(row)
+            return dict(row), cur.lastrowid
         finally:
             conn.close()
 
-    result = await asyncio.to_thread(_do)
+    result, notice_id = await asyncio.to_thread(_do)
+
+    # 비동기로 알림 발송 (응답 블로킹 없음)
+    async def _send_notice_notifications():
+        try:
+            all_users = await asyncio.to_thread(_list_all_users_sync)
+            division = body.division  # '전체' 또는 특정 본부명
+            targets = [
+                u for u in all_users
+                if not u.get("is_dormant")
+                and u.get("empno") != empno
+                and (
+                    division == '전체'
+                    or division in (u.get("region") or '')
+                )
+            ]
+
+            def _bulk_insert():
+                conn2 = sqlite3.connect(_COMMUNITY_DB, timeout=30)
+                try:
+                    _now = datetime.now(timezone.utc).isoformat()
+                    notif_title = f'[{"전체" if division == "전체" else division}] 새 공지사항'
+                    conn2.executemany(
+                        "INSERT INTO notifications (user_empno, type, title, body, related_type, related_id, created_at) "
+                        "VALUES (?, 'notice', ?, ?, 'notice', ?, ?)",
+                        [
+                            (u["empno"], notif_title, body.title[:60], notice_id, _now)
+                            for u in targets
+                        ],
+                    )
+                    conn2.commit()
+                finally:
+                    conn2.close()
+
+            if targets:
+                await asyncio.to_thread(_bulk_insert)
+        except Exception as e:
+            logger.warning(f"공지 알림 발송 실패: {e}")
+
+    asyncio.create_task(_send_notice_notifications())
+
     return {"success": True, "notice": result}
 
 
@@ -15564,13 +15618,24 @@ async def update_request_status(req_id: int, body: RequestStatusUpdate, request:
         conn = sqlite3.connect(_COMMUNITY_DB, timeout=30)
         conn.row_factory = sqlite3.Row
         try:
-            row = conn.execute("SELECT id FROM requests WHERE id = ?", (req_id,)).fetchone()
+            row = conn.execute("SELECT id, author_empno, title FROM requests WHERE id = ?", (req_id,)).fetchone()
             if not row:
                 raise HTTPException(404, "요청사항을 찾을 수 없습니다")
             conn.execute(
                 "UPDATE requests SET status = ?, updated_at = ? WHERE id = ?",
                 (body.status, now, req_id),
             )
+            # 알림: 작성자에게 상태 변경 통보
+            req_author = row["author_empno"]
+            if req_author and req_author != empno:
+                label_map = {'처리중': '처리 중으로 변경되었습니다', '완료': '처리 완료되었습니다', '접수': '접수 상태로 변경되었습니다'}
+                label = label_map.get(body.status, f'{body.status} 상태로 변경되었습니다')
+                _insert_notification(
+                    conn, req_author, 'status',
+                    '요청사항 상태가 변경되었습니다',
+                    f'"{row["title"]}" 이(가) {label}',
+                    'request', req_id,
+                )
             conn.commit()
             updated = conn.execute("SELECT * FROM requests WHERE id = ?", (req_id,)).fetchone()
             return dict(updated)
@@ -15620,7 +15685,7 @@ async def create_comment(req_id: int, body: CommentCreate, request: Request):
         conn.row_factory = sqlite3.Row
         try:
             # 요청사항 존재 확인
-            req_row = conn.execute("SELECT id FROM requests WHERE id = ?", (req_id,)).fetchone()
+            req_row = conn.execute("SELECT id, author_empno, title FROM requests WHERE id = ?", (req_id,)).fetchone()
             if not req_row:
                 raise HTTPException(404, "요청사항을 찾을 수 없습니다")
             cur = conn.execute(
@@ -15628,6 +15693,16 @@ async def create_comment(req_id: int, body: CommentCreate, request: Request):
                 "VALUES (?, ?, ?, ?, ?, ?)",
                 (req_id, body.content, empno, user_info["name"], user_info["org"], now),
             )
+            # 알림: 자기 글에 자기가 댓글 달면 알림 없음
+            req_author = req_row["author_empno"]
+            if req_author and req_author != empno:
+                preview = body.content[:40] + ('...' if len(body.content) > 40 else '')
+                _insert_notification(
+                    conn, req_author, 'comment',
+                    '내 요청에 댓글이 달렸습니다',
+                    f'"{req_row["title"]}" — {preview}',
+                    'request', req_id,
+                )
             conn.commit()
             row = conn.execute("SELECT * FROM comments WHERE id = ?", (cur.lastrowid,)).fetchone()
             d = dict(row)
@@ -15638,6 +15713,77 @@ async def create_comment(req_id: int, body: CommentCreate, request: Request):
 
     comment = await asyncio.to_thread(_do)
     return {"success": True, "comment": comment}
+
+
+# ── 알림 (Notifications) ─────────────────────────────────────
+
+def _insert_notification(conn, user_empno: str, ntype: str, title: str, body: str,
+                          related_type: str = '', related_id: int = 0):
+    """알림 1건 INSERT (이미 열린 connection 사용)."""
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat()
+    conn.execute(
+        "INSERT INTO notifications (user_empno, type, title, body, related_type, related_id, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (user_empno, ntype, title, body, related_type, related_id, now),
+    )
+
+
+@app.get("/notifications")
+async def get_notifications(request: Request):
+    empno = await _verify_auth(request)
+
+    def _do():
+        conn = sqlite3.connect(_COMMUNITY_DB, timeout=30)
+        conn.row_factory = sqlite3.Row
+        try:
+            rows = conn.execute(
+                "SELECT * FROM notifications WHERE user_empno = ? "
+                "ORDER BY is_read ASC, created_at DESC LIMIT 50",
+                (empno,),
+            ).fetchall()
+            items = [dict(r) for r in rows]
+            unread = sum(1 for r in items if r["is_read"] == 0)
+            return {"unread_count": unread, "items": items}
+        finally:
+            conn.close()
+
+    return await asyncio.to_thread(_do)
+
+
+@app.post("/notifications/read-all")
+async def read_all_notifications(request: Request):
+    empno = await _verify_auth(request)
+
+    def _do():
+        conn = sqlite3.connect(_COMMUNITY_DB, timeout=30)
+        try:
+            conn.execute("UPDATE notifications SET is_read = 1 WHERE user_empno = ?", (empno,))
+            conn.commit()
+        finally:
+            conn.close()
+
+    await asyncio.to_thread(_do)
+    return {"success": True}
+
+
+@app.post("/notifications/{notif_id}/read")
+async def read_notification(notif_id: int, request: Request):
+    empno = await _verify_auth(request)
+
+    def _do():
+        conn = sqlite3.connect(_COMMUNITY_DB, timeout=30)
+        try:
+            conn.execute(
+                "UPDATE notifications SET is_read = 1 WHERE id = ? AND user_empno = ?",
+                (notif_id, empno),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    await asyncio.to_thread(_do)
+    return {"success": True}
 
 
 @app.delete("/community/comments/{comment_id}")

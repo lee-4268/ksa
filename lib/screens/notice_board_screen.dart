@@ -15,7 +15,8 @@ import '../widgets/rich_content_viewer.dart';
 /// 공지사항 화면 — 목록 / 상세 / 작성·수정 3가지 뷰를 상태로 전환
 class NoticeBoardScreen extends StatefulWidget {
   final bool showHeader;
-  const NoticeBoardScreen({super.key, this.showHeader = true});
+  final int? openNoticeId;
+  const NoticeBoardScreen({super.key, this.showHeader = true, this.openNoticeId});
 
   @override
   State<NoticeBoardScreen> createState() => _NoticeBoardScreenState();
@@ -68,7 +69,19 @@ class _NoticeBoardScreenState extends State<NoticeBoardScreen> {
     if (!_initialized) {
       _initialized = true;
       _svc.setAuthToken(context.read<AuthService>().authToken);
-      _fetchList();
+      _fetchList().then((_) {
+        if (widget.openNoticeId != null && mounted) {
+          _openDetail(widget.openNoticeId!);
+        }
+      });
+    }
+  }
+
+  @override
+  void didUpdateWidget(NoticeBoardScreen old) {
+    super.didUpdateWidget(old);
+    if (widget.openNoticeId != null && widget.openNoticeId != old.openNoticeId) {
+      _openDetail(widget.openNoticeId!);
     }
   }
 

@@ -12,6 +12,7 @@ import 'services/audit_service.dart';
 import 'services/team_context_service.dart';
 import 'services/admin_service.dart';
 import 'services/division_data_service.dart';
+import 'services/notification_service.dart';
 import 'services/photo_storage_service.dart';
 
 // 모바일용 조건부 import
@@ -53,6 +54,7 @@ class MyApp extends StatelessWidget {
           update: (_, auditService, adminService) =>
               adminService ?? AdminService(auditService),
         ),
+        ChangeNotifierProvider(create: (_) => NotificationService()),
         ChangeNotifierProvider(
           create: (_) => StationProvider(storageService),
         ),
@@ -152,6 +154,12 @@ class _AuthWrapperState extends State<AuthWrapper> {
     context.read<CloudDataService>().setAuthToken(token);
     context.read<TeamContextService>().setAuthToken(token);
     PhotoStorageService.setAuthToken(token);
+    final notifSvc = context.read<NotificationService>();
+    if (token != null) {
+      notifSvc.start(token);
+    } else {
+      notifSvc.stop();
+    }
   }
 
   @override

@@ -11,7 +11,8 @@ import '../widgets/progress_dialog.dart';
 /// 요청사항 게시판 화면
 class RequestBoardScreen extends StatefulWidget {
   final bool showHeader;
-  const RequestBoardScreen({super.key, this.showHeader = true});
+  final int? openRequestId;
+  const RequestBoardScreen({super.key, this.showHeader = true, this.openRequestId});
 
   @override
   State<RequestBoardScreen> createState() => _RequestBoardScreenState();
@@ -59,7 +60,19 @@ class _RequestBoardScreenState extends State<RequestBoardScreen> {
   void initState() {
     super.initState();
     _svc.setAuthToken(context.read<AuthService>().authToken);
-    _fetchList();
+    _fetchList().then((_) {
+      if (widget.openRequestId != null && mounted) {
+        _openDetail(widget.openRequestId!);
+      }
+    });
+  }
+
+  @override
+  void didUpdateWidget(RequestBoardScreen old) {
+    super.didUpdateWidget(old);
+    if (widget.openRequestId != null && widget.openRequestId != old.openRequestId) {
+      _openDetail(widget.openRequestId!);
+    }
   }
 
   @override

@@ -19,6 +19,7 @@ import 'inspection_my_list_screen.dart';
 import 'inspection_results_screen.dart';
 import 'community_screen.dart';
 import '../services/community_service.dart';
+import '../services/notification_service.dart';
 
 /// 앱 셸 — 사이드바 상시 표시 + 오른쪽 콘텐츠 전환
 class HomeScreen extends StatefulWidget {
@@ -118,7 +119,7 @@ class _HomeScreenState extends State<HomeScreen> {
       case '전산비교': return const ErpDsCompareScreen();
       case '부적합 관리': return const InadequateManagementScreen();
       case '변경개설신고': return const ChangeNotificationScreen();
-      case '커뮤니티': return const CommunityScreen();
+      case '커뮤니티': return CommunityScreen();
       case '관리자': return const AdminPanelScreen();
       default: return _HomeContent(onNavigate: (i) { setState(() => _selectedIndex = i); _logMenuAccess(items[i].title); }, menuItems: items);
     }
@@ -582,7 +583,50 @@ class _HomeScreenState extends State<HomeScreen> {
         Icon(Icons.timer_outlined, size: 14, color: isWarning ? Colors.orange : Colors.grey.shade400),
         const SizedBox(width: 4),
         Text(timeText, style: TextStyle(fontSize: 12, color: isWarning ? Colors.orange : _textSecondary)),
-        const SizedBox(width: 12),
+        const SizedBox(width: 8),
+        // 벨 아이콘 + 배지
+        Consumer<NotificationService>(
+          builder: (context, notifSvc, _) {
+            final unread = notifSvc.unreadCount;
+            return Stack(
+              clipBehavior: Clip.none,
+              children: [
+                IconButton(
+                  icon: Icon(
+                    unread > 0 ? Icons.notifications_rounded : Icons.notifications_none_rounded,
+                    size: 22,
+                    color: unread > 0 ? _accent : Colors.grey.shade500,
+                  ),
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                  tooltip: '알림',
+                  onPressed: () => _showNotificationPanel(context, notifSvc),
+                ),
+                if (unread > 0)
+                  Positioned(
+                    right: 2,
+                    top: 2,
+                    child: IgnorePointer(
+                      child: Container(
+                        width: 16,
+                        height: 16,
+                        decoration: const BoxDecoration(
+                          color: _accent,
+                          shape: BoxShape.circle,
+                        ),
+                        alignment: Alignment.center,
+                        child: Text(
+                          unread > 9 ? '9+' : '$unread',
+                          style: const TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.w700),
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            );
+          },
+        ),
+        const SizedBox(width: 4),
         CircleAvatar(
           radius: 14,
           backgroundColor: _accent.withValues(alpha: 0.1),
@@ -593,6 +637,31 @@ class _HomeScreenState extends State<HomeScreen> {
         Text(name, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: _textPrimary)),
       ],
     );
+  }
+
+  void _showNotificationPanel(BuildContext context, NotificationService notifSvc) {
+    showDialog(
+      context: context,
+      barrierColor: Colors.transparent,
+      builder: (ctx) => _NotificationPanel(
+        notifSvc: notifSvc,
+        onNavigate: (relatedType, relatedId) {
+          Navigator.of(ctx).pop();
+          _navigateToCommunity(relatedType, relatedId);
+        },
+      ),
+    );
+  }
+
+  void _navigateToCommunity(String relatedType, int relatedId) {
+    final items = _buildMenuItems(context.read<AuthService>());
+    final idx = items.indexWhere((m) => m.title == '커뮤니티');
+    if (idx < 0) return;
+    setState(() => _selectedIndex = idx);
+    // 딥링크: CommunityScreen에 타겟 전달
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      CommunityScreen.navigateTo(context, relatedType: relatedType, relatedId: relatedId);
+    });
   }
 
   // ── 로그아웃 ──
@@ -1120,6 +1189,203 @@ class _HomeContentState extends State<_HomeContent> {
               ],
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+// ── 알림 패널 다이얼로그 ──────────────────────────────────────
+
+class _NotificationPanel extends StatelessWidget {
+  final NotificationService notifSvc;
+  final void Function(String relatedType, int relatedId) onNavigate;
+
+  const _NotificationPanel({required this.notifSvc, required this.onNavigate});
+
+  static const _accent = Color(0xFFE53935);
+  static const _border = Color(0xFFE5E7EB);
+  static const _textPrimary = Color(0xFF111827);
+
+  @override
+  Widget build(BuildContext context) {
+    return Align(
+      alignment: Alignment.topRight,
+      child: Padding(
+        padding: const EdgeInsets.only(top: 56, right: 16),
+        child: Material(
+          elevation: 12,
+          borderRadius: BorderRadius.circular(14),
+          color: Colors.white,
+          child: SizedBox(
+            width: 360,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // 헤더
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.notifications_rounded, size: 18, color: _accent),
+                      const SizedBox(width: 8),
+                      const Text('알림',
+                          style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: _textPrimary)),
+                      const Spacer(),
+                      if (notifSvc.unreadCount > 0)
+                        TextButton(
+                          onPressed: notifSvc.readAll,
+                          style: TextButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            minimumSize: Size.zero,
+                          ),
+                          child: const Text('전체 읽음',
+                              style: TextStyle(fontSize: 12, color: _accent)),
+                        ),
+                    ],
+                  ),
+                ),
+                const Divider(height: 1, color: _border),
+                // 목록
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxHeight: 400),
+                  child: notifSvc.items.isEmpty
+                      ? const Padding(
+                          padding: EdgeInsets.symmetric(vertical: 40),
+                          child: Column(
+                            children: [
+                              Icon(Icons.notifications_off_outlined, size: 36, color: Color(0xFFD1D5DB)),
+                              SizedBox(height: 8),
+                              Text('새 알림이 없습니다',
+                                  style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
+                            ],
+                          ),
+                        )
+                      : ListView.separated(
+                          shrinkWrap: true,
+                          itemCount: notifSvc.items.length,
+                          separatorBuilder: (_, __) => const Divider(height: 1, color: _border),
+                          itemBuilder: (ctx, i) {
+                            final item = notifSvc.items[i];
+                            return _NotificationTile(
+                              item: item,
+                              onTap: () {
+                                notifSvc.readOne(item.id);
+                                if (item.relatedId > 0 && item.relatedType.isNotEmpty) {
+                                  onNavigate(item.relatedType, item.relatedId);
+                                } else {
+                                  Navigator.of(ctx).pop();
+                                }
+                              },
+                            );
+                          },
+                        ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _NotificationTile extends StatelessWidget {
+  final NotificationItem item;
+  final VoidCallback onTap;
+
+  const _NotificationTile({required this.item, required this.onTap});
+
+  static const _accent = Color(0xFFE53935);
+  static const _textPrimary = Color(0xFF111827);
+  static const _textSecondary = Color(0xFF6B7280);
+
+  IconData get _icon {
+    switch (item.type) {
+      case 'comment': return Icons.chat_bubble_outline_rounded;
+      case 'status': return Icons.check_circle_outline_rounded;
+      case 'notice': return Icons.campaign_outlined;
+      default: return Icons.notifications_none_rounded;
+    }
+  }
+
+  Color get _iconColor {
+    switch (item.type) {
+      case 'comment': return const Color(0xFF3B82F6);
+      case 'status': return const Color(0xFF10B981);
+      case 'notice': return _accent;
+      default: return const Color(0xFF6B7280);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      child: Container(
+        color: item.isRead ? Colors.white : const Color(0xFFFFF5F5),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // 아이콘
+            Container(
+              width: 36,
+              height: 36,
+              decoration: BoxDecoration(
+                color: _iconColor.withValues(alpha: 0.1),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(_icon, size: 18, color: _iconColor),
+            ),
+            const SizedBox(width: 12),
+            // 내용
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          item.title,
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: item.isRead ? FontWeight.w500 : FontWeight.w700,
+                            color: _textPrimary,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      if (!item.isRead)
+                        Container(
+                          width: 7,
+                          height: 7,
+                          margin: const EdgeInsets.only(left: 6, top: 2),
+                          decoration: const BoxDecoration(
+                            color: _accent,
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    item.body,
+                    style: const TextStyle(fontSize: 12, color: _textSecondary, height: 1.4),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    NotificationService.relativeTime(item.createdAt),
+                    style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF)),
+                  ),
+                ],
+              ),
+            ),
+          ],
         ),
       ),
     );
