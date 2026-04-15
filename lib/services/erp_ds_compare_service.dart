@@ -107,6 +107,8 @@ class CompareItem {
   final String dsSerial;
   final String towerMatch;
   final String serialMatch;
+  final String tongsi;
+  final String gongdae;
 
   CompareItem({
     required this.zpwino,
@@ -119,6 +121,8 @@ class CompareItem {
     required this.dsSerial,
     required this.towerMatch,
     required this.serialMatch,
+    required this.tongsi,
+    required this.gongdae,
   });
 
   factory CompareItem.fromJson(Map<String, dynamic> json) {
@@ -133,6 +137,8 @@ class CompareItem {
       dsSerial: json['ds_serial'] ?? '',
       towerMatch: json['tower_match'] ?? '',
       serialMatch: json['serial_match'] ?? '',
+      tongsi: json['통시'] ?? '',
+      gongdae: json['공대'] ?? '',
     );
   }
 }

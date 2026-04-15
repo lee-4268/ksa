@@ -710,6 +710,8 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
                   DataColumn(label: Text('허가번호', style: _headerStyle)),
                   DataColumn(label: Text('호출명칭', style: _headerStyle)),
                   DataColumn(label: Text('본부', style: _headerStyle)),
+                  DataColumn(label: Text('통시', style: _headerStyle)),
+                  DataColumn(label: Text('공대', style: _headerStyle)),
                   DataColumn(label: Text('ERP 설치대', style: _headerStyle)),
                   DataColumn(label: Text('DS 설치대', style: _headerStyle)),
                   DataColumn(label: Text('설치대 비교', style: _headerStyle)),
@@ -755,6 +757,8 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
                             style: _cellStyle,
                             overflow: TextOverflow.ellipsis))),
                     DataCell(Text(item.areaHdofcNm, style: _cellStyle)),
+                    DataCell(Text(item.tongsi, style: _cellStyle)),
+                    DataCell(Text(item.gongdae, style: _cellStyle)),
                     DataCell(SizedBox(
                         width: 100,
                         child: Text(item.erpZpirty3,
@@ -799,7 +803,7 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
 
       // 헤더
       final headers = [
-        '입력값', '허가번호', '호출명칭', '본부',
+        '입력값', '허가번호', '호출명칭', '본부', '통시', '공대',
         'ERP 설치대', 'DS 설치대', '설치대 비교',
         'ERP 일련번호', 'DS 일련번호', '일련번호 비교',
       ];
@@ -822,6 +826,7 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
 
         final values = [
           inputVal, item.zpwino, item.zpwina, item.areaHdofcNm,
+          item.tongsi, item.gongdae,
           item.erpZpirty3, item.dsTowerType, item.towerMatch,
           item.erpSerial, item.dsSerial, item.serialMatch,
         ];

@@ -9814,6 +9814,29 @@ def _erp_ds_compare_sync(
     else:
         warnings.append("DS 데이터가 아직 빌드되지 않았습니다. DS 파일을 업로드해주세요.")
 
+    # 4-2) inspection_schedules에서 통시/공대 조회
+    insp_info = {}  # {허가번호(하이픈제거): {"통시": ..., "공대": ...}}
+    try:
+        conn_insp = sqlite3.connect(_INSP_DB, timeout=30)
+        conn_insp.row_factory = sqlite3.Row
+        all_nos = list({n for raw in zpwino_list for n in (raw, raw.replace('-', ''))})
+        BATCH = 900
+        for i in range(0, len(all_nos), BATCH):
+            batch = all_nos[i:i + BATCH]
+            ph = ','.join('?' * len(batch))
+            for row in conn_insp.execute(
+                f"SELECT 허가번호, 통시, 공대 FROM inspection_schedules WHERE 허가번호 IN ({ph})", batch
+            ):
+                z = str(row['허가번호'] or '').replace('-', '').strip()
+                if z and z not in insp_info:
+                    insp_info[z] = {
+                        "통시": str(row['통시'] or '').strip(),
+                        "공대": str(row['공대'] or '').strip(),
+                    }
+        conn_insp.close()
+    except Exception as e:
+        logger.warning(f"inspection_schedules 통시/공대 조회 실패: {e}")
+
     # 5) 비교 결과 생성
     items = []
     summary = {
@@ -9831,6 +9854,7 @@ def _erp_ds_compare_sync(
         ds_tower = ds_antenna.get(z_clean, "") or ds_antenna.get(z, "")
         ds_serials = ds_device.get(z_clean, []) or ds_device.get(z, [])
         ds_serial_str = ", ".join(ds_serials) if ds_serials else ""
+        insp = insp_info.get(z_clean) or insp_info.get(z, {})
 
         # 철탑형태 비교
         tower_result = _compare_values(erp_zpirty3, ds_tower, _normalize_tower)
@@ -9852,6 +9876,8 @@ def _erp_ds_compare_sync(
             "ds_serial": ds_serial_str,
             "tower_match": tower_result,
             "serial_match": serial_result,
+            "통시": insp.get("통시", ""),
+            "공대": insp.get("공대", ""),
         })
 
     return {
@@ -14692,6 +14718,20 @@ async def document_change_notification(request: Request, file1: UploadFile = Fil
                 break
 
         AU_0 = 46  # AU열 0-based 인덱스
+
+        # 사전 패스: au_entries 미리 수집 (일반사항 시트 기입 시 순서 무관하게 사용)
+        for si in range(len(b_wb.sheet_names())):
+            sn = b_wb.sheet_names()[si]
+            b_ws = b_wb.sheet_by_index(si)
+            for ri in range(1, b_ws.nrows):
+                hn_norm = _norm_hn(b_ws.cell_value(ri, 0))
+                chg_list = changes_norm.get(hn_norm)
+                if not chg_list:
+                    continue
+                for chg in chg_list:
+                    parsed = _parse_value(chg['변경내역'], chg['변경후'])
+                    if parsed:
+                        au_entries[hn_norm] = chg['변경내역']
 
         # Pass 1: 모든 시트 복사 + 변경 적용
         for si in range(len(b_wb.sheet_names())):
