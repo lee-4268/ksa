@@ -136,6 +136,32 @@ class _RequestBoardScreenState extends State<RequestBoardScreen> {
     }
   }
 
+  void _showImageViewer(String url) {
+    showDialog(
+      context: context,
+      builder: (_) => Dialog(
+        backgroundColor: Colors.black87,
+        insetPadding: const EdgeInsets.all(16),
+        child: Stack(
+          children: [
+            InteractiveViewer(
+              minScale: 0.5,
+              maxScale: 5.0,
+              child: Image.network(url, fit: BoxFit.contain),
+            ),
+            Positioned(
+              top: 8, right: 8,
+              child: IconButton(
+                icon: const Icon(Icons.close, color: Colors.white, size: 28),
+                onPressed: () => Navigator.of(context).pop(),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   void _openWrite({Map<String, dynamic>? editItem}) {
     _editId = editItem?['id'] as int?;
     _titleController.text = (editItem?['title'] as String?) ?? '';
@@ -932,30 +958,37 @@ class _RequestBoardScreenState extends State<RequestBoardScreen> {
                         spacing: 12,
                         runSpacing: 12,
                         children: _parseImages(_detail!['images']).map((key) {
-                          return Container(
-                            decoration: BoxDecoration(
-                              border: Border.all(color: Colors.grey.shade200),
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            child: ClipRRect(
-                              borderRadius: BorderRadius.circular(8),
-                              child: Image.network(
-                                _svc.getImageUrl(key),
-                                width: 300,
-                                fit: BoxFit.cover,
-                                loadingBuilder: (_, child, progress) {
-                                  if (progress == null) return child;
-                                  return SizedBox(
+                          final url = _svc.getImageUrl(key);
+                          return GestureDetector(
+                            onTap: () => _showImageViewer(url),
+                            child: MouseRegion(
+                              cursor: SystemMouseCursors.click,
+                              child: Container(
+                                decoration: BoxDecoration(
+                                  border: Border.all(color: Colors.grey.shade200),
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: ClipRRect(
+                                  borderRadius: BorderRadius.circular(8),
+                                  child: Image.network(
+                                    url,
                                     width: 300,
-                                    height: 200,
-                                    child: Center(child: CircularProgressIndicator(color: _primaryColor, strokeWidth: 2)),
-                                  );
-                                },
-                                errorBuilder: (_, __, ___) => Container(
-                                  width: 300,
-                                  height: 200,
-                                  color: Colors.grey.shade50,
-                                  child: Icon(Icons.image_not_supported_outlined, size: 40, color: Colors.grey.shade300),
+                                    fit: BoxFit.cover,
+                                    loadingBuilder: (_, child, progress) {
+                                      if (progress == null) return child;
+                                      return SizedBox(
+                                        width: 300,
+                                        height: 200,
+                                        child: Center(child: CircularProgressIndicator(color: _primaryColor, strokeWidth: 2)),
+                                      );
+                                    },
+                                    errorBuilder: (_, __, ___) => Container(
+                                      width: 300,
+                                      height: 200,
+                                      color: Colors.grey.shade50,
+                                      child: Icon(Icons.image_not_supported_outlined, size: 40, color: Colors.grey.shade300),
+                                    ),
+                                  ),
                                 ),
                               ),
                             ),

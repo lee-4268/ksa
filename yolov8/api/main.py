@@ -14790,6 +14790,12 @@ async def document_change_notification(request: Request, file1: UploadFile = Fil
                 logger.info(f"변경개설신고: 일반사항 AU열 {len(au_entries)}건 기입")
             # AU열 바로 뒤(AV, 48번째)에 빈 열 2개 삽입 (변경내용↔공용화구분코드 사이)
             o_ws.insert_cols(au_col + 1, 2)
+            for _new_ci in range(au_col + 1, au_col + 3):  # AV, AW (1-based)
+                for _ri in range(1, o_ws.max_row + 1):
+                    _c = o_ws.cell(row=_ri, column=_new_ci)
+                    _c.font = _ds_font
+                    _c.alignment = _ds_align
+                    _c.border = _ds_border
             logger.info("변경개설신고: 일반사항 AU열 우측에 빈 열 2개 삽입")
 
         # 6. 결과 바이트 반환
@@ -14799,19 +14805,21 @@ async def document_change_notification(request: Request, file1: UploadFile = Fil
         buf.seek(0)
         # 변경 유형 수집
         types = list(set(c['type'] for c in change_log)) if change_log else []
-        return buf.getvalue(), len(change_log), len(changes), types
+        # B파일(DS) 원본 파일명 (확장자 제거)
+        b_fname = file1.filename if type1 == 'B' else file2.filename
+        b_stem = b_fname.rsplit('.', 1)[0] if b_fname and '.' in b_fname else (b_fname or 'DS파일')
+        return buf.getvalue(), len(change_log), len(changes), types, b_stem
 
     try:
-        data, change_count, target_count, change_types = await asyncio.to_thread(_process)
+        data, change_count, target_count, change_types, b_stem = await asyncio.to_thread(_process)
     except ValueError as e:
         raise HTTPException(400, str(e))
 
     from urllib.parse import quote as _q
-    type_label = ','.join(change_types) if change_types else '변경'
-    filename = f"변경적용({type_label})_DS파일.xlsx"
+    filename = f"{b_stem}_변경후.xls"
     return Response(
         content=data,
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        media_type="application/vnd.ms-excel",
         headers={
             "Content-Disposition": f"attachment; filename*=UTF-8''{_q(filename)}",
             "X-Change-Count": str(change_count),
