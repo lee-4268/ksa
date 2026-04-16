@@ -99,6 +99,9 @@ class ErpDsCompareResult {
 class CompareItem {
   final String zpwino;
   final String zpwina;
+  final String address;
+  final double? lat;
+  final double? lng;
   final String areaHdofcNm;
   final bool erpFound;
   final String erpZpirty3;
@@ -113,6 +116,9 @@ class CompareItem {
   CompareItem({
     required this.zpwino,
     required this.zpwina,
+    required this.address,
+    this.lat,
+    this.lng,
     required this.areaHdofcNm,
     required this.erpFound,
     required this.erpZpirty3,
@@ -129,6 +135,9 @@ class CompareItem {
     return CompareItem(
       zpwino: json['zpwino'] ?? '',
       zpwina: json['zpwina'] ?? '',
+      address: json['zpwiadr'] ?? '',
+      lat: (json['lat'] as num?)?.toDouble(),
+      lng: (json['lng'] as num?)?.toDouble(),
       areaHdofcNm: json['area_hdofc_nm'] ?? '',
       erpFound: json['erp_found'] == true,
       erpZpirty3: json['erp_zpirty3'] ?? '',

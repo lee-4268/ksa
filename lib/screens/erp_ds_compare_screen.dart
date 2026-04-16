@@ -9,8 +9,11 @@ import '../services/erp_ds_compare_service.dart';
 import '../services/excel_export_stub.dart'
     if (dart.library.io) '../services/excel_export_mobile.dart'
     if (dart.library.html) '../services/excel_export_web.dart' as platform_export;
+import '../services/kakao_geocoding_web.dart';
 import '../widgets/progress_dialog.dart';
 import '../widgets/user_profile_button.dart';
+import 'inspection_result_screen.dart' show RoadviewDialog;
+import 'tower_classification_screen.dart';
 
 class ErpDsCompareScreen extends StatefulWidget {
   const ErpDsCompareScreen({super.key});
@@ -769,7 +772,7 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
                         width: 100,
                         child: Text(item.dsTowerType,
                             style: _cellStyle))),
-                    DataCell(_buildMatchChip(item.towerMatch)),
+                    DataCell(_buildMatchChip(item.towerMatch, item: item)),
                     DataCell(SizedBox(
                         width: 120,
                         child: Text(item.erpSerial,
@@ -997,7 +1000,7 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
     );
   }
 
-  Widget _buildMatchChip(String status) {
+  Widget _buildMatchChip(String status, {CompareItem? item}) {
     Color bg;
     Color fg;
     switch (status) {
@@ -1017,13 +1020,40 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
         bg = Colors.orange.withValues(alpha: 0.1);
         fg = Colors.orange.shade700;
     }
-    return Container(
+
+    final chipContent = Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
       decoration:
           BoxDecoration(color: bg, borderRadius: BorderRadius.circular(8)),
-      child: Text(status,
-          style: TextStyle(
-              fontSize: 12, fontWeight: FontWeight.w600, color: fg)),
+      child: (status == '불일치' || status == '확인필요') && item != null
+          ? Row(mainAxisSize: MainAxisSize.min, children: [
+              Text(status,
+                  style: TextStyle(
+                      fontSize: 12, fontWeight: FontWeight.w600, color: fg)),
+              const SizedBox(width: 4),
+              Icon(Icons.open_in_new, size: 11, color: fg),
+            ])
+          : Text(status,
+              style: TextStyle(
+                  fontSize: 12, fontWeight: FontWeight.w600, color: fg)),
+    );
+
+    if ((status == '불일치' || status == '확인필요') && item != null) {
+      return MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: GestureDetector(
+          onTap: () => _openTowerMismatchModal(item),
+          child: chipContent,
+        ),
+      );
+    }
+    return chipContent;
+  }
+
+  void _openTowerMismatchModal(CompareItem item) {
+    showDialog(
+      context: context,
+      builder: (_) => TowerMismatchModal(item: item),
     );
   }
 
@@ -1033,4 +1063,204 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
     color: Colors.black87,
   );
   static const _cellStyle = TextStyle(fontSize: 13);
+}
+
+// ── 설치대 불일치 상세 모달 ──────────────────────────────────────
+
+class TowerMismatchModal extends StatefulWidget {
+  final CompareItem item;
+  const TowerMismatchModal({super.key, required this.item});
+
+  @override
+  State<TowerMismatchModal> createState() => _TowerMismatchModalState();
+}
+
+class _TowerMismatchModalState extends State<TowerMismatchModal> {
+  static const Color _red = Color(0xFFE53935);
+  bool _roadviewLoading = false;
+
+  Future<void> _openRoadview() async {
+    final item = widget.item;
+    final title = item.zpwina.isNotEmpty ? item.zpwina : item.zpwino;
+
+    // 1순위: 위경도 직접 사용
+    if (item.lat != null && item.lng != null) {
+      showDialog(
+        context: context,
+        builder: (_) => RoadviewDialog(lat: item.lat!, lng: item.lng!, title: title),
+      );
+      return;
+    }
+
+    // 2순위: 주소 지오코딩
+    final address = item.address;
+    if (address.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('위치 정보가 없어 로드뷰를 열 수 없습니다.')),
+      );
+      return;
+    }
+    setState(() => _roadviewLoading = true);
+    final coords = await KakaoAddressGeocoder.addressToCoords(address);
+    if (!mounted) return;
+    setState(() => _roadviewLoading = false);
+    if (coords == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('위치를 찾을 수 없습니다.')),
+      );
+      return;
+    }
+    showDialog(
+      context: context,
+      builder: (_) => RoadviewDialog(lat: coords.lat, lng: coords.lng, title: title),
+    );
+  }
+
+  Future<void> _openTowerClassification() async {
+    await Navigator.push<TowerClassificationResult>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => TowerClassificationScreen(
+          stationName: widget.item.zpwina.isNotEmpty
+              ? widget.item.zpwina
+              : widget.item.zpwino,
+          returnResult: false,
+        ),
+      ),
+    );
+  }
+
+  Widget _infoRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 5),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        SizedBox(
+          width: 90,
+          child: Text(label,
+              style: const TextStyle(
+                  fontSize: 13,
+                  color: Colors.black54,
+                  fontWeight: FontWeight.w500)),
+        ),
+        Expanded(
+          child: Text(
+            value.isNotEmpty ? value : '-',
+            style: const TextStyle(fontSize: 13, color: Colors.black87),
+          ),
+        ),
+      ]),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final item = widget.item;
+    return Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      insetPadding: const EdgeInsets.symmetric(horizontal: 32, vertical: 48),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 440),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(24, 20, 24, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // 헤더
+              Row(children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: _red.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    Icon(Icons.warning_amber_rounded, size: 14, color: _red),
+                    const SizedBox(width: 4),
+                    Text('설치대 불일치',
+                        style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                            color: _red)),
+                  ]),
+                ),
+                const Spacer(),
+                IconButton(
+                  icon: const Icon(Icons.close, size: 20),
+                  onPressed: () => Navigator.of(context).pop(),
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                ),
+              ]),
+              const SizedBox(height: 16),
+              // 무선국 정보
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade50,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: Colors.grey.shade200),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _infoRow('호출명칭', item.zpwina),
+                    _infoRow('허가번호', item.zpwino),
+                    if (item.address.isNotEmpty) _infoRow('주소', item.address),
+                    const Divider(height: 16),
+                    _infoRow('ERP 설치대', item.erpZpirty3),
+                    _infoRow('DS 설치대', item.dsTowerType),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 20),
+              // 기능 버튼
+              Row(children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: _roadviewLoading ? null : _openRoadview,
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: const Color(0xFF1565C0),
+                      side: const BorderSide(color: Color(0xFF1565C0)),
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8)),
+                    ),
+                    icon: _roadviewLoading
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2))
+                        : const Icon(Icons.streetview, size: 18),
+                    label: const Text('로드뷰',
+                        style: TextStyle(
+                            fontSize: 13, fontWeight: FontWeight.w600)),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: _openTowerClassification,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: _red,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8)),
+                      elevation: 0,
+                    ),
+                    icon: const Icon(Icons.camera_alt_outlined, size: 18),
+                    label: const Text('철탑형태 분류',
+                        style: TextStyle(
+                            fontSize: 13, fontWeight: FontWeight.w600)),
+                  ),
+                ),
+              ]),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }

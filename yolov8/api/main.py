@@ -9814,29 +9814,54 @@ def _erp_ds_compare_sync(
     else:
         warnings.append("DS 데이터가 아직 빌드되지 않았습니다. DS 파일을 업로드해주세요.")
 
-    # 4-2) inspection_targets + staging에서 통시/공대 조회
-    insp_info = {}  # {허가번호(하이픈제거): {"통시": ..., "공대": ...}}
+    # 4-2) inspection_targets + staging에서 통시/공대/위경도/주소 조회
+    insp_info = {}  # {허가번호(하이픈제거): {"통시":, "공대":, "위도":, "경도":, "도로명주소":, "설치장소":}}
     try:
         conn_insp = sqlite3.connect(_INSP_DB, timeout=30)
         conn_insp.row_factory = sqlite3.Row
         all_nos = list({n for raw in zpwino_list for n in (raw, raw.replace('-', ''))})
         BATCH = 900
         for tbl in ('inspection_targets', 'inspection_targets_staging'):
-            for i in range(0, len(all_nos), BATCH):
-                batch = all_nos[i:i + BATCH]
-                ph = ','.join('?' * len(batch))
-                for row in conn_insp.execute(
-                    f"SELECT 허가번호, 통시, 공대 FROM {tbl} WHERE 허가번호 IN ({ph})", batch
-                ):
-                    z = str(row['허가번호'] or '').replace('-', '').strip()
-                    if z and z not in insp_info:
-                        insp_info[z] = {
-                            "통시": str(row['통시'] or '').strip(),
-                            "공대": str(row['공대'] or '').strip(),
-                        }
+            # 테이블마다 실제 컬럼 확인 후 SELECT (staging은 위도/경도 없음)
+            try:
+                tbl_cols = {r['name'] for r in conn_insp.execute(f"PRAGMA table_info({tbl})").fetchall()}
+                if not tbl_cols:
+                    continue  # 테이블 없음
+                has_location = '위도' in tbl_cols and '경도' in tbl_cols
+                has_road_addr = '도로명주소' in tbl_cols
+                has_install_addr = '설치장소' in tbl_cols
+                select_extra = ''
+                if has_location:
+                    select_extra += ', 위도, 경도'
+                if has_road_addr:
+                    select_extra += ', 도로명주소'
+                if has_install_addr:
+                    select_extra += ', 설치장소'
+                for i in range(0, len(all_nos), BATCH):
+                    batch = all_nos[i:i + BATCH]
+                    ph = ','.join('?' * len(batch))
+                    for row in conn_insp.execute(
+                        f"SELECT 허가번호, 통시, 공대{select_extra} FROM {tbl} WHERE 허가번호 IN ({ph})", batch
+                    ):
+                        z = str(row['허가번호'] or '').replace('-', '').strip()
+                        if z and z not in insp_info:
+                            lat = float(row['위도']) if has_location and row['위도'] else None
+                            lng = float(row['경도']) if has_location and row['경도'] else None
+                            road_addr = str(row['도로명주소'] or '').strip() if has_road_addr else ''
+                            inst_addr = str(row['설치장소'] or '').strip() if has_install_addr else ''
+                            insp_info[z] = {
+                                "통시": str(row['통시'] or '').strip(),
+                                "공대": str(row['공대'] or '').strip(),
+                                "위도": lat,
+                                "경도": lng,
+                                "도로명주소": road_addr,
+                                "설치장소": inst_addr,
+                            }
+            except Exception as te:
+                logger.warning(f"{tbl} 조회 실패: {te}")
         conn_insp.close()
     except Exception as e:
-        logger.warning(f"inspection_targets 통시/공대 조회 실패: {e}")
+        logger.warning(f"inspection_targets 조회 실패: {e}")
 
     # 5) 비교 결과 생성
     items = []
@@ -9866,9 +9891,15 @@ def _erp_ds_compare_sync(
         summary[f"tower_{summary_key_map.get(tower_result, 'check')}"] += 1
         summary[f"serial_{summary_key_map.get(serial_result, 'check')}"] += 1
 
+        # 주소 우선순위: inspection_targets 도로명주소 > 설치장소 > ERP zpwiadr
+        best_address = (insp.get("도로명주소") or insp.get("설치장소")
+                        or (erp.get("zpwiadr", "") if erp else ""))
         items.append({
             "zpwino": z,
             "zpwina": erp.get("zpwina", "") if erp else "",
+            "zpwiadr": best_address,
+            "lat": insp.get("위도"),
+            "lng": insp.get("경도"),
             "area_hdofc_nm": erp.get("area_hdofc_nm", "") if erp else "",
             "erp_found": bool(erp),
             "erp_zpirty3": erp_zpirty3,

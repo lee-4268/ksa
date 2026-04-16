@@ -196,7 +196,7 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
     showDialog(
       context: context,
       barrierDismissible: true,
-      builder: (_) => _RoadviewDialog(lat: resolvedLat!, lng: resolvedLng!, title: title),
+      builder: (_) => RoadviewDialog(lat: resolvedLat!, lng: resolvedLng!, title: title),
     );
   }
 
@@ -1240,22 +1240,23 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
 
 // ── 로드뷰 다이얼로그 ──────────────────────────────────────────
 
-class _RoadviewDialog extends StatefulWidget {
+class RoadviewDialog extends StatefulWidget {
   final double lat;
   final double lng;
   final String title;
 
-  const _RoadviewDialog({
+  const RoadviewDialog({
+    super.key,
     required this.lat,
     required this.lng,
     required this.title,
   });
 
   @override
-  State<_RoadviewDialog> createState() => _RoadviewDialogState();
+  State<RoadviewDialog> createState() => _RoadviewDialogState();
 }
 
-class _RoadviewDialogState extends State<_RoadviewDialog> {
+class _RoadviewDialogState extends State<RoadviewDialog> {
   static const Color _primary = Color(0xFFE53935);
   late final String _viewId;
   late final String _rvId;   // 로드뷰 div id

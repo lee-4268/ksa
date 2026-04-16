@@ -8,6 +8,7 @@ import '../services/ds_data_service.dart';
 import '../services/erp_ds_compare_service.dart';
 import '../services/inspection_service.dart';
 import '../widgets/progress_dialog.dart';
+import 'erp_ds_compare_screen.dart' show TowerMismatchModal;
 import 'inspection_result_screen.dart';
 // ignore: avoid_web_libraries_in_flutter
 import 'dart:html' as html;
@@ -4501,18 +4502,40 @@ class _CompareDialogState extends State<_CompareDialog> {
     }
   }
 
-  Widget _matchChip(String match) {
+  Widget _matchChip(String match, {CompareItem? item}) {
     if (match.isEmpty) return Text('-', style: TextStyle(fontSize: 12, color: Colors.grey.shade400));
     final color = _matchColor(match);
-    return Container(
+    final isClickable = (match == '불일치' || match == '확인필요') && item != null;
+
+    final chip = Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(
         color: color.withValues(alpha: 0.1),
         borderRadius: BorderRadius.circular(6),
         border: Border.all(color: color.withValues(alpha: 0.4)),
       ),
-      child: Text(match, style: TextStyle(fontSize: 11, color: color, fontWeight: FontWeight.w600)),
+      child: isClickable
+          ? Row(mainAxisSize: MainAxisSize.min, children: [
+              Text(match, style: TextStyle(fontSize: 11, color: color, fontWeight: FontWeight.w600)),
+              const SizedBox(width: 3),
+              Icon(Icons.open_in_new, size: 10, color: color),
+            ])
+          : Text(match, style: TextStyle(fontSize: 11, color: color, fontWeight: FontWeight.w600)),
     );
+
+    if (isClickable) {
+      return MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: GestureDetector(
+          onTap: () => showDialog(
+            context: context,
+            builder: (_) => TowerMismatchModal(item: item),
+          ),
+          child: chip,
+        ),
+      );
+    }
+    return chip;
   }
 
   Widget _statChip(String label, int value, Color color) {
@@ -4874,7 +4897,7 @@ class _CompareDialogState extends State<_CompareDialog> {
                   DataCell(Text(item.areaHdofcNm, style: const TextStyle(fontSize: 12))),
                   DataCell(SizedBox(width: 110, child: Text(item.erpZpirty3, style: const TextStyle(fontSize: 12)))),
                   DataCell(SizedBox(width: 110, child: Text(item.dsTowerType, style: const TextStyle(fontSize: 12)))),
-                  DataCell(_matchChip(item.towerMatch)),
+                  DataCell(_matchChip(item.towerMatch, item: item)),
                   DataCell(SizedBox(width: 130, child: Text(item.erpSerial, style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis))),
                   DataCell(SizedBox(width: 130, child: Text(item.dsSerial, style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis))),
                   DataCell(_matchChip(item.serialMatch)),
