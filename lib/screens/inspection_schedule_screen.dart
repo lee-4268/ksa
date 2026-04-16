@@ -1951,73 +1951,8 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
   // ── 매트릭스 탭 ──────────────────────────────────────
 
   Widget _buildMatrixTab() {
-    // 매트릭스 필터 적용: 본부/팀 기준으로 클라이언트 필터
-    final filteredMatrix = <String, dynamic>{};
-    _matrix.forEach((hdqt, teamMapRaw) {
-      if (_mHdqt.isNotEmpty && hdqt != _mHdqt) return;
-      final teamMap = teamMapRaw as Map<String, dynamic>? ?? {};
-      if (_mTeam.isNotEmpty) {
-        if (!teamMap.containsKey(_mTeam)) return;
-        filteredMatrix[hdqt] = {_mTeam: teamMap[_mTeam]};
-      } else {
-        filteredMatrix[hdqt] = teamMap;
-      }
-    });
-
     if (_loading) {
       return const Center(child: CircularProgressIndicator());
-    }
-    if (filteredMatrix.isEmpty && _matrix.isEmpty) {
-      return const Center(child: Text('데이터 없음', style: TextStyle(color: Colors.black38)));
-    }
-
-    final hdqts = filteredMatrix.keys.toList()..sort();
-    final rows = <TableRow>[];
-
-    rows.add(TableRow(
-      decoration: BoxDecoration(color: Colors.grey.shade100),
-      children: [
-        _matrixCell('본부', isHeader: true),
-        _matrixCell('팀', isHeader: true),
-        ..._quarters.map((q) => _matrixCell(q, isHeader: true)),
-        _matrixCell('합계', isHeader: true),
-      ],
-    ));
-
-    for (final hdqt in hdqts) {
-      final teamMap = filteredMatrix[hdqt] as Map<String, dynamic>? ?? {};
-      final teams = teamMap.keys.toList()..sort();
-      final hdqtTotal = _quarters.fold<int>(0, (s, q) =>
-          s + teams.fold<int>(0, (s2, t) => s2 + (((teamMap[t] as Map?)?.containsKey(q) == true ? (teamMap[t] as Map)[q] : 0) as num).toInt()));
-
-      for (var i = 0; i < teams.length; i++) {
-        final team = teams[i];
-        final teamData = teamMap[team] as Map<String, dynamic>? ?? {};
-        final teamTotal = _quarters.fold<int>(0, (s, q) => s + ((teamData[q] as num?)?.toInt() ?? 0));
-        rows.add(TableRow(
-          decoration: i == 0 ? BoxDecoration(color: _primary.withValues(alpha: 0.04)) : null,
-          children: [
-            i == 0 ? _matrixCell(hdqt, isHdqt: true) : _matrixCell(''),
-            _matrixCell(team, isTeam: true),
-            ..._quarters.map((q) => _matrixCell('${(teamData[q] as num?)?.toInt() ?? 0}')),
-            _matrixCell('$teamTotal', isBold: true),
-          ],
-        ));
-      }
-
-      rows.add(TableRow(
-        decoration: BoxDecoration(color: Colors.grey.shade50),
-        children: [
-          _matrixCell('소계', isBold: true),
-          _matrixCell(''),
-          ..._quarters.map((q) {
-            final cnt = teams.fold<int>(0, (s, t) =>
-                s + (((teamMap[t] as Map?)?.containsKey(q) == true ? (teamMap[t] as Map)[q] : 0) as num).toInt());
-            return _matrixCell('$cnt', isBold: true);
-          }),
-          _matrixCell('$hdqtTotal', isBold: true),
-        ],
-      ));
     }
 
     return SingleChildScrollView(
@@ -2040,26 +1975,6 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
             _buildScheduleStatusSection(),
             const SizedBox(height: 16),
           ],
-          // 매트릭스 테이블
-          if (rows.length > 1)
-            Container(
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: const Color(0xFFE5E7EB)),
-                boxShadow: [
-                  BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 8, offset: const Offset(0, 2)),
-                ],
-              ),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(12),
-                child: Table(
-                  border: TableBorder.all(color: const Color(0xFFE5E7EB)),
-                  defaultColumnWidth: const IntrinsicColumnWidth(),
-                  children: rows,
-                ),
-              ),
-            ),
         ],
       ),
     );
@@ -2797,22 +2712,6 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     );
   }
 
-  Widget _matrixCell(String text,
-      {bool isHeader = false, bool isHdqt = false, bool isTeam = false, bool isBold = false}) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
-      child: Text(
-        text,
-        style: TextStyle(
-          fontSize: 13,
-          fontWeight: (isHeader || isBold || isHdqt) ? FontWeight.w600 : FontWeight.normal,
-          color: isHeader ? Colors.black54 : isHdqt ? _primary : Colors.black87,
-        ),
-        textAlign: (isHdqt || isTeam) ? TextAlign.left : TextAlign.center,
-      ),
-    );
-  }
-
   // ── 상세 패널 ─────────────────────────────────────────
 
   Widget _buildDetailPanel() {
@@ -3000,7 +2899,11 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                       callname: callname,
                       initialData: d,
                     ),
-                  )).then((_) { if (_detailLicenseNo != null) _loadDetail(_detailLicenseNo!); }),
+                  )).then((_) {
+                    if (!mounted) return;
+                    _loadData();
+                    if (_detailLicenseNo != null) _loadDetail(_detailLicenseNo!);
+                  }),
                 ),
               ),
             ],
