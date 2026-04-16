@@ -9814,6 +9814,30 @@ def _erp_ds_compare_sync(
     else:
         warnings.append("DS 데이터가 아직 빌드되지 않았습니다. DS 파일을 업로드해주세요.")
 
+    # 4-2) inspection_targets + staging에서 통시/공대 조회
+    insp_info = {}  # {허가번호(하이픈제거): {"통시": ..., "공대": ...}}
+    try:
+        conn_insp = sqlite3.connect(_INSP_DB, timeout=30)
+        conn_insp.row_factory = sqlite3.Row
+        all_nos = list({n for raw in zpwino_list for n in (raw, raw.replace('-', ''))})
+        BATCH = 900
+        for tbl in ('inspection_targets', 'inspection_targets_staging'):
+            for i in range(0, len(all_nos), BATCH):
+                batch = all_nos[i:i + BATCH]
+                ph = ','.join('?' * len(batch))
+                for row in conn_insp.execute(
+                    f"SELECT 허가번호, 통시, 공대 FROM {tbl} WHERE 허가번호 IN ({ph})", batch
+                ):
+                    z = str(row['허가번호'] or '').replace('-', '').strip()
+                    if z and z not in insp_info:
+                        insp_info[z] = {
+                            "통시": str(row['통시'] or '').strip(),
+                            "공대": str(row['공대'] or '').strip(),
+                        }
+        conn_insp.close()
+    except Exception as e:
+        logger.warning(f"inspection_targets 통시/공대 조회 실패: {e}")
+
     # 5) 비교 결과 생성
     items = []
     summary = {
@@ -9831,6 +9855,7 @@ def _erp_ds_compare_sync(
         ds_tower = ds_antenna.get(z_clean, "") or ds_antenna.get(z, "")
         ds_serials = ds_device.get(z_clean, []) or ds_device.get(z, [])
         ds_serial_str = ", ".join(ds_serials) if ds_serials else ""
+        insp = insp_info.get(z_clean) or insp_info.get(z, {})
 
         # 철탑형태 비교
         tower_result = _compare_values(erp_zpirty3, ds_tower, _normalize_tower)
@@ -9852,6 +9877,8 @@ def _erp_ds_compare_sync(
             "ds_serial": ds_serial_str,
             "tower_match": tower_result,
             "serial_match": serial_result,
+            "통시": insp.get("통시", ""),
+            "공대": insp.get("공대", ""),
         })
 
     return {
@@ -12819,6 +12846,8 @@ async def inspection_export_report(request: Request, req: InspectionReportReq):
         zpcode_by_active: dict = {} # key: "허가번호" → zpcode (zpprac1=운용)
         zpcode_by_name: dict = {}   # key: "허가번호|호출명칭" → zpcode
         zpcode_fallback: dict = {}  # key: "허가번호" → zpcode
+        def _norm_serno(v):
+            return re.sub(r'[^0-9A-Za-z]', '', str(v or '').upper())
         if _cert_cache_db_path and os.path.exists(_cert_cache_db_path):
             import sqlite3 as _sq2
             c2 = _sq2.connect(_cert_cache_db_path)
@@ -12826,7 +12855,8 @@ async def inspection_export_report(request: Request, req: InspectionReportReq):
                 f'SELECT TRIM(zpwino), TRIM(zpwina), zpcode, TRIM(eqp_ser_no), TRIM(COALESCE(zpprac1,"")) FROM cert WHERE TRIM(zpwino) IN ({ph})',
                 license_nos).fetchall()
             for r in rows:
-                k = str(r[0] or '').strip()
+                k_raw = str(r[0] or '').strip()
+                k = k_raw.replace('-', '')
                 name = str(r[1] or '').strip()
                 code = str(r[2] or '').strip()
                 eqp = str(r[3] or '').strip()
@@ -12836,6 +12866,9 @@ async def inspection_export_report(request: Request, req: InspectionReportReq):
                 # 1) 기기일련번호 매칭
                 if eqp:
                     zpcode_by_eqp[f"{k}|{eqp}"] = code
+                    eqp_norm = _norm_serno(eqp)
+                    if eqp_norm:
+                        zpcode_by_eqp[f"{k}|{eqp_norm}"] = code
                 # 2) 운용 상태
                 if '운용' in status and k not in zpcode_by_active:
                     zpcode_by_active[k] = code
@@ -12945,9 +12978,11 @@ async def inspection_export_report(request: Request, req: InspectionReportReq):
 
         # ── 데이터 행 ────────────────────────────────────────
         _LINE_HEIGHT = 13.5  # 1줄 높이
+        max_tosi_line_len = 0
         for seq, t in enumerate(targets, 1):
             r = seq + 3
             hn = t['허가번호']
+            hn_norm = str(hn or '').replace('-', '')
 
             # DS 데이터 조합
             jt_list  = ds_장치_map.get(hn, [])
@@ -13022,20 +13057,38 @@ async def inspection_export_report(request: Request, req: InspectionReportReq):
                     _seen_ant.add(_k); deduped_ant.append(_ant)
 
             _callname = str(t['호출명칭'] or '').strip()
-            # tosi_code 우선순위: 1) 기기일련번호 매칭 → 2) 운용 상태 → 3) 호출명칭 → 4) fallback
+            # tosi_code 우선순위:
+            # 1) DS 기기일련번호별 cert(eqp_ser_no) 매칭 결과를 다건(줄바꿈)으로 반영
+            # 2) 매칭값이 전혀 없을 때만 운용/호출명칭/fallback 단건 적용
             tosi_code = ''
             if unique_장치:
+                _tosi_lines = []
+                _has_serial_matched = False
                 for _uj in unique_장치:
                     _eqp = str(_uj.get('기기일련번호') or '').strip()
-                    if _eqp and f"{hn}|{_eqp}" in zpcode_by_eqp:
-                        tosi_code = zpcode_by_eqp[f"{hn}|{_eqp}"]
-                        break
+                    _code = ''
+                    if _eqp:
+                        _code = zpcode_by_eqp.get(f"{hn_norm}|{_eqp}", '')
+                        if not _code:
+                            _eqp_norm = _norm_serno(_eqp)
+                            if _eqp_norm:
+                                _code = zpcode_by_eqp.get(f"{hn_norm}|{_eqp_norm}", '')
+                    if _code:
+                        _has_serial_matched = True
+                    _tosi_lines.append(_code)
+                if _has_serial_matched:
+                    tosi_code = '\n'.join(_tosi_lines)
             if not tosi_code:
-                tosi_code = zpcode_by_active.get(hn, '')
+                tosi_code = zpcode_by_active.get(hn_norm, '')
             if not tosi_code:
-                tosi_code = zpcode_by_name.get(f"{hn}|{_callname}", '')
+                tosi_code = zpcode_by_name.get(f"{hn_norm}|{_callname}", '')
             if not tosi_code:
-                tosi_code = zpcode_fallback.get(hn, '')
+                tosi_code = zpcode_fallback.get(hn_norm, '')
+            if tosi_code:
+                for _line in str(tosi_code).split('\n'):
+                    _line_len = len(_line.strip())
+                    if _line_len > max_tosi_line_len:
+                        max_tosi_line_len = _line_len
             설치형태     = ant_list[0].get('공중선주설치형태명', '') if ant_list else ''
             공중선장치   = _join_all(deduped_ant, '장치번호')
             # 공중선형식: SECTOR만 괄호 안 값 추출, 나머지는 그대로
@@ -13096,9 +13149,9 @@ async def inspection_export_report(request: Request, req: InspectionReportReq):
                 if c_idx == 2:  # B열: 빨간 글씨 + 노란 배경 + 셀에 맞춤
                     _set(r, c_idx, val, font=_font_red, fill=_fill_yellow,
                          border=_thin_border, align=_al_shrink)
-                elif c_idx == 3:  # C열: 셀에 맞춤
-                    _set(r, c_idx, val, font=_font_base,
-                         border=_thin_border, align=_al_shrink)
+                elif c_idx == 3:  # C열(tosi_code): 10pt + 줄바꿈 표시
+                    _set(r, c_idx, val, font=_font_base10,
+                         border=_thin_border, align=_al_center)
                 elif c_idx in (7, 20):  # G(특이사항), T(설치장소): 왼쪽 정렬
                     _set(r, c_idx, val, font=_font_base,
                          border=_thin_border, align=_al_left)
@@ -13108,6 +13161,10 @@ async def inspection_export_report(request: Request, req: InspectionReportReq):
                 else:
                     _set(r, c_idx, val, font=_font_base,
                          border=_thin_border, align=_al_center)
+
+        # C열(tosi_code) 너비 자동 조정: 기본 9.0 유지, 내용 길이에 따라 확장(최대 22)
+        if max_tosi_line_len > 0:
+            ws.column_dimensions['C'].width = max(9.0, min(22.0, max_tosi_line_len * 1.1 + 1.5))
 
         # Excel 자동 필터 설정 (3행 하위 헤더 기준, 샘플과 동일)
         last_row = len(targets) + 3
@@ -14442,8 +14499,6 @@ async def document_change_notification(request: Request, file1: UploadFile = Fil
 
     def _process():
         import xlrd
-        from openpyxl import Workbook
-        from openpyxl.styles import PatternFill
 
         # 1. 파일 식별 (A: 1시트+변경내역 헤더, B: 9시트)
         def _identify(data):
@@ -14479,7 +14534,7 @@ async def document_change_notification(request: Request, file1: UploadFile = Fil
 
         # 2. A파일 파싱: 헤더 행 동적 탐색 후 데이터 추출
         a_ws = a_wb.sheet_by_index(0)
-        changes = {}  # {허가번호: [{변경내역, 변경후}, ...]}
+        changes = {}  # {허가번호: [{변경내역, 변경전, 변경후, 장치번호}, ...]}
         # 헤더 행 찾기 (변경내역/변경후 포함하는 행)
         header_ri = 0
         for ri in range(min(5, a_ws.nrows)):
@@ -14487,26 +14542,39 @@ async def document_change_notification(request: Request, file1: UploadFile = Fil
             if any('변경내역' in v for v in row_vals):
                 header_ri = ri
                 break
-        # 컬럼 인덱스 매핑
+        # 컬럼 인덱스 매핑 (G열=장치번호 추가)
         col_map = {}
         for ci in range(min(a_ws.ncols, 11)):
             h = str(a_ws.cell_value(header_ri, ci)).replace('\n', '').strip()
             if '허가번호' in h: col_map['허가번호'] = ci
             elif '변경내역' in h: col_map['변경내역'] = ci
+            elif '변경전' in h: col_map['변경전'] = ci
             elif '변경후' in h: col_map['변경후'] = ci
+            elif '장치번호' in h: col_map['장치번호'] = ci
         hn_ci = col_map.get('허가번호', 2)
         chg_ci = col_map.get('변경내역', 3)
+        before_ci = col_map.get('변경전', 4)
         after_ci = col_map.get('변경후', 5)
+        device_ci = col_map.get('장치번호', 6)  # G열 (없으면 공란)
 
         for ri in range(header_ri + 1, a_ws.nrows):
             허가번호 = str(a_ws.cell_value(ri, hn_ci) if a_ws.ncols > hn_ci else '').strip()
             변경내역 = str(a_ws.cell_value(ri, chg_ci) if a_ws.ncols > chg_ci else '').strip()
+            변경전 = str(a_ws.cell_value(ri, before_ci) if a_ws.ncols > before_ci else '').strip()
             변경후 = str(a_ws.cell_value(ri, after_ci) if a_ws.ncols > after_ci else '').strip()
+            # 장치번호: 숫자로 올 수 있으므로 int 변환 후 문자열화
+            _dev_raw = a_ws.cell_value(ri, device_ci) if a_ws.ncols > device_ci else ''
+            if isinstance(_dev_raw, float) and _dev_raw == int(_dev_raw):
+                장치번호 = str(int(_dev_raw))
+            else:
+                장치번호 = str(_dev_raw).strip()
             if not 허가번호 or not 변경후:
                 continue
             changes.setdefault(허가번호, []).append({
                 '변경내역': 변경내역,
+                '변경전': 변경전,
                 '변경후': 변경후,
+                '장치번호': 장치번호,
             })
 
         logger.info(f"변경개설신고: A파일 {len(changes)}건 허가번호 파싱, 샘플={list(changes.keys())[:3]}")
@@ -14605,154 +14673,259 @@ async def document_change_notification(request: Request, file1: UploadFile = Fil
             changes_norm[norm] = chg_list
         logger.info(f"변경개설신고: norm keys 샘플={list(changes_norm.keys())[:3]}")
 
-        # 6. B파일을 openpyxl로 복사 + 서식 적용
-        from openpyxl.styles import Font, Alignment, Border, Side
-        out_wb = Workbook()
-        out_wb.remove(out_wb.active)
+        # 6. B파일을 xlwt로 복사 + 서식 적용 (실제 xls 포맷)
+        import xlwt
 
-        yellow_fill = PatternFill(start_color='FFFFFF00', end_color='FFFFFF00', fill_type='solid')
-        _ds_font = Font(name='Arial', size=10)
-        _ds_align = Alignment(horizontal='center', vertical='center', wrap_text=True)
-        _ds_border = Border(
-            left=Side(style='thin'), right=Side(style='thin'),
-            top=Side(style='thin'), bottom=Side(style='thin'))
+        out_wb = xlwt.Workbook(encoding='utf-8')
+
+        # xlwt 스타일 생성
+        def _make_style(yellow=False):
+            style = xlwt.XFStyle()
+            fnt = xlwt.Font()
+            fnt.name = 'Arial'
+            fnt.height = 200  # 10pt
+            style.font = fnt
+            al = xlwt.Alignment()
+            al.horz = xlwt.Alignment.HORZ_CENTER
+            al.vert = xlwt.Alignment.VERT_CENTER
+            al.wrap = xlwt.Alignment.WRAP_AT_RIGHT
+            style.alignment = al
+            brd = xlwt.Borders()
+            brd.left = brd.right = brd.top = brd.bottom = xlwt.Borders.THIN
+            style.borders = brd
+            if yellow:
+                pat = xlwt.Pattern()
+                pat.pattern = xlwt.Pattern.SOLID_PATTERN
+                pat.pattern_fore_colour = 13  # yellow
+                style.pattern = pat
+            return style
+
+        _st = _make_style(yellow=False)
+        _st_y = _make_style(yellow=True)
 
         change_log = []
-        # 허가번호→변경내역 매핑 (일반사항 AU열 기입용)
         au_entries = {}  # {norm_hn: 변경내역 text}
 
         def _norm_hn(val):
-            """허가번호 정규화: float→int, 하이픈 제거."""
             if isinstance(val, float):
                 return str(int(val))
             return str(val).strip().replace('-', '')
 
         def _line_count(val):
             text = '' if val is None else str(val)
-            # 엑셀 줄바꿈(Alt+Enter)은 내부적으로 \r\n 또는 \n 모두 사용될 수 있음
             text = text.replace('\r\n', '\n').replace('\r', '\n')
             return max(1, text.count('\n') + 1)
 
-        from openpyxl.utils import get_column_letter
+        def _write(ws, r, c, val, style):
+            if val is None:
+                ws.write(r, c, '', style)
+            elif isinstance(val, float) and val == int(val):
+                ws.write(r, c, int(val), style)
+            else:
+                ws.write(r, c, val, style)
 
-        # Pass 1: 모든 시트 복사 + 대상 시트에서 값 변경
-        out_sheets = {}  # {시트명: openpyxl worksheet}
+        # 일반사항 시트명 사전 파악
+        일반_sn_pre = None
+        for _sn in b_wb.sheet_names():
+            if '일반사항' in _sn or '일반' in _sn:
+                일반_sn_pre = _sn
+                break
+
+        AU_0 = 46  # AU열 0-based 인덱스
+
+        # 사전 패스: au_entries 미리 수집 (일반사항 시트 기입 시 순서 무관하게 사용)
         for si in range(len(b_wb.sheet_names())):
             sn = b_wb.sheet_names()[si]
             b_ws = b_wb.sheet_by_index(si)
-            o_ws = out_wb.create_sheet(title=sn[:31])
-            out_sheets[sn] = o_ws
-
-            for ci in range(1, max(b_ws.ncols + 1, 48)):
-                o_ws.column_dimensions[get_column_letter(ci)].width = 19.29
-            o_ws.sheet_format.defaultRowHeight = 12.75
-
-            for ri in range(b_ws.nrows):
-                max_lines = 1
-                for ci in range(b_ws.ncols):
-                    val = b_ws.cell_value(ri, ci)
-                    if b_ws.cell_type(ri, ci) == xlrd.XL_CELL_DATE:
-                        try:
-                            dt = xlrd.xldate_as_datetime(val, b_wb.datemode)
-                            val = dt.strftime('%Y-%m-%d')
-                        except:
-                            pass
-                    max_lines = max(max_lines, _line_count(val))
-                    cell = o_ws.cell(row=ri+1, column=ci+1, value=val)
-                    cell.font = _ds_font
-                    cell.alignment = _ds_align
-                    cell.border = _ds_border
-
-                o_ws.row_dimensions[ri + 1].height = 12.75 * max_lines
-
-                if ri == 0:
-                    continue
-
+            for ri in range(1, b_ws.nrows):
                 hn_norm = _norm_hn(b_ws.cell_value(ri, 0))
                 chg_list = changes_norm.get(hn_norm)
                 if not chg_list:
                     continue
-
                 for chg in chg_list:
                     parsed = _parse_value(chg['변경내역'], chg['변경후'])
-                    if not parsed:
-                        continue
-                    if parsed['sheet'] != sn:
-                        continue
+                    if parsed:
+                        au_entries[hn_norm] = chg['변경내역']
 
-                    target_col = parsed['col']
-                    new_val = parsed['value']
-                    old_val = str(b_ws.cell_value(ri, target_col) if target_col < b_ws.ncols else '').strip()
-
-                    cell = o_ws.cell(row=ri+1, column=target_col+1)
-                    cell.value = new_val
-                    cell.fill = yellow_fill
-                    cell.font = _ds_font
-                    cell.alignment = _ds_align
-                    cell.border = _ds_border
-                    max_lines = max(max_lines, _line_count(new_val))
-                    o_ws.row_dimensions[ri + 1].height = 12.75 * max_lines
-
-                    # AU열 기입 대상 기록
-                    au_entries[hn_norm] = chg['변경내역']
-
-                    change_log.append({
-                        '허가번호': hn_norm,
-                        'sheet': sn,
-                        'type': parsed['type'],
-                        'old': old_val,
-                        'new': new_val,
-                    })
-
-        # Pass 2: "일반사항" 시트에 AU열(47번째 컬럼) 기입
-        일반_sn = None
-        for sn in b_wb.sheet_names():
-            if '일반사항' in sn or '일반' in sn:
-                일반_sn = sn
-                break
-        if 일반_sn and 일반_sn in out_sheets and au_entries:
-            o_ws = out_sheets[일반_sn]
-            b_ws = b_wb.sheet_by_name(일반_sn)
-            au_col = 47  # AU = 47번째 (1-based)
+        # 설치장소 시트 사전 집계: 허가번호별 행 수 (4개 이상이면 04행 스킵)
+        설치장소_hn_count = {}  # {hn_norm: count}
+        for si in range(len(b_wb.sheet_names())):
+            sn = b_wb.sheet_names()[si]
+            if '설치장소' not in sn:
+                continue
+            b_ws = b_wb.sheet_by_index(si)
             for ri in range(1, b_ws.nrows):
-                hn_norm = _norm_hn(b_ws.cell_value(ri, 0))
-                if hn_norm in au_entries:
-                    au_val = au_entries[hn_norm]
-                    au_cell = o_ws.cell(row=ri+1, column=au_col, value=au_val)
-                    au_cell.font = _ds_font
-                    au_cell.alignment = _ds_align
-                    au_cell.border = _ds_border
-                    au_cell.fill = yellow_fill
-                    # AU열 기입으로 줄 수가 늘어난 경우 행 높이 보정
-                    try:
-                        cur_h = o_ws.row_dimensions[ri + 1].height or 12.75
-                    except Exception:
-                        cur_h = 12.75
-                    new_h = 12.75 * _line_count(au_val)
-                    if new_h > cur_h:
-                        o_ws.row_dimensions[ri + 1].height = new_h
-            logger.info(f"변경개설신고: 일반사항 AU열 {len(au_entries)}건 기입")
+                hn = _norm_hn(b_ws.cell_value(ri, 0))
+                설치장소_hn_count[hn] = 설치장소_hn_count.get(hn, 0) + 1
+
+        # Pass 1: 모든 시트 복사 + 변경 적용
+        for si in range(len(b_wb.sheet_names())):
+            sn = b_wb.sheet_names()[si]
+            b_ws = b_wb.sheet_by_index(si)
+            o_ws = out_wb.add_sheet(sn[:31])
+            is_일반 = (sn == 일반_sn_pre)
+            is_설치장소 = '설치장소' in sn
+            is_안테나 = '안테나' in sn
+
+            # 열 너비 (xlwt 단위 256 = 1문자, 19.29문자 ≈ 4938)
+            col_out_count = b_ws.ncols + (2 if is_일반 else 0)
+            for ci in range(max(col_out_count, 49 if is_일반 else b_ws.ncols)):
+                o_ws.col(ci).width = 4938
+
+            seen_hn = set()
+            out_ri = 0
+
+            for ri in range(b_ws.nrows):
+                # 일반사항: 중복 허가번호 스킵
+                if is_일반 and ri > 0:
+                    hn_check = _norm_hn(b_ws.cell_value(ri, 0))
+                    if hn_check in seen_hn:
+                        continue
+                    seen_hn.add(hn_check)
+
+                # 이 행의 오버라이드 {0-based 출력열: (value, yellow)}
+                overrides = {}
+
+                if ri > 0:
+                    hn_norm = _norm_hn(b_ws.cell_value(ri, 0))
+                    chg_list = changes_norm.get(hn_norm)
+
+                    # ── 공통 선제 적용 ──
+
+                    # [공통2] 장치/전파형식/주파수: 변경 대상 허가번호 행이면 철거구분 N
+                    if chg_list:
+                        _철거구분_col = {'장치': 24, '전파형식': 8, '주파수': 9}.get(sn)
+                        if _철거구분_col is not None:
+                            overrides[_철거구분_col] = ('N', False)
+
+                    # [공통3] 안테나: AC열(설치형태, 0-based=28) 값 있고 AB열(0-based=27) 비어있으면 AB 채우기
+                    if is_안테나 and chg_list:
+                        ac_val = str(b_ws.cell_value(ri, 28) if b_ws.ncols > 28 else '').strip()
+                        ab_cur = str(b_ws.cell_value(ri, 27) if b_ws.ncols > 27 else '').strip()
+                        if ac_val and not ab_cur:
+                            ab_fill = '1' if ac_val in ('6', '11') else '2'
+                            overrides[27] = (ab_fill, False)
+
+                    # [공통4] 설치장소: 허가번호당 4행이면 D열(0-based=3)이 '04'인 행 스킵
+                    if is_설치장소 and 설치장소_hn_count.get(hn_norm, 0) >= 4:
+                        d_val = str(b_ws.cell_value(ri, 3) if b_ws.ncols > 3 else '').strip()
+                        if d_val == '04':
+                            continue  # 이 행 출력 스킵
+
+                    if chg_list:
+                        # B파일 현재 행의 장치번호(C열=2), 일련번호(I열=8), 형검번호(L열=11) 미리 추출
+                        b_device_no = str(b_ws.cell_value(ri, 2) if b_ws.ncols > 2 else '').strip()
+                        if b_device_no and isinstance(b_ws.cell_value(ri, 2), float):
+                            b_device_no = str(int(b_ws.cell_value(ri, 2)))
+                        b_serial = str(b_ws.cell_value(ri, 8) if b_ws.ncols > 8 else '').strip()
+                        b_형검 = str(b_ws.cell_value(ri, 11) if b_ws.ncols > 11 else '').strip()
+
+                        for chg in chg_list:
+                            parsed = _parse_value(chg['변경내역'], chg['변경후'])
+                            if not parsed or parsed['sheet'] != sn:
+                                continue
+
+                            target_col = parsed['col']  # 0-based
+                            new_val = parsed['value']
+                            old_val = str(b_ws.cell_value(ri, target_col) if target_col < b_ws.ncols else '').strip()
+
+                            # ── 장치번호 기반 행 특정 (일련번호/형검번호) ──
+                            # A파일에 장치번호가 있으면 → 허가번호 + 장치번호로 행 특정
+                            # A파일에 장치번호 없고 일련번호 변경이면 → 변경전 값으로 행 특정
+                            a_device = chg.get('장치번호', '').strip()
+                            a_before = chg.get('변경전', '').strip()
+
+                            if parsed['type'] in ('일련번호', '형식검정번호'):
+                                if a_device:
+                                    # 장치번호가 명시된 경우: B파일 C열(장치번호)과 비교
+                                    if b_device_no != a_device:
+                                        continue  # 장치번호 불일치 → 이 행 건너뜀
+                                elif parsed['type'] == '일련번호' and a_before:
+                                    # 장치번호 없고 변경전 일련번호 있으면 → 일련번호로 행 특정
+                                    if b_serial != a_before:
+                                        continue  # 일련번호 불일치 → 이 행 건너뜀
+                                # 장치번호도 없고 변경전도 없으면 → 허가번호만으로 전체 적용 (기존 동작)
+
+                            if parsed['type'] == '설치형태':
+                                j_val = str(b_ws.cell_value(ri, 9) if b_ws.ncols > 9 else '').strip()
+                                ab_0 = 27  # AB열 0-based
+                                if not j_val:
+                                    overrides[target_col] = ('', False)
+                                    overrides[ab_0] = ('', False)
+                                    continue
+                                ab_val = '1' if new_val in ('6', '11') else '2'
+                                overrides[ab_0] = (ab_val, False)
+                                _고도_기본값 = {
+                                    '3': '16', '4': '6', '6': '1', '8': '16',
+                                    '11': '2', '12': '3', '13': '16', '15': '2', '25': '2',
+                                }
+                                _고도_val = _고도_기본값.get(new_val)
+                                if _고도_val:
+                                    for _고도_0 in (14, 21, 29):  # O, V, AD 0-based
+                                        overrides[_고도_0] = (_고도_val, False)
+
+                            overrides[target_col] = (new_val, True)
+                            au_entries[hn_norm] = chg['변경내역']
+                            change_log.append({
+                                '허가번호': hn_norm, 'sheet': sn,
+                                'type': parsed['type'], 'old': old_val, 'new': new_val,
+                            })
+
+                    # 일반사항: AU열에 변경내역 기입
+                    if is_일반 and hn_norm in au_entries:
+                        overrides[AU_0] = (au_entries[hn_norm], True)
+
+                # 셀 쓰기 — 일반사항은 AU열(0-based=46) 이후 출력열을 +2 오프셋
+                max_lines = 1
+                out_ci = 0
+                for ci in range(b_ws.ncols):
+                    val = b_ws.cell_value(ri, ci)
+                    if b_ws.cell_type(ri, ci) == xlrd.XL_CELL_DATE:
+                        try:
+                            val = xlrd.xldate_as_datetime(val, b_wb.datemode).strftime('%Y-%m-%d')
+                        except:
+                            pass
+                    if ci in overrides:
+                        val, yellow = overrides[ci]
+                    else:
+                        yellow = False
+                    max_lines = max(max_lines, _line_count(val))
+                    _write(o_ws, out_ri, out_ci, val, _st_y if yellow else _st)
+                    out_ci += 1
+                    # 일반사항: AU열 직후 빈 열 2개 삽입
+                    if is_일반 and ci == AU_0:
+                        _write(o_ws, out_ri, out_ci, '', _st)
+                        _write(o_ws, out_ri, out_ci + 1, '', _st)
+                        out_ci += 2
+
+                # 행 높이 (xlwt: 1/20pt, 12.75pt → 255)
+                o_ws.row(out_ri).height_mismatch = True
+                o_ws.row(out_ri).height = int(255 * max_lines)
+                out_ri += 1
+
+        logger.info(f"변경개설신고: {len(au_entries)}건 AU열 기입, {len(change_log)}건 변경 적용, 일반사항 빈열 2개 삽입")
 
         # 6. 결과 바이트 반환
         buf = io.BytesIO()
         out_wb.save(buf)
-        out_wb.close()
         buf.seek(0)
         # 변경 유형 수집
         types = list(set(c['type'] for c in change_log)) if change_log else []
-        return buf.getvalue(), len(change_log), len(changes), types
+        # B파일(DS) 원본 파일명 (확장자 제거)
+        b_fname = file1.filename if type1 == 'B' else file2.filename
+        b_stem = b_fname.rsplit('.', 1)[0] if b_fname and '.' in b_fname else (b_fname or 'DS파일')
+        return buf.getvalue(), len(change_log), len(changes), types, b_stem
 
     try:
-        data, change_count, target_count, change_types = await asyncio.to_thread(_process)
+        data, change_count, target_count, change_types, b_stem = await asyncio.to_thread(_process)
     except ValueError as e:
         raise HTTPException(400, str(e))
 
     from urllib.parse import quote as _q
-    type_label = ','.join(change_types) if change_types else '변경'
-    filename = f"변경적용({type_label})_DS파일.xlsx"
+    filename = f"{b_stem}_변경후.xls"
     return Response(
         content=data,
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        media_type="application/vnd.ms-excel",
         headers={
             "Content-Disposition": f"attachment; filename*=UTF-8''{_q(filename)}",
             "X-Change-Count": str(change_count),
@@ -14827,6 +15000,20 @@ def _init_community_db():
             except Exception:
                 pass
     conn.execute('PRAGMA foreign_keys = ON')
+    # notifications 테이블
+    conn.execute('''CREATE TABLE IF NOT EXISTS notifications (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_empno   TEXT NOT NULL,
+        type         TEXT NOT NULL,
+        title        TEXT NOT NULL,
+        body         TEXT NOT NULL,
+        related_type TEXT DEFAULT '',
+        related_id   INTEGER DEFAULT 0,
+        is_read      INTEGER DEFAULT 0,
+        created_at   TEXT NOT NULL
+    )''')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_notif_user ON notifications(user_empno, is_read)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_notif_created ON notifications(created_at)')
     conn.commit()
     conn.close()
 
@@ -15148,11 +15335,51 @@ async def create_notice(body: NoticeCreate, request: Request):
             )
             conn.commit()
             row = conn.execute("SELECT * FROM notices WHERE id = ?", (cur.lastrowid,)).fetchone()
-            return dict(row)
+            return dict(row), cur.lastrowid
         finally:
             conn.close()
 
-    result = await asyncio.to_thread(_do)
+    result, notice_id = await asyncio.to_thread(_do)
+
+    # 비동기로 알림 발송 (응답 블로킹 없음)
+    async def _send_notice_notifications():
+        try:
+            all_users = await asyncio.to_thread(_list_all_users_sync)
+            division = body.division  # '전체' 또는 특정 본부명
+            targets = [
+                u for u in all_users
+                if not u.get("is_dormant")
+                and u.get("empno") != empno
+                and (
+                    division == '전체'
+                    or division in (u.get("region") or '')
+                )
+            ]
+
+            def _bulk_insert():
+                conn2 = sqlite3.connect(_COMMUNITY_DB, timeout=30)
+                try:
+                    _now = datetime.now(timezone.utc).isoformat()
+                    notif_title = f'[{"전체" if division == "전체" else division}] 새 공지사항'
+                    conn2.executemany(
+                        "INSERT INTO notifications (user_empno, type, title, body, related_type, related_id, created_at) "
+                        "VALUES (?, 'notice', ?, ?, 'notice', ?, ?)",
+                        [
+                            (u["empno"], notif_title, body.title[:60], notice_id, _now)
+                            for u in targets
+                        ],
+                    )
+                    conn2.commit()
+                finally:
+                    conn2.close()
+
+            if targets:
+                await asyncio.to_thread(_bulk_insert)
+        except Exception as e:
+            logger.warning(f"공지 알림 발송 실패: {e}")
+
+    asyncio.create_task(_send_notice_notifications())
+
     return {"success": True, "notice": result}
 
 
@@ -15428,13 +15655,24 @@ async def update_request_status(req_id: int, body: RequestStatusUpdate, request:
         conn = sqlite3.connect(_COMMUNITY_DB, timeout=30)
         conn.row_factory = sqlite3.Row
         try:
-            row = conn.execute("SELECT id FROM requests WHERE id = ?", (req_id,)).fetchone()
+            row = conn.execute("SELECT id, author_empno, title FROM requests WHERE id = ?", (req_id,)).fetchone()
             if not row:
                 raise HTTPException(404, "요청사항을 찾을 수 없습니다")
             conn.execute(
                 "UPDATE requests SET status = ?, updated_at = ? WHERE id = ?",
                 (body.status, now, req_id),
             )
+            # 알림: 작성자에게 상태 변경 통보
+            req_author = row["author_empno"]
+            if req_author and req_author != empno:
+                label_map = {'처리중': '처리 중으로 변경되었습니다', '완료': '처리 완료되었습니다', '접수': '접수 상태로 변경되었습니다'}
+                label = label_map.get(body.status, f'{body.status} 상태로 변경되었습니다')
+                _insert_notification(
+                    conn, req_author, 'status',
+                    '요청사항 상태가 변경되었습니다',
+                    f'"{row["title"]}" 이(가) {label}',
+                    'request', req_id,
+                )
             conn.commit()
             updated = conn.execute("SELECT * FROM requests WHERE id = ?", (req_id,)).fetchone()
             return dict(updated)
@@ -15484,7 +15722,7 @@ async def create_comment(req_id: int, body: CommentCreate, request: Request):
         conn.row_factory = sqlite3.Row
         try:
             # 요청사항 존재 확인
-            req_row = conn.execute("SELECT id FROM requests WHERE id = ?", (req_id,)).fetchone()
+            req_row = conn.execute("SELECT id, author_empno, title FROM requests WHERE id = ?", (req_id,)).fetchone()
             if not req_row:
                 raise HTTPException(404, "요청사항을 찾을 수 없습니다")
             cur = conn.execute(
@@ -15492,6 +15730,16 @@ async def create_comment(req_id: int, body: CommentCreate, request: Request):
                 "VALUES (?, ?, ?, ?, ?, ?)",
                 (req_id, body.content, empno, user_info["name"], user_info["org"], now),
             )
+            # 알림: 자기 글에 자기가 댓글 달면 알림 없음
+            req_author = req_row["author_empno"]
+            if req_author and req_author != empno:
+                preview = body.content[:40] + ('...' if len(body.content) > 40 else '')
+                _insert_notification(
+                    conn, req_author, 'comment',
+                    '내 요청에 댓글이 달렸습니다',
+                    f'"{req_row["title"]}" — {preview}',
+                    'request', req_id,
+                )
             conn.commit()
             row = conn.execute("SELECT * FROM comments WHERE id = ?", (cur.lastrowid,)).fetchone()
             d = dict(row)
@@ -15502,6 +15750,77 @@ async def create_comment(req_id: int, body: CommentCreate, request: Request):
 
     comment = await asyncio.to_thread(_do)
     return {"success": True, "comment": comment}
+
+
+# ── 알림 (Notifications) ─────────────────────────────────────
+
+def _insert_notification(conn, user_empno: str, ntype: str, title: str, body: str,
+                          related_type: str = '', related_id: int = 0):
+    """알림 1건 INSERT (이미 열린 connection 사용)."""
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat()
+    conn.execute(
+        "INSERT INTO notifications (user_empno, type, title, body, related_type, related_id, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (user_empno, ntype, title, body, related_type, related_id, now),
+    )
+
+
+@app.get("/notifications")
+async def get_notifications(request: Request):
+    empno = await _verify_auth(request)
+
+    def _do():
+        conn = sqlite3.connect(_COMMUNITY_DB, timeout=30)
+        conn.row_factory = sqlite3.Row
+        try:
+            rows = conn.execute(
+                "SELECT * FROM notifications WHERE user_empno = ? "
+                "ORDER BY is_read ASC, created_at DESC LIMIT 50",
+                (empno,),
+            ).fetchall()
+            items = [dict(r) for r in rows]
+            unread = sum(1 for r in items if r["is_read"] == 0)
+            return {"unread_count": unread, "items": items}
+        finally:
+            conn.close()
+
+    return await asyncio.to_thread(_do)
+
+
+@app.post("/notifications/read-all")
+async def read_all_notifications(request: Request):
+    empno = await _verify_auth(request)
+
+    def _do():
+        conn = sqlite3.connect(_COMMUNITY_DB, timeout=30)
+        try:
+            conn.execute("UPDATE notifications SET is_read = 1 WHERE user_empno = ?", (empno,))
+            conn.commit()
+        finally:
+            conn.close()
+
+    await asyncio.to_thread(_do)
+    return {"success": True}
+
+
+@app.post("/notifications/{notif_id}/read")
+async def read_notification(notif_id: int, request: Request):
+    empno = await _verify_auth(request)
+
+    def _do():
+        conn = sqlite3.connect(_COMMUNITY_DB, timeout=30)
+        try:
+            conn.execute(
+                "UPDATE notifications SET is_read = 1 WHERE id = ? AND user_empno = ?",
+                (notif_id, empno),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    await asyncio.to_thread(_do)
+    return {"success": True}
 
 
 @app.delete("/community/comments/{comment_id}")

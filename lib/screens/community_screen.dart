@@ -6,9 +6,17 @@ import '../services/community_service.dart';
 import 'notice_board_screen.dart';
 import 'request_board_screen.dart';
 
+/// 알림에서 커뮤니티 특정 글로 이동할 때 사용하는 글로벌 키
+final _communityScreenKey = GlobalKey<_CommunityScreenState>();
+
 /// 커뮤니티 통합 화면
 class CommunityScreen extends StatefulWidget {
-  const CommunityScreen({super.key});
+  CommunityScreen() : super(key: _communityScreenKey);
+
+  /// 알림 클릭 시 외부에서 호출: 해당 탭 + 글로 이동
+  static void navigateTo(BuildContext context, {required String relatedType, required int relatedId}) {
+    _communityScreenKey.currentState?._openDeepLink(relatedType, relatedId);
+  }
 
   @override
   State<CommunityScreen> createState() => _CommunityScreenState();
@@ -22,6 +30,10 @@ class _CommunityScreenState extends State<CommunityScreen> {
   final _svc = CommunityService();
   bool _statsLoading = true;
   int _selectedTab = 0; // 0 = 공지, 1 = 요청 및 문의
+
+  // 딥링크: 알림 클릭 시 특정 글로 이동
+  int? _deepLinkNoticeId;
+  int? _deepLinkRequestId;
 
   // 통계
   int _myTotal = 0;
@@ -44,6 +56,22 @@ class _CommunityScreenState extends State<CommunityScreen> {
     super.initState();
     _svc.setAuthToken(context.read<AuthService>().authToken);
     _loadStats();
+  }
+
+  void _openDeepLink(String relatedType, int relatedId) {
+    if (relatedType == 'notice') {
+      setState(() {
+        _selectedTab = 0;
+        _deepLinkNoticeId = relatedId;
+        _deepLinkRequestId = null;
+      });
+    } else if (relatedType == 'request') {
+      setState(() {
+        _selectedTab = 1;
+        _deepLinkRequestId = relatedId;
+        _deepLinkNoticeId = null;
+      });
+    }
   }
 
   Future<void> _loadStats() async {
@@ -98,9 +126,9 @@ class _CommunityScreenState extends State<CommunityScreen> {
           Expanded(
             child: IndexedStack(
               index: _selectedTab,
-              children: const [
-                NoticeBoardScreen(showHeader: false),
-                RequestBoardScreen(showHeader: false),
+              children: [
+                NoticeBoardScreen(showHeader: false, openNoticeId: _deepLinkNoticeId),
+                RequestBoardScreen(showHeader: false, openRequestId: _deepLinkRequestId),
               ],
             ),
           ),
