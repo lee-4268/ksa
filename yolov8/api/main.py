@@ -1067,6 +1067,18 @@ def _list_all_users_sync() -> list:
         })
 
 
+    # 대소문자 중복 제거 (대문자 키 우선, 프로필 있는 쪽 우선)
+    deduped = {}
+    for u in users:
+        key = u["empno"].upper()
+        if key not in deduped:
+            deduped[key] = u
+        else:
+            # 이름이 있는 쪽을 우선 (프로필 조회 성공한 쪽)
+            if not deduped[key].get("name") and u.get("name"):
+                deduped[key] = u
+    users = list(deduped.values())
+
     users.sort(key=lambda u: u.get("name") or "")
     _admin_users_cache = users
     _admin_users_cache_time = now
@@ -1876,16 +1888,18 @@ async def proxy_sso_login(req: LoginRequest, request: Request):
         sso_data = response.json()
 
         if response.status_code == 200 and sso_data.get("result") == "ok":
+            # 사번 대문자 정규화 (Users 테이블 키와 일치시키기)
+            username = req.username.upper()
             # 휴면계정 차단
-            role_info = await asyncio.to_thread(_get_user_role_info, req.username)
+            role_info = await asyncio.to_thread(_get_user_role_info, username)
             if role_info["is_dormant"]:
                 return JSONResponse(
                     status_code=403,
                     content={"result": "fail", "message": "휴면 계정입니다. 관리자에게 문의하거나 이메일 인증을 진행해 주세요."},
                 )
-            token = _generate_token(req.username)
-            await asyncio.to_thread(_ensure_user_in_roles_sync, req.username)
-            await asyncio.to_thread(_update_last_login, req.username)
+            token = _generate_token(username)
+            await asyncio.to_thread(_ensure_user_in_roles_sync, username)
+            await asyncio.to_thread(_update_last_login, username)
             return JSONResponse(
                 status_code=200,
                 content={**sso_data, "token": token, "expiresIn": AUTH_TOKEN_EXPIRY},
