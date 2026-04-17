@@ -5,7 +5,13 @@ import '../models/radio_station.dart';
 import '../providers/station_provider.dart';
 import '../services/division_data_service.dart';
 import '../services/auth_service.dart';
+import '../services/kca_export_service.dart';
 import '../widgets/user_profile_button.dart';
+
+// 플랫폼별 Excel 저장 (웹: 다운로드, 모바일: 파일 저장 + 공유)
+import '../services/excel_export_stub.dart'
+    if (dart.library.io) '../services/excel_export_mobile.dart'
+    if (dart.library.html) '../services/excel_export_web.dart' as platform_export;
 
 /// 일정 관리 및 통계 대시보드 화면
 class ScheduleScreen extends StatefulWidget {
@@ -475,6 +481,13 @@ class _ScheduleScreenState extends State<ScheduleScreen>
       ),
       centerTitle: true,
       actions: [
+        // Manager 이상만 KCA 호환 Excel Export 가능
+        if (context.watch<AuthService>().isAdmin)
+          IconButton(
+            tooltip: 'KCA Excel 내보내기',
+            icon: const Icon(Icons.file_download_outlined, color: Colors.black87),
+            onPressed: _showKcaExportDialog,
+          ),
         UserProfileButton(
           onLogout: () {
             context.read<AuthService>().signOut();
@@ -484,6 +497,179 @@ class _ScheduleScreenState extends State<ScheduleScreen>
         const SizedBox(width: 8),
       ],
     );
+  }
+
+  /// KCA playground Import 호환 Excel 내보내기 다이얼로그
+  Future<void> _showKcaExportDialog() async {
+    final auth = context.read<AuthService>();
+
+    // 지역본부 소속이면 해당 본부가 기본값 (변경 가능)
+    final userShortName = auth.currentDivisionShortName;
+    var selectedDivisionId = _selectedDivisionId ?? _divisions.first['id']!;
+    if (userShortName != null) {
+      final matching = _divisions.firstWhere(
+        (d) => (d['name'] ?? '').startsWith(userShortName),
+        orElse: () => _divisions.first,
+      );
+      selectedDivisionId = matching['id']!;
+    }
+
+    var selectedYear = DateTime.now().year;
+    final years = List<int>.generate(5, (i) => DateTime.now().year - i);
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogCtx) {
+        return StatefulBuilder(
+          builder: (ctx, setDialogState) {
+            return AlertDialog(
+              title: Row(
+                children: const [
+                  Icon(Icons.file_download_outlined, color: _primaryColor, size: 22),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'KCA Playground용 Excel 내보내기',
+                      style: TextStyle(fontSize: 16),
+                    ),
+                  ),
+                ],
+              ),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    '수검대상 / 수검일정 / 수검결과 3개 시트가 포함됩니다.',
+                    style: TextStyle(fontSize: 12, color: Colors.black54),
+                  ),
+                  const SizedBox(height: 16),
+                  // 연도
+                  DropdownButtonFormField<int>(
+                    initialValue: selectedYear,
+                    decoration: const InputDecoration(
+                      labelText: '연도',
+                      border: OutlineInputBorder(),
+                      isDense: true,
+                    ),
+                    items: years
+                        .map((y) => DropdownMenuItem(value: y, child: Text('$y')))
+                        .toList(),
+                    onChanged: (v) {
+                      if (v != null) setDialogState(() => selectedYear = v);
+                    },
+                  ),
+                  const SizedBox(height: 12),
+                  // 본부
+                  DropdownButtonFormField<String>(
+                    initialValue: selectedDivisionId,
+                    decoration: const InputDecoration(
+                      labelText: '본부',
+                      border: OutlineInputBorder(),
+                      isDense: true,
+                    ),
+                    items: _divisions
+                        .map((d) => DropdownMenuItem(
+                              value: d['id'],
+                              child: Text(d['name']!),
+                            ))
+                        .toList(),
+                    onChanged: (v) {
+                      if (v != null) setDialogState(() => selectedDivisionId = v);
+                    },
+                  ),
+                  if (userShortName != null) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      '자동 선택됨: $userShortName본부 (변경 가능)',
+                      style: const TextStyle(fontSize: 11, color: _blueAccent),
+                    ),
+                  ],
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(dialogCtx),
+                  child: const Text('취소'),
+                ),
+                ElevatedButton.icon(
+                  icon: const Icon(Icons.download, size: 18),
+                  label: const Text('내보내기'),
+                  onPressed: () {
+                    Navigator.pop(dialogCtx);
+                    final division = _divisions
+                        .firstWhere((d) => d['id'] == selectedDivisionId);
+                    _runKcaExport(
+                      year: selectedYear,
+                      divisionId: division['id']!,
+                      divisionName: division['name']!,
+                    );
+                  },
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  /// 실제 Export 실행 (로딩 표시 → Excel 생성 → 파일 저장)
+  Future<void> _runKcaExport({
+    required int year,
+    required String divisionId,
+    required String divisionName,
+  }) async {
+    final scaffoldMessenger = ScaffoldMessenger.of(context);
+    final auth = context.read<AuthService>();
+
+    // 본부명 → short name (예: "경북본부" → "경북")
+    final shortName = divisionName.replaceAll('본부', '');
+
+    // 로딩 다이얼로그
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const AlertDialog(
+        content: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            CircularProgressIndicator(),
+            SizedBox(width: 16),
+            Expanded(child: Text('Excel 생성 중...')),
+          ],
+        ),
+      ),
+    );
+
+    try {
+      final exporter = KcaExportService(authToken: auth.authToken);
+      final bytes = await exporter.buildKcaImportExcel(
+        year: year,
+        divisionShortName: shortName,
+      );
+
+      final fileName = '수검데이터_${divisionName}_$year.xlsx';
+      await platform_export.saveExcelFile(bytes, fileName, saveOnly: false);
+
+      if (!mounted) return;
+      Navigator.of(context, rootNavigator: true).pop(); // 로딩 닫기
+      scaffoldMessenger.showSnackBar(
+        SnackBar(
+          content: Text('내보내기 완료: $fileName'),
+          backgroundColor: _greenColor,
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      Navigator.of(context, rootNavigator: true).pop(); // 로딩 닫기
+      scaffoldMessenger.showSnackBar(
+        SnackBar(
+          content: Text('내보내기 실패: $e'),
+          backgroundColor: _primaryColor,
+        ),
+      );
+    }
   }
 
   /// 탭 섹션 (카테고리별 진도율 / 날짜별 통계)
