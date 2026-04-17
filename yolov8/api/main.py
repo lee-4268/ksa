@@ -12190,7 +12190,7 @@ class InspectionExportReq(BaseModel):
 
 @app.post("/inspection/export-xlsx")
 async def inspection_export_xlsx(request: Request, req: InspectionExportReq):
-    """필터 적용 전체 데이터 → xlsx StreamingResponse."""
+    """필터 적용 전체 데이터 → xlsx (수검대상 + 수검일정 + 수검결과 3시트)."""
     await _verify_auth(request)
     if not HAS_OPENPYXL:
         raise HTTPException(503, "openpyxl 미설치")
@@ -12198,52 +12198,112 @@ async def inspection_export_xlsx(request: Request, req: InspectionExportReq):
         raise HTTPException(404, "데이터 없음")
     where_sql, params = _build_insp_where(req.year, req.sheet, req.filters, req.search, req.addr)
 
-    HEADERS = ['허가번호','호출명칭','국종군','부서','분기','연도주기','검사주기','허가상태',
-               '설치장소','도로명주소','장치수','통시','공대','kca검토결과','시기조정',
-               '기준연도','skt본부','access담당','품질개선팀']
+    TARGET_HEADERS = ['허가번호','호출명칭','국종군','부서','분기','연도주기','검사주기','허가상태',
+                      '설치장소','도로명주소','장치수','통시','공대','kca검토결과','시기조정',
+                      '기준연도','skt본부','access담당','품질개선팀']
+
+    SCHEDULE_HEADERS = ['허가번호','호출명칭','분기','skt본부','access담당','품질개선팀',
+                        '수검예정주차','수검시작일','수검종료일','지역',
+                        '등록자','등록일시','검사관','조']
+
+    RESULT_HEADERS = ['허가번호','status','검사일','메모','철탑형태',
+                      '입력자','입력일시']
+
+    # 수검일정/결과도 수검대상과 동일한 본부/팀 필터 적용
+    access_filter = (req.filters or {}).get('access담당', [])
+    team_filter = (req.filters or {}).get('품질개선팀', [])
+    f_access = access_filter[0] if access_filter else ''
+    f_team = team_filter[0] if team_filter else ''
 
     def _build():
         import openpyxl
         from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
         c = sqlite3.connect(_INSP_DB, timeout=60); c.row_factory = sqlite3.Row
-        rows = c.execute(f'SELECT * FROM inspection_targets WHERE {where_sql} ORDER BY id', params).fetchall()
+
+        # 수검대상
+        target_rows = c.execute(f'SELECT * FROM inspection_targets WHERE {where_sql} ORDER BY id', params).fetchall()
+
+        # 수검일정 (본부/팀 필터)
+        sched_where = 'year=?'
+        sched_params = [req.year]
+        if f_access:
+            sched_where += ' AND access담당=?'
+            sched_params.append(f_access)
+        if f_team:
+            sched_where += ' AND 품질개선팀=?'
+            sched_params.append(f_team)
+        sched_rows = c.execute(
+            f'SELECT * FROM inspection_schedules WHERE {sched_where}',
+            sched_params).fetchall()
+
+        # 수검결과 (입회자가 직접 입력한 수검결과, targets JOIN으로 본부/팀 필터)
+        result_where = 'r.year=?'
+        result_params = [req.year]
+        if f_access:
+            result_where += ' AND t.access담당=?'
+            result_params.append(f_access)
+        if f_team:
+            result_where += ' AND t.품질개선팀=?'
+            result_params.append(f_team)
+        result_rows = c.execute(
+            f'''SELECT r.* FROM inspection_results r
+                JOIN inspection_targets t ON r.year = t.year AND r.허가번호 = t.허가번호
+                WHERE {result_where}
+                ORDER BY r.허가번호''',
+            result_params).fetchall()
+
         c.close()
 
         wb = openpyxl.Workbook()
-        ws = wb.active
-        ws.title = f"{req.year}년_수검대상"
 
         hdr_font = Font(name='Arial', size=10, bold=True, color='FFFFFF')
-        hdr_fill = PatternFill('solid', fgColor='E53935')
         hdr_align = Alignment(horizontal='center', vertical='center')
         thin = Border(
             left=Side(style='thin'), right=Side(style='thin'),
             top=Side(style='thin'), bottom=Side(style='thin'))
+        data_font = Font(name='Arial', size=10)
         data_align = Alignment(horizontal='center', vertical='center')
 
-        ws.append(HEADERS)
-        for cell in ws[1]:
-            cell.font = hdr_font; cell.fill = hdr_fill
-            cell.alignment = hdr_align; cell.border = thin
+        fills = {
+            '수검대상': PatternFill('solid', fgColor='E53935'),
+            '수검일정': PatternFill('solid', fgColor='1565C0'),
+            '수검결과': PatternFill('solid', fgColor='43A047'),
+        }
 
-        for row in rows:
-            d = dict(row)
-            ws.append([d.get(h, '') for h in HEADERS])
+        def _write_sheet(ws, headers, rows, fill):
+            ws.append(headers)
+            for cell in ws[1]:
+                cell.font = hdr_font; cell.fill = fill
+                cell.alignment = hdr_align; cell.border = thin
+            for row in rows:
+                d = dict(row)
+                ws.append([d.get(h, '') for h in headers])
+            for col in ws.iter_cols(min_row=2, max_row=max(ws.max_row, 2)):
+                for cell in col:
+                    cell.alignment = data_align; cell.border = thin
+                    cell.font = data_font
+            for i in range(1, len(headers) + 1):
+                ws.column_dimensions[ws.cell(1, i).column_letter].width = 18
 
-        for col in ws.iter_cols(min_row=2, max_row=ws.max_row):
-            for cell in col:
-                cell.alignment = data_align; cell.border = thin
-                cell.font = Font(name='Arial', size=10)
+        # 시트 1: 수검대상
+        ws1 = wb.active
+        ws1.title = '수검대상'
+        _write_sheet(ws1, TARGET_HEADERS, target_rows, fills['수검대상'])
 
-        for i, h in enumerate(HEADERS, 1):
-            ws.column_dimensions[ws.cell(1, i).column_letter].width = 18
+        # 시트 2: 수검일정
+        ws2 = wb.create_sheet('수검일정')
+        _write_sheet(ws2, SCHEDULE_HEADERS, sched_rows, fills['수검일정'])
+
+        # 시트 3: 수검결과
+        ws3 = wb.create_sheet('수검결과')
+        _write_sheet(ws3, RESULT_HEADERS, result_rows, fills['수검결과'])
 
         buf = io.BytesIO()
         wb.save(buf); buf.seek(0)
         return buf.getvalue()
 
     data = await asyncio.to_thread(_build)
-    fname = f"수검대상_{req.year}년.xlsx"
+    fname = f"수검데이터_{req.year}년.xlsx"
     from urllib.parse import quote as _q
     return Response(
         content=data,

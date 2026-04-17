@@ -40,26 +40,39 @@ class KcaExportService {
     final division = (divisionShortName ?? '').trim();
 
     final targets = await _fetchTargets(year, division);
+    await _yield();
     final schedules = await _fetchSchedules(year, division);
+    await _yield();
     final results = await _fetchResults(year, division);
+    await _yield();
 
     final excel = excel_pkg.Excel.createExcel();
-    // 기본 'Sheet1' 제거
-    final defaultSheet = excel.getDefaultSheet();
-    if (defaultSheet != null) {
-      excel.delete(defaultSheet);
+
+    // 시트 추가 (추가 후 기본 시트 삭제해야 안정적)
+    await _writeSheet(excel, '수검대상', _targetsColumns, targets);
+    await _writeSheet(excel, '수검일정', _schedulesColumns, schedules);
+    await _writeSheet(excel, '수검결과', _resultsColumns, results);
+
+    // 기본 'Sheet1' 제거 (createExcel이 자동 생성한 빈 시트)
+    for (final name in ['Sheet1', 'sheet1']) {
+      if (excel.tables.containsKey(name)) {
+        excel.delete(name);
+      }
     }
+    excel.setDefaultSheet('수검대상');
 
-    _writeSheet(excel, '수검대상', _targetsColumns, targets);
-    _writeSheet(excel, '수검일정', _schedulesColumns, schedules);
-    _writeSheet(excel, '수검결과', _resultsColumns, results);
+    await _yield();
 
-    final bytes = excel.save();
+    // save()는 웹에서 자동 다운로드를 트리거하므로 encode() 사용
+    final bytes = excel.encode();
     if (bytes == null) {
       throw Exception('Excel 파일 생성에 실패했습니다.');
     }
     return Uint8List.fromList(bytes);
   }
+
+  /// 이벤트 루프에 제어권을 양보해 UI 응답성 유지 (웹의 "응답 없음" 방지)
+  Future<void> _yield() => Future<void>.delayed(Duration.zero);
 
   Future<List<Map<String, dynamic>>> _fetchTargets(int year, String division) async {
     final filters = <String, List<String>>{
@@ -104,12 +117,12 @@ class KcaExportService {
     return items;
   }
 
-  void _writeSheet(
+  Future<void> _writeSheet(
     excel_pkg.Excel excel,
     String sheetName,
     List<String> columns,
     List<Map<String, dynamic>> rows,
-  ) {
+  ) async {
     final sheet = excel[sheetName];
 
     // 헤더
@@ -119,15 +132,17 @@ class KcaExportService {
       ).toList(),
     );
 
-    // 데이터
-    for (final row in rows) {
+    // 데이터 - 1000행마다 UI에 제어권 양보
+    const chunkSize = 1000;
+    for (var i = 0; i < rows.length; i++) {
+      final row = rows[i];
       final cells = columns.map<excel_pkg.CellValue?>((col) {
         final v = row[col];
         if (v == null) return excel_pkg.TextCellValue('');
-        if (v is num) return excel_pkg.TextCellValue(v.toString());
         return excel_pkg.TextCellValue(v.toString());
       }).toList();
       sheet.appendRow(cells);
+      if (i % chunkSize == chunkSize - 1) await _yield();
     }
   }
 }
