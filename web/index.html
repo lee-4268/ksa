@@ -63,7 +63,20 @@
           if (status === kakao.maps.services.Status.OK && result && result.length > 0) {
             callback(parseFloat(result[0].y), parseFloat(result[0].x)); // lat, lng
           } else {
-            callback(null, null);
+            // 주소 검색 실패 시 키워드(장소) 검색으로 폴백
+            try {
+              var ps = new kakao.maps.services.Places();
+              ps.keywordSearch(address, function(places, pStatus) {
+                if (pStatus === kakao.maps.services.Status.OK && places && places.length > 0) {
+                  callback(parseFloat(places[0].y), parseFloat(places[0].x));
+                } else {
+                  callback(null, null);
+                }
+              });
+            } catch (e2) {
+              console.error('카카오 keywordSearch 오류:', e2);
+              callback(null, null);
+            }
           }
         });
       } catch (e) {

@@ -7141,7 +7141,7 @@ def _cert_batch_lookup_cached(zpwino_list: list) -> dict:
     if not zpwino_list:
         return {}
     _cert_cache_load()
-    cols = ["zpwino", "zpwina", "zpwiadr", "zpcode", "area_hdofc_nm", "ons_team_nm", "zpirty3", "eqp_ser_no"]
+    cols = ["zpwino", "zpwina", "zpwiadr", "zpcode", "area_hdofc_nm", "ons_team_nm", "zpirty3", "eqp_ser_no", "zpwilat", "zpwilon"]
     results = {}
     try:
         conn = sqlite3.connect(_cert_cache_db_path)
@@ -7153,7 +7153,8 @@ def _cert_batch_lookup_cached(zpwino_list: list) -> dict:
                 cur = conn.execute(f"SELECT * FROM cert WHERE {col}=? LIMIT 1", (q,))
                 row = cur.fetchone()
                 if row:
-                    results[q] = {c: (row[c] or "") for c in cols}
+                    row_dict = dict(row)
+                    results[q] = {c: (row_dict.get(c) or "") for c in cols}
                     break
         conn.close()
     except Exception as e:
@@ -10028,12 +10029,26 @@ def _erp_ds_compare_sync(
         # 주소 우선순위: inspection_targets 도로명주소 > 설치장소 > ERP zpwiadr
         best_address = (insp.get("도로명주소") or insp.get("설치장소")
                         or (erp.get("zpwiadr", "") if erp else ""))
+
+        # 위경도 우선순위: inspection_targets > ERP zpwilat/zpwilon
+        lat = insp.get("위도")
+        lng = insp.get("경도")
+        if (lat is None or lng is None) and erp:
+            try:
+                erp_lat = erp.get("zpwilat", "")
+                erp_lng = erp.get("zpwilon", "")
+                if erp_lat and erp_lng:
+                    lat = float(erp_lat) or None
+                    lng = float(erp_lng) or None
+            except (ValueError, TypeError):
+                pass
+
         items.append({
             "zpwino": z,
             "zpwina": erp.get("zpwina", "") if erp else "",
             "zpwiadr": best_address,
-            "lat": insp.get("위도"),
-            "lng": insp.get("경도"),
+            "lat": lat,
+            "lng": lng,
             "area_hdofc_nm": erp.get("area_hdofc_nm", "") if erp else "",
             "erp_found": bool(erp),
             "erp_zpirty3": erp_zpirty3,
