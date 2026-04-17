@@ -212,10 +212,11 @@ class AuthService extends ChangeNotifier {
 
         if (result == 'ok') {
           // 2. SSO 인증 성공 → 토큰 저장 + 즉시 로그인 상태 반영
+          final normalizedId = username.toUpperCase();
           _authToken = data['token'] as String?;
           _isSignedIn = true;
-          _userId = username;
-          _userName = username; // 임시로 사번 표시
+          _userId = normalizedId;
+          _userName = normalizedId; // 임시로 사번 표시
           _isLoading = false;
 
           debugPrint('로그인 성공: $_userId, isSignedIn=$_isSignedIn');
@@ -230,7 +231,7 @@ class AuthService extends ChangeNotifier {
           _startSessionTimerBackground();
 
           // 3. 사용자 상세 정보 비동기 조회 (화면 전환 후 백그라운드)
-          _lookupAndUpdateUserInfo(username);
+          _lookupAndUpdateUserInfo(normalizedId);
 
           return true;
         } else {
