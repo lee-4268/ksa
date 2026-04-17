@@ -15226,6 +15226,11 @@ def _init_community_db():
         FOREIGN KEY (request_id) REFERENCES requests(id) ON DELETE CASCADE
     )''')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_comments_request ON comments(request_id)')
+    # comments 테이블 마이그레이션: updated_at 컬럼 추가
+    try:
+        conn.execute("ALTER TABLE comments ADD COLUMN updated_at TEXT DEFAULT ''")
+    except Exception:
+        pass
     # 기존 테이블에 컬럼 추가 (이미 존재하면 무시)
     for col, default in [('secret_password', "''")]:
         try:
@@ -15296,6 +15301,9 @@ class RequestStatusUpdate(BaseModel):
 
 
 class CommentCreate(BaseModel):
+    content: str
+
+class CommentUpdate(BaseModel):
     content: str
 
 
@@ -15593,6 +15601,7 @@ async def create_notice(body: NoticeCreate, request: Request):
                 and (
                     division == '전체'
                     or division in (u.get("region") or '')
+                    or u.get("role") == "admin"  # admin은 모든 공지 알림 수신
                 )
             ]
 
@@ -15819,11 +15828,49 @@ async def create_request(body: RequestCreate, request: Request):
             )
             conn.commit()
             row = conn.execute("SELECT * FROM requests WHERE id = ?", (cur.lastrowid,)).fetchone()
-            return dict(row)
+            return dict(row), cur.lastrowid
         finally:
             conn.close()
 
-    result = await asyncio.to_thread(_do)
+    result, request_id = await asyncio.to_thread(_do)
+
+    # admin에게 새 요청 알림 (비동기, 응답 블로킹 없음)
+    async def _notify_admins_new_request():
+        try:
+            all_users = await asyncio.to_thread(_list_all_users_sync)
+            admins = [
+                u for u in all_users
+                if u.get("role") == "admin"
+                and not u.get("is_dormant")
+                and u.get("empno") != empno
+            ]
+            if not admins:
+                return
+
+            def _bulk():
+                conn2 = sqlite3.connect(_COMMUNITY_DB, timeout=30)
+                try:
+                    _now = datetime.now(timezone.utc).isoformat()
+                    author_name = user_info.get("name") or empno
+                    conn2.executemany(
+                        "INSERT INTO notifications (user_empno, type, title, body, related_type, related_id, created_at) "
+                        "VALUES (?, 'comment', ?, ?, 'request', ?, ?)",
+                        [
+                            (u["empno"], '새로운 요청/문의가 등록되었습니다',
+                             f'{author_name}: {body.title[:50]}', request_id, _now)
+                            for u in admins
+                        ],
+                    )
+                    conn2.commit()
+                finally:
+                    conn2.close()
+
+            await asyncio.to_thread(_bulk)
+        except Exception as e:
+            logger.warning(f"요청 알림 발송 실패: {e}")
+
+    asyncio.create_task(_notify_admins_new_request())
+
     return {"success": True, "request": result}
 
 
@@ -16061,6 +16108,36 @@ async def read_notification(notif_id: int, request: Request):
 
     await asyncio.to_thread(_do)
     return {"success": True}
+
+
+@app.put("/community/comments/{comment_id}")
+async def update_comment(comment_id: int, body: CommentUpdate, request: Request):
+    empno = await _verify_auth(request)
+    now = datetime.now(timezone.utc).isoformat()
+
+    def _do():
+        conn = sqlite3.connect(_COMMUNITY_DB, timeout=30)
+        conn.row_factory = sqlite3.Row
+        try:
+            row = conn.execute("SELECT author_empno FROM comments WHERE id = ?", (comment_id,)).fetchone()
+            if not row:
+                raise HTTPException(404, "댓글을 찾을 수 없습니다")
+            if row["author_empno"] != empno:
+                raise HTTPException(403, "작성자만 수정할 수 있습니다")
+            conn.execute(
+                "UPDATE comments SET content = ?, updated_at = ? WHERE id = ?",
+                (body.content, now, comment_id),
+            )
+            conn.commit()
+            updated = conn.execute("SELECT * FROM comments WHERE id = ?", (comment_id,)).fetchone()
+            d = dict(updated)
+            d["is_mine"] = 1
+            return d
+        finally:
+            conn.close()
+
+    comment = await asyncio.to_thread(_do)
+    return {"success": True, "comment": comment}
 
 
 @app.delete("/community/comments/{comment_id}")

@@ -224,6 +224,19 @@ class CommunityService {
     return (body['comment'] as Map<String, dynamic>?) ?? {};
   }
 
+  Future<Map<String, dynamic>> updateComment(int commentId, String content) async {
+    final resp = await http.put(
+      Uri.parse('$_baseUrl/community/comments/$commentId'),
+      headers: _headers,
+      body: json.encode({'content': content}),
+    ).timeout(_apiTimeout);
+    final body = json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+    if (resp.statusCode != 200) {
+      throw Exception(body['detail'] ?? '댓글 수정 실패');
+    }
+    return (body['comment'] as Map<String, dynamic>?) ?? {};
+  }
+
   Future<void> deleteComment(int commentId) async {
     final resp = await http.delete(
       Uri.parse('$_baseUrl/community/comments/$commentId'),

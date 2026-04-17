@@ -308,6 +308,46 @@ class _RequestBoardScreenState extends State<RequestBoardScreen> {
     }
   }
 
+  Future<void> _editComment(int commentId, int requestId, String currentContent) async {
+    final ctrl = TextEditingController(text: currentContent);
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('댓글 수정', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+        content: TextField(
+          controller: ctrl,
+          maxLines: 4,
+          autofocus: true,
+          decoration: InputDecoration(
+            hintText: '댓글 내용',
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('취소')),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFE53935),
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('수정'),
+          ),
+        ],
+      ),
+    );
+    if (result != true) return;
+    final newContent = ctrl.text.trim();
+    if (newContent.isEmpty || newContent == currentContent) return;
+    try {
+      await _svc.updateComment(commentId, newContent);
+      final comments = await _svc.getComments(requestId);
+      setState(() => _comments = comments);
+    } catch (e) {
+      if (mounted) { final d = ProgressDialog(context); await d.error(message: '댓글 수정 실패: $e'); }
+    }
+  }
+
   Future<void> _deleteComment(int commentId, int requestId) async {
     try {
       await _svc.deleteComment(commentId);
@@ -1118,6 +1158,8 @@ class _RequestBoardScreenState extends State<RequestBoardScreen> {
                             final cOrg = c['author_org'] as String? ?? '';
                             final cDisplay = cOrg.isNotEmpty ? '$cAuthor($cOrg)' : cAuthor;
                             final cDate = _formatDate(c['created_at'] as String?);
+                            final cUpdatedAt = c['updated_at'] as String? ?? '';
+                            final cEdited = cUpdatedAt.isNotEmpty;
                             final cContent = c['content'] ?? '';
                             final cId = c['id'] as int? ?? 0;
 
@@ -1137,7 +1179,21 @@ class _RequestBoardScreenState extends State<RequestBoardScreen> {
                                       Text(cDisplay, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF111827))),
                                       const SizedBox(width: 8),
                                       Text(cDate, style: TextStyle(fontSize: 12, color: Colors.grey.shade500)),
+                                      if (cEdited)
+                                        Padding(
+                                          padding: const EdgeInsets.only(left: 6),
+                                          child: Text('(수정됨)', style: TextStyle(fontSize: 11, color: Colors.grey.shade400)),
+                                        ),
                                       const Spacer(),
+                                      if (cIsMine)
+                                        InkWell(
+                                          onTap: () => _editComment(cId, id, cContent),
+                                          borderRadius: BorderRadius.circular(4),
+                                          child: Padding(
+                                            padding: const EdgeInsets.all(4),
+                                            child: Icon(Icons.edit_outlined, size: 14, color: Colors.grey.shade400),
+                                          ),
+                                        ),
                                       if (cIsMine || isAdmin)
                                         InkWell(
                                           onTap: () => _deleteComment(cId, id),
