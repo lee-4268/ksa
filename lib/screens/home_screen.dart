@@ -1305,6 +1305,7 @@ class _NotificationTile extends StatelessWidget {
       case 'comment': return Icons.chat_bubble_outline_rounded;
       case 'status': return Icons.check_circle_outline_rounded;
       case 'notice': return Icons.campaign_outlined;
+      case 'deadline': return Icons.warning_amber_rounded;
       default: return Icons.notifications_none_rounded;
     }
   }
@@ -1314,6 +1315,7 @@ class _NotificationTile extends StatelessWidget {
       case 'comment': return const Color(0xFF3B82F6);
       case 'status': return const Color(0xFF10B981);
       case 'notice': return _accent;
+      case 'deadline': return const Color(0xFFF59E0B);
       default: return const Color(0xFF6B7280);
     }
   }

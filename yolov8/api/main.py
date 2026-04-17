@@ -1325,6 +1325,9 @@ async def startup_event():
     # 휴면계정 처리 매일 09:00 KST 실행 (예고 메일 + 자동 전환)
     asyncio.create_task(_dormant_account_daily_scheduler())
 
+    # 부적합 시정기한 D-60/D-30/D-14/D-7 알림 매일 08:30 KST
+    asyncio.create_task(_inadequate_deadline_scheduler())
+
     # Rate limiter + 호출명칭 세션 5분 주기 정리
     async def _rl_cleanup():
         while True:
@@ -6957,6 +6960,137 @@ async def _sqlite_backup_daily_scheduler():
         logger.info(f"SQLite 백업 다음 실행: {next_run.strftime('%Y-%m-%d %H:%M')} KST ({wait_seconds:.0f}초 후)")
         await asyncio.sleep(wait_seconds)
         await asyncio.to_thread(_backup_sqlite_to_s3_sync)
+
+
+async def _inadequate_deadline_scheduler():
+    """매일 08:30 KST 부적합 시정기한 D-60/D-30/D-14/D-7 알림 발송."""
+    from datetime import datetime, timezone, timedelta
+    KST = timezone(timedelta(hours=9))
+    while True:
+        now = datetime.now(KST)
+        next_run = now.replace(hour=8, minute=30, second=0, microsecond=0)
+        if now >= next_run:
+            next_run += timedelta(days=1)
+        wait_seconds = (next_run - now).total_seconds()
+        logger.info(f"부적합 시정기한 알림 다음 실행: {next_run.strftime('%Y-%m-%d %H:%M')} KST ({wait_seconds:.0f}초 후)")
+        await asyncio.sleep(wait_seconds)
+        try:
+            await asyncio.to_thread(_run_inadequate_deadline_notify_sync)
+            logger.info("부적합 시정기한 알림 발송 완료")
+        except Exception as e:
+            logger.error(f"부적합 시정기한 알림 발송 실패: {e}")
+
+
+def _run_inadequate_deadline_notify_sync():
+    """부적합 시정기한 D-60/D-30/D-14/D-7 해당 건을 조회하여
+    해당 본부 manager에게 알림을 발송한다."""
+    from datetime import datetime, timezone, timedelta
+    KST = timezone(timedelta(hours=9))
+    today = datetime.now(KST).date()
+
+    THRESHOLDS = [60, 30, 14, 7]  # D-N 기준
+
+    # 1. 부적합 관리 DB에서 미완료 건 전체 조회
+    conn_insp = sqlite3.connect(_INSP_DB, timeout=30)
+    conn_insp.row_factory = sqlite3.Row
+    try:
+        rows = conn_insp.execute(
+            "SELECT 허가번호, 호출명칭, region, skt본부, 시정기한 "
+            "FROM inadequate_management "
+            "WHERE status != '완료' AND 시정기한 != '' AND 시정기한 IS NOT NULL"
+        ).fetchall()
+    finally:
+        conn_insp.close()
+
+    if not rows:
+        return
+
+    # 2. D-N 해당 건 필터링
+    targets = []  # [(region, 허가번호, 호출명칭, 시정기한, d_left)]
+    for row in rows:
+        try:
+            deadline = datetime.strptime(row['시정기한'], '%Y-%m-%d').date()
+            d_left = (deadline - today).days
+            if d_left in THRESHOLDS:
+                targets.append({
+                    'region': row['region'] or row['skt본부'] or '',
+                    '허가번호': row['허가번호'],
+                    '호출명칭': row['호출명칭'] or '',
+                    '시정기한': row['시정기한'],
+                    'd_left': d_left,
+                })
+        except Exception:
+            continue
+
+    if not targets:
+        return
+
+    logger.info(f"부적합 시정기한 알림 대상: {len(targets)}건")
+
+    # 3. kca-user-roles 스캔 → region 매칭 manager 목록 수집
+    try:
+        all_users = _list_all_users_sync()
+    except Exception as e:
+        logger.error(f"부적합 알림: 사용자 목록 조회 실패: {e}")
+        return
+
+    # region → manager empno 목록 매핑
+    region_managers = {}  # {region_key: [empno, ...]}
+    for u in all_users:
+        if u.get('role') not in ('manager', 'admin'):
+            continue
+        if u.get('is_dormant'):
+            continue
+        r = (u.get('region') or '').strip()
+        if not r:
+            continue
+        region_managers.setdefault(r, []).append(u['empno'])
+
+    # 4. 알림 INSERT
+    conn_comm = sqlite3.connect(_COMMUNITY_DB, timeout=30)
+    try:
+        _now = datetime.now(timezone.utc).isoformat()
+        inserted = 0
+        for item in targets:
+            region = item['region']
+            d_left = item['d_left']
+            허가번호 = item['허가번호']
+            호출명칭 = item['호출명칭']
+            시정기한 = item['시정기한']
+
+            # region 부분 매칭 (예: "강남본부" ↔ "강남")
+            matched_empnos = []
+            for r_key, empnos in region_managers.items():
+                if region in r_key or r_key in region:
+                    matched_empnos.extend(empnos)
+
+            if not matched_empnos:
+                logger.warning(f"부적합 알림: region '{region}' 매칭 manager 없음 ({허가번호})")
+                continue
+
+            title = f'부적합 시정기한 D-{d_left} 알림'
+            body = f'[{region}] {호출명칭} ({허가번호}) 시정기한: {시정기한}'
+
+            for empno in set(matched_empnos):
+                # 동일 허가번호 + D-N 에 대해 오늘 이미 발송된 알림이면 중복 방지
+                already = conn_comm.execute(
+                    "SELECT id FROM notifications "
+                    "WHERE user_empno=? AND title=? AND body=? AND DATE(created_at)=DATE(?)",
+                    (empno, title, body, _now),
+                ).fetchone()
+                if already:
+                    continue
+                conn_comm.execute(
+                    "INSERT INTO notifications (user_empno, type, title, body, related_type, related_id, created_at) "
+                    "VALUES (?, 'deadline', ?, ?, 'inadequate', 0, ?)",
+                    (empno, title, body, _now),
+                )
+                inserted += 1
+
+        conn_comm.commit()
+        logger.info(f"부적합 시정기한 알림 INSERT: {inserted}건")
+    finally:
+        conn_comm.close()
 
 
 async def _cert_cache_daily_scheduler():
