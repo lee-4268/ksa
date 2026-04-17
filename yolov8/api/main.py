@@ -1039,9 +1039,11 @@ def _list_all_users_sync() -> list:
             continue
         user_role = role_item.get("role", "member")
 
-        # Users 테이블에서 프로필 정보 조회 (ProjectionExpression 없이 전체 조회)
+        # Users 테이블에서 프로필 정보 조회 (대소문자 불일치 대응)
         try:
             user_resp = users_table.get_item(Key={"user_id": uid})
+            if not user_resp.get("Item"):
+                user_resp = users_table.get_item(Key={"user_id": uid.upper()})
             user_info = user_resp.get("Item")
             if user_info:
                 logger.info(f"Users 조회 성공 ({uid}): name={user_info.get('name')}, keys={list(user_info.keys())}")
