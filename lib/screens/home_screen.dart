@@ -140,16 +140,45 @@ class _HomeScreenState extends State<HomeScreen> {
           key: _scaffoldKey,
           backgroundColor: _bg,
           drawer: isWide ? null : _buildDrawer(auth, items),
-          body: isWide
-              ? Row(children: [
-                  _buildSidebar(auth, items),
-                  const VerticalDivider(width: 1, color: _border),
-                  Expanded(child: _buildContentArea(auth, items)),
-                ])
-              : Column(children: [
-                  _buildMobileAppBar(items),
-                  Expanded(child: _buildPage(_selectedIndex, auth)),
-                ]),
+          body: Column(
+            children: [
+              // 상단 바: 와이드일 때는 콘텐츠 영역 내부 상단 바, 내로우일 때는 모바일 앱바
+              if (!isWide) _buildMobileAppBar(items),
+              Expanded(
+                child: Row(
+                  children: [
+                    if (isWide) ...[
+                      _buildSidebar(auth, items),
+                      const VerticalDivider(width: 1, color: _border),
+                    ],
+                    Expanded(
+                      child: Column(
+                        children: [
+                          if (isWide)
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                              decoration: const BoxDecoration(
+                                color: _surface,
+                                border: Border(bottom: BorderSide(color: _border)),
+                              ),
+                              child: Row(
+                                children: [
+                                  Text(items[_selectedIndex].title,
+                                      style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w600, color: _textPrimary)),
+                                  const Spacer(),
+                                  _buildUserChip(auth),
+                                ],
+                              ),
+                            ),
+                          Expanded(child: _buildPage(_selectedIndex, auth)),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
         );
       },
     );
@@ -544,30 +573,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   // ── 콘텐츠 영역 ──
 
-  Widget _buildContentArea(AuthService auth, List<_MenuItem> items) {
-    return Column(
-      children: [
-        // 상단 바
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-          decoration: const BoxDecoration(
-            color: _surface,
-            border: Border(bottom: BorderSide(color: _border)),
-          ),
-          child: Row(
-            children: [
-              Text(items[_selectedIndex].title,
-                  style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w600, color: _textPrimary)),
-              const Spacer(),
-              _buildUserChip(auth),
-            ],
-          ),
-        ),
-        // 콘텐츠
-        Expanded(child: _buildPage(_selectedIndex, auth)),
-      ],
-    );
-  }
+
 
   Widget _buildUserChip(AuthService auth) {
     final name = auth.userName ?? auth.userId ?? '';

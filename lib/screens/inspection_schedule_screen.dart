@@ -7,6 +7,7 @@ import '../services/auth_service.dart';
 import '../services/ds_data_service.dart';
 import '../services/erp_ds_compare_service.dart';
 import '../services/inspection_service.dart';
+import '../services/kca_export_service.dart';
 import '../widgets/progress_dialog.dart';
 import 'erp_ds_compare_screen.dart' show TowerMismatchModal;
 import 'inspection_result_screen.dart';
@@ -993,6 +994,41 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     }
   }
 
+  /// KCA playground Import 호환 3시트 Excel 다운로드 (수검대상/수검일정/수검결과)
+  Future<void> _exportKcaExcel() async {
+    // 지역 Manager는 본부 필수, Super Admin은 선택 가능(전체 허용)
+    if (_isDivisionAdmin && _aHdqt.isEmpty) {
+      await _showError('KCA Export를 하려면 본부 필터를 선택하세요.');
+      return;
+    }
+
+    final auth = context.read<AuthService>();
+    final divisionLabel = _aHdqt.isEmpty ? '전체' : _aHdqt;
+    final dlg = ProgressDialog(context);
+
+    try {
+      dlg.show(message: 'KCA Export 생성 중... (3시트)');
+
+      final exporter = KcaExportService(authToken: auth.authToken);
+      final bytes = await exporter.buildKcaImportExcel(
+        year: _year,
+        divisionShortName: _aHdqt.isEmpty ? null : _aHdqt,
+      );
+
+      final blob = html.Blob([bytes],
+          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      final url = html.Url.createObjectUrlFromBlob(blob);
+      html.AnchorElement(href: url)
+        ..setAttribute('download', '수검데이터_${divisionLabel}_$_year.xlsx')
+        ..click();
+      html.Url.revokeObjectUrl(url);
+
+      await dlg.complete(message: 'KCA Export 완료');
+    } catch (e) {
+      await dlg.error(message: 'KCA Export 실패: $e');
+    }
+  }
+
   Future<void> _showAddFromStagingDialog() async {
     await showDialog<void>(
       context: context,
@@ -1309,6 +1345,18 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                 ),
                 onPressed: _exportExcel,
               ),
+              if (_isAdmin)
+                OutlinedButton.icon(
+                  icon: const Icon(Icons.cloud_download_outlined, size: 16),
+                  label: const Text('KCA Export', style: TextStyle(fontSize: 13)),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: const Color(0xFF7B1FA2),
+                    side: const BorderSide(color: Color(0xFF7B1FA2)),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                  ),
+                  onPressed: _exportKcaExcel,
+                ),
               OutlinedButton.icon(
                 icon: const Icon(Icons.assignment, size: 16),
                 label: const Text('검사내역서', style: TextStyle(fontSize: 13)),
