@@ -131,8 +131,8 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
 
     // 이름 순 정렬
     filtered.sort((a, b) {
-      final aName = a.name ?? a.email;
-      final bName = b.name ?? b.email;
+      final aName = a.name ?? a.id;
+      final bName = b.name ?? b.id;
       return aName.compareTo(bName);
     });
 
@@ -574,14 +574,14 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        user.name ?? '이름 없음',
+                        user.name ?? user.id,
                         style: const TextStyle(
                           fontWeight: FontWeight.bold,
                           fontSize: 15,
                         ),
                       ),
                       Text(
-                        user.email,
+                        user.email.isNotEmpty ? user.email : user.id,
                         style: TextStyle(
                           color: Colors.grey[600],
                           fontSize: 13,
@@ -792,7 +792,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  '${user.name ?? user.email}',
+                  '${user.name ?? user.id}',
                   style: const TextStyle(fontWeight: FontWeight.bold),
                 ),
                 const SizedBox(height: 8),
@@ -897,7 +897,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
     if (mounted) {
       final d = ProgressDialog(context);
       if (success) {
-        await d.complete(message: '${user.name ?? user.email}의 권한이 ${_getRoleName(newRole)}(으)로 변경되었습니다.');
+        await d.complete(message: '${user.name ?? user.id}의 권한이 ${_getRoleName(newRole)}(으)로 변경되었습니다.');
         _applyFilters();
       } else {
         await d.error(message: '권한 변경 실패: ${adminService.errorMessage}');
