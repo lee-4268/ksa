@@ -46,6 +46,8 @@ class _RequestBoardScreenState extends State<RequestBoardScreen> {
   Map<String, dynamic>? _detail;
   List<Map<String, dynamic>> _comments = [];
   final _commentController = TextEditingController();
+  int? _editingCommentId;
+  final _editCommentController = TextEditingController();
 
   // 글쓰기/수정
   int? _editId;
@@ -82,6 +84,7 @@ class _RequestBoardScreenState extends State<RequestBoardScreen> {
     _contentController.dispose();
     _passwordController.dispose();
     _commentController.dispose();
+    _editCommentController.dispose();
     super.dispose();
   }
 
@@ -308,41 +311,31 @@ class _RequestBoardScreenState extends State<RequestBoardScreen> {
     }
   }
 
-  Future<void> _editComment(int commentId, int requestId, String currentContent) async {
-    final ctrl = TextEditingController(text: currentContent);
-    final result = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('댓글 수정', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
-        content: TextField(
-          controller: ctrl,
-          maxLines: 4,
-          autofocus: true,
-          decoration: InputDecoration(
-            hintText: '댓글 내용',
-            border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-          ),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('취소')),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFFE53935),
-              foregroundColor: Colors.white,
-            ),
-            child: const Text('수정'),
-          ),
-        ],
-      ),
-    );
-    if (result != true) return;
-    final newContent = ctrl.text.trim();
-    if (newContent.isEmpty || newContent == currentContent) return;
+  void _startEditComment(int commentId, String currentContent) {
+    setState(() {
+      _editingCommentId = commentId;
+      _editCommentController.text = currentContent;
+    });
+  }
+
+  void _cancelEditComment() {
+    setState(() {
+      _editingCommentId = null;
+      _editCommentController.clear();
+    });
+  }
+
+  Future<void> _submitEditComment(int commentId, int requestId) async {
+    final newContent = _editCommentController.text.trim();
+    if (newContent.isEmpty) return;
     try {
       await _svc.updateComment(commentId, newContent);
       final comments = await _svc.getComments(requestId);
-      setState(() => _comments = comments);
+      setState(() {
+        _comments = comments;
+        _editingCommentId = null;
+        _editCommentController.clear();
+      });
     } catch (e) {
       if (mounted) { final d = ProgressDialog(context); await d.error(message: '댓글 수정 실패: $e'); }
     }
@@ -1163,13 +1156,17 @@ class _RequestBoardScreenState extends State<RequestBoardScreen> {
                             final cContent = c['content'] ?? '';
                             final cId = c['id'] as int? ?? 0;
 
+                            final isEditing = _editingCommentId == cId;
+
                             return Container(
                               margin: const EdgeInsets.only(bottom: 12),
                               padding: const EdgeInsets.all(16),
                               decoration: BoxDecoration(
-                                color: Colors.white,
+                                color: isEditing ? const Color(0xFFFFFBE6) : Colors.white,
                                 borderRadius: BorderRadius.circular(6),
-                                border: Border.all(color: Colors.grey.shade200),
+                                border: Border.all(
+                                  color: isEditing ? const Color(0xFFE53935).withValues(alpha: 0.3) : Colors.grey.shade200,
+                                ),
                               ),
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -1179,22 +1176,22 @@ class _RequestBoardScreenState extends State<RequestBoardScreen> {
                                       Text(cDisplay, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF111827))),
                                       const SizedBox(width: 8),
                                       Text(cDate, style: TextStyle(fontSize: 12, color: Colors.grey.shade500)),
-                                      if (cEdited)
+                                      if (cEdited && !isEditing)
                                         Padding(
                                           padding: const EdgeInsets.only(left: 6),
                                           child: Text('(수정됨)', style: TextStyle(fontSize: 11, color: Colors.grey.shade400)),
                                         ),
                                       const Spacer(),
-                                      if (cIsMine)
+                                      if (!isEditing && cIsMine)
                                         InkWell(
-                                          onTap: () => _editComment(cId, id, cContent),
+                                          onTap: () => _startEditComment(cId, cContent),
                                           borderRadius: BorderRadius.circular(4),
                                           child: Padding(
                                             padding: const EdgeInsets.all(4),
                                             child: Icon(Icons.edit_outlined, size: 14, color: Colors.grey.shade400),
                                           ),
                                         ),
-                                      if (cIsMine || isAdmin)
+                                      if (!isEditing && (cIsMine || isAdmin))
                                         InkWell(
                                           onTap: () => _deleteComment(cId, id),
                                           borderRadius: BorderRadius.circular(4),
@@ -1206,7 +1203,45 @@ class _RequestBoardScreenState extends State<RequestBoardScreen> {
                                     ],
                                   ),
                                   const SizedBox(height: 8),
-                                  Text(cContent, style: const TextStyle(fontSize: 14, height: 1.5, color: Color(0xFF374151))),
+                                  if (isEditing) ...[
+                                    TextField(
+                                      controller: _editCommentController,
+                                      maxLines: null,
+                                      autofocus: true,
+                                      style: const TextStyle(fontSize: 14, height: 1.5, color: Color(0xFF374151)),
+                                      decoration: InputDecoration(
+                                        isDense: true,
+                                        contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: BorderSide(color: Colors.grey.shade300)),
+                                        focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: const BorderSide(color: Color(0xFFE53935), width: 1.5)),
+                                      ),
+                                    ),
+                                    const SizedBox(height: 8),
+                                    Row(
+                                      mainAxisAlignment: MainAxisAlignment.end,
+                                      children: [
+                                        TextButton(
+                                          onPressed: _cancelEditComment,
+                                          style: TextButton.styleFrom(
+                                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                          ),
+                                          child: Text('취소', style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+                                        ),
+                                        const SizedBox(width: 8),
+                                        ElevatedButton(
+                                          onPressed: () => _submitEditComment(cId, id),
+                                          style: ElevatedButton.styleFrom(
+                                            backgroundColor: const Color(0xFFE53935),
+                                            foregroundColor: Colors.white,
+                                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                                          ),
+                                          child: const Text('저장', style: TextStyle(fontSize: 12)),
+                                        ),
+                                      ],
+                                    ),
+                                  ] else
+                                    Text(cContent, style: const TextStyle(fontSize: 14, height: 1.5, color: Color(0xFF374151))),
                                 ],
                               ),
                             );
