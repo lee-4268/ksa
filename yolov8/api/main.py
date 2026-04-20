@@ -11669,6 +11669,19 @@ async def inspection_staging_confirm(request: Request, req: InspStagingConfirmRe
     added_list = [dict(r) for r in added_rows]
     added_license_nos = {r['허가번호'] for r in added_list if r['허가번호']}
 
+    # 기존 좌표 보관: (허가번호, 도로명주소) → (위도, 경도)
+    # 같은 허가번호 + 같은 도로명주소이면 기존 좌표 재사용, 주소 변경 시 재지오코딩 대상
+    coord_map: dict = {}
+    for r in conn.execute(
+        'SELECT 허가번호, 도로명주소, 위도, 경도 FROM inspection_targets '
+        'WHERE year=? AND 위도 IS NOT NULL AND 위도 != 0',
+        (req.year,)
+    ).fetchall():
+        hn = r['허가번호'] or ''
+        addr = (r['도로명주소'] or '').strip()
+        if hn and addr:
+            coord_map[(hn, addr)] = (r['위도'], r['경도'])
+
     # 기존 본 테이블 데이터 삭제 (같은 연도)
     conn.execute('DELETE FROM inspection_targets WHERE year=?', (req.year,))
 
@@ -11709,15 +11722,28 @@ async def inspection_staging_confirm(request: Request, req: InspStagingConfirmRe
 
     # 확정된 항목만 스테이징에서 제거 (미확정 항목은 유지 → 개별 추가 용도)
     conn.execute(f'DELETE FROM inspection_targets_staging WHERE {where_sql}', params)
+
+    # 기존 좌표 복원: (허가번호, 도로명주소)가 동일한 행에만 적용
+    coord_restored = 0
+    if coord_map:
+        for (hn, addr), (lat, lng) in coord_map.items():
+            cur = conn.execute(
+                'UPDATE inspection_targets SET 위도=?, 경도=? '
+                'WHERE year=? AND 허가번호=? AND 도로명주소=? '
+                'AND (위도 IS NULL OR 위도=0)',
+                (lat, lng, req.year, hn, addr)
+            )
+            if cur.rowcount > 0:
+                coord_restored += cur.rowcount
     conn.commit()
     conn.close()
 
-    logger.info(f"confirm: {req.year}년 신규 {count}건 + 보존 {preserved_count}건 (대상 추가)")
+    logger.info(f"confirm: {req.year}년 신규 {count}건 + 보존 {preserved_count}건 (대상 추가) + 좌표 복원 {coord_restored}건")
 
     # confirm 후 백그라운드에서 자동 지오코딩 실행
     asyncio.create_task(_auto_geocode_background(req.year))
 
-    return {"success": True, "count": count, "preserved_count": preserved_count}
+    return {"success": True, "count": count, "preserved_count": preserved_count, "coord_restored": coord_restored}
 
 
 async def _auto_geocode_background(year: int):
