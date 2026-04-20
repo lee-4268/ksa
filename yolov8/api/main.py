@@ -11659,24 +11659,65 @@ async def inspection_staging_confirm(request: Request, req: InspStagingConfirmRe
 
     conn = sqlite3.connect(_INSP_DB, timeout=60)
     conn.execute('PRAGMA synchronous=NORMAL')
+    conn.row_factory = sqlite3.Row
+
+    # 기존 "대상 추가"로 넣은 행들 보존 (재import 시 유실 방지)
+    added_rows = conn.execute(
+        'SELECT * FROM inspection_targets WHERE year=? AND kca검토결과=?',
+        (req.year, '대상 추가')
+    ).fetchall()
+    added_list = [dict(r) for r in added_rows]
+    added_license_nos = {r['허가번호'] for r in added_list if r['허가번호']}
 
     # 기존 본 테이블 데이터 삭제 (같은 연도)
     conn.execute('DELETE FROM inspection_targets WHERE year=?', (req.year,))
 
-    # 스테이징에서 필터된 데이터를 본 테이블로 복사
+    # 스테이징에서 필터된 데이터를 본 테이블로 복사 (단, 이미 "대상 추가"로 보존된 허가번호는 제외)
     cols = 'year,sheet,pnu_code,허가번호,호출명칭,국종군,부서,분기,연도주기,검사주기,허가상태,설치장소,도로명주소,장치수,통시,공대,kca검토결과,시기조정,기준연도,skt본부,access담당,품질개선팀,검사종류'
-    count = conn.execute(f'SELECT COUNT(*) FROM inspection_targets_staging WHERE {where_sql}', params).fetchone()[0]
-    conn.execute(f'INSERT INTO inspection_targets ({cols}) SELECT {cols} FROM inspection_targets_staging WHERE {where_sql}', params)
+    exclude_sql = ''
+    exclude_params: list = []
+    if added_license_nos:
+        ph = ','.join('?' * len(added_license_nos))
+        exclude_sql = f' AND 허가번호 NOT IN ({ph})'
+        exclude_params = list(added_license_nos)
+    count = conn.execute(
+        f'SELECT COUNT(*) FROM inspection_targets_staging WHERE {where_sql}{exclude_sql}',
+        params + exclude_params,
+    ).fetchone()[0]
+    conn.execute(
+        f'INSERT INTO inspection_targets ({cols}) SELECT {cols} FROM inspection_targets_staging WHERE {where_sql}{exclude_sql}',
+        params + exclude_params,
+    )
+
+    # "대상 추가"로 보존한 행들 다시 삽입
+    preserved_count = 0
+    if added_list:
+        col_list = cols.split(',')
+        ph = ','.join('?' * len(col_list))
+        for row in added_list:
+            vals = tuple(row.get(c) for c in col_list)
+            conn.execute(f'INSERT INTO inspection_targets ({cols}) VALUES ({ph})', vals)
+            preserved_count += 1
+
+    # 스테이징에서 해당 허가번호 제거 (중복 방지)
+    if added_license_nos:
+        ph = ','.join('?' * len(added_license_nos))
+        conn.execute(
+            f'DELETE FROM inspection_targets_staging WHERE year=? AND 허가번호 IN ({ph})',
+            [req.year] + list(added_license_nos),
+        )
 
     # 확정된 항목만 스테이징에서 제거 (미확정 항목은 유지 → 개별 추가 용도)
     conn.execute(f'DELETE FROM inspection_targets_staging WHERE {where_sql}', params)
     conn.commit()
     conn.close()
 
+    logger.info(f"confirm: {req.year}년 신규 {count}건 + 보존 {preserved_count}건 (대상 추가)")
+
     # confirm 후 백그라운드에서 자동 지오코딩 실행
     asyncio.create_task(_auto_geocode_background(req.year))
 
-    return {"success": True, "count": count}
+    return {"success": True, "count": count, "preserved_count": preserved_count}
 
 
 async def _auto_geocode_background(year: int):
