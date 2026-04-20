@@ -11800,8 +11800,21 @@ async def inspection_staging_confirm(request: Request, req: InspStagingConfirmRe
 
     logger.info(f"confirm: {req.year}년 신규 {count}건 + 보존 {preserved_count}건 (대상 추가) + 좌표 복원 {coord_restored}건")
 
-    # confirm 후 백그라운드에서 자동 지오코딩 실행
-    asyncio.create_task(_auto_geocode_background(req.year))
+    # confirm 후 백그라운드에서 자동 재매핑 + 지오코딩 실행
+    async def _post_confirm_bg():
+        try:
+            learned_map = await _load_learned_addr_map_async()
+            if learned_map:
+                result = await asyncio.to_thread(_remap_divisions_sync, req.year, learned_map, False)
+                logger.info(f"[auto-remap] {req.year}년 {result['changed_count']}건 재매핑 완료")
+            else:
+                logger.warning("[auto-remap] learned_map 비어있음 — 재매핑 생략")
+        except Exception as e:
+            logger.error(f"[auto-remap] 오류: {e}")
+        # 재매핑 후 지오코딩
+        await _auto_geocode_background(req.year)
+
+    asyncio.create_task(_post_confirm_bg())
 
     return {"success": True, "count": count, "preserved_count": preserved_count, "coord_restored": coord_restored}
 
@@ -11962,6 +11975,85 @@ async def _auto_geocode_background(year: int):
         logger.error(f"[auto-geocode] 오류: {e}")
 
 
+async def _load_learned_addr_map_async() -> dict:
+    """학습된 주소→팀 맵 로드 (캐시 우선, 없으면 cert DB에서 생성)."""
+    import tempfile as _tf, json as _jr
+    _cache_path = os.path.join(_tf.gettempdir(), "learned_addr_map.json")
+    learned_map: dict = {}
+    if os.path.exists(_cache_path):
+        try:
+            with open(_cache_path, 'r', encoding='utf-8') as _f:
+                learned_map = _jr.load(_f)
+        except Exception:
+            learned_map = {}
+
+    if not learned_map:
+        learned_map = await asyncio.to_thread(_learn_addr_map_from_cert_db)
+        if not learned_map:
+            logger.info("learned_addr_map: cert DB 없음 — 빌드 시작")
+            await asyncio.to_thread(_cert_cache_load)
+            learned_map = await asyncio.to_thread(_learn_addr_map_from_cert_db)
+        if learned_map:
+            try:
+                with open(_cache_path, 'w', encoding='utf-8') as _f:
+                    _jr.dump(learned_map, _f, ensure_ascii=False)
+            except Exception:
+                pass
+    return learned_map
+
+
+def _remap_divisions_sync(year: int, learned_map: dict, dry_run: bool = False) -> dict:
+    """동기: inspection_targets / inspection_schedules 재매핑."""
+    conn = sqlite3.connect(_INSP_DB, timeout=120)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            'SELECT id, 허가번호, 도로명주소, 설치장소, access담당, 품질개선팀 '
+            'FROM inspection_targets WHERE year=?',
+            (year,)
+        ).fetchall()
+
+        total = len(rows)
+        changed = []
+
+        for r in rows:
+            addr = (r['도로명주소'] or '').strip() or (r['설치장소'] or '').strip()
+            if not addr:
+                continue
+            new_access, new_team = _hdqt_from_addr(addr, learned_map=learned_map)
+            if not new_access:
+                continue
+            old_access = r['access담당'] or ''
+            old_team = r['품질개선팀'] or ''
+            if new_access != old_access or (new_team and new_team != old_team):
+                changed.append({
+                    'id': r['id'],
+                    '허가번호': r['허가번호'],
+                    'before_access': old_access,
+                    'after_access': new_access,
+                    'before_team': old_team,
+                    'after_team': new_team or old_team,
+                })
+
+        if not dry_run and changed:
+            for c in changed:
+                conn.execute(
+                    'UPDATE inspection_targets SET access담당=?, 품질개선팀=? WHERE id=?',
+                    (c['after_access'], c['after_team'], c['id'])
+                )
+            for c in changed:
+                conn.execute(
+                    'UPDATE inspection_schedules SET access담당=?, 품질개선팀=? '
+                    'WHERE year=? AND 허가번호=?',
+                    (c['after_access'], c['after_team'], year, c['허가번호'])
+                )
+            conn.commit()
+
+        return {'total': total, 'changed_count': len(changed), 'samples': changed[:20]}
+    finally:
+        conn.close()
+
+
 @app.post("/inspection/remap-divisions")
 async def inspection_remap_divisions(request: Request, year: int, dry_run: bool = True):
     """도로명주소 기반으로 inspection_targets의 access담당/품질개선팀을 재매핑.
@@ -11977,96 +12069,13 @@ async def inspection_remap_divisions(request: Request, year: int, dry_run: bool 
     if not os.path.exists(_INSP_DB):
         raise HTTPException(400, "DB 없음")
 
-    # 학습된 주소→팀 맵 로드 (서울 구명 외 지방 주소 매칭용)
-    # 1차: /tmp/learned_addr_map.json 캐시 사용
-    # 2차: cert DB에서 바로 학습
-    # 3차: cert DB 없으면 _cert_cache_load()로 빌드 후 재학습
-    import tempfile as _tf, json as _jr
-    _cache_path = os.path.join(_tf.gettempdir(), "learned_addr_map.json")
-    learned_map: dict = {}
-    if os.path.exists(_cache_path):
-        try:
-            with open(_cache_path, 'r', encoding='utf-8') as _f:
-                learned_map = _jr.load(_f)
-        except Exception:
-            learned_map = {}
-
-    if not learned_map:
-        # cert DB에서 직접 학습 시도
-        learned_map = await asyncio.to_thread(_learn_addr_map_from_cert_db)
-        if not learned_map:
-            # cert DB가 없으면 빌드 (시간 소요)
-            logger.info("remap-divisions: cert DB 없음 — 빌드 시작")
-            await asyncio.to_thread(_cert_cache_load)
-            learned_map = await asyncio.to_thread(_learn_addr_map_from_cert_db)
-        # 재학습된 맵을 캐시 파일로 저장
-        if learned_map:
-            try:
-                with open(_cache_path, 'w', encoding='utf-8') as _f:
-                    _jr.dump(learned_map, _f, ensure_ascii=False)
-            except Exception:
-                pass
-
+    learned_map = await _load_learned_addr_map_async()
     logger.info(f"remap-divisions: learned_map {len(learned_map)}개 키워드 학습됨")
 
     if not learned_map:
         raise HTTPException(500, "주소→팀 학습 맵 생성 실패 (cert DB 확인 필요)")
 
-    def _do():
-        conn = sqlite3.connect(_INSP_DB, timeout=120)
-        conn.row_factory = sqlite3.Row
-        try:
-            rows = conn.execute(
-                'SELECT id, 허가번호, 도로명주소, 설치장소, access담당, 품질개선팀 '
-                'FROM inspection_targets WHERE year=?',
-                (year,)
-            ).fetchall()
-
-            total = len(rows)
-            changed = []  # [(id, 허가번호, before_access, after_access, before_team, after_team)]
-
-            for r in rows:
-                addr = (r['도로명주소'] or '').strip() or (r['설치장소'] or '').strip()
-                if not addr:
-                    continue
-                new_access, new_team = _hdqt_from_addr(addr, learned_map=learned_map)
-                # 본부가 추론 안 되면 스킵 (기존 값 보존)
-                if not new_access:
-                    continue
-                # 팀이 추론 안 되면 access만 비교
-                old_access = r['access담당'] or ''
-                old_team = r['품질개선팀'] or ''
-                if new_access != old_access or (new_team and new_team != old_team):
-                    changed.append({
-                        'id': r['id'],
-                        '허가번호': r['허가번호'],
-                        'before_access': old_access,
-                        'after_access': new_access,
-                        'before_team': old_team,
-                        'after_team': new_team or old_team,
-                    })
-
-            if not dry_run and changed:
-                # inspection_targets UPDATE
-                for c in changed:
-                    conn.execute(
-                        'UPDATE inspection_targets SET access담당=?, 품질개선팀=? WHERE id=?',
-                        (c['after_access'], c['after_team'], c['id'])
-                    )
-                # inspection_schedules도 동기화 (같은 허가번호/연도)
-                for c in changed:
-                    conn.execute(
-                        'UPDATE inspection_schedules SET access담당=?, 품질개선팀=? '
-                        'WHERE year=? AND 허가번호=?',
-                        (c['after_access'], c['after_team'], year, c['허가번호'])
-                    )
-                conn.commit()
-
-            return {'total': total, 'changed_count': len(changed), 'samples': changed[:20]}
-        finally:
-            conn.close()
-
-    result = await asyncio.to_thread(_do)
+    result = await asyncio.to_thread(_remap_divisions_sync, year, learned_map, dry_run)
     return {
         'success': True,
         'dry_run': dry_run,
