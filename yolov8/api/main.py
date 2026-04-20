@@ -11850,6 +11850,10 @@ async def inspection_remap_divisions(request: Request, year: int, dry_run: bool 
     if not os.path.exists(_INSP_DB):
         raise HTTPException(400, "DB 없음")
 
+    # cert DB에서 학습된 주소→팀 맵 로드 (서울 구명 외에 지방 주소 매칭용)
+    learned_map = await asyncio.to_thread(_learn_addr_map_from_cert_db)
+    logger.info(f"remap-divisions: learned_map {len(learned_map)}개 키워드 학습됨")
+
     def _do():
         conn = sqlite3.connect(_INSP_DB, timeout=120)
         conn.row_factory = sqlite3.Row
@@ -11867,7 +11871,7 @@ async def inspection_remap_divisions(request: Request, year: int, dry_run: bool 
                 addr = (r['도로명주소'] or '').strip() or (r['설치장소'] or '').strip()
                 if not addr:
                     continue
-                new_access, new_team = _hdqt_from_addr(addr)
+                new_access, new_team = _hdqt_from_addr(addr, learned_map=learned_map)
                 # 본부가 추론 안 되면 스킵 (기존 값 보존)
                 if not new_access:
                     continue
