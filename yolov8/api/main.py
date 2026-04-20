@@ -10261,13 +10261,16 @@ def _hdqt_from_addr(addr: str, known_hdqt: str = '',
     # 0) 축약형 정규화 ("대구 동구" → "대구광역시 동구")
     addr = _normalize_addr(addr.strip())
 
-    # 1) 서울 구명 (명확한 하드코딩)
-    for kw, (hdqt, team) in _SEOUL_GU_SORTED:
-        if kw not in addr:
-            continue
-        if known_hdqt and hdqt != known_hdqt:
-            continue
-        return hdqt, team
+    # 1) 서울 구명 (명확한 하드코딩) — 서울 주소일 때만 적용
+    #    (인천/대전 '중구' 등 동명이 다른 지역에 잘못 매칭되는 문제 방지)
+    is_seoul = ('서울특별시' in addr) or ('서울 ' in addr) or addr.startswith('서울')
+    if is_seoul:
+        for kw, (hdqt, team) in _SEOUL_GU_SORTED:
+            if kw not in addr:
+                continue
+            if known_hdqt and hdqt != known_hdqt:
+                continue
+            return hdqt, team
 
     # 2) 학습된 맵 (임포트 시 same-file known-team rows에서 학습)
     if learned_map:
