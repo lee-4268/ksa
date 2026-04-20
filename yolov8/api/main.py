@@ -11024,24 +11024,54 @@ def _process_inspection_sync(job_id: str, s3_key: str, year: int, uploaded_by: s
         _INVALID_TEAM = {'#N/A', '#n/a', 'N/A', 'n/a', '미배정', '-', '없음', '', '0', '0.0'}
 
         def _proc_sheet(rows, sheet_label, pct_start, pct_end, is_skt,
-                        learned_map=None, total_rows=0, insp_type_col=-1):
+                        learned_map=None, total_rows=0, insp_type_col=-1,
+                        col_map=None):
+            """헤더명 기반 컬럼 매핑(col_map). None이거나 누락된 키는 기존 인덱스 기본값 사용."""
             nonlocal matched, unmatched
+            cm = col_map or {}
+            # 헤더명 → 인덱스 조회 헬퍼 (없으면 기본 인덱스 fallback)
+            def _ci(key, default_idx):
+                idx = cm.get(key, -1)
+                return idx if idx >= 0 else default_idx
+            # 컬럼 인덱스 (헤더 기반 우선, fallback은 기존 고정 인덱스)
+            IDX_PNU      = _ci('pnu_code', 0)
+            IDX_HN       = _ci('허가번호', 2)
+            IDX_NAME     = _ci('호출명칭', 3)
+            IDX_GROUP    = _ci('국종군', 4)
+            IDX_QUARTER  = _ci('분기', 8)
+            IDX_CYCLE_YR = _ci('연도주기', 9)
+            IDX_CYCLE    = _ci('검사주기', 10)
+            IDX_DEPT     = _ci('부서', 11)
+            IDX_STATUS   = _ci('허가상태', 12)
+            IDX_LOC      = _ci('설치장소', 13)
+            IDX_ROAD     = _ci('도로명주소', 14)
+            IDX_EXTRA1   = _ci('도로명주소2', 15)
+            IDX_DEVCNT   = _ci('장치수', 16)
+            IDX_ADJ      = _ci('시기조정', 25)
+            IDX_KCA      = _ci('kca검토결과', 26)
+            IDX_BASE_YR  = _ci('기준연도', 27)
+            IDX_TONGSI   = _ci('통시', 28)
+            IDX_GONGTAE  = _ci('공대', 29)
+            IDX_SKTHDQT  = _ci('skt본부', 30)
+            IDX_ACCESS   = _ci('access담당', 31)
+            IDX_TEAM     = _ci('품질개선팀', 32)
+
             batch = []; row_count = 0
             for i, row in enumerate(rows):
-                # 허가번호(col 2) 없거나 빈 행 스킵 — None, 빈 문자열, 공백 모두 제외
-                if len(row) <= 2:
+                # 허가번호 없거나 빈 행 스킵 — None, 빈 문자열, 공백 모두 제외
+                if len(row) <= IDX_HN:
                     continue
-                raw_license = str(row[2] or '').strip()
+                raw_license = str(row[IDX_HN] or '').strip()
                 if not raw_license:
                     continue
                 # #N/A, 미배정 등 무효값 → 빈 문자열로 정규화
-                access = str(row[31] or '').strip() if is_skt and len(row) > 31 else ''
+                access = str(row[IDX_ACCESS] or '').strip() if is_skt and len(row) > IDX_ACCESS else ''
                 if access in _INVALID_TEAM: access = ''
-                품질 = str(row[32] or '').strip() if is_skt and len(row) > 32 else ''
+                품질 = str(row[IDX_TEAM] or '').strip() if is_skt and len(row) > IDX_TEAM else ''
                 if 품질 in _INVALID_TEAM: 품질 = ''
-                tongsi = str(row[28] or '').strip() if is_skt and len(row) > 28 else ''
-                gongtae = str(row[29] or '').strip() if is_skt and len(row) > 29 else ''
-                skt본부 = str(row[30] or '').strip() if is_skt and len(row) > 30 else ''
+                tongsi = str(row[IDX_TONGSI] or '').strip() if is_skt and len(row) > IDX_TONGSI else ''
+                gongtae = str(row[IDX_GONGTAE] or '').strip() if is_skt and len(row) > IDX_GONGTAE else ''
+                skt본부 = str(row[IDX_SKTHDQT] or '').strip() if is_skt and len(row) > IDX_SKTHDQT else ''
 
                 # 초기 매핑: access/팀 없으면 cert DB로 조회
                 if not access:
@@ -11067,10 +11097,10 @@ def _process_inspection_sync(job_id: str, s3_key: str, year: int, uploaded_by: s
                         품질 = fb_team
                     else:
                         # 4) 주소 키워드로 팀 추론 (ERP cert DB 학습 맵 + Seoul 구명)
-                        #    row[13],[14],[15],[22] — 주소 관련 컬럼 전부 활용
+                        #    설치장소/도로명주소 등 — 헤더 기반 인덱스 활용
                         addr_parts = []
-                        for ci in (13, 14, 15, 22):
-                            if len(row) > ci and row[ci]:
+                        for ci in {IDX_LOC, IDX_ROAD, IDX_EXTRA1, 22}:
+                            if ci >= 0 and len(row) > ci and row[ci]:
                                 addr_parts.append(str(row[ci]).strip())
                         addr = ' '.join(addr_parts)
                         inferred_hdqt, inferred_team = _hdqt_from_addr(
@@ -11084,7 +11114,7 @@ def _process_inspection_sync(job_id: str, s3_key: str, year: int, uploaded_by: s
 
                 # 5) 여전히 미배정이면 PNU코드 → 법정동 주소 변환 → 팀 추론
                 if not 품질 or 품질 not in INSP_TEAM_TO_HDQT:
-                    pnu_raw = str(row[0] or '').strip()
+                    pnu_raw = str(row[IDX_PNU] or '').strip() if len(row) > IDX_PNU else ''
                     if pnu_raw and len(pnu_raw) >= 10:
                         pnu_addr = _pnu_to_addr(pnu_raw)
                         if pnu_addr:
@@ -11110,29 +11140,31 @@ def _process_inspection_sync(job_id: str, s3_key: str, year: int, uploaded_by: s
                     return str(v).strip() if v else ''
 
                 insp_type_raw = _safe_str(row[insp_type_col] if insp_type_col >= 0 and len(row) > insp_type_col else '')
-                호출명칭 = _safe_str(row[3] if len(row) > 3 else '')
+                def _get(idx):
+                    return row[idx] if idx >= 0 and len(row) > idx else ''
+                호출명칭 = _safe_str(_get(IDX_NAME))
                 if 호출명칭.startswith('#'):  # Excel 수식 오류(#N/A, #REF! 등) → 빈값 처리
                     호출명칭 = ''
                 if not 호출명칭:
                     호출명칭 = _lookup_name(tongsi, gongtae, raw_license)
                 batch.append((
                     year, sheet_label,
-                    _safe_str(row[0] if len(row) > 0 else ''),
-                    _safe_str(row[2] if len(row) > 2 else ''),
+                    _safe_str(_get(IDX_PNU)),
+                    _safe_str(_get(IDX_HN)),
                     호출명칭,
-                    _safe_str(row[4] if len(row) > 4 else ''),
-                    _safe_str(row[11] if len(row) > 11 else ''),
-                    _safe_str(row[8] if len(row) > 8 else ''),
-                    _safe_str(row[9] if len(row) > 9 else ''),
-                    _safe_int(row[10] if len(row) > 10 else 0),
-                    _safe_str(row[12] if len(row) > 12 else ''),
-                    _safe_str(row[13] if len(row) > 13 else ''),
-                    _safe_str(row[14] if len(row) > 14 else ''),
-                    _safe_int(row[16] if len(row) > 16 else 0),
+                    _safe_str(_get(IDX_GROUP)),
+                    _safe_str(_get(IDX_DEPT)),
+                    _safe_str(_get(IDX_QUARTER)),
+                    _safe_str(_get(IDX_CYCLE_YR)),
+                    _safe_int(_get(IDX_CYCLE) or 0),
+                    _safe_str(_get(IDX_STATUS)),
+                    _safe_str(_get(IDX_LOC)),
+                    _safe_str(_get(IDX_ROAD)),
+                    _safe_int(_get(IDX_DEVCNT) or 0),
                     tongsi, gongtae,
-                    _safe_str(row[26] if is_skt and len(row) > 26 else (row[26] if len(row) > 26 else '')),
-                    _safe_str(row[25] if is_skt and len(row) > 25 else (row[25] if len(row) > 25 else '')),
-                    _safe_int(row[27] if len(row) > 27 else '', year),
+                    _safe_str(_get(IDX_KCA)),
+                    _safe_str(_get(IDX_ADJ)),
+                    _safe_int(_get(IDX_BASE_YR) or '', year),
                     skt본부, access, 품질,
                     insp_type_raw,
                 ))
@@ -11145,21 +11177,52 @@ def _process_inspection_sync(job_id: str, s3_key: str, year: int, uploaded_by: s
             conn.commit()
             return row_count
 
+        # 헤더명 → 인덱스 맵 (모든 주요 컬럼) — SKT/Sheet1 공통 사용
+        _HEADER_ALIASES = {
+            'pnu_code': ['pnu_code', 'PNU_CODE', 'PNU'],
+            '허가번호': ['허가번호'],
+            '호출명칭': ['호출명칭'],
+            '국종군': ['국종군'],
+            '분기': ['분기'],
+            '연도주기': ['연도주기'],
+            '검사주기': ['검사주기'],
+            '부서': ['부서', 'KCA부서'],
+            '허가상태': ['허가상태'],
+            '설치장소': ['설치장소'],
+            '도로명주소': ['도로명주소'],
+            '도로명주소2': ['도로명주소2', '도로명주소_보조'],
+            '장치수': ['장치수'],
+            '시기조정': ['시기조정'],
+            'kca검토결과': ['kca검토결과', 'KCA검토결과'],
+            '기준연도': ['기준연도'],
+            '통시': ['통시'],
+            '공대': ['공대'],
+            'skt본부': ['skt본부', 'SKT본부'],
+            'access담당': ['access담당', 'Access담당'],
+            '품질개선팀': ['품질개선팀'],
+            '검사종류': ['검사종류'],
+        }
+        def _build_col_map(sname):
+            cm = {}
+            for _rn, cells in _iter_xlsx_rows_light(tmp_path, sheet_name=sname):
+                if _rn == 0:
+                    header_norm = [str(c or '').strip() for c in cells]
+                    for key, aliases in _HEADER_ALIASES.items():
+                        for al in aliases:
+                            if al in header_norm:
+                                cm[key] = header_norm.index(al)
+                                break
+                break
+            return cm
+
         # SKT 시트 — ZIP+XML 경량 파서 (openpyxl 제거, 메모리 ~95% 절감)
         if 'SKT' in sheet_names:
             _upd(20, "SKT 시트 처리 중...")
             _log_mem("SKT 시트 처리 전")
 
-            # 헤더 행에서 검사종류 컬럼 인덱스 탐색
-            _insp_type_col = -1
-            for _rn, cells in _iter_xlsx_rows_light(tmp_path, sheet_name='SKT'):
-                if _rn == 0:
-                    for _ci, _cv in enumerate(cells):
-                        if str(_cv).strip() == '검사종류':
-                            _insp_type_col = _ci
-                            break
-                break
-            logger.info(f"SKT 시트 검사종류 컬럼 인덱스: {_insp_type_col}")
+            _skt_col_map = _build_col_map('SKT')
+            _insp_type_col = _skt_col_map.get('검사종류', -1)
+            logger.info(f"SKT 시트 헤더 매핑: {_skt_col_map}")
 
             def _light_rows(path, sname):
                 """_iter_xlsx_rows_light 래퍼: (row_num, cells) → cells(리스트)로 변환."""
@@ -11173,28 +11236,25 @@ def _process_inspection_sync(job_id: str, s3_key: str, year: int, uploaded_by: s
                 'SKT', 20, 70, True,
                 learned_map=learned_addr_map,
                 total_rows=0,
-                insp_type_col=_insp_type_col)
+                insp_type_col=_insp_type_col,
+                col_map=_skt_col_map)
             _release_memory()
             _log_mem("SKT 시트 처리 후")
 
         # Sheet1 (시기조정)
         if 'Sheet1' in sheet_names:
             _upd(72, "시기조정 시트 처리 중...")
-            # Sheet1에도 검사종류 탐색
-            _s1_insp_type_col = -1
-            for _rn, cells in _iter_xlsx_rows_light(tmp_path, sheet_name='Sheet1'):
-                if _rn == 0:
-                    for _ci, _cv in enumerate(cells):
-                        if str(_cv).strip() == '검사종류':
-                            _s1_insp_type_col = _ci
-                            break
-                break
+            # Sheet1도 헤더명 기반 매핑 (SKT와 동일한 헬퍼 사용)
+            _s1_col_map = _build_col_map('Sheet1')
+            _s1_insp_type_col = _s1_col_map.get('검사종류', -1)
+            logger.info(f"Sheet1 시트 헤더 매핑: {_s1_col_map}")
             total_s1 = _proc_sheet(
                 _light_rows(tmp_path, 'Sheet1'),
                 'sheet1', 72, 85, False,
                 learned_map=learned_addr_map,
                 total_rows=0,
-                insp_type_col=_s1_insp_type_col)
+                insp_type_col=_s1_insp_type_col,
+                col_map=_s1_col_map)
             _release_memory()
             _log_mem("시기조정 시트 처리 후")
 
