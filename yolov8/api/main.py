@@ -12716,6 +12716,8 @@ async def inspection_my_list_weeks(request: Request, year: int, team: str = ""):
 
     if is_manager:
         품질팀 = team
+    if 품질팀 == '테스트팀':
+        품질팀 = ''
 
     if not is_dev and not access_team and not 품질팀 and not is_manager:
         return {"weeks": []}
@@ -12798,6 +12800,8 @@ async def inspection_my_list(request: Request, year: int, week: str = "", team: 
     # 본부 관리자: team 파라미터 있으면 해당 팀, 없으면 본부 전체
     if is_manager:
         품질팀 = team
+    if 품질팀 == '테스트팀':
+        품질팀 = ''
 
     logger.info(f"my-list: empno={empno}, access_team='{access_team}', 품질팀='{품질팀}', is_dev={is_dev}, is_manager={is_manager}, role={user_role}")
 
