@@ -12818,26 +12818,19 @@ async def inspection_my_list(request: Request, year: int, week: str = "", team: 
             # 본부 관리자 (팀 미선택 → 본부 전체)
             where_parts.append('s.year=? AND s.access담당=?')
             params.extend([year, access_team])
+        elif is_manager:
+            # 수퍼어드민 또는 region 미설정 관리자 → 전체 연도 조회
+            where_parts.append('s.year=?')
+            params.extend([year])
         elif is_dev and access_team and 품질팀:
-            # 테스트 계정(member): 소속 본부 + 팀 필터
             where_parts.append('s.year=? AND s.access담당=? AND s.품질개선팀=?')
             params.extend([year, access_team, 품질팀])
         elif is_dev and access_team:
-            # 테스트 계정(member): 소속 본부 전체 (팀 미배정)
             where_parts.append('s.year=? AND s.access담당=?')
             params.extend([year, access_team])
         elif is_dev:
-            # 테스트 계정 본부 없음 → 전체 (fallback)
             where_parts.append('s.year=?')
             params.extend([year])
-        elif access_team and 품질팀:
-            # 본부 관리자 + 팀 필터
-            where_parts.append('s.year=? AND s.access담당=? AND s.품질개선팀=?')
-            params.extend([year, access_team, 품질팀])
-        elif is_manager and access_team:
-            # 본부 관리자 (팀 필터 없음 → 본부 전체)
-            where_parts.append('s.year=? AND s.access담당=?')
-            params.extend([year, access_team])
         elif access_team and 품질팀:
             where_parts.append('s.year=? AND s.access담당=? AND s.품질개선팀=?')
             params.extend([year, access_team, 품질팀])
