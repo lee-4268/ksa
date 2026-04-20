@@ -4,8 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:file_picker/file_picker.dart';
-// ignore: avoid_web_libraries_in_flutter
-import 'dart:html' as html;
 
 import '../services/auth_service.dart';
 import '../services/certificate_service.dart';
@@ -134,13 +132,6 @@ class _IndividualTabState extends State<_IndividualTab>
   // 미리보기 탭
   int _previewTab = 0; // 0: 설치확인서, 1: 현장사진
 
-  // ACTA 도면 연동
-  String? _actaToken;
-  String? _actaAtflUuid;
-  String? _actaFileNm;
-  String? _actaViewerUrl;
-  bool _isActaLoading = false;
-
   @override
   void dispose() {
     _queryCtrl.dispose();
@@ -190,109 +181,6 @@ class _IndividualTabState extends State<_IndividualTab>
       _lookupError = e.toString().replaceFirst('Exception: ', '');
     } finally {
       if (mounted) setState(() => _isLooking = false);
-    }
-  }
-
-  Future<void> _showActaLoginDialog() async {
-    // 1. ACTA 새 탭 열기
-    html.window.open('https://acta.sktelecom.com', '_blank');
-
-    // 2. 토큰 입력 다이얼로그
-    final tokenCtrl = TextEditingController();
-    final result = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('ACTA 토큰 입력'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text('① 새 탭(Chrome)에서 ACTA 로그인 완료 후',
-                style: TextStyle(fontSize: 13)),
-            const Text('② 개발자도구(F12) → Console 탭에서',
-                style: TextStyle(fontSize: 13)),
-            Container(
-              margin: const EdgeInsets.symmetric(vertical: 6),
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: Colors.grey.shade100,
-                borderRadius: BorderRadius.circular(6),
-              ),
-              child: const SelectableText(
-                "localStorage.getItem('accessToken')",
-                style: TextStyle(fontSize: 12, fontFamily: 'monospace'),
-              ),
-            ),
-            const Text('③ 출력된 토큰을 아래에 붙여넣기',
-                style: TextStyle(fontSize: 13)),
-            const SizedBox(height: 12),
-            TextField(
-              controller: tokenCtrl,
-              maxLines: 3,
-              style: const TextStyle(fontSize: 11),
-              decoration: const InputDecoration(
-                labelText: 'ACTA 토큰',
-                border: OutlineInputBorder(),
-                hintText: 'eyJhbGci...',
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('취소')),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF00838F)),
-            child: const Text('도면 조회', style: TextStyle(color: Colors.white)),
-          ),
-        ],
-      ),
-    );
-    if (result != true) return;
-    final token = tokenCtrl.text.trim();
-    if (token.isEmpty) return;
-    if (!mounted) return;
-    _actaToken = token;
-    await _fetchActaDrawing();
-  }
-
-  Future<void> _fetchActaDrawing() async {
-    final zpwino = _zpwinoCtrl.text.trim();
-    if (zpwino.isEmpty) {
-      _showValidation('먼저 허가번호를 조회하세요.');
-      return;
-    }
-    if (_actaToken == null) {
-      _showValidation('ACTA 로그인이 필요합니다.');
-      return;
-    }
-    setState(() => _isActaLoading = true);
-    try {
-      final res = await widget.service.actaDrawing(zpwino, _actaToken!);
-      if (res['found'] == true) {
-        setState(() {
-          _actaAtflUuid = res['atflUuid'];
-          _actaFileNm = res['fileNm'];
-          _actaViewerUrl = res['viewerUrl'];
-        });
-        if (mounted) { final d = ProgressDialog(context); await d.complete(message: '도면 연동 완료: ${_actaFileNm ?? ''}'); }
-      } else {
-        final msg = res['msg'] as String? ?? '해당 국소의 ACTA 도면을 찾을 수 없습니다.';
-        if (mounted) {
-          showDialog(
-            context: context,
-            builder: (ctx) => AlertDialog(
-              title: const Text('도면 조회 결과'),
-              content: Text(msg),
-              actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('확인'))],
-            ),
-          );
-        }
-      }
-    } catch (e) {
-      if (mounted) { final d = ProgressDialog(context); await d.error(message: e.toString().replaceFirst('Exception: ', '')); }
-    } finally {
-      if (mounted) setState(() => _isActaLoading = false);
     }
   }
 
@@ -618,66 +506,6 @@ class _IndividualTabState extends State<_IndividualTab>
           // ── 첨부 자료 ──
           _sectionTitle('첨부 자료'),
           _formLabel('설계도면'),
-          const SizedBox(height: 8),
-          // ACTA 도면 연동 버튼
-          Row(
-            children: [
-              if (_actaAtflUuid != null) ...[
-                Expanded(
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFE0F2F1),
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: const Color(0xFF00838F)),
-                    ),
-                    child: Row(
-                      children: [
-                        const Icon(Icons.check_circle, color: Color(0xFF00838F), size: 16),
-                        const SizedBox(width: 6),
-                        Expanded(
-                          child: Text(
-                            _actaFileNm ?? 'ACTA 도면 연동됨',
-                            style: const TextStyle(fontSize: 12, color: Color(0xFF00838F)),
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                        GestureDetector(
-                          onTap: () => html.window.open(_actaViewerUrl!, '_blank'),
-                          child: const Icon(Icons.open_in_new, color: Color(0xFF00838F), size: 16),
-                        ),
-                        const SizedBox(width: 4),
-                        GestureDetector(
-                          onTap: () => setState(() {
-                            _actaAtflUuid = null;
-                            _actaFileNm = null;
-                            _actaViewerUrl = null;
-                          }),
-                          child: const Icon(Icons.close, color: Colors.grey, size: 16),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ] else ...[
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: _isActaLoading ? null : _showActaLoginDialog,
-                    icon: _isActaLoading
-                        ? const SizedBox(width: 14, height: 14,
-                            child: CircularProgressIndicator(strokeWidth: 2))
-                        : const Icon(Icons.link, size: 16),
-                    label: Text(_actaToken != null ? 'ACTA 도면 재조회' : 'ACTA 도면 연동'),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: const Color(0xFF00838F),
-                      side: const BorderSide(color: Color(0xFF00838F)),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                    ),
-                  ),
-                ),
-              ],
-            ],
-          ),
           const SizedBox(height: 8),
           GestureDetector(
             onTap: _pickBlueprint,
