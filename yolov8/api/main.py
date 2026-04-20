@@ -10111,6 +10111,57 @@ INSP_ORG_MAP: dict = {
 # 팀 → 본부 역방향 맵 (import 시 매칭용)
 INSP_TEAM_TO_HDQT: dict = {team: hdqt for hdqt, teams in INSP_ORG_MAP.items() for team in teams}
 
+# ── SKT본부 유효값 + access담당(9) → skt본부(4) 매핑 ──────────────────────
+_VALID_SKT_HDQTS: set = {'수도권', '중부', '서부', '동부'}
+_ACCESS_TO_SKT_HDQT: dict = {
+    # 수도권: 강남, 강북, 경기, 인천, 강원
+    '강남': '수도권', '강북': '수도권', '경기': '수도권', '인천': '수도권', '강원': '수도권',
+    # 중부: 충청
+    '충청': '중부',
+    # 서부: 서부
+    '서부': '서부',
+    # 동부: 경북, 경남
+    '경북': '동부', '경남': '동부',
+}
+
+def _normalize_skt_hdqt(raw: str, access: str = '') -> str:
+    """skt본부 값 정규화.
+    - 유효값(수도권/중부/서부/동부)이면 그대로
+    - 'xx Network담당', 'xx담당' 같은 접미사 제거
+    - 품질개선팀명이 들어온 경우 → 팀→access담당→skt본부로 유추
+    - 그래도 안 되면 access담당 파라미터로 유추
+    - 최종 실패 시 빈 문자열
+    """
+    s = (raw or '').strip()
+    if s in _VALID_SKT_HDQTS:
+        return s
+
+    # 접미사 제거
+    for suffix in ('Network담당', 'Access담당', '품질개선팀', '담당'):
+        if s.endswith(suffix):
+            s = s[:-len(suffix)].strip()
+            break
+    if s in _VALID_SKT_HDQTS:
+        return s
+
+    # 앞부분 매칭 (예: "수도권-강남" → "수도권")
+    for v in _VALID_SKT_HDQTS:
+        if s.startswith(v):
+            return v
+
+    # 팀명이 들어왔으면 팀→access→skt본부
+    if raw in INSP_TEAM_TO_HDQT:
+        derived_access = INSP_TEAM_TO_HDQT[raw]
+        if derived_access in _ACCESS_TO_SKT_HDQT:
+            return _ACCESS_TO_SKT_HDQT[derived_access]
+
+    # 파라미터로 받은 access담당으로 유추
+    access_clean = (access or '').strip()
+    if access_clean in _ACCESS_TO_SKT_HDQT:
+        return _ACCESS_TO_SKT_HDQT[access_clean]
+
+    return ''
+
 # ── 알려진 폐지 팀 → 현재 팀 명시 매핑 ──────────────────────────────────────
 _DEPRECATED_TEAM_MAP: dict = {
     '남산품질개선팀':   '용산품질개선팀',
@@ -11071,7 +11122,8 @@ def _process_inspection_sync(job_id: str, s3_key: str, year: int, uploaded_by: s
                 if 품질 in _INVALID_TEAM: 품질 = ''
                 tongsi = str(row[IDX_TONGSI] or '').strip() if is_skt and len(row) > IDX_TONGSI else ''
                 gongtae = str(row[IDX_GONGTAE] or '').strip() if is_skt and len(row) > IDX_GONGTAE else ''
-                skt본부 = str(row[IDX_SKTHDQT] or '').strip() if is_skt and len(row) > IDX_SKTHDQT else ''
+                skt본부_raw = str(row[IDX_SKTHDQT] or '').strip() if is_skt and len(row) > IDX_SKTHDQT else ''
+                skt본부 = _normalize_skt_hdqt(skt본부_raw)
 
                 # 초기 매핑: access/팀 없으면 cert DB로 조회
                 if not access:
@@ -11138,6 +11190,10 @@ def _process_inspection_sync(job_id: str, s3_key: str, year: int, uploaded_by: s
 
                 def _safe_str(v):
                     return str(v).strip() if v else ''
+
+                # 최종 access담당이 확정됐으니 skt본부 재정규화 (원본 값이 이상했던 케이스 보정)
+                if not skt본부 and access:
+                    skt본부 = _ACCESS_TO_SKT_HDQT.get(access, '')
 
                 insp_type_raw = _safe_str(row[insp_type_col] if insp_type_col >= 0 and len(row) > insp_type_col else '')
                 def _get(idx):
@@ -12003,12 +12059,12 @@ async def _load_learned_addr_map_async() -> dict:
 
 
 def _remap_divisions_sync(year: int, learned_map: dict, dry_run: bool = False) -> dict:
-    """동기: inspection_targets / inspection_schedules 재매핑."""
+    """동기: inspection_targets / inspection_schedules 재매핑 + skt본부 정규화."""
     conn = sqlite3.connect(_INSP_DB, timeout=120)
     conn.row_factory = sqlite3.Row
     try:
         rows = conn.execute(
-            'SELECT id, 허가번호, 도로명주소, 설치장소, access담당, 품질개선팀 '
+            'SELECT id, 허가번호, 도로명주소, 설치장소, access담당, 품질개선팀, skt본부 '
             'FROM inspection_targets WHERE year=?',
             (year,)
         ).fetchall()
@@ -12017,15 +12073,28 @@ def _remap_divisions_sync(year: int, learned_map: dict, dry_run: bool = False) -
         changed = []
 
         for r in rows:
-            addr = (r['도로명주소'] or '').strip() or (r['설치장소'] or '').strip()
-            if not addr:
-                continue
-            new_access, new_team = _hdqt_from_addr(addr, learned_map=learned_map)
-            if not new_access:
-                continue
             old_access = r['access담당'] or ''
             old_team = r['품질개선팀'] or ''
-            if new_access != old_access or (new_team and new_team != old_team):
+            old_skt = r['skt본부'] or ''
+
+            # 1) 주소 기반으로 access/team 재계산
+            addr = (r['도로명주소'] or '').strip() or (r['설치장소'] or '').strip()
+            new_access = old_access
+            new_team = old_team
+            if addr:
+                inferred_access, inferred_team = _hdqt_from_addr(addr, learned_map=learned_map)
+                if inferred_access:
+                    new_access = inferred_access
+                if inferred_team:
+                    new_team = inferred_team
+
+            # 2) skt본부 정규화 (유효값이 아니면 access담당으로 유추)
+            new_skt = _normalize_skt_hdqt(old_skt, access=new_access)
+
+            # 변경사항 있으면 기록
+            if (new_access != old_access
+                or (new_team and new_team != old_team)
+                or new_skt != old_skt):
                 changed.append({
                     'id': r['id'],
                     '허가번호': r['허가번호'],
@@ -12033,19 +12102,21 @@ def _remap_divisions_sync(year: int, learned_map: dict, dry_run: bool = False) -
                     'after_access': new_access,
                     'before_team': old_team,
                     'after_team': new_team or old_team,
+                    'before_skt': old_skt,
+                    'after_skt': new_skt,
                 })
 
         if not dry_run and changed:
             for c in changed:
                 conn.execute(
-                    'UPDATE inspection_targets SET access담당=?, 품질개선팀=? WHERE id=?',
-                    (c['after_access'], c['after_team'], c['id'])
+                    'UPDATE inspection_targets SET access담당=?, 품질개선팀=?, skt본부=? WHERE id=?',
+                    (c['after_access'], c['after_team'], c['after_skt'], c['id'])
                 )
             for c in changed:
                 conn.execute(
-                    'UPDATE inspection_schedules SET access담당=?, 품질개선팀=? '
+                    'UPDATE inspection_schedules SET access담당=?, 품질개선팀=?, skt본부=? '
                     'WHERE year=? AND 허가번호=?',
-                    (c['after_access'], c['after_team'], year, c['허가번호'])
+                    (c['after_access'], c['after_team'], c['after_skt'], year, c['허가번호'])
                 )
             conn.commit()
 
