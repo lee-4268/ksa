@@ -12225,11 +12225,9 @@ async def inspection_export_xlsx(request: Request, req: InspectionExportReq):
     RESULT_HEADERS = ['허가번호','status','검사일','메모','철탑형태',
                       '입력자','입력일시']
 
-    # 수검일정/결과도 수검대상과 동일한 본부/팀 필터 적용
-    access_filter = (req.filters or {}).get('access담당', [])
-    team_filter = (req.filters or {}).get('품질개선팀', [])
-    f_access = access_filter[0] if access_filter else ''
-    f_team = team_filter[0] if team_filter else ''
+    # 수검일정/결과도 수검대상과 동일한 본부/팀 필터 적용 (복수 선택 지원)
+    access_list = [v for v in (req.filters or {}).get('access담당', []) if v]
+    team_list = [v for v in (req.filters or {}).get('품질개선팀', []) if v]
 
     def _build():
         import openpyxl
@@ -12239,28 +12237,32 @@ async def inspection_export_xlsx(request: Request, req: InspectionExportReq):
         # 수검대상
         target_rows = c.execute(f'SELECT * FROM inspection_targets WHERE {where_sql} ORDER BY id', params).fetchall()
 
-        # 수검일정 (본부/팀 필터)
+        # 수검일정 (본부/팀 IN 필터)
         sched_where = 'year=?'
-        sched_params = [req.year]
-        if f_access:
-            sched_where += ' AND access담당=?'
-            sched_params.append(f_access)
-        if f_team:
-            sched_where += ' AND 품질개선팀=?'
-            sched_params.append(f_team)
+        sched_params: list = [req.year]
+        if access_list:
+            ph = ','.join('?' * len(access_list))
+            sched_where += f' AND access담당 IN ({ph})'
+            sched_params.extend(access_list)
+        if team_list:
+            ph = ','.join('?' * len(team_list))
+            sched_where += f' AND 품질개선팀 IN ({ph})'
+            sched_params.extend(team_list)
         sched_rows = c.execute(
             f'SELECT * FROM inspection_schedules WHERE {sched_where}',
             sched_params).fetchall()
 
-        # 수검결과 (입회자가 직접 입력한 수검결과, targets JOIN으로 본부/팀 필터)
+        # 수검결과 (입회자가 직접 입력한 수검결과, targets JOIN으로 본부/팀 IN 필터)
         result_where = 'r.year=?'
-        result_params = [req.year]
-        if f_access:
-            result_where += ' AND t.access담당=?'
-            result_params.append(f_access)
-        if f_team:
-            result_where += ' AND t.품질개선팀=?'
-            result_params.append(f_team)
+        result_params: list = [req.year]
+        if access_list:
+            ph = ','.join('?' * len(access_list))
+            result_where += f' AND t.access담당 IN ({ph})'
+            result_params.extend(access_list)
+        if team_list:
+            ph = ','.join('?' * len(team_list))
+            result_where += f' AND t.품질개선팀 IN ({ph})'
+            result_params.extend(team_list)
         result_rows = c.execute(
             f'''SELECT r.* FROM inspection_results r
                 JOIN inspection_targets t ON r.year = t.year AND r.허가번호 = t.허가번호

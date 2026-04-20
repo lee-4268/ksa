@@ -967,30 +967,118 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
   }
 
   Future<void> _exportExcel() async {
-    if (_aHdqt.isEmpty) {
-      await _showError('Excel 다운로드를 하려면 본부 필터를 선택하세요.');
-      return;
+    // 본부 선택 다이얼로그 (최대 3개)
+    final selected = await _showDivisionSelectDialog();
+    if (selected == null || selected.isEmpty) return;
+
+    // 선택한 본부로 필터 override (나머지 필터는 적용된 것 유지)
+    final filters = Map<String, List<String>>.from(_activeFilters);
+    filters['access담당'] = selected;
+    // 선택 본부가 현재 화면 본부와 다르면 팀 필터는 무시 (팀 매칭 안 맞을 수 있음)
+    if (selected.length > 1 || (selected.isNotEmpty && selected.first != _aHdqt)) {
+      filters.remove('품질개선팀');
     }
+
     final dlg = ProgressDialog(context);
     try {
       dlg.show(message: 'Excel 다운로드 중...');
       final bytes = await _svc.exportXlsx(
         year: _year, sheet: _sheet,
-        filters: _activeFilters,
+        filters: filters,
         search: _aSearch,
         addr: _aSearch,
       );
       final blob = html.Blob([bytes],
           'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
       final url = html.Url.createObjectUrlFromBlob(blob);
+      final label = selected.length == 1 ? selected.first : '${selected.length}개본부';
       html.AnchorElement(href: url)
-        ..setAttribute('download', '수검데이터_$_year년.xlsx')
+        ..setAttribute('download', '수검데이터_${label}_$_year년.xlsx')
         ..click();
       html.Url.revokeObjectUrl(url);
       await dlg.complete(message: 'Excel 다운로드 완료');
     } catch (e) {
       await dlg.error(message: 'Excel 다운로드 실패: $e');
     }
+  }
+
+  Future<List<String>?> _showDivisionSelectDialog() async {
+    // 초기값: 현재 본부 필터가 있으면 그 본부 선택, 없으면 빈 상태
+    final initial = <String>{};
+    if (_aHdqt.isNotEmpty) initial.add(_aHdqt);
+    final selected = Set<String>.from(initial);
+
+    return showDialog<List<String>>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDlgState) {
+          const maxCount = 3;
+          return AlertDialog(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            title: const Text('Excel 다운로드 본부 선택',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+            content: SizedBox(
+              width: 360,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('본부를 최대 $maxCount개까지 선택 (현재 ${selected.length}/$maxCount)',
+                      style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+                  const SizedBox(height: 8),
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxHeight: 360),
+                    child: SingleChildScrollView(
+                      child: Column(
+                        children: _hdqts.map((h) {
+                          final isChecked = selected.contains(h);
+                          final disabled = !isChecked && selected.length >= maxCount;
+                          return CheckboxListTile(
+                            dense: true,
+                            contentPadding: EdgeInsets.zero,
+                            controlAffinity: ListTileControlAffinity.leading,
+                            value: isChecked,
+                            onChanged: disabled
+                                ? null
+                                : (v) {
+                                    setDlgState(() {
+                                      if (v == true) {
+                                        selected.add(h);
+                                      } else {
+                                        selected.remove(h);
+                                      }
+                                    });
+                                  },
+                            title: Text(h, style: const TextStyle(fontSize: 14)),
+                            activeColor: const Color(0xFFE53935),
+                          );
+                        }).toList(),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, null),
+                child: const Text('취소'),
+              ),
+              ElevatedButton(
+                onPressed: selected.isEmpty
+                    ? null
+                    : () => Navigator.pop(ctx, selected.toList()),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFFE53935),
+                  foregroundColor: Colors.white,
+                ),
+                child: const Text('다운로드'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
   }
 
 
