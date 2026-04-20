@@ -11850,9 +11850,40 @@ async def inspection_remap_divisions(request: Request, year: int, dry_run: bool 
     if not os.path.exists(_INSP_DB):
         raise HTTPException(400, "DB 없음")
 
-    # cert DB에서 학습된 주소→팀 맵 로드 (서울 구명 외에 지방 주소 매칭용)
-    learned_map = await asyncio.to_thread(_learn_addr_map_from_cert_db)
+    # 학습된 주소→팀 맵 로드 (서울 구명 외 지방 주소 매칭용)
+    # 1차: /tmp/learned_addr_map.json 캐시 사용
+    # 2차: cert DB에서 바로 학습
+    # 3차: cert DB 없으면 _cert_cache_load()로 빌드 후 재학습
+    import tempfile as _tf, json as _jr
+    _cache_path = os.path.join(_tf.gettempdir(), "learned_addr_map.json")
+    learned_map: dict = {}
+    if os.path.exists(_cache_path):
+        try:
+            with open(_cache_path, 'r', encoding='utf-8') as _f:
+                learned_map = _jr.load(_f)
+        except Exception:
+            learned_map = {}
+
+    if not learned_map:
+        # cert DB에서 직접 학습 시도
+        learned_map = await asyncio.to_thread(_learn_addr_map_from_cert_db)
+        if not learned_map:
+            # cert DB가 없으면 빌드 (시간 소요)
+            logger.info("remap-divisions: cert DB 없음 — 빌드 시작")
+            await asyncio.to_thread(_cert_cache_load)
+            learned_map = await asyncio.to_thread(_learn_addr_map_from_cert_db)
+        # 재학습된 맵을 캐시 파일로 저장
+        if learned_map:
+            try:
+                with open(_cache_path, 'w', encoding='utf-8') as _f:
+                    _jr.dump(learned_map, _f, ensure_ascii=False)
+            except Exception:
+                pass
+
     logger.info(f"remap-divisions: learned_map {len(learned_map)}개 키워드 학습됨")
+
+    if not learned_map:
+        raise HTTPException(500, "주소→팀 학습 맵 생성 실패 (cert DB 확인 필요)")
 
     def _do():
         conn = sqlite3.connect(_INSP_DB, timeout=120)
