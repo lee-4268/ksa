@@ -44,6 +44,10 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
   bool _geocoding = false;
   String? _geocodeResult;
 
+  // 본부/팀 재매핑
+  bool _remapping = false;
+  String? _remapResult;
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
@@ -76,6 +80,102 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
       if (mounted) setState(() => _geocodeResult = '오류: $e');
     } finally {
       if (mounted) setState(() => _geocoding = false);
+    }
+  }
+
+  Future<void> _runRemapDivisions() async {
+    final year = DateTime.now().year;
+    setState(() { _remapping = true; _remapResult = null; });
+    try {
+      // 1. dry_run으로 변경 예정 건수 확인
+      final preview = await _inspSvc.remapDivisions(year: year, dryRun: true);
+      final total = preview['total'] as int? ?? 0;
+      final changedCount = preview['changed_count'] as int? ?? 0;
+      final samples = (preview['samples'] as List? ?? []).cast<Map<String, dynamic>>();
+
+      if (!mounted) return;
+
+      if (changedCount == 0) {
+        setState(() => _remapResult = '$year년 $total건 검토 완료: 변경할 항목이 없습니다.');
+        return;
+      }
+
+      // 2. 확인 다이얼로그
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          title: const Text('본부/팀 재매핑', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+          content: SizedBox(
+            width: 480,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('$year년 전체 $total건 중 $changedCount건 변경 예정',
+                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                const SizedBox(height: 8),
+                Text('주소 기반으로 access담당/품질개선팀을 재계산합니다. 수검일정도 함께 동기화됩니다. (수검결과/사진/메모는 영향 없음)',
+                    style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+                const SizedBox(height: 12),
+                if (samples.isNotEmpty) ...[
+                  const Text('변경 예시 (최대 20건):',
+                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+                  const SizedBox(height: 6),
+                  Container(
+                    constraints: const BoxConstraints(maxHeight: 260),
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.grey.shade50,
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(color: Colors.grey.shade300),
+                    ),
+                    child: SingleChildScrollView(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: samples.map((s) {
+                          return Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 2),
+                            child: Text(
+                              '${s['허가번호']}: ${s['before_access']}/${s['before_team']} → ${s['after_access']}/${s['after_team']}',
+                              style: const TextStyle(fontSize: 11, fontFamily: 'monospace'),
+                            ),
+                          );
+                        }).toList(),
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('취소')),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFFE53935),
+                foregroundColor: Colors.white,
+              ),
+              child: const Text('적용'),
+            ),
+          ],
+        ),
+      );
+
+      if (confirmed != true) {
+        if (mounted) setState(() => _remapResult = '취소됨');
+        return;
+      }
+
+      // 3. 실제 적용
+      final applied = await _inspSvc.remapDivisions(year: year, dryRun: false);
+      final appliedCount = applied['changed_count'] as int? ?? 0;
+      if (mounted) setState(() => _remapResult = '$year년 $appliedCount건 재매핑 완료');
+    } catch (e) {
+      if (mounted) setState(() => _remapResult = '오류: $e');
+    } finally {
+      if (mounted) setState(() => _remapping = false);
     }
   }
 
@@ -539,6 +639,20 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                     ),
                   ),
+                  const SizedBox(width: 8),
+                  OutlinedButton.icon(
+                    onPressed: _remapping ? null : _runRemapDivisions,
+                    icon: _remapping
+                        ? const SizedBox(width: 14, height: 14,
+                            child: CircularProgressIndicator(strokeWidth: 2))
+                        : const Icon(Icons.swap_horiz, size: 18),
+                    label: const Text('본부/팀 재매핑'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: const Color(0xFF7B1FA2),
+                      side: const BorderSide(color: Color(0xFF7B1FA2)),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    ),
+                  ),
                 ],
               ]),
               if (_geocodeResult != null) ...[
@@ -547,6 +661,13 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
                     style: TextStyle(
                         fontSize: 12,
                         color: _geocodeResult!.startsWith('오류') ? Colors.red : Colors.green.shade700)),
+              ],
+              if (_remapResult != null) ...[
+                const SizedBox(height: 8),
+                Text(_remapResult!,
+                    style: TextStyle(
+                        fontSize: 12,
+                        color: _remapResult!.startsWith('오류') ? Colors.red : const Color(0xFF7B1FA2))),
               ],
           ],
         ),

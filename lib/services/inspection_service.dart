@@ -362,6 +362,17 @@ class InspectionService {
     return body;
   }
 
+  Future<Map<String, dynamic>> remapDivisions({required int year, bool dryRun = true}) async {
+    final resp = await http.post(
+      Uri.parse('$_baseUrl/inspection/remap-divisions').replace(
+          queryParameters: {'year': '$year', 'dry_run': dryRun ? 'true' : 'false'}),
+      headers: _headers,
+    ).timeout(const Duration(minutes: 5));
+    final body = json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+    if (resp.statusCode != 200) throw Exception(body['detail'] ?? '재매핑 실패');
+    return body;
+  }
+
   Future<Uint8List> exportInspectionReport({
     required int year,
     List<String> licenseNos = const [],

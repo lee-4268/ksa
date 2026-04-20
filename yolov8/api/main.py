@@ -11835,6 +11835,84 @@ async def _auto_geocode_background(year: int):
         logger.error(f"[auto-geocode] 오류: {e}")
 
 
+@app.post("/inspection/remap-divisions")
+async def inspection_remap_divisions(request: Request, year: int, dry_run: bool = True):
+    """도로명주소 기반으로 inspection_targets의 access담당/품질개선팀을 재매핑.
+
+    - dry_run=True: 변경 예정 건수만 리포트 (실제 UPDATE 안 함)
+    - dry_run=False: 실제 UPDATE 실행 (inspection_schedules도 함께 동기화)
+    - admin 전용
+    """
+    empno = await _verify_auth(request)
+    role = await asyncio.to_thread(_get_user_role_sync, empno)
+    if role != "admin":
+        raise HTTPException(403, "최고관리자만 가능")
+    if not os.path.exists(_INSP_DB):
+        raise HTTPException(400, "DB 없음")
+
+    def _do():
+        conn = sqlite3.connect(_INSP_DB, timeout=120)
+        conn.row_factory = sqlite3.Row
+        try:
+            rows = conn.execute(
+                'SELECT id, 허가번호, 도로명주소, 설치장소, access담당, 품질개선팀 '
+                'FROM inspection_targets WHERE year=?',
+                (year,)
+            ).fetchall()
+
+            total = len(rows)
+            changed = []  # [(id, 허가번호, before_access, after_access, before_team, after_team)]
+
+            for r in rows:
+                addr = (r['도로명주소'] or '').strip() or (r['설치장소'] or '').strip()
+                if not addr:
+                    continue
+                new_access, new_team = _hdqt_from_addr(addr)
+                # 본부가 추론 안 되면 스킵 (기존 값 보존)
+                if not new_access:
+                    continue
+                # 팀이 추론 안 되면 access만 비교
+                old_access = r['access담당'] or ''
+                old_team = r['품질개선팀'] or ''
+                if new_access != old_access or (new_team and new_team != old_team):
+                    changed.append({
+                        'id': r['id'],
+                        '허가번호': r['허가번호'],
+                        'before_access': old_access,
+                        'after_access': new_access,
+                        'before_team': old_team,
+                        'after_team': new_team or old_team,
+                    })
+
+            if not dry_run and changed:
+                # inspection_targets UPDATE
+                for c in changed:
+                    conn.execute(
+                        'UPDATE inspection_targets SET access담당=?, 품질개선팀=? WHERE id=?',
+                        (c['after_access'], c['after_team'], c['id'])
+                    )
+                # inspection_schedules도 동기화 (같은 허가번호/연도)
+                for c in changed:
+                    conn.execute(
+                        'UPDATE inspection_schedules SET access담당=?, 품질개선팀=? '
+                        'WHERE year=? AND 허가번호=?',
+                        (c['after_access'], c['after_team'], year, c['허가번호'])
+                    )
+                conn.commit()
+
+            return {'total': total, 'changed_count': len(changed), 'samples': changed[:20]}
+        finally:
+            conn.close()
+
+    result = await asyncio.to_thread(_do)
+    return {
+        'success': True,
+        'dry_run': dry_run,
+        'year': year,
+        **result,
+    }
+
+
 @app.post("/inspection/geocode-targets")
 async def inspection_geocode_targets(request: Request, year: int):
     """기존 inspection_targets의 위경도를 Kakao 지오코딩으로 채움 (관리자 1회성).
