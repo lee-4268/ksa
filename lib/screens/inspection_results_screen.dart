@@ -218,170 +218,308 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
     }
   }
 
-  // ── Excel 다운로드 ──
+// ── Excel 다운로드 ──
 
-  static const _divisions = ['', '강남', '강북', '인천', '경기', '경남', '경북', '서부', '충청', '강원'];
+static const _divisions = ['', '강남', '강북', '인천', '경기', '경남', '경북', '서부', '충청', '강원'];
 
-  Future<void> _downloadExcel() async {
-    final result = await showDialog<Map<String, dynamic>>(
-      context: context,
-      builder: (ctx) {
-        final Set<String> selDivisions = {};
-        final Set<String> selMonths = {};
-        final Set<String> selWeeks = {};
-        List<String> weekOptions = [];
-        bool weekLoading = false;
+Future<void> _downloadExcel() async {
+  final result = await showDialog<Map<String, dynamic>>(
+    context: context,
+    builder: (ctx) {
+      // 내부 상태 관리를 위한 변수들
+      final Set<String> selDivisions = {};
+      final Set<String> selMonths = {};
+      final Set<String> selWeeks = {};
+      List<String> weekOptions = [];
+      bool weekLoading = false;
 
-        final months = List.generate(12, (i) => '${i + 1}월');
+      final months = List.generate(12, (i) => '${i + 1}월');
+      final activeDivisions = _divisions.where((d) => d.isNotEmpty).toList();
 
-        Future<void> loadWeeks(void Function(void Function()) setS) async {
-          setS(() { weekLoading = true; selWeeks.clear(); weekOptions = []; });
+      return StatefulBuilder(builder: (ctx, setS) {
+        
+        // 주차 데이터를 비동기로 불러오는 함수
+        Future<void> loadWeeks() async {
+          setS(() { 
+            weekLoading = true; 
+            selWeeks.clear(); 
+            weekOptions = []; 
+          });
+          
           final monthParam = selMonths.length == 1 ? selMonths.first : '';
           final regionParam = selDivisions.length == 1 ? selDivisions.first : '';
-          final ws = await _svc.getResultsWeeks(_year, month: monthParam, region: regionParam);
-          setS(() { weekLoading = false; weekOptions = ws; });
+          
+          try {
+            final ws = await _svc.getResultsWeeks(_year, month: monthParam, region: regionParam);
+            setS(() { 
+              weekOptions = ws;
+              weekLoading = false; 
+            });
+          } catch (e) {
+            setS(() => weekLoading = false);
+          }
         }
 
-        Widget sectionLabel(String label) => Padding(
-          padding: const EdgeInsets.only(bottom: 6),
-          child: Text(label, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.grey.shade700)),
-        );
-
-        Widget checkChip(String label, bool selected, VoidCallback onTap) => InkWell(
-          onTap: onTap,
-          borderRadius: BorderRadius.circular(20),
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 150),
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-            decoration: BoxDecoration(
-              color: selected ? _primary : Colors.grey.shade100,
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(color: selected ? _primary : Colors.grey.shade300),
-            ),
-            child: Text(label, style: TextStyle(fontSize: 12, color: selected ? Colors.white : Colors.black87, fontWeight: selected ? FontWeight.w600 : FontWeight.normal)),
-          ),
-        );
-
-        return StatefulBuilder(builder: (ctx, setS) {
-          return AlertDialog(
-            backgroundColor: Colors.white,
-            surfaceTintColor: Colors.white,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-            title: const Text('Excel 다운로드 옵션', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
-            content: SizedBox(
-              width: 480,
-              child: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // 본부
-                    sectionLabel('본부 (복수 선택 가능)'),
-                    Wrap(
-                      spacing: 6,
-                      runSpacing: 6,
-                      children: _divisions.where((d) => d.isNotEmpty).map((d) {
-                        final sel = selDivisions.contains(d);
-                        return checkChip(d, sel, () {
-                          setS(() {
-                            if (sel) selDivisions.remove(d); else selDivisions.add(d);
-                            selWeeks.clear(); weekOptions = [];
-                          });
-                        });
-                      }).toList(),
-                    ),
-                    const SizedBox(height: 16),
-                    // 월
-                    sectionLabel('월 (복수 선택 가능)'),
-                    Wrap(
-                      spacing: 6,
-                      runSpacing: 6,
-                      children: months.map((m) {
-                        final sel = selMonths.contains(m);
-                        return checkChip(m, sel, () {
-                          setS(() {
-                            if (sel) selMonths.remove(m); else selMonths.add(m);
-                            selWeeks.clear(); weekOptions = [];
-                          });
-                          if (selMonths.isNotEmpty) loadWeeks(setS);
-                        });
-                      }).toList(),
-                    ),
-                    const SizedBox(height: 16),
-                    // 주차
-                    sectionLabel('주차 (복수 선택 가능)'),
-                    if (weekLoading)
-                      const SizedBox(height: 28, child: Center(child: SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))))
-                    else if (weekOptions.isEmpty)
-                      Text('월을 먼저 선택하세요', style: TextStyle(fontSize: 12, color: Colors.grey.shade500))
-                    else
-                      Wrap(
-                        spacing: 6,
-                        runSpacing: 6,
-                        children: weekOptions.map((w) {
-                          final sel = selWeeks.contains(w);
-                          return checkChip(w, sel, () => setS(() {
-                            if (sel) selWeeks.remove(w); else selWeeks.add(w);
-                          }));
-                        }).toList(),
-                      ),
-                  ],
+        // 공통 섹션 헤더 (라벨 + 전체선택 버튼)
+        Widget sectionHeader({
+          required String title, 
+          required bool isAllSelected, 
+          required VoidCallback onToggle
+        }) {
+          return Padding(
+            padding: const EdgeInsets.only(top: 8, bottom: 8),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(title, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.black87)),
+                TextButton(
+                  onPressed: onToggle,
+                  style: TextButton.styleFrom(
+                    minimumSize: Size.zero,
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                  child: Text(
+                    isAllSelected ? '전체 해제' : '전체 선택',
+                    style: TextStyle(fontSize: 12, color: _primary, fontWeight: FontWeight.w600),
+                  ),
                 ),
-              ),
+              ],
             ),
-            actions: [
-              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('취소')),
-              ElevatedButton(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: _green,
-                  foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                ),
-                onPressed: () => Navigator.pop(ctx, {
-                  'regions': selDivisions.toList(),
-                  'months': selMonths.toList(),
-                  'weeks': selWeeks.toList(),
-                }),
-                child: const Text('다운로드'),
-              ),
-            ],
           );
-        });
-      },
-    );
-    if (result == null) return;
+        }
 
-    final dialog = ProgressDialog(context);
-    dialog.show(message: 'Excel 다운로드\n준비 중...');
-    try {
-      final regions = (result['regions'] as List<String>? ?? []);
-      final months = (result['months'] as List<String>? ?? []);
-      final weeks = (result['weeks'] as List<String>? ?? []);
-      final bytes = await _svc.exportResultsXlsx(_year, regions: regions, weeks: weeks);
-      if (!mounted) return;
-      final fileSuffix = [
-        if (regions.isNotEmpty) regions.join('+'),
-        if (months.isNotEmpty) months.join('+'),
-        if (weeks.isNotEmpty) weeks.join('+'),
-        if (regions.isEmpty && months.isEmpty && weeks.isEmpty) '전체',
-      ].join('_');
-      final blob = html.Blob([bytes],
-          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-      final url = html.Url.createObjectUrlFromBlob(blob);
-      final anchor = html.AnchorElement()
-        ..href = url
-        ..download = '실적_결과장_${_year}_$fileSuffix.xlsx'
-        ..style.display = 'none';
-      html.document.body?.children.add(anchor);
-      anchor.click();
-      html.document.body?.children.remove(anchor);
-      html.Url.revokeObjectUrl(url);
-      await dialog.complete(message: '다운로드 완료');
-    } catch (e) {
-      if (!mounted) return;
-      await dialog.error(message: '다운로드 실패');
-    }
+        // 세련된 커스텀 칩 위젯
+        Widget selectChip(String label, bool isSelected, VoidCallback onTap) {
+          return InkWell(
+            onTap: onTap,
+            borderRadius: BorderRadius.circular(8),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 150),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: isSelected ? _primary.withOpacity(0.08) : Colors.grey.shade50,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: isSelected ? _primary : Colors.grey.shade300,
+                  width: isSelected ? 1.5 : 1,
+                ),
+              ),
+              child: Text(
+                label,
+                style: TextStyle(
+                  fontSize: 12,
+                  color: isSelected ? _primary : Colors.black87,
+                  fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                ),
+              ),
+            ),
+          );
+        }
+
+        return AlertDialog(
+          backgroundColor: Colors.white,
+          surfaceTintColor: Colors.white,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 10),
+          title: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(color: _green.withOpacity(0.1), borderRadius: BorderRadius.circular(10)),
+                child: Icon(Icons.description_outlined, color: _green, size: 20),
+              ),
+              const SizedBox(width: 12),
+              const Text('Excel 다운로드 옵션', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            ],
+          ),
+          content: SizedBox(
+            width: 500,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // --- 본부 선택 섹션 ---
+                  sectionHeader(
+                    title: '본부 지역',
+                    isAllSelected: selDivisions.length == activeDivisions.length && activeDivisions.isNotEmpty,
+                    onToggle: () {
+                      setS(() {
+                        if (selDivisions.length == activeDivisions.length) {
+                          selDivisions.clear();
+                        } else {
+                          selDivisions.addAll(activeDivisions);
+                        }
+                        selWeeks.clear(); weekOptions = [];
+                      });
+                    },
+                  ),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: activeDivisions.map((d) {
+                      final sel = selDivisions.contains(d);
+                      return selectChip(d, sel, () {
+                        setS(() {
+                          if (sel) selDivisions.remove(d); else selDivisions.add(d);
+                          selWeeks.clear(); weekOptions = [];
+                        });
+                      });
+                    }).toList(),
+                  ),
+                  const Padding(padding: EdgeInsets.symmetric(vertical: 12), child: Divider(height: 1)),
+
+                  // --- 월 선택 섹션 ---
+                  sectionHeader(
+                    title: '해당 월',
+                    isAllSelected: selMonths.length == months.length,
+                    onToggle: () {
+                      setS(() {
+                        if (selMonths.length == months.length) {
+                          selMonths.clear();
+                        } else {
+                          selMonths.addAll(months);
+                        }
+                        selWeeks.clear(); weekOptions = [];
+                      });
+                      if (selMonths.isNotEmpty) loadWeeks();
+                    },
+                  ),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: months.map((m) {
+                      final sel = selMonths.contains(m);
+                      return selectChip(m, sel, () {
+                        setS(() {
+                          if (sel) selMonths.remove(m); else selMonths.add(m);
+                          selWeeks.clear(); weekOptions = [];
+                        });
+                        if (selMonths.isNotEmpty) loadWeeks();
+                      });
+                    }).toList(),
+                  ),
+                  const Padding(padding: EdgeInsets.symmetric(vertical: 12), child: Divider(height: 1)),
+
+                  // --- 주차 선택 섹션 ---
+                  sectionHeader(
+                    title: '주차 선택',
+                    isAllSelected: weekOptions.isNotEmpty && selWeeks.length == weekOptions.length,
+                    onToggle: () {
+                      if (weekOptions.isEmpty) return;
+                      setS(() {
+                        if (selWeeks.length == weekOptions.length) {
+                          selWeeks.clear();
+                        } else {
+                          selWeeks.addAll(weekOptions);
+                        }
+                      });
+                    },
+                  ),
+                  if (weekLoading)
+                    const Center(child: Padding(padding: EdgeInsets.all(20), child: CircularProgressIndicator(strokeWidth: 2)))
+                  else if (weekOptions.isEmpty)
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(vertical: 20),
+                      decoration: BoxDecoration(color: Colors.grey.shade50, borderRadius: BorderRadius.circular(12)),
+                      child: Text('월을 선택하면 주차 정보가 표시됩니다.', textAlign: TextAlign.center, style: TextStyle(fontSize: 13, color: Colors.grey.shade500)),
+                    )
+                  else
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: weekOptions.map((w) {
+                        final sel = selWeeks.contains(w);
+                        return selectChip(w, sel, () => setS(() {
+                          if (sel) selWeeks.remove(w); else selWeeks.add(w);
+                        }));
+                      }).toList(),
+                    ),
+                ],
+              ),
+            ),
+          ),
+          actionsPadding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
+          actions: [
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: () => Navigator.pop(ctx),
+                    style: OutlinedButton.styleFrom(
+                      side: BorderSide(color: Colors.grey.shade300),
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                    child: Text('취소', style: TextStyle(color: Colors.grey.shade600, fontWeight: FontWeight.bold)),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: () => Navigator.pop(ctx, {
+                      'regions': selDivisions.toList(),
+                      'months': selMonths.toList(),
+                      'weeks': selWeeks.toList(),
+                    }),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: _green,
+                      foregroundColor: Colors.white,
+                      elevation: 0,
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                    child: const Text('다운로드 시작', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        );
+      });
+    },
+  );
+
+  // 리턴값이 없으면 중단
+  if (result == null) return;
+
+  // ── 이후 엑셀 다운로드 로직 (기존 유지) ──
+  final dialog = ProgressDialog(context);
+  dialog.show(message: 'Excel 다운로드\n준비 중...');
+  try {
+    final regions = (result['regions'] as List<String>? ?? []);
+    final months = (result['months'] as List<String>? ?? []);
+    final weeks = (result['weeks'] as List<String>? ?? []);
+    
+    final bytes = await _svc.exportResultsXlsx(_year, regions: regions, weeks: weeks);
+    if (!mounted) return;
+
+    final fileSuffix = [
+      if (regions.isNotEmpty) regions.join('+'),
+      if (months.isNotEmpty) months.join('+'),
+      if (weeks.isNotEmpty) weeks.join('+'),
+      if (regions.isEmpty && months.isEmpty && weeks.isEmpty) '전체',
+    ].join('_');
+
+    final blob = html.Blob([bytes], 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    final url = html.Url.createObjectUrlFromBlob(blob);
+    final anchor = html.AnchorElement()
+      ..href = url
+      ..download = '실적_결과장_${_year}_$fileSuffix.xlsx'
+      ..style.display = 'none';
+    html.document.body?.children.add(anchor);
+    anchor.click();
+    html.document.body?.children.remove(anchor);
+    html.Url.revokeObjectUrl(url);
+
+    await dialog.complete(message: '다운로드 완료');
+  } catch (e) {
+    if (!mounted) return;
+    await dialog.error(message: '다운로드 실패');
   }
+}
 
 
   // ── 숫자 포맷 ──
