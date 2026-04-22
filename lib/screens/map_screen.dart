@@ -1,5 +1,7 @@
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
 import 'package:provider/provider.dart';
 import '../models/radio_station.dart';
 import '../providers/station_provider.dart';
@@ -44,6 +46,12 @@ class _MapScreenState extends State<MapScreen>
   bool _isSearchMode = false; // 상세 화면 검색 모드
   String _detailSearchQuery = ''; // 상세 화면 검색어
   final Set<String> _selectedStationIds = {}; // 선택된 스테이션 ID들
+
+  // 경로 계획 모드
+  bool _isRoutePlanMode = false;
+  final List<RadioStation> _routeSelectedStations = [];
+  bool _isCalculatingRoute = false;
+  List<RadioStation>? _routeResult; // 계산된 최적 순서
 
   // 드래그 관련 상태 (맵 리사이즈 없이 리스트만 드래그)
   double _listHeightRatio = 0.35; // 리스트 높이 비율 (0.15 ~ 0.85) - 기본값 낮춤
@@ -454,6 +462,14 @@ class _MapScreenState extends State<MapScreen>
                             bottom: 16,
                             child: _buildMyLocationButton(_detailMapKey),
                           ),
+                          // 경로 계획 패널 (하단)
+                          if (_isRoutePlanMode)
+                            Positioned(
+                              left: 0,
+                              right: 0,
+                              bottom: 0,
+                              child: _buildRoutePlanPanel(),
+                            ),
                         ],
                       ),
                     ),
@@ -540,6 +556,14 @@ class _MapScreenState extends State<MapScreen>
                             bottom: _listHeightRatio * MediaQuery.of(context).size.height + 16,
                             child: _buildMyLocationButton(_detailMapKey),
                           ),
+                          // 경로 계획 패널 (하단, 리스트 위)
+                          if (_isRoutePlanMode)
+                            Positioned(
+                              left: 0,
+                              right: 0,
+                              bottom: _listHeightRatio * MediaQuery.of(context).size.height,
+                              child: _buildRoutePlanPanel(),
+                            ),
                         ],
                       ),
                     ),
@@ -683,6 +707,15 @@ class _MapScreenState extends State<MapScreen>
                 ),
               ],
             ),
+          ),
+          // 경로 계획 토글 버튼
+          IconButton(
+            icon: Icon(
+              Icons.alt_route,
+              color: _isRoutePlanMode ? Colors.blue : Colors.grey[700],
+            ),
+            tooltip: '경로 계획',
+            onPressed: _toggleRoutePlanMode,
           ),
           // 검색 아이콘
           IconButton(
@@ -1573,6 +1606,12 @@ class _MapScreenState extends State<MapScreen>
   }
 
   void _showStationDetail(RadioStation station) {
+    // 경로 계획 모드면 선택/해제
+    if (_isRoutePlanMode) {
+      _toggleRouteStation(station);
+      return;
+    }
+
     final provider = context.read<StationProvider>();
     provider.selectStation(station);
 
@@ -2038,6 +2077,348 @@ class _MapScreenState extends State<MapScreen>
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  // ─── 경로 계획 ───────────────────────────────────────────────
+
+  void _toggleRoutePlanMode() {
+    setState(() {
+      _isRoutePlanMode = !_isRoutePlanMode;
+      if (!_isRoutePlanMode) {
+        _routeSelectedStations.clear();
+        _routeResult = null;
+        _detailMapKey.currentState?.clearRouteOverlay();
+      }
+    });
+  }
+
+  void _toggleRouteStation(RadioStation station) {
+    if (!station.hasCoordinates) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('좌표가 없는 국소는 선택할 수 없습니다.')),
+      );
+      return;
+    }
+    setState(() {
+      final idx = _routeSelectedStations.indexWhere((s) => s.id == station.id);
+      if (idx >= 0) {
+        _routeSelectedStations.removeAt(idx);
+      } else {
+        _routeSelectedStations.add(station);
+      }
+      // 결과 초기화
+      _routeResult = null;
+      _detailMapKey.currentState?.clearRouteOverlay();
+      // 선택된 마커 강조 업데이트
+      _detailMapKey.currentState?.setRouteSelectedMarkers(
+        _routeSelectedStations.map((s) => s.id).toList(),
+      );
+    });
+  }
+
+  Future<void> _calculateOptimalRoute() async {
+    if (_routeSelectedStations.length < 2) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('최소 2개 이상의 국소를 선택하세요.')),
+      );
+      return;
+    }
+
+    setState(() => _isCalculatingRoute = true);
+
+    try {
+      final stations = _routeSelectedStations;
+      final n = stations.length;
+
+      // OSRM Table API: n×n 이동시간 행렬 조회
+      final coords = stations
+          .map((s) => '${s.longitude},${s.latitude}')
+          .join(';');
+      final url = 'http://router.project-osrm.org/table/v1/driving/$coords?annotations=duration';
+      final resp = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 30));
+
+      if (resp.statusCode != 200) throw Exception('OSRM 서버 오류');
+      final data = json.decode(resp.body) as Map<String, dynamic>;
+      final durations = (data['durations'] as List)
+          .map((row) => (row as List).map((v) => (v as num).toDouble()).toList())
+          .toList();
+
+      // Nearest Neighbor TSP
+      final visited = List.filled(n, false);
+      final order = <int>[];
+      int current = 0;
+      visited[current] = true;
+      order.add(current);
+
+      for (int step = 1; step < n; step++) {
+        double best = double.infinity;
+        int next = -1;
+        for (int j = 0; j < n; j++) {
+          if (!visited[j] && durations[current][j] < best) {
+            best = durations[current][j];
+            next = j;
+          }
+        }
+        visited[next] = true;
+        order.add(next);
+        current = next;
+      }
+
+      final orderedStations = order.map((i) => stations[i]).toList();
+
+      // OSRM Route API: 실제 도로 폴리라인 좌표 조회
+      final routeCoords = orderedStations
+          .map((s) => '${s.longitude},${s.latitude}')
+          .join(';');
+      final routeUrl =
+          'http://router.project-osrm.org/route/v1/driving/$routeCoords?overview=full&geometries=geojson';
+      final routeResp =
+          await http.get(Uri.parse(routeUrl)).timeout(const Duration(seconds: 30));
+
+      List<List<double>>? polylineCoords;
+      if (routeResp.statusCode == 200) {
+        final routeData = json.decode(routeResp.body) as Map<String, dynamic>;
+        final routes = routeData['routes'] as List?;
+        if (routes != null && routes.isNotEmpty) {
+          final geometry = routes[0]['geometry'] as Map<String, dynamic>?;
+          final coordsList = geometry?['coordinates'] as List?;
+          if (coordsList != null) {
+            polylineCoords = coordsList
+                .map((c) => [(c as List)[0] as double, c[1] as double])
+                .toList();
+          }
+        }
+      }
+
+      setState(() {
+        _routeResult = orderedStations;
+        _isCalculatingRoute = false;
+      });
+
+      // 지도에 경로 표시
+      _detailMapKey.currentState?.drawRouteOverlay(
+        orderedStations: orderedStations,
+        polylineCoords: polylineCoords,
+      );
+    } catch (e) {
+      setState(() => _isCalculatingRoute = false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('경로 계산 실패: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+
+  Widget _buildRoutePlanPanel() {
+    final hasResult = _routeResult != null;
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.15),
+            blurRadius: 8,
+            offset: const Offset(0, -2),
+          ),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // 헤더
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            color: Colors.blue,
+            child: Row(
+              children: [
+                const Icon(Icons.alt_route, color: Colors.white, size: 18),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    hasResult
+                        ? '최적 경로 (${_routeResult!.length}개 국소)'
+                        : '경로 계획 모드 — 방문할 국소를 선택하세요',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 13,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+                TextButton(
+                  onPressed: _toggleRoutePlanMode,
+                  style: TextButton.styleFrom(
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    minimumSize: Size.zero,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                  child: const Text('종료', style: TextStyle(fontSize: 12)),
+                ),
+              ],
+            ),
+          ),
+          // 선택된 국소 목록 또는 결과
+          if (hasResult)
+            _buildRouteResultList()
+          else
+            _buildRouteSelectionList(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRouteSelectionList() {
+    return Container(
+      constraints: const BoxConstraints(maxHeight: 200),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (_routeSelectedStations.isEmpty)
+            const Padding(
+              padding: EdgeInsets.all(16),
+              child: Text(
+                '지도에서 마커를 탭하여 국소를 선택하세요',
+                style: TextStyle(color: Colors.grey, fontSize: 13),
+              ),
+            )
+          else
+            Flexible(
+              child: ListView.separated(
+                shrinkWrap: true,
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                itemCount: _routeSelectedStations.length,
+                separatorBuilder: (_, __) => const Divider(height: 1),
+                itemBuilder: (context, index) {
+                  final s = _routeSelectedStations[index];
+                  return ListTile(
+                    dense: true,
+                    leading: CircleAvatar(
+                      radius: 12,
+                      backgroundColor: Colors.blue,
+                      child: Text(
+                        '${index + 1}',
+                        style: const TextStyle(color: Colors.white, fontSize: 11),
+                      ),
+                    ),
+                    title: Text(s.displayName, style: const TextStyle(fontSize: 13)),
+                    subtitle: Text(
+                      s.address,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 11),
+                    ),
+                    trailing: IconButton(
+                      icon: const Icon(Icons.close, size: 16),
+                      onPressed: () => _toggleRouteStation(s),
+                    ),
+                  );
+                },
+              ),
+            ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+            child: SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: _routeSelectedStations.length < 2 || _isCalculatingRoute
+                    ? null
+                    : _calculateOptimalRoute,
+                icon: _isCalculatingRoute
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                      )
+                    : const Icon(Icons.navigation, size: 18),
+                label: Text(
+                  _isCalculatingRoute ? '계산 중...' : '최적 경로 계산 (${_routeSelectedStations.length}개)',
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.blue,
+                  foregroundColor: Colors.white,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRouteResultList() {
+    return Container(
+      constraints: const BoxConstraints(maxHeight: 220),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Flexible(
+            child: ListView.separated(
+              shrinkWrap: true,
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              itemCount: _routeResult!.length,
+              separatorBuilder: (_, __) => const Divider(height: 1),
+              itemBuilder: (context, index) {
+                final s = _routeResult![index];
+                final isLast = index == _routeResult!.length - 1;
+                return ListTile(
+                  dense: true,
+                  leading: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      CircleAvatar(
+                        radius: 12,
+                        backgroundColor: index == 0
+                            ? Colors.green
+                            : isLast
+                                ? Colors.red
+                                : Colors.blue,
+                        child: Text(
+                          '${index + 1}',
+                          style: const TextStyle(color: Colors.white, fontSize: 11),
+                        ),
+                      ),
+                    ],
+                  ),
+                  title: Text(s.displayName, style: const TextStyle(fontSize: 13)),
+                  subtitle: Text(
+                    s.address,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 11),
+                  ),
+                  trailing: index == 0
+                      ? const Text('출발', style: TextStyle(fontSize: 11, color: Colors.green))
+                      : isLast
+                          ? const Text('도착', style: TextStyle(fontSize: 11, color: Colors.red))
+                          : null,
+                );
+              },
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+            child: SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: () {
+                  setState(() {
+                    _routeResult = null;
+                    _detailMapKey.currentState?.clearRouteOverlay();
+                    _detailMapKey.currentState?.setRouteSelectedMarkers(
+                      _routeSelectedStations.map((s) => s.id).toList(),
+                    );
+                  });
+                },
+                icon: const Icon(Icons.refresh, size: 18),
+                label: const Text('다시 선택'),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

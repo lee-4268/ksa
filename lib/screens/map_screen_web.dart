@@ -1,6 +1,7 @@
 // ignore_for_file: avoid_web_libraries_in_flutter
 
 import 'dart:async';
+import 'dart:convert';
 import 'dart:html' as html;
 import 'dart:js' as js;
 import 'dart:ui_web' as ui_web;
@@ -1146,6 +1147,178 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
           map.setLevel($level);
           console.log('Level set to: $level');
         }
+      })();
+    ''';
+    html.document.body?.append(html.ScriptElement()..text = jsCode);
+  }
+
+  /// 경로 계획 모드: 선택된 마커 강조 표시
+  void setRouteSelectedMarkers(List<String> selectedIds) {
+    final idsJson = json.encode(selectedIds);
+    final jsCode = '''
+      (function() {
+        if (typeof kakao === 'undefined') return;
+        var labelsMap = window['kakaoMapLabelsMap_$_containerId'] || {};
+        var selectedIds = $idsJson;
+        var selectedSet = {};
+        for (var i = 0; i < selectedIds.length; i++) selectedSet[selectedIds[i]] = true;
+
+        // 기존 선택 강조 오버레이 제거
+        var selOverlays = window['kakaoRouteSelectOverlays_$_containerId'] || [];
+        for (var i = 0; i < selOverlays.length; i++) selOverlays[i].setMap(null);
+        window['kakaoRouteSelectOverlays_$_containerId'] = [];
+
+        var map = window['kakaoMapInstance_$_containerId'];
+        if (!map) return;
+
+        // 선택된 마커에 파란 원형 강조 오버레이 추가
+        var markersMap = window['kakaoMapMarkersMap_$_containerId'] || {};
+        for (var id in selectedSet) {
+          var marker = markersMap[id];
+          if (!marker) continue;
+          var pos = marker.getPosition();
+          var idx = selectedIds.indexOf(id) + 1;
+          var content = '<div style="' +
+            'width:28px;height:28px;border-radius:50%;' +
+            'background:rgba(33,150,243,0.85);' +
+            'border:2px solid white;' +
+            'display:flex;align-items:center;justify-content:center;' +
+            'color:white;font-size:12px;font-weight:bold;' +
+            'box-shadow:0 2px 6px rgba(0,0,0,0.4);' +
+            '">' + idx + '</div>';
+          var overlay = new kakao.maps.CustomOverlay({
+            position: pos,
+            content: content,
+            yAnchor: 2.2,
+            xAnchor: 0.5,
+            zIndex: 5
+          });
+          overlay.setMap(map);
+          window['kakaoRouteSelectOverlays_$_containerId'].push(overlay);
+        }
+      })();
+    ''';
+    html.document.body?.append(html.ScriptElement()..text = jsCode);
+  }
+
+  /// 경로 계획 결과: 폴리라인 + 순서 번호 오버레이 표시
+  void drawRouteOverlay({
+    required List<dynamic> orderedStations,
+    List<List<double>>? polylineCoords,
+  }) {
+    // 순서 번호 오버레이 좌표
+    final stationPoints = orderedStations.map((s) {
+      return '{"lat":${s.latitude},"lng":${s.longitude},"name":"${s.displayName.replaceAll("'", "\\'")}"}';
+    }).join(',');
+
+    // 폴리라인 좌표 (OSRM GeoJSON: [lng, lat] 순서)
+    String polyCoordsJs = 'null';
+    if (polylineCoords != null && polylineCoords.isNotEmpty) {
+      final pts = polylineCoords.map((c) => '{"lat":${c[1]},"lng":${c[0]}}').join(',');
+      polyCoordsJs = '[$pts]';
+    }
+
+    final jsCode = '''
+      (function() {
+        if (typeof kakao === 'undefined') return;
+        var map = window['kakaoMapInstance_$_containerId'];
+        if (!map) return;
+
+        // 기존 경로 오버레이 제거
+        var existing = window['kakaoRouteOverlays_$_containerId'] || [];
+        for (var i = 0; i < existing.length; i++) existing[i].setMap(null);
+        window['kakaoRouteOverlays_$_containerId'] = [];
+        if (window['kakaoRoutePolyline_$_containerId']) {
+          window['kakaoRoutePolyline_$_containerId'].setMap(null);
+          window['kakaoRoutePolyline_$_containerId'] = null;
+        }
+
+        var stations = [$stationPoints];
+        var polyCoordsRaw = $polyCoordsJs;
+        var overlays = [];
+
+        // 폴리라인 그리기
+        if (polyCoordsRaw) {
+          var path = polyCoordsRaw.map(function(p) {
+            return new kakao.maps.LatLng(p.lat, p.lng);
+          });
+          var polyline = new kakao.maps.Polyline({
+            path: path,
+            strokeWeight: 4,
+            strokeColor: '#1565C0',
+            strokeOpacity: 0.85,
+            strokeStyle: 'solid'
+          });
+          polyline.setMap(map);
+          window['kakaoRoutePolyline_$_containerId'] = polyline;
+        } else {
+          // 폴리라인 없으면 직선으로 연결
+          var path = stations.map(function(s) {
+            return new kakao.maps.LatLng(s.lat, s.lng);
+          });
+          var polyline = new kakao.maps.Polyline({
+            path: path,
+            strokeWeight: 3,
+            strokeColor: '#1565C0',
+            strokeOpacity: 0.7,
+            strokeStyle: 'dashed'
+          });
+          polyline.setMap(map);
+          window['kakaoRoutePolyline_$_containerId'] = polyline;
+        }
+
+        // 순서 번호 오버레이
+        var colors = ['#43A047', '#1E88E5', '#1E88E5', '#1E88E5', '#1E88E5',
+                      '#1E88E5', '#1E88E5', '#1E88E5', '#1E88E5', '#E53935'];
+        for (var i = 0; i < stations.length; i++) {
+          var s = stations[i];
+          var color = i === 0 ? '#43A047' : (i === stations.length - 1 ? '#E53935' : '#1E88E5');
+          var label = i === 0 ? '출발' : (i === stations.length - 1 ? '도착' : (i + 1).toString());
+          var content = '<div style="' +
+            'background:' + color + ';' +
+            'color:white;font-weight:bold;font-size:12px;' +
+            'padding:4px 8px;border-radius:12px;' +
+            'white-space:nowrap;' +
+            'box-shadow:0 2px 6px rgba(0,0,0,0.4);' +
+            'border:2px solid white;' +
+            '">' + label + ' ' + s.name + '</div>';
+          var overlay = new kakao.maps.CustomOverlay({
+            position: new kakao.maps.LatLng(s.lat, s.lng),
+            content: content,
+            yAnchor: 2.5,
+            xAnchor: 0.5,
+            zIndex: 8
+          });
+          overlay.setMap(map);
+          overlays.push(overlay);
+        }
+        window['kakaoRouteOverlays_$_containerId'] = overlays;
+
+        // 기존 선택 강조 제거
+        var selOverlays = window['kakaoRouteSelectOverlays_$_containerId'] || [];
+        for (var i = 0; i < selOverlays.length; i++) selOverlays[i].setMap(null);
+        window['kakaoRouteSelectOverlays_$_containerId'] = [];
+      })();
+    ''';
+    html.document.body?.append(html.ScriptElement()..text = jsCode);
+  }
+
+  /// 경로 오버레이 전체 제거
+  void clearRouteOverlay() {
+    final jsCode = '''
+      (function() {
+        var existing = window['kakaoRouteOverlays_$_containerId'] || [];
+        for (var i = 0; i < existing.length; i++) existing[i].setMap(null);
+        window['kakaoRouteOverlays_$_containerId'] = [];
+
+        if (window['kakaoRoutePolyline_$_containerId']) {
+          window['kakaoRoutePolyline_$_containerId'].setMap(null);
+          window['kakaoRoutePolyline_$_containerId'] = null;
+        }
+
+        var selOverlays = window['kakaoRouteSelectOverlays_$_containerId'] || [];
+        for (var i = 0; i < selOverlays.length; i++) selOverlays[i].setMap(null);
+        window['kakaoRouteSelectOverlays_$_containerId'] = [];
       })();
     ''';
     html.document.body?.append(html.ScriptElement()..text = jsCode);
