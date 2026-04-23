@@ -6030,6 +6030,14 @@ async def ds_enqueue_multi(request: Request, req: DsEnqueueMultiRequest):
         raise HTTPException(status_code=500, detail="서버 내부 오류")
 
 
+def _s3_key_exists(s3, key: str) -> bool:
+    try:
+        s3.head_object(Bucket=S3_BUCKET_NAME, Key=key)
+        return True
+    except Exception:
+        return False
+
+
 def _scan_missing_xlsx_caches_sync() -> tuple:
     """uploads 테이블 스캔 → S3 xlsx 캐시 없는 항목 찾아 빌드 큐 등록 (동기)"""
     uploads_table = _dynamodb_resource.Table(DYNAMODB_TABLES["ds_uploads"])
@@ -6048,6 +6056,8 @@ def _scan_missing_xlsx_caches_sync() -> tuple:
             break
         scan_kwargs["ExclusiveStartKey"] = resp["LastEvaluatedKey"]
 
+    _SUDO_HDQTS = ['강남', '강북', '경기', '인천']
+
     queued = []
     skipped = []
     for item in items:
@@ -6058,14 +6068,30 @@ def _scan_missing_xlsx_caches_sync() -> tuple:
             continue
         division_code = parts[0]
         import_date = parts[1]
+        is_sudo = (division_code == '10')
 
-        xlsx_key = f"ds-exports/{division_id}/{division_code}_{import_date}.xlsx"
-        try:
-            s3.head_object(Bucket=S3_BUCKET_NAME, Key=xlsx_key)
-            skipped.append(f"{division_id}/{division_code}_{import_date}")
-            continue
-        except Exception:
-            pass
+        # xlsx 캐시 존재 체크: 수도권은 본부별 4개 모두 있어야 완성
+        if is_sudo:
+            all_cached = all(
+                _s3_key_exists(s3, f"ds-exports/{division_id}/{division_code}_{import_date}_{h}.xlsx")
+                for h in _SUDO_HDQTS
+            )
+            # 기존 전체 xlsx(suffix 없음)가 남아있으면 삭제
+            old_key = f"ds-exports/{division_id}/{division_code}_{import_date}.xlsx"
+            if _s3_key_exists(s3, old_key):
+                try:
+                    s3.delete_object(Bucket=S3_BUCKET_NAME, Key=old_key)
+                    logger.info(f"DS xlsx cache: 수도권 전체 xlsx 삭제 → {old_key}")
+                except Exception as de:
+                    logger.warning(f"DS xlsx cache: 전체 xlsx 삭제 실패: {de}")
+            if all_cached:
+                skipped.append(f"{division_id}/{division_code}_{import_date}")
+                continue
+        else:
+            xlsx_key = f"ds-exports/{division_id}/{division_code}_{import_date}.xlsx"
+            if _s3_key_exists(s3, xlsx_key):
+                skipped.append(f"{division_id}/{division_code}_{import_date}")
+                continue
 
         zip_key = f"ds-raw/{division_id}/{division_code}_{import_date}.zip"
         try:
