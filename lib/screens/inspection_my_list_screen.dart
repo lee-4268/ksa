@@ -1,5 +1,7 @@
+import 'dart:convert';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 import 'package:provider/provider.dart';
 import '../models/radio_station.dart';
 import '../services/auth_service.dart';
@@ -46,6 +48,12 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
   // 조/검사관 필터 (클라이언트 필터링)
   String _selectedJo = '';
   String _selectedInspector = '';
+
+  // 경로 계획 모드
+  bool _isRoutePlanMode = false;
+  final List<RadioStation> _routeSelectedStations = [];
+  bool _isCalculatingRoute = false;
+  List<RadioStation>? _routeResult;
 
   // 드래그 (모바일)
   double _listHeightRatio = 0.40;
@@ -175,6 +183,10 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
   }
 
   void _onMarkerTap(RadioStation station) {
+    if (_isRoutePlanMode) {
+      _toggleRouteStation(station);
+      return;
+    }
     if (station.hasCoordinates) _mapKey.currentState?.moveToStation(station);
     final item = _assignedItems.firstWhere(
       (i) => (i['허가번호'] as String? ?? '').trim() == station.licenseNumber.trim(),
@@ -262,6 +274,11 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
                           onMarkerTap: _onMarkerTap,
                         ),
                         Positioned(right: 16, bottom: 16, child: _buildMyLocationButton()),
+                        if (_isRoutePlanMode)
+                          Positioned(
+                            left: 0, right: 0, bottom: 0,
+                            child: _buildRoutePlanPanel(),
+                          ),
                       ],
                     ),
                   ),
@@ -305,6 +322,12 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
                           bottom: _listHeightRatio * screenHeight + 16,
                           child: _buildMyLocationButton(),
                         ),
+                        if (_isRoutePlanMode)
+                          Positioned(
+                            left: 0, right: 0,
+                            bottom: _listHeightRatio * screenHeight,
+                            child: _buildRoutePlanPanel(),
+                          ),
                       ],
                     ),
                   ),
@@ -386,6 +409,12 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
           const Spacer(),
           if (_loadingInsp)
             const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
+          IconButton(
+            icon: Icon(Icons.alt_route,
+                color: _isRoutePlanMode ? Colors.blue : Colors.black54),
+            tooltip: '경로 계획',
+            onPressed: _toggleRoutePlanMode,
+          ),
           IconButton(
             icon: const Icon(Icons.refresh_rounded, color: Colors.black54),
             tooltip: '새로고침',
@@ -1080,6 +1109,293 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
           },
         ),
       ],
+    );
+  }
+
+  // ── 경로 계획 ─────────────────────────────────────────────────────────
+
+  void _toggleRoutePlanMode() {
+    setState(() {
+      _isRoutePlanMode = !_isRoutePlanMode;
+      if (!_isRoutePlanMode) {
+        _routeSelectedStations.clear();
+        _routeResult = null;
+        _mapKey.currentState?.clearRouteOverlay();
+      }
+    });
+  }
+
+  void _toggleRouteStation(RadioStation station) {
+    setState(() {
+      final idx = _routeSelectedStations.indexWhere((s) => s.id == station.id);
+      if (idx >= 0) {
+        _routeSelectedStations.removeAt(idx);
+      } else {
+        _routeSelectedStations.add(station);
+      }
+      _routeResult = null;
+      _mapKey.currentState?.clearRouteOverlay();
+      _mapKey.currentState?.setRouteSelectedMarkers(
+        _routeSelectedStations.map((s) => s.id).toList(),
+      );
+    });
+  }
+
+  Future<void> _calculateOptimalRoute() async {
+    if (_routeSelectedStations.length < 2) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('최소 2개 이상의 국소를 선택하세요.')),
+      );
+      return;
+    }
+    setState(() => _isCalculatingRoute = true);
+    try {
+      final stations = _routeSelectedStations;
+      final coords = stations.map((s) => '${s.longitude},${s.latitude}').join(';');
+      final tableResp = await http
+          .get(Uri.parse(
+              'http://router.project-osrm.org/table/v1/driving/$coords?annotations=duration'))
+          .timeout(const Duration(seconds: 30));
+      if (tableResp.statusCode != 200) throw Exception('OSRM 서버 오류');
+      final tableData = json.decode(tableResp.body) as Map<String, dynamic>;
+      final durations = (tableData['durations'] as List)
+          .map((row) => (row as List).map((v) => (v as num).toDouble()).toList())
+          .toList();
+
+      final n = stations.length;
+      final visited = List.filled(n, false);
+      final order = <int>[];
+      int current = 0;
+      visited[current] = true;
+      order.add(current);
+      for (int step = 1; step < n; step++) {
+        double best = double.infinity;
+        int next = -1;
+        for (int j = 0; j < n; j++) {
+          if (!visited[j] && durations[current][j] < best) {
+            best = durations[current][j];
+            next = j;
+          }
+        }
+        visited[next] = true;
+        order.add(next);
+        current = next;
+      }
+      final orderedStations = order.map((i) => stations[i]).toList();
+
+      final routeCoords = orderedStations.map((s) => '${s.longitude},${s.latitude}').join(';');
+      final routeResp = await http
+          .get(Uri.parse(
+              'http://router.project-osrm.org/route/v1/driving/$routeCoords?overview=full&geometries=geojson'))
+          .timeout(const Duration(seconds: 30));
+
+      List<List<double>>? polylineCoords;
+      if (routeResp.statusCode == 200) {
+        final routeData = json.decode(routeResp.body) as Map<String, dynamic>;
+        final routes = routeData['routes'] as List?;
+        if (routes != null && routes.isNotEmpty) {
+          final coordsList =
+              ((routes[0] as Map)['geometry'] as Map?)?['coordinates'] as List?;
+          if (coordsList != null) {
+            polylineCoords = coordsList
+                .map((c) => [(c as List)[0] as double, c[1] as double])
+                .toList();
+          }
+        }
+      }
+
+      setState(() {
+        _routeResult = orderedStations;
+        _isCalculatingRoute = false;
+      });
+      _mapKey.currentState?.drawRouteOverlay(
+        orderedStations: orderedStations,
+        polylineCoords: polylineCoords,
+      );
+    } catch (e) {
+      setState(() => _isCalculatingRoute = false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('경로 계산 실패: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+
+  Widget _buildRoutePlanPanel() {
+    final hasResult = _routeResult != null;
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        boxShadow: [
+          BoxShadow(color: Colors.black.withValues(alpha: 0.15), blurRadius: 8, offset: const Offset(0, -2)),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            color: Colors.blue,
+            child: Row(
+              children: [
+                const Icon(Icons.alt_route, color: Colors.white, size: 18),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    hasResult
+                        ? '최적 경로 (${_routeResult!.length}개 국소)'
+                        : '경로 계획 모드 — 방문할 국소를 선택하세요',
+                    style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
+                  ),
+                ),
+                TextButton(
+                  onPressed: _toggleRoutePlanMode,
+                  style: TextButton.styleFrom(
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    minimumSize: Size.zero,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                  child: const Text('종료', style: TextStyle(fontSize: 12)),
+                ),
+              ],
+            ),
+          ),
+          if (hasResult) _buildRouteResultList() else _buildRouteSelectionList(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRouteSelectionList() {
+    return Container(
+      constraints: const BoxConstraints(maxHeight: 200),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (_routeSelectedStations.isEmpty)
+            const Padding(
+              padding: EdgeInsets.all(16),
+              child: Text('지도에서 마커를 탭하여 국소를 선택하세요',
+                  style: TextStyle(color: Colors.grey, fontSize: 13)),
+            )
+          else
+            Flexible(
+              child: ListView.separated(
+                shrinkWrap: true,
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                itemCount: _routeSelectedStations.length,
+                separatorBuilder: (_, __) => const Divider(height: 1),
+                itemBuilder: (context, index) {
+                  final s = _routeSelectedStations[index];
+                  return ListTile(
+                    dense: true,
+                    leading: CircleAvatar(
+                      radius: 12,
+                      backgroundColor: Colors.blue,
+                      child: Text('${index + 1}',
+                          style: const TextStyle(color: Colors.white, fontSize: 11)),
+                    ),
+                    title: Text(s.displayName, style: const TextStyle(fontSize: 13)),
+                    subtitle: Text(s.address,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 11)),
+                    trailing: IconButton(
+                      icon: const Icon(Icons.close, size: 16),
+                      onPressed: () => _toggleRouteStation(s),
+                    ),
+                  );
+                },
+              ),
+            ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+            child: SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: _routeSelectedStations.length < 2 || _isCalculatingRoute
+                    ? null
+                    : _calculateOptimalRoute,
+                icon: _isCalculatingRoute
+                    ? const SizedBox(
+                        width: 16, height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                    : const Icon(Icons.navigation, size: 18),
+                label: Text(_isCalculatingRoute
+                    ? '계산 중...'
+                    : '최적 경로 계산 (${_routeSelectedStations.length}개)'),
+                style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.blue, foregroundColor: Colors.white),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRouteResultList() {
+    return Container(
+      constraints: const BoxConstraints(maxHeight: 220),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Flexible(
+            child: ListView.separated(
+              shrinkWrap: true,
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              itemCount: _routeResult!.length,
+              separatorBuilder: (_, __) => const Divider(height: 1),
+              itemBuilder: (context, index) {
+                final s = _routeResult![index];
+                final isLast = index == _routeResult!.length - 1;
+                return ListTile(
+                  dense: true,
+                  leading: CircleAvatar(
+                    radius: 12,
+                    backgroundColor: index == 0
+                        ? Colors.green
+                        : isLast ? Colors.red : Colors.blue,
+                    child: Text('${index + 1}',
+                        style: const TextStyle(color: Colors.white, fontSize: 11)),
+                  ),
+                  title: Text(s.displayName, style: const TextStyle(fontSize: 13)),
+                  subtitle: Text(s.address,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 11)),
+                  trailing: index == 0
+                      ? const Text('출발', style: TextStyle(fontSize: 11, color: Colors.green))
+                      : isLast
+                          ? const Text('도착', style: TextStyle(fontSize: 11, color: Colors.red))
+                          : null,
+                );
+              },
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+            child: SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: () {
+                  setState(() {
+                    _routeResult = null;
+                    _mapKey.currentState?.clearRouteOverlay();
+                    _mapKey.currentState?.setRouteSelectedMarkers(
+                      _routeSelectedStations.map((s) => s.id).toList(),
+                    );
+                  });
+                },
+                icon: const Icon(Icons.refresh, size: 18),
+                label: const Text('다시 선택'),
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
