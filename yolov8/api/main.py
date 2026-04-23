@@ -3773,6 +3773,27 @@ def _process_zip_to_xlsx_sync(zip_temp_path: str, progress_cb=None,
             raise ValueError("처리할 시트가 없습니다.")
 
         _release_memory()
+
+        # 시트를 종류별로 묶어 정렬: 일반사항 → 장치 → 전파형식 → 주파수 → 안테나 → 설치장소 → 종사자 → 부적합무선국 → 기타
+        # 각 종류 내에서: 기본 → (검사전) → (2) → (3) ...
+        _SHEET_BASE_ORDER = ['일반사항', '장치', '전파형식', '주파수', '안테나', '설치장소', '종사자', '부적합무선국']
+
+        def _sheet_sort_key(name: str):
+            import re
+            # "(검사전)" 포함 여부
+            is_before = 1 if '(검사전)' in name else 0
+            # "(숫자)" 추출
+            m = re.search(r'\((\d+)\)', name)
+            num = int(m.group(1)) if m else 0
+            # 기본 이름 추출
+            base = re.sub(r'\(검사전\)|\(\d+\)', '', name).strip()
+            # base가 정의된 순서에 없으면 뒤로
+            base_idx = _SHEET_BASE_ORDER.index(base) if base in _SHEET_BASE_ORDER else len(_SHEET_BASE_ORDER)
+            return (base_idx, is_before, num)
+
+        sorted_sheet_names = sorted(sheet_headers.keys(), key=_sheet_sort_key)
+        sheet_headers = {k: sheet_headers[k] for k in sorted_sheet_names}
+
         all_sheets = list(sheet_headers.keys())
         hundred_sheets = [s for s in all_sheets if "(검사전)" in s]
         logger.info(f"DS xlsx Pass1 완료: {len(sheet_headers)}개 시트 헤더 수집 "
