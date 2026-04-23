@@ -14580,12 +14580,12 @@ async def inspection_results_summary_report(request: Request, year: int = Query(
             doc_fail = conn.execute(f"SELECT COUNT(*) FROM inspection_results_raw WHERE year=?{rgn_f} AND 성능서류='서류'", rgn_p).fetchone()[0]
             perf_pass = total - perf_fail
             doc_pass = total - doc_fail
-            perf_rate = round(perf_pass / total * 100, 2) if total > 0 else 0
-            doc_rate = round(doc_pass / total * 100, 2) if total > 0 else 0
+            perf_rate = round(perf_pass / total * 100, 1) if total > 0 else 0
+            doc_rate = round(doc_pass / total * 100, 1) if total > 0 else 0
             perf_target = 98.5
             doc_target = 85.5
-            perf_diff = round(perf_rate - perf_target, 2)
-            doc_diff = round(doc_rate - doc_target, 2)
+            perf_diff = round(perf_rate - perf_target, 1)
+            doc_diff = round(doc_rate - doc_target, 1)
 
             lines = []
 
@@ -14618,9 +14618,9 @@ async def inspection_results_summary_report(request: Request, year: int = Query(
             if len(weeks) >= 2:
                 curr_week = weeks[-1]
                 prev_week = weeks[-2]
-                curr_rate = round((curr_week[1] - curr_week[2]) / curr_week[1] * 100, 2) if curr_week[1] > 0 else 0
-                prev_rate = round((prev_week[1] - prev_week[2]) / prev_week[1] * 100, 2) if prev_week[1] > 0 else 0
-                diff = round(curr_rate - prev_rate, 2)
+                curr_rate = round((curr_week[1] - curr_week[2]) / curr_week[1] * 100, 1) if curr_week[1] > 0 else 0
+                prev_rate = round((prev_week[1] - prev_week[2]) / prev_week[1] * 100, 1) if prev_week[1] > 0 else 0
+                diff = round(curr_rate - prev_rate, 1)
                 direction = "상승" if diff >= 0 else "하락"
                 lines.append({
                     "type": "detail",
@@ -14647,11 +14647,11 @@ async def inspection_results_summary_report(request: Request, year: int = Query(
                 drops = []
                 for r in regions_curr:
                     rg, cnt, fail = r
-                    curr_r = round((cnt - fail) / cnt * 100, 2) if cnt > 0 else 0
+                    curr_r = round((cnt - fail) / cnt * 100, 1) if cnt > 0 else 0
                     if rg in prev_map:
                         p_cnt, p_fail = prev_map[rg]
-                        prev_r = round((p_cnt - p_fail) / p_cnt * 100, 2) if p_cnt > 0 else 0
-                        d = round(curr_r - prev_r, 2)
+                        prev_r = round((p_cnt - p_fail) / p_cnt * 100, 1) if p_cnt > 0 else 0
+                        d = round(curr_r - prev_r, 1)
                         if d < 0:
                             drops.append((rg, curr_r, abs(d), fail))
 
@@ -14688,8 +14688,8 @@ async def inspection_results_summary_report(request: Request, year: int = Query(
             ranked = []
             for r in region_stats:
                 rg, cnt, pf, df = r
-                p_rate = round((cnt - pf) / cnt * 100, 2) if cnt > 0 else 0
-                d_rate = round((cnt - df) / cnt * 100, 2) if cnt > 0 else 0
+                p_rate = round((cnt - pf) / cnt * 100, 1) if cnt > 0 else 0
+                d_rate = round((cnt - df) / cnt * 100, 1) if cnt > 0 else 0
                 ranked.append((rg, p_rate, d_rate))
             ranked.sort(key=lambda x: x[1], reverse=True)  # 성능 합격율 내림차순
 
