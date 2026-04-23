@@ -70,6 +70,14 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
     if (_isDivisionAdmin) _loadTeams();
     _loadWeeks();
     _loadInspection();
+    // 진입 시 내 위치 자동 활성화
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      Future.delayed(const Duration(milliseconds: 1500), () {
+        if (!mounted) return;
+        _mapKey.currentState?.startLocationTracking();
+        setState(() => _isLocationActive = true);
+      });
+    });
   }
 
   Future<void> _loadTeams() async {
@@ -185,6 +193,8 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
   void _onMarkerTap(RadioStation station) {
     if (_isRoutePlanMode) {
       _toggleRouteStation(station);
+      // 마커 클릭 시 JS에서 zoom/drag가 꺼지므로 즉시 복원
+      _mapKey.currentState?.setMapDraggable(true);
       return;
     }
     if (station.hasCoordinates) _mapKey.currentState?.moveToStation(station);
@@ -1154,7 +1164,7 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
       final coords = stations.map((s) => '${s.longitude},${s.latitude}').join(';');
       final tableResp = await http
           .get(Uri.parse(
-              'http://router.project-osrm.org/table/v1/driving/$coords?annotations=duration'))
+              'https://router.project-osrm.org/table/v1/driving/$coords?annotations=duration'))
           .timeout(const Duration(seconds: 30));
       if (tableResp.statusCode != 200) throw Exception('OSRM 서버 오류');
       final tableData = json.decode(tableResp.body) as Map<String, dynamic>;
@@ -1186,7 +1196,7 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
       final routeCoords = orderedStations.map((s) => '${s.longitude},${s.latitude}').join(';');
       final routeResp = await http
           .get(Uri.parse(
-              'http://router.project-osrm.org/route/v1/driving/$routeCoords?overview=full&geometries=geojson'))
+              'https://router.project-osrm.org/route/v1/driving/$routeCoords?overview=full&geometries=geojson'))
           .timeout(const Duration(seconds: 30));
 
       List<List<double>>? polylineCoords;
