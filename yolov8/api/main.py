@@ -3652,7 +3652,9 @@ def _read_xls_from_zip_paginated_sync(
 
 def _process_zip_to_xlsx_sync(zip_temp_path: str, progress_cb=None,
                                xlsx_out_path: str = None,
-                               cancel_event: threading.Event = None) -> tuple:
+                               cancel_event: threading.Event = None,
+                               hdqt_filter: str = None,
+                               city_hdqt_map: dict = None) -> tuple:
     """ZIP → XLS 파싱 → xlsx 직접 빌드 (2-pass 스트리밍, 디스크 기반)
 
     Pass 1: 헤더 수집 (행 0만 읽기, 메모리 ~수 KB)
@@ -3662,6 +3664,8 @@ def _process_zip_to_xlsx_sync(zip_temp_path: str, progress_cb=None,
     progress_cb: Optional[Callable(stage, percent)] — 파일별 진행률 콜백
     xlsx_out_path: xlsx 출력 경로 (미지정 시 자동 생성)
     cancel_event: threading.Event — set되면 루프 즉시 중단
+    hdqt_filter: 본부명 (예: "강남") — 설치장소 주소 기반으로 해당 본부 행만 포함
+    city_hdqt_map: {"경기 시흥시": "인천", ...} — hdqt_filter 사용 시 주소→본부 매핑
     """
     if not HAS_XLRD:
         raise RuntimeError("xlrd not installed on server")
@@ -3799,6 +3803,85 @@ def _process_zip_to_xlsx_sync(zip_temp_path: str, progress_cb=None,
         logger.info(f"DS xlsx Pass1 완료: {len(sheet_headers)}개 시트 헤더 수집 "
                     f"(검사전 시트: {hundred_sheets})")
 
+        # ── hdqt_filter: 설치장소 시트에서 허가번호→본부 매핑 생성 ──
+        lic_to_hdqt: dict = {}
+        if hdqt_filter:
+            SEOUL_GU_MAP = {
+                '강남구':'강남','서초구':'강남','관악구':'강남','동작구':'강남',
+                '강동구':'강남','송파구':'강남','양천구':'강남','강서구':'강남',
+                '영등포구':'강남','구로구':'강남','금천구':'강남',
+                '용산구':'강북','마포구':'강북','서대문구':'강북','은평구':'강북',
+                '종로구':'강북','중구':'강북','성동구':'강북','광진구':'강북',
+                '중랑구':'강북','동대문구':'강북','성북구':'강북','강북구':'강북',
+                '도봉구':'강북','노원구':'강북',
+            }
+            def _addr_to_hdqt(addr: str) -> str:
+                if not addr:
+                    return ''
+                parts = addr.strip().split()
+                # city_hdqt_map 우선 (DB 기반)
+                if city_hdqt_map and len(parts) >= 2:
+                    p0, p1 = parts[0], parts[1]
+                    if '서울' in p0: key = f'서울 {p1}'
+                    elif '인천' in p0: key = f'인천 {p1}'
+                    elif '경기' in p0: key = f'경기 {p1}'
+                    else: key = None
+                    if key and key in city_hdqt_map:
+                        return city_hdqt_map[key]
+                # fallback: 키워드 기반
+                if '인천' in addr: return '인천'
+                if '경기' in addr: return '경기'
+                if '서울' in addr:
+                    for gu, hdqt in SEOUL_GU_MAP.items():
+                        if gu in addr:
+                            return hdqt
+                    return '강북'
+                return ''
+
+            # 설치장소 시트를 ZIP에서 직접 스캔
+            inst_sheet_name = '설치장소'
+            for fname in process_list:
+                try:
+                    xls_scan_path = f"/tmp/ds_hdqtscan_{id(zf)}_{fname.replace('/','_')}.xls"
+                    with zf.open(fname) as src, open(xls_scan_path, 'wb') as dst:
+                        shutil.copyfileobj(src, dst)
+                    try:
+                        wb_scan = xlrd.open_workbook(xls_scan_path)
+                    except Exception:
+                        wb_scan = xlrd.open_workbook(xls_scan_path, ignore_workbook_corruption=True)
+                    for si in range(wb_scan.nsheets):
+                        sh = wb_scan.sheet_by_index(si)
+                        if sh.name.strip() != inst_sheet_name or sh.nrows < 2:
+                            continue
+                        hdr = [_xlrd_cell_to_str(sh, 0, c) for c in range(sh.ncols)]
+                        lic_col = next((i for i, h in enumerate(hdr) if h == '허가번호'), -1)
+                        road_col = next((i for i, h in enumerate(hdr) if h == '설치장소도로주소'), -1)
+                        inp_col = next((i for i, h in enumerate(hdr) if h == '설치장소입력주소'), -1)
+                        if lic_col < 0:
+                            continue
+                        for ri in range(1, sh.nrows):
+                            lic = _xlrd_cell_to_str(sh, ri, lic_col).strip()
+                            if not lic:
+                                continue
+                            addr = (
+                                (_xlrd_cell_to_str(sh, ri, road_col) if road_col >= 0 else '')
+                                or (_xlrd_cell_to_str(sh, ri, inp_col) if inp_col >= 0 else '')
+                            )
+                            hdqt = _addr_to_hdqt(addr.strip())
+                            if hdqt:
+                                lic_to_hdqt[lic] = hdqt
+                    wb_scan.release_resources()
+                    del wb_scan
+                except Exception as e:
+                    logger.warning(f"DS hdqt scan: {fname} 실패 (non-fatal): {e}")
+                finally:
+                    try:
+                        if os.path.exists(xls_scan_path):
+                            os.remove(xls_scan_path)
+                    except Exception:
+                        pass
+            logger.info(f"DS xlsx hdqt_filter={hdqt_filter}: 허가번호 매핑 {len(lic_to_hdqt)}건")
+
         # ── Pass 2: xlsxwriter에 직접 행 쓰기 (sheet_rows 없이) ──
         if progress_cb:
             progress_cb(f"xlsx 생성 중... (0/{total_files})", 10)
@@ -3909,6 +3992,11 @@ def _process_zip_to_xlsx_sync(zip_temp_path: str, progress_cb=None,
                 if not xls_col_map:
                     continue
 
+                # hdqt_filter용 허가번호 컬럼 인덱스 (xlsx 기준)
+                lic_xlsx_col = -1
+                if hdqt_filter and lic_to_hdqt:
+                    lic_xlsx_col = header_col_maps[sheet_name].get('허가번호', -1)
+
                 row_count = 0
                 for row_idx in range(1, sheet.nrows):
                     # 현재 행 1개만 메모리에 보유
@@ -3917,6 +4005,12 @@ def _process_zip_to_xlsx_sync(zip_temp_path: str, progress_cb=None,
                         val = _xlrd_cell_to_str(sheet, row_idx, xls_col)
                         if val:
                             row_vals[xlsx_col] = val
+
+                    # 본부 필터링: 허가번호가 있는 시트에서 해당 본부 행만 포함
+                    if hdqt_filter and lic_to_hdqt and lic_xlsx_col >= 0:
+                        lic = row_vals[lic_xlsx_col].strip() if lic_xlsx_col < len(row_vals) else ''
+                        if lic_to_hdqt.get(lic) != hdqt_filter:
+                            continue
 
                     # 시트 행 수 100만 초과 시 자동 분할
                     if sheet_row_idx[sheet_name] > MAX_ROWS_PER_SHEET:
@@ -4522,7 +4616,8 @@ _xlsx_build_process: Optional[multiprocessing.Process] = None  # 현재 빌드 �
 
 
 def _subprocess_xlsx_entry(zip_path: str, xlsx_path: str, result_path: str,
-                           cancel_flag_path: str):
+                           cancel_flag_path: str, hdqt_filter: str = None,
+                           city_hdqt_map: dict = None):
     """서브프로세스 진입점: ZIP → xlsx 빌드 후 결과를 JSON으로 저장.
     이 함수가 끝나면 프로세스가 exit → OS가 메모리 100% 회수.
     """
@@ -4539,9 +4634,9 @@ def _subprocess_xlsx_entry(zip_path: str, xlsx_path: str, result_path: str,
 
     cancel_ev = _FileCancelEvent(cancel_flag_path)
     try:
-        # _process_zip_to_xlsx_sync는 모듈 레벨에 정의되어 있으므로 직접 호출
         result = _process_zip_to_xlsx_sync(
-            zip_path, None, xlsx_path, cancel_event=cancel_ev
+            zip_path, None, xlsx_path, cancel_event=cancel_ev,
+            hdqt_filter=hdqt_filter, city_hdqt_map=city_hdqt_map,
         )
         # result = (xlsx_path, sheet_stats, total_rows, sheet_headers)
         out = {
@@ -4561,44 +4656,35 @@ def _subprocess_xlsx_entry(zip_path: str, xlsx_path: str, result_path: str,
         pass
 
 
-async def _build_xlsx_cache_background(division_id: str, division_code: str, import_date: str):
-    """S3 ZIP → 서브프로세스에서 xlsx 빌드 → S3 캐싱
-    서브프로세스 exit 시 OS가 메모리 100% 회수 (pymalloc 단편화 문제 완전 해결).
-    실패해도 export 시 on-demand 빌드 가능하므로 non-fatal.
-    """
-    global _xlsx_build_cancel_event, _xlsx_build_current, _xlsx_build_process
-    _xlsx_build_current = (division_id, division_code, import_date)
-    zip_s3_key = f"ds-raw/{division_id}/{division_code}_{import_date}.zip"
-    zip_temp = f"/tmp/ds_bgxlsx_{division_id}_{division_code}_{import_date}.zip"
-    xlsx_temp = f"/tmp/ds_bgxlsx_{division_id}_{division_code}_{import_date}.xlsx"
-    result_json = f"/tmp/ds_bgxlsx_{division_id}_{division_code}_{import_date}_result.json"
-    cancel_flag = f"/tmp/ds_bgxlsx_{division_id}_{division_code}_{import_date}_cancel"
-    cancel_ev = multiprocessing.Event()
-    _xlsx_build_cancel_event = cancel_ev
-    _xlsx_build_process = None
-    try:
-        # 1. S3 → ZIP 다운로드 (메인 프로세스, 경량)
-        s3 = get_s3_client()
-        await asyncio.to_thread(s3.download_file, S3_BUCKET_NAME, zip_s3_key, zip_temp)
-        if cancel_ev.is_set():
-            raise InterruptedError("xlsx build cancelled before processing")
+async def _build_one_xlsx_cache(
+    division_id: str, division_code: str, import_date: str,
+    zip_temp: str, cancel_ev,
+    hdqt_filter: str = None, city_hdqt_map: dict = None,
+) -> int:
+    """단일 xlsx 빌드 → S3 저장. 성공 시 total_rows 반환. 취소/실패 시 예외."""
+    global _xlsx_build_process
+    suffix = f"_{hdqt_filter}" if hdqt_filter else ""
+    tag = f"{division_id}/{division_code}_{import_date}{suffix}"
+    xlsx_temp = f"/tmp/ds_bgxlsx_{division_id}_{division_code}_{import_date}{suffix}.xlsx"
+    result_json = f"/tmp/ds_bgxlsx_{division_id}_{division_code}_{import_date}{suffix}_result.json"
+    cancel_flag = f"/tmp/ds_bgxlsx_{division_id}_{division_code}_{import_date}{suffix}_cancel"
 
-        # 2. 서브프로세스에서 xlsx 빌드 (메모리 격리)
-        logger.info(f"DS bg xlsx: 서브프로세스 시작 {division_id}/{division_code}_{import_date}")
+    try:
+        if cancel_ev.is_set():
+            raise InterruptedError("xlsx build cancelled before subprocess")
+
+        logger.info(f"DS bg xlsx: 서브프로세스 시작 {tag}")
         proc = multiprocessing.Process(
             target=_subprocess_xlsx_entry,
             args=(zip_temp, xlsx_temp, result_json, cancel_flag),
+            kwargs={"hdqt_filter": hdqt_filter, "city_hdqt_map": city_hdqt_map},
             daemon=True,
         )
         _xlsx_build_process = proc
         proc.start()
 
-        # 3. 비동기 대기 (이벤트 루프 차단하지 않음)
-        def _wait_proc():
-            proc.join(timeout=1200)  # 최대 20분
         while proc.is_alive():
             if cancel_ev.is_set():
-                # 취소 플래그 파일 생성 → 자식이 감지
                 try:
                     with open(cancel_flag, "w") as f:
                         f.write("1")
@@ -4609,33 +4695,114 @@ async def _build_xlsx_cache_background(division_id: str, division_code: str, imp
                     proc.terminate()
                     proc.join(timeout=5)
                 raise InterruptedError("xlsx build cancelled")
-            await asyncio.sleep(2)  # 2초 간격으로 체크
+            await asyncio.sleep(2)
 
         _xlsx_build_process = None
-        exit_code = proc.exitcode
-        if exit_code != 0:
-            raise RuntimeError(f"서브프로세스 비정상 종료 (exit code {exit_code})")
+        if proc.exitcode != 0:
+            raise RuntimeError(f"서브프로세스 비정상 종료 (exit code {proc.exitcode})")
 
-        # 4. 결과 읽기
         if not os.path.exists(result_json):
             raise RuntimeError("서브프로세스 결과 파일 없음")
         with open(result_json, "r") as f:
             result = json.load(f)
-
         if not result.get("success"):
             if result.get("cancelled"):
                 raise InterruptedError("xlsx build cancelled in subprocess")
             raise RuntimeError(f"서브프로세스 빌드 실패: {result.get('error', 'unknown')}")
 
-        # 5. xlsx → S3 업로드 (메인 프로세스, 경량)
         if cancel_ev.is_set():
             raise InterruptedError("xlsx build cancelled after processing")
+
+        s3_key = f"ds-exports/{division_id}/{division_code}_{import_date}{suffix}.xlsx"
+        s3 = get_s3_client()
         await asyncio.to_thread(
-            _upload_xlsx_file_to_s3_sync, xlsx_temp, division_id, division_code, import_date
+            s3.upload_file, xlsx_temp, S3_BUCKET_NAME, s3_key,
+            {"ExtraArgs": {"ContentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}},
         )
         total_rows = result.get("total_rows", 0)
-        logger.info(f"DS bg xlsx cache: {division_id}/{division_code}_{import_date} 완료 "
-                    f"({total_rows}행, 서브프로세스 메모리 100% 회수)")
+        logger.info(f"DS bg xlsx cache: {tag} 완료 ({total_rows}행)")
+        return total_rows
+    finally:
+        for tmp in [xlsx_temp, result_json, cancel_flag]:
+            try:
+                if os.path.exists(tmp):
+                    os.remove(tmp)
+            except Exception:
+                pass
+
+
+async def _build_xlsx_cache_background(division_id: str, division_code: str, import_date: str):
+    """S3 ZIP → 서브프로세스에서 xlsx 빌드 → S3 캐싱
+    수도권(code '10')은 강남/강북/경기/인천 4개 본부별 xlsx를 순차 빌드.
+    서브프로세스 exit 시 OS가 메모리 100% 회수 (pymalloc 단편화 문제 완전 해결).
+    실패해도 export 시 on-demand 빌드 가능하므로 non-fatal.
+    """
+    global _xlsx_build_cancel_event, _xlsx_build_current, _xlsx_build_process
+    _xlsx_build_current = (division_id, division_code, import_date)
+    is_sudo = (division_code == '10')
+    zip_s3_key = f"ds-raw/{division_id}/{division_code}_{import_date}.zip"
+    zip_temp = f"/tmp/ds_bgxlsx_{division_id}_{division_code}_{import_date}.zip"
+    cancel_ev = multiprocessing.Event()
+    _xlsx_build_cancel_event = cancel_ev
+    _xlsx_build_process = None
+    try:
+        # 1. S3 → ZIP 다운로드
+        s3 = get_s3_client()
+        await asyncio.to_thread(s3.download_file, S3_BUCKET_NAME, zip_s3_key, zip_temp)
+        if cancel_ev.is_set():
+            raise InterruptedError("xlsx build cancelled before processing")
+
+        if is_sudo:
+            # 수도권: city_hdqt_map 조회 후 본부별 4개 xlsx 순차 빌드
+            city_hdqt_map = None
+            try:
+                import sqlite3
+                conn = sqlite3.connect(_INSP_DB, timeout=10)
+                rows = conn.execute(
+                    "SELECT 도로명주소, skt본부 FROM inspection_targets "
+                    "WHERE 도로명주소 IS NOT NULL AND 도로명주소 != '' "
+                    "AND skt본부 IS NOT NULL AND skt본부 != ''"
+                ).fetchall()
+                conn.close()
+                from collections import defaultdict
+                city_counts: dict = defaultdict(lambda: defaultdict(int))
+                for addr, hdqt in rows:
+                    parts = addr.split()
+                    if len(parts) < 2:
+                        continue
+                    p0 = parts[0]
+                    if '서울' in p0: region = '서울'
+                    elif '인천' in p0: region = '인천'
+                    elif '경기' in p0: region = '경기'
+                    else: continue
+                    city_counts[f"{region} {parts[1]}"][hdqt] += 1
+                city_hdqt_map = {
+                    city: max(cnt, key=cnt.get)
+                    for city, cnt in city_counts.items()
+                }
+                logger.info(f"DS bg xlsx 수도권: city_hdqt_map {len(city_hdqt_map)}개 시/군 로드")
+            except Exception as e:
+                logger.warning(f"DS bg xlsx 수도권: city_hdqt_map 로드 실패 (fallback 사용): {e}")
+
+            for hdqt in ['강남', '강북', '경기', '인천']:
+                if cancel_ev.is_set():
+                    raise InterruptedError("xlsx build cancelled between hdqt builds")
+                try:
+                    await _build_one_xlsx_cache(
+                        division_id, division_code, import_date,
+                        zip_temp, cancel_ev,
+                        hdqt_filter=hdqt, city_hdqt_map=city_hdqt_map,
+                    )
+                except InterruptedError:
+                    raise
+                except Exception as e:
+                    logger.warning(f"DS bg xlsx 수도권 {hdqt} 빌드 실패 (non-fatal): {e}")
+        else:
+            # 비수도권: 기존 단일 xlsx 빌드
+            await _build_one_xlsx_cache(
+                division_id, division_code, import_date,
+                zip_temp, cancel_ev,
+            )
     except asyncio.CancelledError:
         logger.info(f"DS bg xlsx cache 중단: {division_id}/{division_code}_{import_date} (task cancelled)")
         raise  # 상위 _xlsx_build_worker도 중단시켜야 함
@@ -4646,7 +4813,6 @@ async def _build_xlsx_cache_background(division_id: str, division_code: str, imp
     finally:
         _xlsx_build_cancel_event = None
         _xlsx_build_current = None
-        # 서브프로세스가 아직 살아있으면 정리
         if _xlsx_build_process and _xlsx_build_process.is_alive():
             try:
                 _xlsx_build_process.terminate()
@@ -4654,12 +4820,11 @@ async def _build_xlsx_cache_background(division_id: str, division_code: str, imp
             except Exception:
                 pass
         _xlsx_build_process = None
-        for tmp in [zip_temp, xlsx_temp, result_json, cancel_flag]:
-            try:
-                if os.path.exists(tmp):
-                    os.remove(tmp)
-            except Exception:
-                pass
+        try:
+            if os.path.exists(zip_temp):
+                os.remove(zip_temp)
+        except Exception:
+            pass
         _release_memory()
 
 
@@ -4808,14 +4973,18 @@ async def ds_export_presign(
     divisionId: str = Query(...),
     importDate: str = Query(...),
     divisionCode: str = Query(""),
+    hdqt: str = Query(""),
 ):
-    """S3 Export용 presigned URL - 병합 xlsx 우선, 없으면 원본 ZIP"""
+    """S3 Export용 presigned URL - 병합 xlsx 우선, 없으면 원본 ZIP
+    hdqt: 본부명 (수도권 분리 시) — 지정하면 본부별 xlsx 우선 조회
+    """
     await _verify_auth(request)
     try:
         s3 = get_s3_client()
 
-        # 1순위: 미리 생성된 병합 xlsx → 즉시 다운로드
-        xlsx_key = f"ds-exports/{divisionId}/{divisionCode}_{importDate}.xlsx"
+        # 1순위: 미리 생성된 xlsx (본부별 or 전체)
+        suffix = f"_{hdqt}" if hdqt else ""
+        xlsx_key = f"ds-exports/{divisionId}/{divisionCode}_{importDate}{suffix}.xlsx"
         _validate_s3_key(xlsx_key, ALLOWED_S3_READ_PREFIXES)
         try:
             s3.head_object(Bucket=S3_BUCKET_NAME, Key=xlsx_key)
@@ -4828,12 +4997,11 @@ async def ds_export_presign(
         except ClientError:
             pass
 
-        # 2순위: 원본 ZIP → 브라우저에서 병합
+        # 2순위: 원본 ZIP → 브라우저에서 병합 (hdqt 있으면 JS 필터링)
         zip_key = f"ds-raw/{divisionId}/{divisionCode}_{importDate}.zip"
         try:
             s3.head_object(Bucket=S3_BUCKET_NAME, Key=zip_key)
 
-            # xlsx 빌드가 진행 중이면 클라이언트에 알림
             _target = (divisionId, divisionCode, importDate)
             building = (_xlsx_build_current == _target or _target in _xlsx_build_queue)
 

@@ -187,8 +187,8 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
   static const Color _green = Color(0xFF43A047);
 
   Future<String?> _showHdqtSelectDialog(DsUploadInfo upload) async {
-    // 수도권 본부(divisionCode 30 또는 70)만 dialog 표시
-    final isSuDo = upload.divisionCode == '30' || upload.divisionCode == '70'
+    // 수도권 본부(divisionCode 10)만 dialog 표시
+    final isSuDo = upload.divisionCode == '10'
         || (upload.divisionName ?? '').contains('수도권');
     if (!isSuDo) return null; // 수도권 아니면 dialog 없이 전체 다운로드
 
@@ -312,7 +312,7 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
 
   Future<void> _startExport(DsUploadInfo upload) async {
     // 수도권이면 본부 선택 dialog 먼저
-    final isSuDo = upload.divisionCode == '30' || upload.divisionCode == '70'
+    final isSuDo = upload.divisionCode == '10'
         || (upload.divisionName ?? '').contains('수도권');
     String? selectedHdqt;
     if (isSuDo) {
