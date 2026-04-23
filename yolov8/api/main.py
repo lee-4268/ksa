@@ -4759,9 +4759,9 @@ async def _build_xlsx_cache_background(division_id: str, division_code: str, imp
                 import sqlite3
                 conn = sqlite3.connect(_INSP_DB, timeout=10)
                 rows = conn.execute(
-                    "SELECT 도로명주소, skt본부 FROM inspection_targets "
+                    "SELECT 도로명주소, access담당 FROM inspection_targets "
                     "WHERE 도로명주소 IS NOT NULL AND 도로명주소 != '' "
-                    "AND skt본부 IS NOT NULL AND skt본부 != ''"
+                    "AND access담당 IS NOT NULL AND access담당 != ''"
                 ).fetchall()
                 conn.close()
                 from collections import defaultdict
@@ -5029,7 +5029,7 @@ _CITY_HDQT_CACHE_TTL = 3600 * 6  # 6시간
 
 @app.get("/ds/city-hdqt-map")
 async def ds_city_hdqt_map(request: Request):
-    """inspection_targets 전체에서 시/군별 최다 skt본부 집계 반환.
+    """inspection_targets 전체에서 시/군별 최다 access담당 집계 반환.
     응답: { "경기 시흥시": {"본부": "인천", "건수": 1847, "비율": 99.2}, ... }
     6시간 캐시.
     """
@@ -5043,9 +5043,9 @@ async def ds_city_hdqt_map(request: Request):
     conn = sqlite3.connect(_INSP_DB, timeout=30)
     try:
         rows = conn.execute(
-            "SELECT 도로명주소, skt본부 FROM inspection_targets "
+            "SELECT 도로명주소, access담당 FROM inspection_targets "
             "WHERE 도로명주소 IS NOT NULL AND 도로명주소 != '' "
-            "AND skt본부 IS NOT NULL AND skt본부 != ''"
+            "AND access담당 IS NOT NULL AND access담당 != ''"
         ).fetchall()
     finally:
         conn.close()
