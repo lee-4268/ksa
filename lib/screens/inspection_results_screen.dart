@@ -538,7 +538,7 @@ Future<void> _downloadExcel() async {
     if (v == null) return '-';
     final n = v is num ? v.toDouble() : double.tryParse(v.toString()) ?? 0;
     final pct = n <= 1.0 ? n * 100 : n;
-    return '${pct.toStringAsFixed(2)}%';
+    return '${pct.toStringAsFixed(1)}%';
   }
 
   double _toDouble(dynamic v) {
@@ -1370,7 +1370,7 @@ Future<void> _downloadExcel() async {
         borderRadius: BorderRadius.circular(6),
       ),
       child: Text(
-        '${rate.toStringAsFixed(2)}%',
+        '${rate.toStringAsFixed(1)}%',
         textAlign: TextAlign.center,
         style: TextStyle(
           fontSize: 11,
@@ -1639,13 +1639,13 @@ Future<void> _downloadExcel() async {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.end,
                       children: [
-                        Text('${perf.toStringAsFixed(2)}%',
+                        Text('${perf.toStringAsFixed(1)}%',
                             style: TextStyle(
                                 fontSize: 11,
                                 fontWeight: FontWeight.w700,
                                 color: perfPass ? perfColor : missColor)),
                         const SizedBox(height: 6),
-                        Text('${doc.toStringAsFixed(2)}%',
+                        Text('${doc.toStringAsFixed(1)}%',
                             style: TextStyle(
                                 fontSize: 11,
                                 fontWeight: FontWeight.w700,
@@ -1702,13 +1702,13 @@ Future<void> _downloadExcel() async {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.end,
                     children: [
-                      Text('${totalPerf.toStringAsFixed(2)}%',
+                      Text('${totalPerf.toStringAsFixed(1)}%',
                           style: TextStyle(
                               fontSize: 12,
                               fontWeight: FontWeight.w800,
                               color: totalPerfPass ? perfColor : missColor)),
                       const SizedBox(height: 6),
-                      Text('${totalDoc.toStringAsFixed(2)}%',
+                      Text('${totalDoc.toStringAsFixed(1)}%',
                           style: TextStyle(
                               fontSize: 12,
                               fontWeight: FontWeight.w800,
@@ -1897,11 +1897,11 @@ Future<void> _downloadExcel() async {
             DataCell(Center(child: Text(weekLabel, style: TextStyle(fontSize: fontSize)))),
             DataCell(Center(child: Text(_fmt(w['수검'] ?? 0), style: TextStyle(fontSize: fontSize)))),
             DataCell(Center(child: Text(_fmt(w['불합격'] ?? 0), style: TextStyle(fontSize: fontSize)))),
-            DataCell(Center(child: Text('${rate.toStringAsFixed(2)}%',
+            DataCell(Center(child: Text('${rate.toStringAsFixed(1)}%',
                 style: TextStyle(fontSize: fontSize, fontWeight: FontWeight.w600,
                     color: rate >= 98.5 ? const Color(0xFF2E7D32) : _primary)))),
             DataCell(Center(child: Text(_fmt(w['서류불합격'] ?? 0), style: TextStyle(fontSize: fontSize)))),
-            DataCell(Center(child: Text('${docRate.toStringAsFixed(2)}%',
+            DataCell(Center(child: Text('${docRate.toStringAsFixed(1)}%',
                 style: TextStyle(fontSize: fontSize, fontWeight: FontWeight.w600,
                     color: docRate >= 85.5 ? const Color(0xFF2E7D32) : _blue)))),
           ]);
@@ -2323,7 +2323,7 @@ Future<void> _downloadExcel() async {
                 DataCell(Center(child: Text(_fmt(total.toInt()),
                     style: style.copyWith(fontWeight: FontWeight.w700)))),
                 DataCell(Center(child: Text(
-                    isTotalRow ? '100%' : '${ratio.toStringAsFixed(2)}%',
+                    isTotalRow ? '100%' : '${ratio.toStringAsFixed(1)}%',
                     style: style))),
               ],
             );
@@ -2801,7 +2801,7 @@ class _ComboChartPainter extends CustomPainter {
       final val = rateMax - (rateMax - rateMin) * (i / 4);
       final label = val == val.toInt().toDouble()
           ? '${val.toInt()}%'
-          : '${val.toStringAsFixed(2)}%';
+          : '${val.toStringAsFixed(1)}%';
       _drawText(
           canvas,
           label,
@@ -2994,7 +2994,7 @@ class _SmallLineChartPainter extends CustomPainter {
       final lastPt = Offset(xFor(values.length - 1), yFor(lastVal));
       final valTp = TextPainter(
         text: TextSpan(
-            text: '${lastVal.toStringAsFixed(2)}%',
+            text: '${lastVal.toStringAsFixed(1)}%',
             style: TextStyle(
                 fontSize: fontSize + 1,
                 fontWeight: FontWeight.w700,
@@ -3010,7 +3010,7 @@ class _SmallLineChartPainter extends CustomPainter {
       final lastPt2 = Offset(xFor(values2.length - 1), yFor(lastVal2));
       final valTp2 = TextPainter(
         text: TextSpan(
-            text: '${lastVal2.toStringAsFixed(2)}%',
+            text: '${lastVal2.toStringAsFixed(1)}%',
             style: TextStyle(
                 fontSize: fontSize + 1,
                 fontWeight: FontWeight.w700,
