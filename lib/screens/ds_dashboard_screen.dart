@@ -182,7 +182,145 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
   // ============================================================
   // Excel Export
   // ============================================================
+
+  static const _su도권Hdqts = ['강남', '강북', '경기', '인천'];
+  static const Color _green = Color(0xFF43A047);
+
+  Future<String?> _showHdqtSelectDialog(DsUploadInfo upload) async {
+    // 수도권 본부(divisionCode 30 또는 70)만 dialog 표시
+    final isSuDo = upload.divisionCode == '30' || upload.divisionCode == '70'
+        || (upload.divisionName ?? '').contains('수도권');
+    if (!isSuDo) return null; // 수도권 아니면 dialog 없이 전체 다운로드
+
+    String? selected;
+    return showDialog<String?>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setS) {
+          Widget selectChip(String label, bool isSelected, VoidCallback onTap) {
+            return InkWell(
+              onTap: onTap,
+              borderRadius: BorderRadius.circular(8),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 150),
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: isSelected ? _green.withOpacity(0.08) : Colors.grey.shade50,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: isSelected ? _green : Colors.grey.shade300,
+                    width: isSelected ? 1.5 : 1,
+                  ),
+                ),
+                child: Text(
+                  label,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: isSelected ? _green : Colors.black87,
+                    fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                  ),
+                ),
+              ),
+            );
+          }
+
+          return AlertDialog(
+            backgroundColor: Colors.white,
+            surfaceTintColor: Colors.white,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 10),
+            title: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: _green.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Icon(Icons.description_outlined, color: _green, size: 20),
+                ),
+                const SizedBox(width: 12),
+                const Text('Excel 다운로드 옵션',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+              ],
+            ),
+            content: SizedBox(
+              width: 400,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('본부 선택',
+                      style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.black87)),
+                  const SizedBox(height: 4),
+                  Text('수도권 DS 파일을 본부별로 분리하여 다운로드합니다.',
+                      style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+                  const SizedBox(height: 12),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      selectChip('전체 (분리 없음)', selected == '', () => setS(() => selected = '')),
+                      ..._su도권Hdqts.map((h) =>
+                          selectChip(h, selected == h, () => setS(() => selected = h))),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            actionsPadding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
+            actions: [
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: () => Navigator.pop(ctx, null),
+                      style: OutlinedButton.styleFrom(
+                        side: BorderSide(color: Colors.grey.shade300),
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      ),
+                      child: Text('취소',
+                          style: TextStyle(color: Colors.grey.shade600, fontWeight: FontWeight.bold)),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: ElevatedButton(
+                      onPressed: selected == null
+                          ? null
+                          : () => Navigator.pop(ctx, selected),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: _green,
+                        foregroundColor: Colors.white,
+                        elevation: 0,
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      ),
+                      child: const Text('다운로드 시작',
+                          style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
   Future<void> _startExport(DsUploadInfo upload) async {
+    // 수도권이면 본부 선택 dialog 먼저
+    final isSuDo = upload.divisionCode == '30' || upload.divisionCode == '70'
+        || (upload.divisionName ?? '').contains('수도권');
+    String? selectedHdqt;
+    if (isSuDo) {
+      final dlgResult = await _showHdqtSelectDialog(upload);
+      if (dlgResult == null) return; // 취소
+      selectedHdqt = dlgResult.isEmpty ? null : dlgResult;
+    }
+
     final exportId = '${upload.divisionId}_${upload.actualDate}_${upload.divisionCode}';
     setState(() {
       _exportingId = exportId;
@@ -195,8 +333,10 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
         'divisionId': upload.divisionId,
         'importDate': upload.actualDate,
         'divisionCode': upload.divisionCode,
+        if (selectedHdqt != null) 'hdqt': selectedHdqt,
       };
-      final filename = '${upload.divisionName}_${upload.actualDate}_DS.xlsx';
+      final hdqtSuffix = selectedHdqt != null ? '_$selectedHdqt' : '';
+      final filename = '${upload.divisionName}${hdqtSuffix}_${upload.actualDate}_DS.xlsx';
 
       void onProgress(String stage, double percent) {
         if (mounted) {
@@ -243,6 +383,7 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
                 'divisionId': upload.divisionId,
                 'divisionCode': upload.divisionCode,
                 'importDate': upload.actualDate,
+                if (selectedHdqt != null) 'hdqt': selectedHdqt,
               });
               final result = await platform_export.exportDsFromS3(
                 s3Url: proxyUri.toString(),

@@ -1003,76 +1003,156 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
   }
 
   Future<List<String>?> _showDivisionSelectDialog() async {
-    // 초기값: 현재 본부 필터가 있으면 그 본부 선택, 없으면 빈 상태
     final initial = <String>{};
     if (_aHdqt.isNotEmpty) initial.add(_aHdqt);
     final selected = Set<String>.from(initial);
+    const maxCount = 3;
 
     return showDialog<List<String>>(
       context: context,
       builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setDlgState) {
-          const maxCount = 3;
+        builder: (ctx, setS) {
+          Widget selectChip(String label, bool isSelected, bool disabled, VoidCallback onTap) {
+            return InkWell(
+              onTap: disabled ? null : onTap,
+              borderRadius: BorderRadius.circular(8),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 150),
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: isSelected
+                      ? _green.withOpacity(0.08)
+                      : disabled ? Colors.grey.shade100 : Colors.grey.shade50,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: isSelected ? _green : Colors.grey.shade300,
+                    width: isSelected ? 1.5 : 1,
+                  ),
+                ),
+                child: Text(
+                  label,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: isSelected ? _green : disabled ? Colors.grey.shade400 : Colors.black87,
+                    fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                  ),
+                ),
+              ),
+            );
+          }
+
           return AlertDialog(
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-            title: const Text('Excel 다운로드 본부 선택',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+            backgroundColor: Colors.white,
+            surfaceTintColor: Colors.white,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 10),
+            title: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: _green.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Icon(Icons.description_outlined, color: _green, size: 20),
+                ),
+                const SizedBox(width: 12),
+                const Text('Excel 다운로드 옵션',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+              ],
+            ),
             content: SizedBox(
-              width: 360,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
+              width: 500,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text('본부 선택',
+                            style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.black87)),
+                        Row(
+                          children: [
+                            Text('최대 $maxCount개 (${selected.length}/$maxCount)',
+                                style: TextStyle(fontSize: 12, color: Colors.grey.shade500)),
+                            const SizedBox(width: 8),
+                            TextButton(
+                              onPressed: () => setS(() {
+                                if (selected.length == _hdqts.length) {
+                                  selected.clear();
+                                } else {
+                                  selected.clear();
+                                  selected.addAll(_hdqts.take(maxCount));
+                                }
+                              }),
+                              style: TextButton.styleFrom(
+                                minimumSize: Size.zero,
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              ),
+                              child: Text(
+                                selected.length == _hdqts.length ? '전체 해제' : '전체 선택',
+                                style: TextStyle(fontSize: 12, color: _green, fontWeight: FontWeight.w600),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: _hdqts.map((h) {
+                        final isSel = selected.contains(h);
+                        final disabled = !isSel && selected.length >= maxCount;
+                        return selectChip(h, isSel, disabled, () {
+                          setS(() {
+                            if (isSel) selected.remove(h); else selected.add(h);
+                          });
+                        });
+                      }).toList(),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            actionsPadding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
+            actions: [
+              Row(
                 children: [
-                  Text('본부를 최대 $maxCount개까지 선택 (현재 ${selected.length}/$maxCount)',
-                      style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
-                  const SizedBox(height: 8),
-                  ConstrainedBox(
-                    constraints: const BoxConstraints(maxHeight: 360),
-                    child: SingleChildScrollView(
-                      child: Column(
-                        children: _hdqts.map((h) {
-                          final isChecked = selected.contains(h);
-                          final disabled = !isChecked && selected.length >= maxCount;
-                          return CheckboxListTile(
-                            dense: true,
-                            contentPadding: EdgeInsets.zero,
-                            controlAffinity: ListTileControlAffinity.leading,
-                            value: isChecked,
-                            onChanged: disabled
-                                ? null
-                                : (v) {
-                                    setDlgState(() {
-                                      if (v == true) {
-                                        selected.add(h);
-                                      } else {
-                                        selected.remove(h);
-                                      }
-                                    });
-                                  },
-                            title: Text(h, style: const TextStyle(fontSize: 14)),
-                            activeColor: const Color(0xFFE53935),
-                          );
-                        }).toList(),
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: () => Navigator.pop(ctx, null),
+                      style: OutlinedButton.styleFrom(
+                        side: BorderSide(color: Colors.grey.shade300),
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                       ),
+                      child: Text('취소',
+                          style: TextStyle(color: Colors.grey.shade600, fontWeight: FontWeight.bold)),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: ElevatedButton(
+                      onPressed: selected.isEmpty
+                          ? null
+                          : () => Navigator.pop(ctx, selected.toList()),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: _green,
+                        foregroundColor: Colors.white,
+                        elevation: 0,
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      ),
+                      child: const Text('다운로드 시작',
+                          style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
                     ),
                   ),
                 ],
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(ctx, null),
-                child: const Text('취소'),
-              ),
-              ElevatedButton(
-                onPressed: selected.isEmpty
-                    ? null
-                    : () => Navigator.pop(ctx, selected.toList()),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFFE53935),
-                  foregroundColor: Colors.white,
-                ),
-                child: const Text('다운로드'),
               ),
             ],
           );

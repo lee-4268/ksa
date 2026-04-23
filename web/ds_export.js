@@ -218,6 +218,28 @@ async function _exportDsFromS3(s3Url, metaJson, progressCallback, completionCall
     zip = null;
 
     // ========================================================
+    // 본부 필터링 (meta.hdqt가 있을 때만)
+    // ========================================================
+    if (meta.hdqt) {
+      progressCallback('본부 매핑 조회 중...', 48);
+      var cityHdqtMap = null;
+      try {
+        var mapRes = await fetch('/ds/city-hdqt-map', {
+          headers: authToken ? { 'Authorization': 'Bearer ' + authToken } : {}
+        });
+        if (mapRes.ok) {
+          var mapData = await mapRes.json();
+          // { "경기 시흥시": { "본부": "인천", ... }, ... } → { "경기 시흥시": "인천", ... }
+          cityHdqtMap = {};
+          Object.keys(mapData).forEach(function(k) { cityHdqtMap[k] = mapData[k]['본부']; });
+        }
+      } catch(e) { console.warn('city-hdqt-map 조회 실패, 주소 기반 fallback:', e); }
+
+      progressCallback('본부 필터링 중 (' + meta.hdqt + ')...', 49);
+      allMergedRows = _filterRowsByHdqt(allMergedRows, meta.hdqt, cityHdqtMap);
+    }
+
+    // ========================================================
     // xlsx 생성 (ds_merge.js와 동일)
     // ========================================================
     var xlsxZip = new JSZip();
@@ -262,10 +284,11 @@ async function _exportDsFromS3(s3Url, metaJson, progressCallback, completionCall
     });
     xlsxZip = null;
 
-    // 파일명: 본부명_날짜_DS.xlsx
+    // 파일명: 본부명(_본부)_날짜_DS.xlsx
     var divName = meta.divisionName || meta.divisionId || 'DS';
     var dateStr = meta.importDate || '';
-    var outputName = divName + '_' + dateStr + '_DS.xlsx';
+    var hdqtSuffix = meta.hdqt ? '_' + meta.hdqt : '';
+    var outputName = divName + hdqtSuffix + '_' + dateStr + '_DS.xlsx';
 
     // 다운로드 트리거
     var url = URL.createObjectURL(xlsxBlob);
@@ -429,4 +452,107 @@ async function _exportDsToXlsx(jsonString, progressCallback, completionCallback)
     console.error('DS Export 오류:', e);
     completionCallback(false, 'Export 중 오류 발생: ' + e.message);
   }
+}
+
+/**
+ * 수도권 DS 본부 필터링
+ * cityHdqtMap: { "경기 시흥시": "인천", ... } — API에서 받은 DB 기반 매핑 (없으면 null)
+ * DB 매핑 우선, 없으면 서울 구명 하드코딩 fallback
+ */
+function _filterRowsByHdqt(allMergedRows, targetHdqt, cityHdqtMap) {
+  // ── 주소 → 시/군 키 추출 ("경기도 시흥시 ..." → "경기 시흥시") ──
+  function addrToCityKey(addr) {
+    if (!addr) return null;
+    var parts = addr.trim().split(/\s+/);
+    if (parts.length < 2) return null;
+    var p0 = parts[0];
+    var p1 = parts[1];
+    if (p0.indexOf('서울') !== -1) return '서울 ' + p1;
+    if (p0.indexOf('인천') !== -1) return '인천 ' + p1;
+    if (p0.indexOf('경기') !== -1) return '경기 ' + p1;
+    return null;
+  }
+
+  // ── fallback: 서울 구→본부, 인천/경기 단순 키워드 ──
+  var SEOUL_GU_MAP = {
+    '강남구':'강남','서초구':'강남','관악구':'강남','동작구':'강남',
+    '강동구':'강남','송파구':'강남','양천구':'강남','강서구':'강남',
+    '영등포구':'강남','구로구':'강남','금천구':'강남',
+    '용산구':'강북','마포구':'강북','서대문구':'강북','은평구':'강북',
+    '종로구':'강북','중구':'강북','성동구':'강북','광진구':'강북',
+    '중랑구':'강북','동대문구':'강북','성북구':'강북','강북구':'강북',
+    '도봉구':'강북','노원구':'강북'
+  };
+  var guKeys = Object.keys(SEOUL_GU_MAP).sort(function(a,b){ return b.length - a.length; });
+
+  function addrToHdqtFallback(addr) {
+    if (!addr) return null;
+    if (addr.indexOf('인천') !== -1) return '인천';
+    if (addr.indexOf('경기') !== -1) return '경기';
+    if (addr.indexOf('서울') !== -1) {
+      for (var i = 0; i < guKeys.length; i++) {
+        if (addr.indexOf(guKeys[i]) !== -1) return SEOUL_GU_MAP[guKeys[i]];
+      }
+      return '강북';
+    }
+    return null;
+  }
+
+  function addrToHdqt(addr) {
+    if (cityHdqtMap) {
+      var key = addrToCityKey(addr);
+      if (key && cityHdqtMap[key]) return cityHdqtMap[key];
+    }
+    return addrToHdqtFallback(addr);
+  }
+
+  // ── 설치장소 시트에서 허가번호→본부 매핑 생성 ──
+  var licNoToHdqt = {};
+  var instSheet = allMergedRows['설치장소'];
+  if (instSheet && instSheet.length > 1) {
+    var header = instSheet[0];
+    var licCol = -1, roadCol = -1, inputCol = -1;
+    for (var ci = 0; ci < header.length; ci++) {
+      var h = String(header[ci] || '').trim();
+      if (h === '허가번호') licCol = ci;
+      if (h === '설치장소도로주소') roadCol = ci;
+      if (h === '설치장소입력주소') inputCol = ci;
+    }
+    if (licCol >= 0) {
+      for (var ri = 1; ri < instSheet.length; ri++) {
+        var row = instSheet[ri];
+        var lic = String(row[licCol] || '').trim();
+        if (!lic) continue;
+        var addr = (roadCol >= 0 ? String(row[roadCol] || '') : '')
+                || (inputCol >= 0 ? String(row[inputCol] || '') : '');
+        var hdqt = addrToHdqt(addr.trim());
+        if (hdqt) licNoToHdqt[lic] = hdqt;
+      }
+    }
+  }
+
+  // ── 각 시트 필터링 ──
+  var filtered = {};
+  var sheetNames = Object.keys(allMergedRows);
+  for (var si = 0; si < sheetNames.length; si++) {
+    var sName = sheetNames[si];
+    var rows = allMergedRows[sName];
+    if (!rows || rows.length <= 1) { filtered[sName] = rows; continue; }
+
+    var hdr = rows[0];
+    var lCol = -1;
+    for (var hci = 0; hci < hdr.length; hci++) {
+      if (String(hdr[hci] || '').trim() === '허가번호') { lCol = hci; break; }
+    }
+    if (lCol < 0) { filtered[sName] = rows; continue; }
+
+    var kept = [hdr];
+    for (var dri = 1; dri < rows.length; dri++) {
+      var drow = rows[dri];
+      var dlic = String(drow[lCol] || '').trim();
+      if (licNoToHdqt[dlic] === targetHdqt) kept.push(drow);
+    }
+    filtered[sName] = kept;
+  }
+  return filtered;
 }
