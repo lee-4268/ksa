@@ -365,8 +365,8 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
 
             // 1. 원본 ZIP → EC2 프록시 → 브라우저 병합 (신규 업로드)
             if (type == 'zip') {
-              // 서버에서 xlsx 빌드 진행 중이면 안내 후 중단
-              if (data['building'] == true) {
+              // 서버에서 xlsx 빌드 진행 중이면 안내 후 중단 (수도권은 ZIP fallback으로 진행)
+              if (data['building'] == true && !isSuDo) {
                 if (mounted) {
                   setState(() => _exportingId = null);
                   final d = ProgressDialog(context);
