@@ -1,4 +1,6 @@
+// ignore_for_file: avoid_web_libraries_in_flutter
 import 'dart:convert';
+import 'dart:html' as html;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
@@ -1424,26 +1426,255 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
           ),
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-            child: SizedBox(
-              width: double.infinity,
-              child: OutlinedButton.icon(
-                onPressed: () {
-                  setState(() {
-                    _routeResult = null;
-                    _mapKey.currentState?.clearRouteOverlay();
-                    _mapKey.currentState?.setRouteSelectedMarkers(
-                      _routeSelectedStations.map((s) => s.id).toList(),
-                    );
-                  });
-                },
-                icon: const Icon(Icons.refresh, size: 18),
-                label: const Text('다시 선택'),
-              ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: () {
+                      setState(() {
+                        _routeResult = null;
+                        _routeHasMyLocation = false;
+                        _mapKey.currentState?.clearRouteOverlay();
+                        _mapKey.currentState?.setRouteSelectedMarkers(
+                          _routeSelectedStations.map((s) => s.id).toList(),
+                        );
+                      });
+                    },
+                    icon: const Icon(Icons.refresh, size: 18),
+                    label: const Text('다시 선택'),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: _showNavigationAppPicker,
+                    icon: const Icon(Icons.navigation, size: 18),
+                    label: const Text('내비 시작'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.green,
+                      foregroundColor: Colors.white,
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
         ],
       ),
     );
+  }
+
+  // ── 내비게이션 앱 연동 ────────────────────────────────────────────────
+
+  // 각 앱이 지원하는 최대 국소 수 (출발 + 경유 + 도착)
+  static const int _navMaxStations = 7; // 경유지 5개 + 출발 + 도착
+
+  void _showNavigationAppPicker() {
+    final stations = _routeResult!;
+    if (stations.isEmpty) return;
+
+    // 내 위치 포함 시 실제 경유지 수 = stations.length (내 위치가 출발)
+    // 아닐 경우 stations.length 자체가 출발+경유+도착
+    final totalStops = _routeHasMyLocation ? stations.length + 1 : stations.length;
+    final isOverLimit = totalStops > _navMaxStations;
+    // 초과 시 앞에서부터 _navMaxStations개만 사용
+    final usedStations = isOverLimit
+        ? stations.sublist(0, _routeHasMyLocation ? _navMaxStations - 1 : _navMaxStations)
+        : stations;
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (_) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              margin: const EdgeInsets.symmetric(vertical: 12),
+              width: 40, height: 4,
+              decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(2)),
+            ),
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 0, 16, 12),
+              child: Text('내비게이션 앱 선택',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+            ),
+            if (isOverLimit)
+              Container(
+                margin: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: Colors.orange.shade50,
+                  border: Border.all(color: Colors.orange.shade300),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.warning_amber, color: Colors.orange.shade700, size: 18),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        '선택한 국소($totalStops개)가 앱 경유지 한도를 초과합니다.\n앞 $_navMaxStations개 국소만 내비에 전달됩니다.',
+                        style: TextStyle(fontSize: 12, color: Colors.orange.shade800),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            const Divider(height: 1),
+            _navAppTile(
+              icon: 'T',
+              iconColor: Colors.blue.shade700,
+              bgColor: Colors.blue.shade50,
+              label: 'Tmap',
+              onTap: () { Navigator.pop(context); _launchTmap(usedStations); },
+            ),
+            _navAppTile(
+              icon: 'N',
+              iconColor: Colors.green.shade700,
+              bgColor: Colors.green.shade50,
+              label: '네이버지도',
+              onTap: () { Navigator.pop(context); _launchNaverMap(usedStations); },
+            ),
+            _navAppTile(
+              icon: 'K',
+              iconColor: Colors.yellow.shade800,
+              bgColor: Colors.yellow.shade50,
+              label: '카카오맵',
+              onTap: () { Navigator.pop(context); _launchKakaoMap(usedStations); },
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _navAppTile({
+    required String icon,
+    required Color iconColor,
+    required Color bgColor,
+    required String label,
+    required VoidCallback onTap,
+  }) {
+    return ListTile(
+      leading: Container(
+        width: 40, height: 40,
+        decoration: BoxDecoration(color: bgColor, borderRadius: BorderRadius.circular(10)),
+        alignment: Alignment.center,
+        child: Text(icon, style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: iconColor)),
+      ),
+      title: Text(label, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+      trailing: const Icon(Icons.arrow_forward_ios, size: 14, color: Colors.black38),
+      onTap: onTap,
+    );
+  }
+
+  /// Tmap 딥링크
+  /// tmap://routes?goalx&goaly&goalname&via1x~via5x
+  /// 내 위치 있으면 출발지 생략(현재 위치 사용), 없으면 startx/starty
+  void _launchTmap(List<RadioStation> stations) {
+    if (stations.isEmpty) return;
+
+    final List<RadioStation> vias;
+    final RadioStation dest;
+
+    if (_routeHasMyLocation) {
+      // 내 위치 → stations[0..n-2] 경유 → stations[n-1] 도착
+      dest = stations.last;
+      vias = stations.length > 1 ? stations.sublist(0, stations.length - 1) : [];
+    } else {
+      // stations[0] 출발 → stations[1..n-2] 경유 → stations[n-1] 도착
+      dest = stations.last;
+      vias = stations.length > 2 ? stations.sublist(1, stations.length - 1) : [];
+    }
+
+    final params = StringBuffer();
+
+    if (!_routeHasMyLocation) {
+      final start = stations.first;
+      params.write('startx=${start.longitude}&starty=${start.latitude}');
+      params.write('&startname=${Uri.encodeComponent(start.displayName)}&');
+    }
+
+    params.write('goalx=${dest.longitude}&goaly=${dest.latitude}');
+    params.write('&goalname=${Uri.encodeComponent(dest.displayName)}');
+    params.write('&reqCoordType=WGS84GEO&resCoordType=WGS84GEO');
+
+    for (int i = 0; i < vias.length && i < 5; i++) {
+      final v = vias[i];
+      params.write('&via${i+1}x=${v.longitude}&via${i+1}y=${v.latitude}');
+      params.write('&via${i+1}name=${Uri.encodeComponent(v.displayName)}');
+    }
+
+    _openUrl('tmap://routes?$params');
+  }
+
+  /// 네이버지도 딥링크
+  /// nmap://route/car?slat&slng&sname&v1lat~v5lat&dlat&dlng&dname&appname=...
+  void _launchNaverMap(List<RadioStation> stations) {
+    if (stations.isEmpty) return;
+    final dest = stations.last;
+    final params = StringBuffer();
+
+    if (_routeHasMyLocation) {
+      // 내 위치를 출발지로: 파라미터 생략 시 현재 위치 사용
+      // 첫 번째 국소가 경유지 v1, 마지막이 도착지
+      final vias = stations.sublist(0, stations.length - 1);
+      for (int i = 0; i < vias.length && i < 5; i++) {
+        final v = vias[i];
+        params.write('v${i+1}lat=${v.latitude}&v${i+1}lng=${v.longitude}&v${i+1}name=${Uri.encodeComponent(v.displayName)}&');
+      }
+    } else {
+      // 첫 번째 국소 출발
+      final start = stations.first;
+      params.write('slat=${start.latitude}&slng=${start.longitude}&sname=${Uri.encodeComponent(start.displayName)}&');
+      final vias = stations.length > 2 ? stations.sublist(1, stations.length - 1) : <RadioStation>[];
+      for (int i = 0; i < vias.length && i < 5; i++) {
+        final v = vias[i];
+        params.write('v${i+1}lat=${v.latitude}&v${i+1}lng=${v.longitude}&v${i+1}name=${Uri.encodeComponent(v.displayName)}&');
+      }
+    }
+
+    params.write('dlat=${dest.latitude}&dlng=${dest.longitude}&dname=${Uri.encodeComponent(dest.displayName)}');
+    params.write('&appname=com.skons.kca');
+
+    _openUrl('nmap://route/car?$params');
+  }
+
+  /// 카카오맵 딥링크
+  /// kakaomap://route?sp=lat,lng&vp=lat,lng&vp2=lat,lng&ep=lat,lng&by=car
+  void _launchKakaoMap(List<RadioStation> stations) {
+    if (stations.isEmpty) return;
+    final dest = stations.last;
+    final params = StringBuffer();
+
+    final List<RadioStation> vias;
+    if (_routeHasMyLocation) {
+      vias = stations.sublist(0, stations.length - 1);
+      // sp 생략 → 현재 위치
+    } else {
+      final start = stations.first;
+      params.write('sp=${start.latitude},${start.longitude}&');
+      vias = stations.length > 2 ? stations.sublist(1, stations.length - 1) : [];
+    }
+
+    // 경유지: vp, vp2, vp3, vp4, vp5 (최대 5개)
+    for (int i = 0; i < vias.length && i < 5; i++) {
+      final v = vias[i];
+      final key = i == 0 ? 'vp' : 'vp${i + 1}';
+      params.write('$key=${v.latitude},${v.longitude}&');
+    }
+
+    params.write('ep=${dest.latitude},${dest.longitude}&by=car');
+    _openUrl('kakaomap://route?$params');
+  }
+
+  void _openUrl(String url) {
+    html.window.open(url, '_blank');
   }
 
   Widget _mapFloatingButton({required IconData icon, required Color color, required VoidCallback onTap}) {
