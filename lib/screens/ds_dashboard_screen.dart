@@ -235,7 +235,7 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setS) {
-          // 선택한 본부가 캐시 없고 빌드 중/대기이면 다운로드 불가
+          // 본부 선택 시 캐시 없으면 다운로드 불가 (전체는 항상 허용)
           final selectedNotCached = selected != null && selected!.isNotEmpty
               && cached[selected] == false;
           final canDownload = selected != null && !selectedNotCached;
