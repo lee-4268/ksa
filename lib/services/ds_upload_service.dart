@@ -141,10 +141,8 @@ class DsUploadService {
       try {
         if (regionFiles.length == 1) {
           // 단일 파일: 기존 flow
-          final file = regionFiles.first;
           final msg = await _uploadSingleFile(
-            bytes: file.bytes,
-            fileName: file.name,
+            file: regionFiles.first,
             uploadedBy: uploadedBy,
             onProgress: (stage, percent) {
               final base = (gi / totalGroups) * 100;
@@ -180,15 +178,16 @@ class DsUploadService {
 
   /// 단일 ZIP 업로드 (기존 flow — 변경 없음)
   Future<String> _uploadSingleFile({
-    required Uint8List bytes,
-    required String fileName,
+    required web_picker.PickedFile file,
     required String uploadedBy,
     required void Function(String stage, double percent) onProgress,
   }) async {
     // ── 1단계: ZIP → EC2 경유 S3 업로드 ──
-    onProgress('ZIP 업로드 중...', 5);
+    onProgress('ZIP 업로드 중... 0%', 5);
 
-    final s3Key = await _uploadToS3(bytes, fileName);
+    final s3Key = await _uploadToS3(file, onProgress: (p) {
+      onProgress('ZIP 업로드 중... ${(p * 100).toInt()}%', 5 + p * 15);
+    });
 
     // ── 2단계: 서버에 처리 요청 (enqueue) ──
     onProgress('서버 처리 요청 중...', 20);
@@ -201,7 +200,7 @@ class DsUploadService {
       },
       body: jsonEncode({
         's3Key': s3Key,
-        'fileName': fileName,
+        'fileName': file.name,
         'uploadedBy': uploadedBy,
       }),
     ).timeout(_apiTimeout);
@@ -236,12 +235,12 @@ class DsUploadService {
     // Phase 1: 모든 ZIP → EC2 디스크 직접 업로드 (0~50%)
     for (var i = 0; i < totalFiles; i++) {
       final file = files[i];
-      onProgress(
-        'ZIP 업로드 중 (${i + 1}/$totalFiles)',
-        (i / totalFiles) * 50,
-      );
-
-      final tempId = await _uploadToTemp(file.bytes, file.name);
+      final tempId = await _uploadToTemp(file, onProgress: (p) {
+        onProgress(
+          'ZIP 업로드 중 (${i + 1}/$totalFiles) ${(p * 100).toInt()}%',
+          (i / totalFiles) * 50 + p * (50 / totalFiles),
+        );
+      });
       tempIds.add(tempId);
       fileNames.add(file.name);
     }
@@ -283,64 +282,69 @@ class DsUploadService {
     return '$resultMsg\n$totalFiles개 ZIP 병합';
   }
 
-  /// ZIP 파일을 S3에 업로드하고 s3Key 반환 (단일 파일 업로드용)
-  Future<String> _uploadToS3(Uint8List bytes, String fileName) async {
-    final uploadReq = http.MultipartRequest(
-      'POST',
-      Uri.parse('$_baseUrl/ds/upload-raw'),
-    )
-      ..headers['Authorization'] = 'Bearer ${_authToken ?? ''}'
-      ..files.add(http.MultipartFile.fromBytes(
-        'file',
-        bytes,
-        filename: fileName,
-      ));
-
-    final streamedResp = await uploadReq.send().timeout(_s3Timeout);
-    final resp = await http.Response.fromStream(streamedResp);
-
-    if (resp.statusCode != 200) {
-      throw Exception('ZIP 업로드 실패 (${resp.statusCode}): ${resp.body}');
+  /// ZIP 파일을 S3에 업로드하고 s3Key 반환 (XHR 스트리밍 — 진행률 포함)
+  Future<String> _uploadToS3(
+    web_picker.PickedFile file, {
+    void Function(double progress)? onProgress,
+  }) async {
+    final htmlFile = file.htmlFile;
+    String respBody;
+    if (htmlFile != null) {
+      respBody = await web_picker.uploadFileXhr(
+        url: '$_baseUrl/ds/upload-raw',
+        file: htmlFile,
+        fieldName: 'file',
+        headers: {if (_authToken != null) 'Authorization': 'Bearer $_authToken'},
+        onProgress: onProgress,
+      );
+    } else {
+      // fallback: bytes 방식 (stub 환경)
+      final bytes = await file.bytes;
+      final uploadReq = http.MultipartRequest('POST', Uri.parse('$_baseUrl/ds/upload-raw'))
+        ..headers['Authorization'] = 'Bearer ${_authToken ?? ''}'
+        ..files.add(http.MultipartFile.fromBytes('file', bytes, filename: file.name));
+      final streamedResp = await uploadReq.send().timeout(_s3Timeout);
+      respBody = await http.Response.fromStream(streamedResp).then((r) => r.body);
     }
 
-    final data = jsonDecode(resp.body) as Map<String, dynamic>;
+    final data = jsonDecode(respBody) as Map<String, dynamic>;
     if (data['success'] != true) {
       throw Exception('ZIP 업로드 실패: ${data['detail'] ?? data['message']}');
     }
-
-    final s3Key = data['s3Key'] as String;
-    debugPrint('ZIP EC2→S3 업로드 완료: $s3Key (${bytes.length ~/ 1024}KB)');
-    return s3Key;
+    debugPrint('ZIP EC2→S3 업로드 완료: ${data['s3Key']} (${file.size ~/ 1024}KB)');
+    return data['s3Key'] as String;
   }
 
-  /// ZIP 파일을 EC2 디스크에 직접 업로드하고 tempId 반환 (병합용)
-  Future<String> _uploadToTemp(Uint8List bytes, String fileName) async {
-    final uploadReq = http.MultipartRequest(
-      'POST',
-      Uri.parse('$_baseUrl/ds/upload-temp'),
-    )
-      ..headers['Authorization'] = 'Bearer ${_authToken ?? ''}'
-      ..files.add(http.MultipartFile.fromBytes(
-        'file',
-        bytes,
-        filename: fileName,
-      ));
-
-    final streamedResp = await uploadReq.send().timeout(_s3Timeout);
-    final resp = await http.Response.fromStream(streamedResp);
-
-    if (resp.statusCode != 200) {
-      throw Exception('ZIP 업로드 실패 (${resp.statusCode}): ${resp.body}');
+  /// ZIP 파일을 EC2 디스크에 직접 업로드하고 tempId 반환 (병합용, XHR 스트리밍)
+  Future<String> _uploadToTemp(
+    web_picker.PickedFile file, {
+    void Function(double progress)? onProgress,
+  }) async {
+    final htmlFile = file.htmlFile;
+    String respBody;
+    if (htmlFile != null) {
+      respBody = await web_picker.uploadFileXhr(
+        url: '$_baseUrl/ds/upload-temp',
+        file: htmlFile,
+        fieldName: 'file',
+        headers: {if (_authToken != null) 'Authorization': 'Bearer $_authToken'},
+        onProgress: onProgress,
+      );
+    } else {
+      final bytes = await file.bytes;
+      final uploadReq = http.MultipartRequest('POST', Uri.parse('$_baseUrl/ds/upload-temp'))
+        ..headers['Authorization'] = 'Bearer ${_authToken ?? ''}'
+        ..files.add(http.MultipartFile.fromBytes('file', bytes, filename: file.name));
+      final streamedResp = await uploadReq.send().timeout(_s3Timeout);
+      respBody = await http.Response.fromStream(streamedResp).then((r) => r.body);
     }
 
-    final data = jsonDecode(resp.body) as Map<String, dynamic>;
+    final data = jsonDecode(respBody) as Map<String, dynamic>;
     if (data['success'] != true) {
       throw Exception('ZIP 업로드 실패: ${data['detail'] ?? data['message']}');
     }
-
-    final tempId = data['tempId'] as String;
-    debugPrint('ZIP EC2 직접 업로드 완료: $tempId (${bytes.length ~/ 1024}KB)');
-    return tempId;
+    debugPrint('ZIP EC2 직접 업로드 완료: ${data['tempId']} (${file.size ~/ 1024}KB)');
+    return data['tempId'] as String;
   }
 
   /// 잡 상태 폴링 → 완료 메시지 반환
