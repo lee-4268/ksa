@@ -4613,6 +4613,7 @@ _xlsx_build_task: Optional[asyncio.Task] = None
 _xlsx_build_cancel_event: Optional[multiprocessing.Event] = None  # 서브프로세스 취소용
 _xlsx_build_current: Optional[tuple] = None  # 현재 빌드 중인 (division_id, division_code, import_date)
 _xlsx_build_process: Optional[multiprocessing.Process] = None  # 현재 빌드 서브프로세스
+_xlsx_build_start_time: Optional[float] = None  # 현재 빌드 시작 epoch time
 
 
 def _subprocess_xlsx_entry(zip_path: str, xlsx_path: str, result_path: str,
@@ -4737,8 +4738,9 @@ async def _build_xlsx_cache_background(division_id: str, division_code: str, imp
     서브프로세스 exit 시 OS가 메모리 100% 회수 (pymalloc 단편화 문제 완전 해결).
     실패해도 export 시 on-demand 빌드 가능하므로 non-fatal.
     """
-    global _xlsx_build_cancel_event, _xlsx_build_current, _xlsx_build_process
+    global _xlsx_build_cancel_event, _xlsx_build_current, _xlsx_build_process, _xlsx_build_start_time
     _xlsx_build_current = (division_id, division_code, import_date)
+    _xlsx_build_start_time = time.time()
     is_sudo = (division_code == '10')
     zip_s3_key = f"ds-raw/{division_id}/{division_code}_{import_date}.zip"
     zip_temp = f"/tmp/ds_bgxlsx_{division_id}_{division_code}_{import_date}.zip"
@@ -4813,6 +4815,7 @@ async def _build_xlsx_cache_background(division_id: str, division_code: str, imp
     finally:
         _xlsx_build_cancel_event = None
         _xlsx_build_current = None
+        _xlsx_build_start_time = None
         if _xlsx_build_process and _xlsx_build_process.is_alive():
             try:
                 _xlsx_build_process.terminate()
@@ -5025,14 +5028,7 @@ async def ds_export_presign(
 
 @app.get("/ds/xlsx-build-status")
 async def ds_xlsx_build_status(request: Request, divisionId: str, divisionCode: str, importDate: str):
-    """수도권 본부별 xlsx 캐시 존재 여부 + 현재 빌드 큐 상태 반환.
-    응답: {
-      "building": bool,  # 현재 이 파일 빌드 중 또는 큐 대기 중
-      "current": "강남"|null,  # 현재 빌드 중인 본부
-      "queue": ["경기", "인천"],  # 대기 중인 항목 (이 divisionId 기준)
-      "cached": {"강남": true, "강북": false, ...}  # 각 본부별 캐시 존재 여부
-    }
-    """
+    """수도권 본부별 xlsx 캐시 존재 여부 + 현재 빌드 큐 상태 반환."""
     await _verify_auth(request)
     s3 = get_s3_client()
     _sudoHdqts = ["강남", "강북", "경기", "인천"]
@@ -5049,25 +5045,38 @@ async def ds_xlsx_build_status(request: Request, divisionId: str, divisionCode: 
     is_building = _xlsx_build_current == _target
     in_queue = _target in _xlsx_build_queue
 
-    # 현재 빌드 중인 본부 추정 (로그에서 파악 불가 → current 필드는 서버 전역 변수 없음)
+    # 현재 빌드 중인 본부 = 캐시 안 된 것 중 첫 번째
     current_hdqt = None
-    if is_building and _xlsx_build_current:
-        # 캐시된 것 중 마지막 것 다음이 현재 빌드 중
+    if is_building:
         for hdqt in _sudoHdqts:
             if not cached[hdqt]:
                 current_hdqt = hdqt
                 break
 
-    queue_items = []
-    for q in _xlsx_build_queue:
-        if q[0] == divisionId and q[1] == divisionCode and q[2] == importDate:
-            queue_items.append(q)
+    # 예상 남은 시간 계산
+    # 수도권 4개 본부 순차 빌드: 본부당 평균 4분 기준
+    SECS_PER_HDQT = 240
+    cached_count = sum(1 for v in cached.values() if v)
+    remaining_count = len(_sudoHdqts) - cached_count
+    estimated_remaining_sec = None
+    elapsed_sec = None
+    if is_building and _xlsx_build_start_time:
+        elapsed_sec = int(time.time() - _xlsx_build_start_time)
+        # 경과 시간 기반으로 현재 본부 진행률 보정
+        hdqts_done = cached_count  # 완료된 본부 수
+        current_hdqt_elapsed = elapsed_sec - hdqts_done * SECS_PER_HDQT
+        current_hdqt_remaining = max(0, SECS_PER_HDQT - current_hdqt_elapsed)
+        estimated_remaining_sec = current_hdqt_remaining + max(0, remaining_count - 1) * SECS_PER_HDQT
+    elif in_queue:
+        estimated_remaining_sec = remaining_count * SECS_PER_HDQT
 
     return {
         "building": is_building or in_queue,
+        "in_queue": in_queue,
         "current": current_hdqt,
         "cached": cached,
-        "queue_length": len(queue_items),
+        "elapsed_sec": elapsed_sec,
+        "estimated_remaining_sec": estimated_remaining_sec,
     }
 
 

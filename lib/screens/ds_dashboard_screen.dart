@@ -195,7 +195,9 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
     // 빌드 상태 먼저 조회
     Map<String, bool> cached = {};
     bool isBuilding = false;
+    bool inQueue = false;
     String? currentHdqt;
+    int? estimatedRemainingSec;
     try {
       final authToken = context.read<AuthService>().authToken;
       final uri = Uri.parse('$_baseUrl/ds/xlsx-build-status').replace(queryParameters: {
@@ -209,11 +211,23 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
       if (resp.statusCode == 200) {
         final data = jsonDecode(resp.body) as Map<String, dynamic>;
         isBuilding = data['building'] == true;
+        inQueue = data['in_queue'] == true;
         currentHdqt = data['current'] as String?;
+        estimatedRemainingSec = data['estimated_remaining_sec'] as int?;
         final rawCached = data['cached'] as Map<String, dynamic>? ?? {};
         cached = rawCached.map((k, v) => MapEntry(k, v == true));
       }
     } catch (_) {}
+
+    String _fmtRemaining(int? secs) {
+      if (secs == null) return '';
+      if (secs <= 0) return '곧 완료';
+      final m = secs ~/ 60;
+      final s = secs % 60;
+      if (m == 0) return '약 ${s}초';
+      if (s == 0) return '약 ${m}분';
+      return '약 ${m}분 ${s}초';
+    }
 
     String? selected;
     if (!mounted) return null;
@@ -221,6 +235,11 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setS) {
+          // 선택한 본부가 캐시 없고 빌드 중/대기이면 다운로드 불가
+          final selectedNotCached = selected != null && selected!.isNotEmpty
+              && cached[selected] == false;
+          final canDownload = selected != null && !selectedNotCached;
+
           Widget selectChip(String label, bool isSelected, VoidCallback onTap, {bool? hasCached, bool isCurrent = false}) {
             final Color borderColor;
             final Color bgColor;
@@ -302,7 +321,7 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
                   const SizedBox(height: 4),
                   Text('수도권 DS 파일을 본부별로 분리하여 다운로드합니다.',
                       style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
-                  if (isBuilding) ...[
+                  if (isBuilding || inQueue) ...[
                     const SizedBox(height: 8),
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
@@ -316,11 +335,43 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
                           const SizedBox(width: 12, height: 12,
                               child: CircularProgressIndicator(strokeWidth: 1.5, color: Colors.orange)),
                           const SizedBox(width: 8),
-                          Text(
-                            currentHdqt != null
-                                ? '$currentHdqt 본부 xlsx 빌드 중...'
-                                : 'xlsx 빌드 대기 중...',
-                            style: TextStyle(fontSize: 11, color: Colors.orange.shade800),
+                          Expanded(
+                            child: Text(
+                              [
+                                if (inQueue && !isBuilding) 'xlsx 빌드 대기 중...'
+                                else if (currentHdqt != null) '$currentHdqt 본부 xlsx 빌드 중...'
+                                else 'xlsx 빌드 중...',
+                                if (estimatedRemainingSec != null)
+                                  '(완료까지 ${_fmtRemaining(estimatedRemainingSec)} 남음)',
+                              ].join(' '),
+                              style: TextStyle(fontSize: 11, color: Colors.orange.shade800),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                  // 선택한 본부 캐시 없을 때 경고
+                  if (selectedNotCached) ...[
+                    const SizedBox(height: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: Colors.red.shade50,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.red.shade200),
+                      ),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Icon(Icons.info_outline, size: 15, color: Colors.red.shade700),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              '$selected 본부 xlsx가 아직 준비되지 않았습니다.\n빌드 완료 후 다시 시도해 주세요.'
+                              '${estimatedRemainingSec != null ? '\n예상 대기: ${_fmtRemaining(estimatedRemainingSec)}' : ''}',
+                              style: TextStyle(fontSize: 11, color: Colors.red.shade800, height: 1.5),
+                            ),
                           ),
                         ],
                       ),
@@ -374,9 +425,9 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
                   const SizedBox(width: 12),
                   Expanded(
                     child: ElevatedButton(
-                      onPressed: selected == null
-                          ? null
-                          : () => Navigator.pop(ctx, selected),
+                      onPressed: canDownload
+                          ? () => Navigator.pop(ctx, selected)
+                          : null,
                       style: ElevatedButton.styleFrom(
                         backgroundColor: _green,
                         foregroundColor: Colors.white,
