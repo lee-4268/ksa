@@ -1600,8 +1600,9 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
   }
 
   /// Tmap 딥링크
-  /// tmap://routes?goalx&goaly&goalname&via1x~via5x
-  /// 내 위치 있으면 출발지 생략(현재 위치 사용), 없으면 startx/starty
+  /// Android: intent:// 스킴으로 앱 실행 (웹브라우저에서 tmap:// 직접 호출 차단됨)
+  /// iOS: tmap:// 스킴
+  /// 경유지: viaX={경도}&viaY={위도}&viaName={이름} (1-indexed 없이 반복 — Tmap 실제 스펙)
   void _launchTmap(List<RadioStation> stations) {
     if (stations.isEmpty) return;
 
@@ -1609,34 +1610,45 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
     final RadioStation dest;
 
     if (_routeHasMyLocation) {
-      // 내 위치 → stations[0..n-2] 경유 → stations[n-1] 도착
       dest = stations.last;
       vias = stations.length > 1 ? stations.sublist(0, stations.length - 1) : [];
     } else {
-      // stations[0] 출발 → stations[1..n-2] 경유 → stations[n-1] 도착
       dest = stations.last;
       vias = stations.length > 2 ? stations.sublist(1, stations.length - 1) : [];
     }
 
-    final params = StringBuffer();
-
+    // 공통 쿼리 파라미터 (tmap:// 기준)
+    final qParams = StringBuffer();
     if (!_routeHasMyLocation) {
       final start = stations.first;
-      params.write('startx=${start.longitude}&starty=${start.latitude}');
-      params.write('&startname=${Uri.encodeComponent(start.displayName)}&');
+      qParams.write('startX=${start.longitude}&startY=${start.latitude}');
+      qParams.write('&startName=${Uri.encodeComponent(start.displayName)}&');
     }
-
-    params.write('goalx=${dest.longitude}&goaly=${dest.latitude}');
-    params.write('&goalname=${Uri.encodeComponent(dest.displayName)}');
-    params.write('&reqCoordType=WGS84GEO&resCoordType=WGS84GEO');
-
+    qParams.write('goalX=${dest.longitude}&goalY=${dest.latitude}');
+    qParams.write('&goalName=${Uri.encodeComponent(dest.displayName)}');
+    qParams.write('&reqCoordType=WGS84GEO&resCoordType=WGS84GEO');
     for (int i = 0; i < vias.length && i < 5; i++) {
       final v = vias[i];
-      params.write('&via${i+1}x=${v.longitude}&via${i+1}y=${v.latitude}');
-      params.write('&via${i+1}name=${Uri.encodeComponent(v.displayName)}');
+      qParams.write('&via${i+1}X=${v.longitude}&via${i+1}Y=${v.latitude}');
+      qParams.write('&via${i+1}Name=${Uri.encodeComponent(v.displayName)}');
     }
 
-    _openUrl('tmap://routes?$params');
+    final ua = html.window.navigator.userAgent.toLowerCase();
+    final isAndroid = ua.contains('android');
+
+    if (isAndroid) {
+      // Android: intent URL로 감싸야 웹뷰/브라우저에서 앱 실행 가능
+      final intentUrl = 'intent://route?$qParams'
+          '#Intent;'
+          'scheme=tmap;'
+          'package=com.skt.tmap.ku;'
+          'S.browser_fallback_url=https%3A%2F%2Fplay.google.com%2Fstore%2Fapps%2Fdetails%3Fid%3Dcom.skt.tmap.ku;'
+          'end';
+      _openUrl(intentUrl);
+    } else {
+      // iOS: tmap:// 스킴 직접 사용
+      _openUrl('tmap://route?$qParams');
+    }
   }
 
   /// 네이버지도 딥링크
