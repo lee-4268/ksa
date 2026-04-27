@@ -1482,6 +1482,8 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
         ? stations.sublist(0, _routeHasMyLocation ? _navMaxStations - 1 : _navMaxStations)
         : stations;
 
+    final isMobile = _isMobile();
+
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.white,
@@ -1525,27 +1527,51 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
                 ),
               ),
             const Divider(height: 1),
-            _navAppTile(
-              icon: 'T',
-              iconColor: Colors.blue.shade700,
-              bgColor: Colors.blue.shade50,
-              label: 'Tmap',
-              onTap: () { Navigator.pop(context); _launchTmap(usedStations); },
-            ),
-            _navAppTile(
-              icon: 'N',
-              iconColor: Colors.green.shade700,
-              bgColor: Colors.green.shade50,
-              label: '네이버지도',
-              onTap: () { Navigator.pop(context); _launchNaverMap(usedStations); },
-            ),
-            _navAppTile(
-              icon: 'K',
-              iconColor: Colors.yellow.shade800,
-              bgColor: Colors.yellow.shade50,
-              label: '카카오맵',
-              onTap: () { Navigator.pop(context); _launchKakaoMap(usedStations); },
-            ),
+            if (!isMobile)
+              Container(
+                margin: const EdgeInsets.all(16),
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade50,
+                  border: Border.all(color: Colors.grey.shade300),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.smartphone, color: Colors.grey.shade500, size: 20),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        'PC에서는 내비 앱을 직접 실행할 수 없습니다.\n모바일에서 접속하면 Tmap, 네이버지도, 카카오맵으로 바로 연결됩니다.',
+                        style: TextStyle(fontSize: 12, color: Colors.grey.shade600, height: 1.5),
+                      ),
+                    ),
+                  ],
+                ),
+              )
+            else ...[
+              _navAppTile(
+                icon: 'T',
+                iconColor: Colors.blue.shade700,
+                bgColor: Colors.blue.shade50,
+                label: 'Tmap',
+                onTap: () { Navigator.pop(context); _launchTmap(usedStations); },
+              ),
+              _navAppTile(
+                icon: 'N',
+                iconColor: Colors.green.shade700,
+                bgColor: Colors.green.shade50,
+                label: '네이버지도',
+                onTap: () { Navigator.pop(context); _launchNaverMap(usedStations); },
+              ),
+              _navAppTile(
+                icon: 'K',
+                iconColor: Colors.yellow.shade800,
+                bgColor: Colors.yellow.shade50,
+                label: '카카오맵',
+                onTap: () { Navigator.pop(context); _launchKakaoMap(usedStations); },
+              ),
+            ],
             const SizedBox(height: 8),
           ],
         ),
@@ -1671,6 +1697,11 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
 
     params.write('ep=${dest.latitude},${dest.longitude}&by=car');
     _openUrl('kakaomap://route?$params');
+  }
+
+  bool _isMobile() {
+    final ua = html.window.navigator.userAgent.toLowerCase();
+    return ua.contains('android') || ua.contains('iphone') || ua.contains('ipad');
   }
 
   void _openUrl(String url) {
