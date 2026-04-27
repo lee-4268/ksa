@@ -59,6 +59,10 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
   /// 맵 드래그 활성화 상태 (외부에서 제어 가능)
   bool _mapDraggable = true;
 
+  /// 내 현재 위치 (위치 추적 중일 때 업데이트)
+  double? currentLat;
+  double? currentLng;
+
   /// 맵 드래그 비활성화 (리스트 오버레이 드래그 시 호출)
   void setMapDraggable(bool draggable) {
     if (_mapDraggable == draggable) return;
@@ -624,6 +628,8 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
           final lng = data['lng'] as num?;
           final heading = data['heading'] as num?;
           if (lat != null && lng != null) {
+            currentLat = lat.toDouble();
+            currentLng = lng.toDouble();
             _showCurrentLocationMarker(lat.toDouble(), lng.toDouble(),
                 heading: heading?.toDouble());
           }

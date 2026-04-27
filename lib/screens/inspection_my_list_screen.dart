@@ -1133,6 +1133,8 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
         _mapKey.currentState?.clearRouteOverlay();
       }
     });
+    // 경로 모드 On/Off 관계없이 지도 조작 항상 활성화
+    _mapKey.currentState?.setMapDraggable(true);
   }
 
   void _toggleRouteStation(RadioStation station) {
@@ -1161,10 +1163,19 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
     setState(() => _isCalculatingRoute = true);
     try {
       final stations = _routeSelectedStations;
-      final coords = stations.map((s) => '${s.longitude},${s.latitude}').join(';');
+      final myLat = _mapKey.currentState?.currentLat;
+      final myLng = _mapKey.currentState?.currentLng;
+      final hasMyLocation = myLat != null && myLng != null;
+
+      // 내 위치를 포함한 전체 좌표 목록 (내 위치가 index 0)
+      final allCoords = <String>[];
+      if (hasMyLocation) allCoords.add('$myLng,$myLat');
+      allCoords.addAll(stations.map((s) => '${s.longitude},${s.latitude}'));
+
+      final coordsStr = allCoords.join(';');
       final tableResp = await http
           .get(Uri.parse(
-              'https://router.project-osrm.org/table/v1/driving/$coords?annotations=duration'))
+              'https://router.project-osrm.org/table/v1/driving/$coordsStr?annotations=duration'))
           .timeout(const Duration(seconds: 30));
       if (tableResp.statusCode != 200) throw Exception('OSRM 서버 오류');
       final tableData = json.decode(tableResp.body) as Map<String, dynamic>;
@@ -1172,23 +1183,24 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
           .map((row) => (row as List).map((v) => (v as num).toDouble()).toList())
           .toList();
 
+      final offset = hasMyLocation ? 1 : 0; // 내 위치 offset
       final n = stations.length;
-      final visited = List.filled(n, false);
+      final visited = List.filled(n + offset, false);
       final order = <int>[];
+      // 출발: 내 위치(0) 또는 첫 번째 국소(0)
       int current = 0;
       visited[current] = true;
-      order.add(current);
-      for (int step = 1; step < n; step++) {
+      for (int step = 0; step < n; step++) {
         double best = double.infinity;
         int next = -1;
-        for (int j = 0; j < n; j++) {
+        for (int j = offset; j < n + offset; j++) {
           if (!visited[j] && durations[current][j] < best) {
             best = durations[current][j];
             next = j;
           }
         }
         visited[next] = true;
-        order.add(next);
+        order.add(next - offset); // stations 인덱스로 변환
         current = next;
       }
       final orderedStations = order.map((i) => stations[i]).toList();
