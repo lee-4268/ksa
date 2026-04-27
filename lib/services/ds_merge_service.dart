@@ -30,7 +30,7 @@ class DsMergeService {
     Uint8List zipBytes;
 
     if (picked.length == 1) {
-      zipBytes = picked.first.bytes;
+      zipBytes = await picked.first.bytes;
       debugPrint('ZIP 파일 선택됨: ${picked.first.name} (${zipBytes.length} bytes)');
     } else {
       onProgress('ZIP 파일 병합 중... (${picked.length}개)', 2);
@@ -38,7 +38,7 @@ class DsMergeService {
       zipBytes = await compute(
         _mergeZipsIsolate,
         _MergeZipsArgs(
-          picked.map((f) => f.bytes).toList(),
+          await Future.wait(picked.map((f) => f.bytes)),
           picked.map((f) => f.name).toList(),
         ),
       );
