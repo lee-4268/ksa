@@ -65,7 +65,6 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
 
   /// 맵 드래그 비활성화 (리스트 오버레이 드래그 시 호출)
   void setMapDraggable(bool draggable) {
-    if (_mapDraggable == draggable) return;
     _mapDraggable = draggable;
     _updateMapDraggable(draggable);
   }
@@ -622,6 +621,8 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
               widget.onMarkerTap!(stationsAtLocation.first);
             }
           }
+        } else if (data['type'] == 'infoWindowClosed') {
+          setMapDraggable(true);
         } else if (data['type'] == 'currentLocation') {
           // 현재 위치 수신 - 마커 표시 (heading 있으면 방향 화살표 함께 표시)
           final lat = data['lat'] as num?;
@@ -1058,11 +1059,6 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
         kakao.maps.event.addListener(marker, 'click', function() {
           infowindow.setContent(iwContent);
           infowindow.open(map, marker);
-
-          // 상세정보 창이 열리면 지도 드래그/줌 비활성화
-          map.setDraggable(false);
-          map.setZoomable(false);
-          console.log('InfoWindow opened, map interaction disabled');
 
           window.postMessage({
             type: 'markerClick',

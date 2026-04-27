@@ -54,6 +54,7 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
   final List<RadioStation> _routeSelectedStations = [];
   bool _isCalculatingRoute = false;
   List<RadioStation>? _routeResult;
+  bool _routeHasMyLocation = false;
 
   // 드래그 (모바일)
   double _listHeightRatio = 0.40;
@@ -1130,6 +1131,7 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
       if (!_isRoutePlanMode) {
         _routeSelectedStations.clear();
         _routeResult = null;
+        _routeHasMyLocation = false;
         _mapKey.currentState?.clearRouteOverlay();
       }
     });
@@ -1162,10 +1164,18 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
     }
     setState(() => _isCalculatingRoute = true);
     try {
-      final stations = _routeSelectedStations;
+      final stations = List<RadioStation>.from(_routeSelectedStations);
       final myLat = _mapKey.currentState?.currentLat;
       final myLng = _mapKey.currentState?.currentLng;
       final hasMyLocation = myLat != null && myLng != null;
+      if (!hasMyLocation) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('내 위치를 확인 중입니다. 위치 버튼을 눌러 위치를 활성화해 주세요.'),
+            duration: Duration(seconds: 3),
+          ),
+        );
+      }
 
       // 내 위치를 포함한 전체 좌표 목록 (내 위치가 index 0)
       final allCoords = <String>[];
@@ -1228,6 +1238,7 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
 
       setState(() {
         _routeResult = orderedStations;
+        _routeHasMyLocation = hasMyLocation;
         _isCalculatingRoute = false;
       });
       _mapKey.currentState?.drawRouteOverlay(
@@ -1359,6 +1370,9 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
   }
 
   Widget _buildRouteResultList() {
+    final stations = _routeResult!;
+    // 내 위치 출발 포함 시 총 아이템 수 = 1 + stations.length
+    final totalItems = _routeHasMyLocation ? stations.length + 1 : stations.length;
     return Container(
       constraints: const BoxConstraints(maxHeight: 220),
       child: Column(
@@ -1368,19 +1382,32 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
             child: ListView.separated(
               shrinkWrap: true,
               padding: const EdgeInsets.symmetric(vertical: 4),
-              itemCount: _routeResult!.length,
+              itemCount: totalItems,
               separatorBuilder: (_, __) => const Divider(height: 1),
               itemBuilder: (context, index) {
-                final s = _routeResult![index];
-                final isLast = index == _routeResult!.length - 1;
+                // 내 위치 출발 행
+                if (_routeHasMyLocation && index == 0) {
+                  return ListTile(
+                    dense: true,
+                    leading: const CircleAvatar(
+                      radius: 12,
+                      backgroundColor: Colors.green,
+                      child: Icon(Icons.my_location, color: Colors.white, size: 13),
+                    ),
+                    title: const Text('내 위치', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                    trailing: const Text('출발', style: TextStyle(fontSize: 11, color: Colors.green)),
+                  );
+                }
+                final stationIndex = _routeHasMyLocation ? index - 1 : index;
+                final s = stations[stationIndex];
+                final isLast = stationIndex == stations.length - 1;
+                final displayIndex = _routeHasMyLocation ? index : index + 1;
                 return ListTile(
                   dense: true,
                   leading: CircleAvatar(
                     radius: 12,
-                    backgroundColor: index == 0
-                        ? Colors.green
-                        : isLast ? Colors.red : Colors.blue,
-                    child: Text('${index + 1}',
+                    backgroundColor: isLast ? Colors.red : Colors.blue,
+                    child: Text('$displayIndex',
                         style: const TextStyle(color: Colors.white, fontSize: 11)),
                   ),
                   title: Text(s.displayName, style: const TextStyle(fontSize: 13)),
@@ -1388,11 +1415,9 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(fontSize: 11)),
-                  trailing: index == 0
-                      ? const Text('출발', style: TextStyle(fontSize: 11, color: Colors.green))
-                      : isLast
-                          ? const Text('도착', style: TextStyle(fontSize: 11, color: Colors.red))
-                          : null,
+                  trailing: isLast
+                      ? const Text('도착', style: TextStyle(fontSize: 11, color: Colors.red))
+                      : null,
                 );
               },
             ),
