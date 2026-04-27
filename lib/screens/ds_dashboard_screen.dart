@@ -183,7 +183,7 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
   // Excel Export
   // ============================================================
 
-  static const _su도권Hdqts = ['강남', '강북', '경기', '인천'];
+  static const _sudoHdqts = ['강남', '강북', '경기', '인천'];
   static const Color _green = Color(0xFF43A047);
 
   Future<String?> _showHdqtSelectDialog(DsUploadInfo upload) async {
@@ -261,7 +261,7 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
                     runSpacing: 8,
                     children: [
                       selectChip('전체 (분리 없음)', selected == '', () => setS(() => selected = '')),
-                      ..._su도권Hdqts.map((h) =>
+                      ..._sudoHdqts.map((h) =>
                           selectChip(h, selected == h, () => setS(() => selected = h))),
                     ],
                   ),
