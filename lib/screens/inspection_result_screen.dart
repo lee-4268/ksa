@@ -400,6 +400,20 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
               ? () => _openRoadview(lat: lat, lng: lng, address: address, title: name)
               : null,
         ),
+        const SizedBox(width: 8),
+        ElevatedButton.icon(
+          style: ElevatedButton.styleFrom(
+            backgroundColor: const Color(0xFFE53935),
+            foregroundColor: Colors.white,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            elevation: 0,
+          ),
+          icon: const Icon(Icons.safety_check, size: 16),
+          label: const Text('TBM',
+              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+          onPressed: () => html.window.open('https://safe.skons.net', '_blank'),
+        ),
       ]),
       const SizedBox(height: 10),
       // 태그 행
