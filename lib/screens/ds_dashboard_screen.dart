@@ -518,7 +518,7 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
             ClipRRect(
               borderRadius: BorderRadius.circular(4),
               child: LinearProgressIndicator(
-                value: _uploadProgress,
+                value: _uploadProgress == 0 ? null : _uploadProgress,
                 backgroundColor: Colors.grey.shade200,
                 valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFF42A5F5)),
                 minHeight: 6,
@@ -529,12 +529,33 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Expanded(
-                  child: Text(_uploadStage,
-                      style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
-                      overflow: TextOverflow.ellipsis),
+                  child: Row(
+                    children: [
+                      if (_uploadProgress == 0) ...[
+                        SizedBox(
+                          width: 12, height: 12,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 1.5,
+                            valueColor: AlwaysStoppedAnimation<Color>(Colors.grey.shade500),
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                      ],
+                      Expanded(
+                        child: Text(
+                          _uploadProgress == 0
+                              ? '$_uploadStage (대용량 파일은 시간이 걸릴 수 있습니다)'
+                              : _uploadStage,
+                          style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
-                Text('${(_uploadProgress * 100).toInt()}%',
-                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.grey.shade700)),
+                if (_uploadProgress > 0)
+                  Text('${(_uploadProgress * 100).toInt()}%',
+                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.grey.shade700)),
               ],
             ),
             const SizedBox(height: 6),
