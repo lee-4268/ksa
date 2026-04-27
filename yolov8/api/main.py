@@ -4717,7 +4717,7 @@ async def _build_one_xlsx_cache(
         s3 = get_s3_client()
         await asyncio.to_thread(
             s3.upload_file, xlsx_temp, S3_BUCKET_NAME, s3_key,
-            {"ExtraArgs": {"ContentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}},
+            ExtraArgs={"ContentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},
         )
         total_rows = result.get("total_rows", 0)
         logger.info(f"DS bg xlsx cache: {tag} 완료 ({total_rows}행)")
@@ -5021,6 +5021,54 @@ async def ds_export_presign(
     except Exception as e:
         logger.error(f"DS export presign error: {e}")
         raise HTTPException(status_code=500, detail="서버 내부 오류")
+
+
+@app.get("/ds/xlsx-build-status")
+async def ds_xlsx_build_status(request: Request, divisionId: str, divisionCode: str, importDate: str):
+    """수도권 본부별 xlsx 캐시 존재 여부 + 현재 빌드 큐 상태 반환.
+    응답: {
+      "building": bool,  # 현재 이 파일 빌드 중 또는 큐 대기 중
+      "current": "강남"|null,  # 현재 빌드 중인 본부
+      "queue": ["경기", "인천"],  # 대기 중인 항목 (이 divisionId 기준)
+      "cached": {"강남": true, "강북": false, ...}  # 각 본부별 캐시 존재 여부
+    }
+    """
+    await _verify_auth(request)
+    s3 = get_s3_client()
+    _sudoHdqts = ["강남", "강북", "경기", "인천"]
+    cached = {}
+    for hdqt in _sudoHdqts:
+        key = f"ds-exports/{divisionId}/{divisionCode}_{importDate}_{hdqt}.xlsx"
+        try:
+            s3.head_object(Bucket=S3_BUCKET_NAME, Key=key)
+            cached[hdqt] = True
+        except Exception:
+            cached[hdqt] = False
+
+    _target = (divisionId, divisionCode, importDate)
+    is_building = _xlsx_build_current == _target
+    in_queue = _target in _xlsx_build_queue
+
+    # 현재 빌드 중인 본부 추정 (로그에서 파악 불가 → current 필드는 서버 전역 변수 없음)
+    current_hdqt = None
+    if is_building and _xlsx_build_current:
+        # 캐시된 것 중 마지막 것 다음이 현재 빌드 중
+        for hdqt in _sudoHdqts:
+            if not cached[hdqt]:
+                current_hdqt = hdqt
+                break
+
+    queue_items = []
+    for q in _xlsx_build_queue:
+        if q[0] == divisionId and q[1] == divisionCode and q[2] == importDate:
+            queue_items.append(q)
+
+    return {
+        "building": is_building or in_queue,
+        "current": current_hdqt,
+        "cached": cached,
+        "queue_length": len(queue_items),
+    }
 
 
 _city_hdqt_cache: dict | None = None

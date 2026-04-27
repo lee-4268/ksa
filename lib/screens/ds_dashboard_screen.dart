@@ -192,12 +192,59 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
         || (upload.divisionName ?? '').contains('수도권');
     if (!isSuDo) return null; // 수도권 아니면 dialog 없이 전체 다운로드
 
+    // 빌드 상태 먼저 조회
+    Map<String, bool> cached = {};
+    bool isBuilding = false;
+    String? currentHdqt;
+    try {
+      final authToken = context.read<AuthService>().authToken;
+      final uri = Uri.parse('$_baseUrl/ds/xlsx-build-status').replace(queryParameters: {
+        'divisionId': upload.divisionId,
+        'divisionCode': upload.divisionCode,
+        'importDate': upload.actualDate,
+      });
+      final resp = await http.get(uri, headers: {
+        if (authToken != null) 'Authorization': 'Bearer $authToken',
+      }).timeout(const Duration(seconds: 5));
+      if (resp.statusCode == 200) {
+        final data = jsonDecode(resp.body) as Map<String, dynamic>;
+        isBuilding = data['building'] == true;
+        currentHdqt = data['current'] as String?;
+        final rawCached = data['cached'] as Map<String, dynamic>? ?? {};
+        cached = rawCached.map((k, v) => MapEntry(k, v == true));
+      }
+    } catch (_) {}
+
     String? selected;
+    if (!mounted) return null;
     return showDialog<String?>(
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setS) {
-          Widget selectChip(String label, bool isSelected, VoidCallback onTap) {
+          Widget selectChip(String label, bool isSelected, VoidCallback onTap, {bool? hasCached, bool isCurrent = false}) {
+            final Color borderColor;
+            final Color bgColor;
+            final Color textColor;
+            if (isSelected) {
+              borderColor = _green;
+              bgColor = _green.withOpacity(0.08);
+              textColor = _green;
+            } else {
+              borderColor = Colors.grey.shade300;
+              bgColor = Colors.grey.shade50;
+              textColor = Colors.black87;
+            }
+            Widget? trailingIcon;
+            if (isCurrent) {
+              trailingIcon = const SizedBox(
+                width: 10, height: 10,
+                child: CircularProgressIndicator(strokeWidth: 1.5, color: Colors.orange),
+              );
+            } else if (hasCached == true) {
+              trailingIcon = const Icon(Icons.check_circle, size: 12, color: Color(0xFF43A047));
+            } else if (hasCached == false) {
+              trailingIcon = Icon(Icons.hourglass_empty, size: 12, color: Colors.grey.shade400);
+            }
             return InkWell(
               onTap: onTap,
               borderRadius: BorderRadius.circular(8),
@@ -205,20 +252,20 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
                 duration: const Duration(milliseconds: 150),
                 padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                 decoration: BoxDecoration(
-                  color: isSelected ? _green.withOpacity(0.08) : Colors.grey.shade50,
+                  color: bgColor,
                   borderRadius: BorderRadius.circular(8),
-                  border: Border.all(
-                    color: isSelected ? _green : Colors.grey.shade300,
-                    width: isSelected ? 1.5 : 1,
-                  ),
+                  border: Border.all(color: borderColor, width: isSelected ? 1.5 : 1),
                 ),
-                child: Text(
-                  label,
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: isSelected ? _green : Colors.black87,
-                    fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                  ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(label, style: TextStyle(fontSize: 12, color: textColor,
+                        fontWeight: isSelected ? FontWeight.bold : FontWeight.normal)),
+                    if (trailingIcon != null) ...[
+                      const SizedBox(width: 4),
+                      trailingIcon,
+                    ],
+                  ],
                 ),
               ),
             );
@@ -255,14 +302,54 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
                   const SizedBox(height: 4),
                   Text('수도권 DS 파일을 본부별로 분리하여 다운로드합니다.',
                       style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+                  if (isBuilding) ...[
+                    const SizedBox(height: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: Colors.orange.shade50,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.orange.shade200),
+                      ),
+                      child: Row(
+                        children: [
+                          const SizedBox(width: 12, height: 12,
+                              child: CircularProgressIndicator(strokeWidth: 1.5, color: Colors.orange)),
+                          const SizedBox(width: 8),
+                          Text(
+                            currentHdqt != null
+                                ? '$currentHdqt 본부 xlsx 빌드 중...'
+                                : 'xlsx 빌드 대기 중...',
+                            style: TextStyle(fontSize: 11, color: Colors.orange.shade800),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                   const SizedBox(height: 12),
+                  // 범례
+                  Row(
+                    children: [
+                      const Icon(Icons.check_circle, size: 11, color: Color(0xFF43A047)),
+                      const SizedBox(width: 3),
+                      Text('캐시됨', style: TextStyle(fontSize: 10, color: Colors.grey.shade600)),
+                      const SizedBox(width: 10),
+                      Icon(Icons.hourglass_empty, size: 11, color: Colors.grey.shade400),
+                      const SizedBox(width: 3),
+                      Text('빌드 필요', style: TextStyle(fontSize: 10, color: Colors.grey.shade600)),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
                   Wrap(
                     spacing: 8,
                     runSpacing: 8,
                     children: [
                       selectChip('전체 (분리 없음)', selected == '', () => setS(() => selected = '')),
-                      ..._sudoHdqts.map((h) =>
-                          selectChip(h, selected == h, () => setS(() => selected = h))),
+                      ..._sudoHdqts.map((h) => selectChip(
+                        h, selected == h, () => setS(() => selected = h),
+                        hasCached: cached[h],
+                        isCurrent: currentHdqt == h,
+                      )),
                     ],
                   ),
                 ],
