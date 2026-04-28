@@ -5083,7 +5083,6 @@ async def _build_xlsx_cache_background(division_id: str, division_code: str, imp
     실패해도 export 시 on-demand 빌드 가능하므로 non-fatal.
     """
     global _xlsx_build_cancel_event, _xlsx_build_current, _xlsx_build_process, _xlsx_build_start_time
-    await asyncio.sleep(0)  # 이벤트 루프 양보 (cert 캐시 빌드 스레드 GIL 경합 회피)
     _xlsx_build_current = (division_id, division_code, import_date)
     _xlsx_build_start_time = time.time()
     is_sudo = (division_code == '10')
@@ -5186,6 +5185,11 @@ async def _xlsx_build_worker():
     워커 루프와 독립 실행 → 새 잡이 들어와도 워커가 즉시 처리 가능.
     """
     global _xlsx_build_task
+    # cert 캐시 빌드 완료 대기 (빌드 중 GIL 경합으로 xlsx 코루틴이 실행 기회를 못 얻는 문제 방지)
+    waited = 0
+    while not _cert_cache_db_path and waited < 180:
+        await asyncio.sleep(2)
+        waited += 2
     while _xlsx_build_queue:
         args = _xlsx_build_queue.pop(0)
         logger.info(f"DS xlsx build queue: {args[0]}/{args[1]}_{args[2]} "
