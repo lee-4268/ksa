@@ -3650,7 +3650,241 @@ def _read_xls_from_zip_paginated_sync(
     }
 
 
+
+def _process_zip_to_multiple_xlsx_sync(zip_temp_path: str, hdqts: list, progress_cb=None,
+                                       cancel_event=None, city_hdqt_map: dict = None) -> dict:
+    """1-Pass Fan-out: 원본 ZIP을 한 번만 읽어 여러 본부(hdqts)의 xlsx를 동시 생성
+    Returns: { hdqt: (xlsx_path, sheet_stats, total_rows, sheet_headers) }
+    """
+    import copy
+    if not HAS_XLRD or not HAS_XLSXWRITER:
+        raise RuntimeError("xlrd or xlsxwriter not installed")
+
+    results = {h: {"stats": {}, "rows": 0, "headers": {}} for h in hdqts}
+    _xwb_refs = {}
+    _xlsxwriter_tmpdirs = []
+
+    try:
+        with zipfile.ZipFile(zip_temp_path, "r") as zf:
+            all_names = zf.namelist()
+            name_map = {n: _fix_zip_filename(n) for n in all_names}
+            xls_names = [n for n in all_names if name_map[n].lower().endswith(".xls") and not os.path.basename(name_map[n]).startswith("~")]
+            
+            classified = {"base": [], "numbered": [], "spt": [], "hundred": []}
+            hundred_files = set()
+            for fname in xls_names:
+                b_fname = os.path.basename(name_map[fname])
+                if not b_fname: continue
+                cls = _classify_ds_file(b_fname)
+                classified[cls].append(fname)
+                if cls == "hundred": hundred_files.add(fname)
+            
+            process_list = classified["base"] + classified["numbered"] + classified["spt"] + classified["hundred"]
+            if not process_list: raise ValueError("처리할 XLS 파일 없음")
+
+            # ── Pass 1: 헤더 및 허가번호 매핑 스캔 ──
+            global_sheet_headers = {}
+            lic_to_hdqt = {}
+            
+            def _addr_to_hdqt(addr: str) -> str:
+                if not addr: return ''
+                parts = addr.strip().split()
+                if city_hdqt_map and len(parts) >= 2:
+                    p0, p1 = parts[0], parts[1]
+                    key = f'서울 {p1}' if '서울' in p0 else f'인천 {p1}' if '인천' in p0 else f'경기 {p1}' if '경기' in p0 else None
+                    if key and key in city_hdqt_map: return city_hdqt_map[key]
+                if '인천' in addr: return '인천'
+                if '경기' in addr: return '경기'
+                if '서울' in addr:
+                    for gu, hdqt in [('강남구','강남'),('서초구','강남'),('관악구','강남'),('동작구','강남'),('강동구','강남'),('송파구','강남'),('양천구','강남'),('강서구','강남'),('영등포구','강남'),('구로구','강남'),('금천구','강남')]:
+                        if gu in addr: return hdqt
+                    return '강북'
+                return ''
+
+            for fname in process_list:
+                if cancel_event and cancel_event.is_set(): raise InterruptedError("xlsx build cancelled")
+                xls_tmp = f"/tmp/ds_xls_p1_{id(zf)}_{fname.replace('/', '_')}.xls"
+                try:
+                    with zf.open(fname) as src, open(xls_tmp, "wb") as dst: shutil.copyfileobj(src, dst)
+                    try: wb = xlrd.open_workbook(xls_tmp)
+                    except: wb = xlrd.open_workbook(xls_tmp, ignore_workbook_corruption=True)
+                except Exception:
+                    if os.path.exists(xls_tmp): os.remove(xls_tmp)
+                    continue
+
+                for sheet_idx in range(wb.nsheets):
+                    sheet = wb.sheet_by_index(sheet_idx)
+                    orig_sheet_name = sheet.name.strip()
+                    if sheet.nrows < 2: continue
+                    sheet_name = f"{orig_sheet_name}(검사전)" if fname in hundred_files else orig_sheet_name
+
+                    headers = [_xlrd_cell_to_str(sheet, 0, c) for c in range(sheet.ncols)]
+                    headers = [h for h in headers if h]
+                    if not headers: continue
+
+                    if sheet_name not in global_sheet_headers:
+                        global_sheet_headers[sheet_name] = list(headers)
+                    else:
+                        existing = set(global_sheet_headers[sheet_name])
+                        for h in headers:
+                            if h not in existing:
+                                global_sheet_headers[sheet_name].append(h)
+                                existing.add(h)
+
+                    if orig_sheet_name == '설치장소':
+                        hdr = [_xlrd_cell_to_str(sheet, 0, c) for c in range(sheet.ncols)]
+                        lic_col = next((i for i, hh in enumerate(hdr) if hh == '허가번호'), -1)
+                        road_col = next((i for i, hh in enumerate(hdr) if hh == '설치장소도로주소'), -1)
+                        inp_col = next((i for i, hh in enumerate(hdr) if hh == '설치장소입력주소'), -1)
+                        if lic_col >= 0:
+                            for ri in range(1, sheet.nrows):
+                                lic = _xlrd_cell_to_str(sheet, ri, lic_col).strip()
+                                if not lic: continue
+                                addr = ((_xlrd_cell_to_str(sheet, ri, road_col) if road_col >= 0 else '') or 
+                                        (_xlrd_cell_to_str(sheet, ri, inp_col) if inp_col >= 0 else ''))
+                                hd = _addr_to_hdqt(addr.strip())
+                                if hd in hdqts: lic_to_hdqt[lic] = hd
+
+                wb.release_resources()
+                del wb
+                try: os.remove(xls_tmp)
+                except Exception: pass
+
+            if not global_sheet_headers: raise ValueError("처리할 시트가 없습니다.")
+            _release_memory()
+
+            _SHEET_BASE_ORDER = ['일반사항', '장치', '전파형식', '주파수', '안테나', '설치장소', '종사자', '부적합무선국']
+            def _sheet_sort_key(n):
+                import re
+                is_before = 1 if '(검사전)' in n else 0
+                m = re.search(r'\((\d+)\)', n)
+                num = int(m.group(1)) if m else 0
+                base = re.sub(r'\(검사전\)|\(\d+\)', '', n).strip()
+                base_idx = _SHEET_BASE_ORDER.index(base) if base in _SHEET_BASE_ORDER else len(_SHEET_BASE_ORDER)
+                return (base_idx, is_before, num)
+
+            sorted_sheet_names = sorted(global_sheet_headers.keys(), key=_sheet_sort_key)
+            global_sheet_headers = {k: global_sheet_headers[k] for k in sorted_sheet_names}
+
+            for h in hdqts:
+                results[h]["headers"] = copy.deepcopy(global_sheet_headers)
+
+            # ── Pass 2: 다중 Workbook에 쓰기 ──
+            xwb_dict = {}
+            worksheets_dict = {h: {} for h in hdqts}
+            sheet_row_idx = {h: {} for h in hdqts}
+            sheet_split_num = {h: {} for h in hdqts}
+            header_fmt_dict = {}
+            data_fmt_dict = {}
+
+            for h in hdqts:
+                out_path = f"/tmp/ds_xlsx_multi_{h}_{id(zip_temp_path)}.xlsx"
+                results[h]["path"] = out_path
+                tmpdir = f"/tmp/ds_xlsxbuild_{h}_{os.getpid()}"
+                os.makedirs(tmpdir, exist_ok=True)
+                _xlsxwriter_tmpdirs.append(tmpdir)
+
+                xwb = xlsxwriter.Workbook(out_path, {"constant_memory": True, "tmpdir": tmpdir})
+                _xwb_refs[h] = xwb
+                xwb_dict[h] = xwb
+
+                header_fmt_dict[h] = xwb.add_format({"font_name": "Arial", "font_size": 10, "bold": True, "align": "center", "valign": "vcenter", "bg_color": "#BFBFBF", "border": 1})
+                data_fmt_dict[h] = xwb.add_format({"font_name": "Arial", "font_size": 10, "align": "center", "valign": "vcenter", "border": 1})
+
+                for sname, hdrs in global_sheet_headers.items():
+                    xws = xwb.add_worksheet(sname[:31])
+                    xws.set_row(0, 12.75)
+                    for ci, col_h in enumerate(hdrs):
+                        xws.set_column(ci, ci, 20)
+                        xws.write(0, ci, col_h, header_fmt_dict[h])
+                    worksheets_dict[h][sname] = xws
+                    sheet_row_idx[h][sname] = 1
+                    results[h]["stats"][sname] = 0
+
+            header_col_maps = {sname: {col_h: i for i, col_h in enumerate(hdrs)} for sname, hdrs in global_sheet_headers.items()}
+
+            for file_idx, fname in enumerate(process_list):
+                if cancel_event and cancel_event.is_set(): raise InterruptedError("xlsx build cancelled")
+                xls_tmp_path = f"/tmp/ds_xls_{id(zf)}_{file_idx}.xls"
+                try:
+                    with zf.open(fname) as src, open(xls_tmp_path, "wb") as dst: shutil.copyfileobj(src, dst)
+                    try: wb = xlrd.open_workbook(xls_tmp_path)
+                    except: wb = xlrd.open_workbook(xls_tmp_path, ignore_workbook_corruption=True)
+                except Exception:
+                    if os.path.exists(xls_tmp_path): os.remove(xls_tmp_path)
+                    continue
+
+                for sheet_idx in range(wb.nsheets):
+                    sheet = wb.sheet_by_index(sheet_idx)
+                    orig_sheet_name = sheet.name.strip()
+                    if sheet.nrows < 2: continue
+                    sheet_name = f"{orig_sheet_name}(검사전)" if fname in hundred_files else orig_sheet_name
+                    if sheet_name not in global_sheet_headers: continue
+
+                    col_map = header_col_maps[sheet_name]
+                    num_cols = len(global_sheet_headers[sheet_name])
+                    xls_col_map = [(col, col_map[col_h]) for col in range(sheet.ncols) if (col_h := _xlrd_cell_to_str(sheet, 0, col)) and col_h in col_map]
+                    if not xls_col_map: continue
+
+                    lic_xlsx_col = header_col_maps[sheet_name].get('허가번호', -1)
+
+                    for row_idx in range(1, sheet.nrows):
+                        row_vals = [""] * num_cols
+                        for xls_col, xlsx_col in xls_col_map:
+                            val = _xlrd_cell_to_str(sheet, row_idx, xls_col)
+                            if val: row_vals[xlsx_col] = val
+
+                        target_hdqts = hdqts
+                        if lic_to_hdqt and lic_xlsx_col >= 0:
+                            lic = row_vals[lic_xlsx_col].strip() if lic_xlsx_col < len(row_vals) else ''
+                            if hd := lic_to_hdqt.get(lic):
+                                target_hdqts = [hd] if hd in hdqts else []
+                        
+                        for h in target_hdqts:
+                            if sheet_row_idx[h][sheet_name] > 1_000_000:
+                                split_num = sheet_split_num[h].get(sheet_name, 1) + 1
+                                sheet_split_num[h][sheet_name] = split_num
+                                split_ws_name = f"{sheet_name}({split_num})"[:31]
+                                new_xws = xwb_dict[h].add_worksheet(split_ws_name)
+                                new_xws.set_row(0, 12.75)
+                                for ci, col_h in enumerate(global_sheet_headers[sheet_name]):
+                                    new_xws.set_column(ci, ci, 20)
+                                    new_xws.write(0, ci, col_h, header_fmt_dict[h])
+                                worksheets_dict[h][sheet_name] = new_xws
+                                sheet_row_idx[h][sheet_name] = 1
+
+                            ri = sheet_row_idx[h][sheet_name]
+                            xws = worksheets_dict[h][sheet_name]
+                            xws.set_row(ri, 12.75)
+                            for ci, val in enumerate(row_vals): xws.write(ri, ci, val, data_fmt_dict[h])
+                            sheet_row_idx[h][sheet_name] += 1
+                            results[h]["stats"][sheet_name] += 1
+                            results[h]["rows"] += 1
+
+                wb.release_resources()
+                del wb
+                try: os.remove(xls_tmp_path)
+                except Exception: pass
+                _release_memory()
+
+            for h in hdqts: xwb_dict[h].close()
+            _xwb_refs.clear()
+            for tmpdir in _xlsxwriter_tmpdirs:
+                if os.path.isdir(tmpdir): shutil.rmtree(tmpdir, ignore_errors=True)
+                
+    except Exception:
+        for xwb in _xwb_refs.values():
+            try: xwb.close()
+            except Exception: pass
+        for tmpdir in _xlsxwriter_tmpdirs:
+            if os.path.isdir(tmpdir): shutil.rmtree(tmpdir, ignore_errors=True)
+        raise
+
+    _release_memory()
+    return {h: (results[h]["path"], results[h]["stats"], results[h]["rows"], results[h]["headers"]) for h in hdqts}
+
 def _process_zip_to_xlsx_sync(zip_temp_path: str, progress_cb=None,
+
                                xlsx_out_path: str = None,
                                cancel_event: threading.Event = None,
                                hdqt_filter: str = None,
@@ -4616,7 +4850,32 @@ _xlsx_build_process: Optional[multiprocessing.Process] = None  # 현재 빌드 �
 _xlsx_build_start_time: Optional[float] = None  # 현재 빌드 시작 epoch time
 
 
+
+def _subprocess_multiple_xlsx_entry(zip_path: str, hdqts: list, result_path: str,
+                                    cancel_flag_path: str, city_hdqt_map: dict = None):
+    """서브프로세스 진입점: ZIP → 여러 xlsx 동시 빌드 후 결과를 JSON으로 저장."""
+    import json, os, traceback
+    class _FileCancelEvent:
+        def __init__(self, path): self._path = path
+        def is_set(self): return os.path.exists(self._path)
+        def set(self):
+            with open(self._path, "w") as f: f.write("1")
+    cancel_ev = _FileCancelEvent(cancel_flag_path)
+    try:
+        results = _process_zip_to_multiple_xlsx_sync(
+            zip_path, hdqts, cancel_event=cancel_ev, city_hdqt_map=city_hdqt_map
+        )
+        out = {"success": True, "results": results}
+    except InterruptedError:
+        out = {"success": False, "cancelled": True, "error": "cancelled"}
+    except Exception as e:
+        out = {"success": False, "cancelled": False, "error": str(e), "traceback": traceback.format_exc()}
+    try:
+        with open(result_path, "w") as f: json.dump(out, f)
+    except Exception: pass
+
 def _subprocess_xlsx_entry(zip_path: str, xlsx_path: str, result_path: str,
+
                            cancel_flag_path: str, hdqt_filter: str = None,
                            city_hdqt_map: dict = None):
     """서브프로세스 진입점: ZIP → xlsx 빌드 후 결과를 JSON으로 저장.
@@ -4657,7 +4916,79 @@ def _subprocess_xlsx_entry(zip_path: str, xlsx_path: str, result_path: str,
         pass
 
 
+
+async def _build_multiple_xlsx_cache(
+    division_id: str, division_code: str, import_date: str,
+    zip_temp: str, cancel_ev, hdqts: list, city_hdqt_map: dict = None,
+):
+    global _xlsx_build_process
+    tag = f"{division_id}/{division_code}_{import_date}_multi"
+    result_json = f"/tmp/ds_bgxlsx_{division_id}_{division_code}_{import_date}_multi_result.json"
+    cancel_flag = f"/tmp/ds_bgxlsx_{division_id}_{division_code}_{import_date}_multi_cancel"
+
+    try:
+        if cancel_ev.is_set(): raise InterruptedError("xlsx build cancelled before subprocess")
+
+        logger.info(f"DS bg xlsx: 다중 서브프로세스 시작 {tag}")
+        proc = multiprocessing.Process(
+            target=_subprocess_multiple_xlsx_entry,
+            args=(zip_temp, hdqts, result_json, cancel_flag),
+            kwargs={"city_hdqt_map": city_hdqt_map},
+            daemon=True,
+        )
+        _xlsx_build_process = proc
+        proc.start()
+
+        start_wait_time = time.time()
+        while proc.is_alive():
+            if cancel_ev.is_set():
+                try:
+                    with open(cancel_flag, "w") as f: f.write("1")
+                except Exception: pass
+                proc.join(timeout=10)
+                if proc.is_alive():
+                    proc.terminate()
+                    proc.join(timeout=5)
+                raise InterruptedError("xlsx build cancelled")
+
+            if time.time() - start_wait_time > 3600:
+                logger.error(f"DS bg xlsx 타임아웃 발생 (강제 종료): {tag}")
+                proc.terminate()
+                proc.join(timeout=5)
+                raise TimeoutError("엑셀 빌드 타임아웃 초과로 서브프로세스를 강제 종료했습니다.")
+            await asyncio.sleep(2)
+
+        _xlsx_build_process = None
+        if proc.exitcode != 0: raise RuntimeError(f"서브프로세스 비정상 종료 (exit code {proc.exitcode})")
+
+        if not os.path.exists(result_json): raise RuntimeError("서브프로세스 결과 파일 없음")
+        with open(result_json, "r") as f: result = json.load(f)
+        if not result.get("success"):
+            if result.get("cancelled"): raise InterruptedError("xlsx build cancelled in subprocess")
+            raise RuntimeError(f"서브프로세스 빌드 실패: {result.get('error', 'unknown')}")
+
+        if cancel_ev.is_set(): raise InterruptedError("xlsx build cancelled after processing")
+
+        s3 = get_s3_client()
+        for hdqt, hdqt_res in result["results"].items():
+            s3_key = f"ds-exports/{division_id}/{division_code}_{import_date}_{hdqt}.xlsx"
+            xlsx_temp = hdqt_res[0]
+            await asyncio.to_thread(
+                s3.upload_file, xlsx_temp, S3_BUCKET_NAME, s3_key,
+                ExtraArgs={"ContentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},
+            )
+            try:
+                if os.path.exists(xlsx_temp): os.remove(xlsx_temp)
+            except Exception: pass
+
+    finally:
+        for tmp in [result_json, cancel_flag]:
+            try:
+                if os.path.exists(tmp): os.remove(tmp)
+            except Exception: pass
+
 async def _build_one_xlsx_cache(
+
     division_id: str, division_code: str, import_date: str,
     zip_temp: str, cancel_ev,
     hdqt_filter: str = None, city_hdqt_map: dict = None,
@@ -4684,6 +5015,7 @@ async def _build_one_xlsx_cache(
         _xlsx_build_process = proc
         proc.start()
 
+        start_wait_time = time.time()
         while proc.is_alive():
             if cancel_ev.is_set():
                 try:
@@ -4696,6 +5028,13 @@ async def _build_one_xlsx_cache(
                     proc.terminate()
                     proc.join(timeout=5)
                 raise InterruptedError("xlsx build cancelled")
+
+            if time.time() - start_wait_time > 1800:
+                logger.error(f"DS bg xlsx 타임아웃 발생 (강제 종료): {tag}")
+                proc.terminate()
+                proc.join(timeout=5)
+                raise TimeoutError("엑셀 빌드 타임아웃 초과로 서브프로세스를 강제 종료했습니다.")
+
             await asyncio.sleep(2)
 
         _xlsx_build_process = None
@@ -4786,19 +5125,17 @@ async def _build_xlsx_cache_background(division_id: str, division_code: str, imp
             except Exception as e:
                 logger.warning(f"DS bg xlsx 수도권: city_hdqt_map 로드 실패 (fallback 사용): {e}")
 
-            for hdqt in ['강남', '강북', '경기', '인천']:
-                if cancel_ev.is_set():
-                    raise InterruptedError("xlsx build cancelled between hdqt builds")
-                try:
-                    await _build_one_xlsx_cache(
-                        division_id, division_code, import_date,
-                        zip_temp, cancel_ev,
-                        hdqt_filter=hdqt, city_hdqt_map=city_hdqt_map,
-                    )
-                except InterruptedError:
-                    raise
-                except Exception as e:
-                    logger.warning(f"DS bg xlsx 수도권 {hdqt} 빌드 실패 (non-fatal): {e}")
+            hdqts = ['강남', '강북', '경기', '인천']
+            try:
+                await _build_multiple_xlsx_cache(
+                    division_id, division_code, import_date,
+                    zip_temp, cancel_ev,
+                    hdqts=hdqts, city_hdqt_map=city_hdqt_map,
+                )
+            except InterruptedError:
+                raise
+            except Exception as e:
+                logger.warning(f"DS bg xlsx 수도권 다중 빌드 실패 (non-fatal): {e}")
         else:
             # 비수도권: 기존 단일 xlsx 빌드
             await _build_one_xlsx_cache(
