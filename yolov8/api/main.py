@@ -5089,9 +5089,12 @@ async def _build_xlsx_cache_background(division_id: str, division_code: str, imp
     is_sudo = (division_code == '10')
     zip_s3_key = f"ds-raw/{division_id}/{division_code}_{import_date}.zip"
     zip_temp = f"/tmp/ds_bgxlsx_{division_id}_{division_code}_{import_date}.zip"
+    print(f"[DEBUG] threading.Event() 생성 직전", flush=True)
     cancel_ev = threading.Event()
+    print(f"[DEBUG] threading.Event() 생성 완료", flush=True)
     _xlsx_build_cancel_event = cancel_ev
     _xlsx_build_process = None
+    print(f"[DEBUG] 초기화 완료, try 진입 직전", flush=True)
     try:
         # 1. S3 → ZIP 다운로드 (매번 새 클라이언트: CLOSE-WAIT 잔여 커넥션 회피)
         print(f"[DEBUG] try 블록 진입, cancel_ev={cancel_ev}, zip_s3_key={zip_s3_key}", flush=True)
