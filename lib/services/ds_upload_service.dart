@@ -232,18 +232,29 @@ class DsUploadService {
     final tempIds = <String>[];
     final fileNames = <String>[];
 
-    // Phase 1: 모든 ZIP → EC2 디스크 직접 업로드 (0~50%)
-    for (var i = 0; i < totalFiles; i++) {
-      final file = files[i];
-      final tempId = await _uploadToTemp(file, onProgress: (p) {
-        onProgress(
-          'ZIP 업로드 중 (${i + 1}/$totalFiles) ${(p * 100).toInt()}%',
-          (i / totalFiles) * 50 + p * (50 / totalFiles),
-        );
+    // Phase 1: 모든 ZIP → EC2 디스크 직접 업로드 (0~50%), 5개씩 병렬
+    const batchSize = 5;
+    final uploadedPercents = List<double>.filled(totalFiles, 0.0);
+    final tempIdResults = List<String>.filled(totalFiles, '');
+    fileNames.addAll(files.map((f) => f.name));
+
+    for (var batchStart = 0; batchStart < totalFiles; batchStart += batchSize) {
+      final batchEnd = (batchStart + batchSize).clamp(0, totalFiles);
+      final batch = List.generate(batchEnd - batchStart, (j) {
+        final i = batchStart + j;
+        final file = files[i];
+        return _uploadToTemp(file, onProgress: (p) {
+          uploadedPercents[i] = p;
+          final totalPercent = uploadedPercents.fold(0.0, (a, b) => a + b) / totalFiles * 50;
+          onProgress(
+            'ZIP 업로드 중 ($batchEnd/$totalFiles) ${(totalPercent * 2).toInt()}%',
+            totalPercent,
+          );
+        }).then((tempId) => tempIdResults[i] = tempId);
       });
-      tempIds.add(tempId);
-      fileNames.add(file.name);
+      await Future.wait(batch);
     }
+    tempIds.addAll(tempIdResults);
 
     // Phase 2: 병합 잡 생성 (50~55%)
     onProgress('서버 병합 요청 중... ($totalFiles개 파일)', 52);
