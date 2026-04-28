@@ -5092,8 +5092,16 @@ async def _build_xlsx_cache_background(division_id: str, division_code: str, imp
     _xlsx_build_cancel_event = cancel_ev
     _xlsx_build_process = None
     try:
-        # 1. S3 → ZIP 다운로드 (전용 클라이언트: read_timeout=600초)
-        await asyncio.to_thread(_s3_client_xlsx.download_file, S3_BUCKET_NAME, zip_s3_key, zip_temp)
+        # 1. S3 → ZIP 다운로드 (매번 새 클라이언트: CLOSE-WAIT 잔여 커넥션 회피)
+        logger.info(f"DS xlsx build: S3 다운로드 시작 → {zip_s3_key}")
+        def _download_zip():
+            s3 = boto3.client('s3', region_name=S3_REGION, config=_BotoConfig(
+                connect_timeout=30, read_timeout=600,
+                retries={'max_attempts': 2},
+            ))
+            s3.download_file(S3_BUCKET_NAME, zip_s3_key, zip_temp)
+        await asyncio.to_thread(_download_zip)
+        logger.info(f"DS xlsx build: S3 다운로드 완료 → {zip_temp}")
         if cancel_ev.is_set():
             raise InterruptedError("xlsx build cancelled before processing")
 
