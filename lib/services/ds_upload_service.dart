@@ -233,7 +233,7 @@ class DsUploadService {
     final fileNames = <String>[];
 
     // Phase 1: 모든 ZIP → EC2 디스크 직접 업로드 (0~50%), 5개씩 병렬
-    const batchSize = 5;
+    const batchSize = 3;
     final uploadedPercents = List<double>.filled(totalFiles, 0.0);
     final tempIdResults = List<String>.filled(totalFiles, '');
     fileNames.addAll(files.map((f) => f.name));
