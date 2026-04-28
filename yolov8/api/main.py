@@ -1424,6 +1424,11 @@ def decimal_to_native(obj):
 from botocore.config import Config as _BotoConfig
 _boto_config = _BotoConfig(max_pool_connections=25)
 _s3_client = boto3.client('s3', region_name=S3_REGION, config=_boto_config)
+# xlsx 대용량 다운로드 전용 — read_timeout 600초, hang 방지
+_s3_client_xlsx = boto3.client('s3', region_name=S3_REGION, config=_BotoConfig(
+    max_pool_connections=2, connect_timeout=10, read_timeout=600,
+    retries={'max_attempts': 1},
+))
 _dynamodb_resource = boto3.resource('dynamodb', region_name=S3_REGION, config=_boto_config)
 _dynamodb_client = boto3.client('dynamodb', region_name=S3_REGION, config=_boto_config)
 
@@ -3230,7 +3235,7 @@ def _merge_zips_sync(s3_keys: list, file_names: list, job_id: str,
     xls_count = 0
     s3 = None if use_local else get_s3_client()
 
-    with zipfile.ZipFile(merged_path, "w", zipfile.ZIP_STORED) as out_zip:
+    with zipfile.ZipFile(merged_path, "w", zipfile.ZIP_DEFLATED) as out_zip:
         for idx, (src_id, fname) in enumerate(zip(sources, file_names)):
             if use_local:
                 src_path = f"/tmp/ds_temp_{src_id}.zip"
@@ -5087,9 +5092,8 @@ async def _build_xlsx_cache_background(division_id: str, division_code: str, imp
     _xlsx_build_cancel_event = cancel_ev
     _xlsx_build_process = None
     try:
-        # 1. S3 → ZIP 다운로드
-        s3 = get_s3_client()
-        await asyncio.to_thread(s3.download_file, S3_BUCKET_NAME, zip_s3_key, zip_temp)
+        # 1. S3 → ZIP 다운로드 (전용 클라이언트: read_timeout=600초)
+        await asyncio.to_thread(_s3_client_xlsx.download_file, S3_BUCKET_NAME, zip_s3_key, zip_temp)
         if cancel_ev.is_set():
             raise InterruptedError("xlsx build cancelled before processing")
 
