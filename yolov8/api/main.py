@@ -5185,11 +5185,6 @@ async def _xlsx_build_worker():
     워커 루프와 독립 실행 → 새 잡이 들어와도 워커가 즉시 처리 가능.
     """
     global _xlsx_build_task
-    # cert 캐시 빌드 완료 대기 (빌드 중 GIL 경합으로 xlsx 코루틴이 실행 기회를 못 얻는 문제 방지)
-    waited = 0
-    while not _cert_cache_db_path and waited < 180:
-        await asyncio.sleep(2)
-        waited += 2
     while _xlsx_build_queue:
         args = _xlsx_build_queue.pop(0)
         logger.info(f"DS xlsx build queue: {args[0]}/{args[1]}_{args[2]} "
@@ -5223,6 +5218,10 @@ async def _job_worker_loop():
             if job is None:
                 # 잡 큐가 비었을 때 xlsx 빌드 태스크 시작 (이미 실행 중이면 무시)
                 if _xlsx_build_queue and (_xlsx_build_task is None or _xlsx_build_task.done()):
+                    # cert 캐시 빌드 완료 대기 (GIL 경합으로 xlsx 코루틴 실행 기회 차단 방지)
+                    if not _cert_cache_db_path:
+                        await asyncio.sleep(5)
+                        continue
                     _xlsx_build_task = asyncio.create_task(_xlsx_build_worker())
                 await asyncio.sleep(5)
                 continue
