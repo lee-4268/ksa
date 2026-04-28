@@ -5083,6 +5083,7 @@ async def _build_xlsx_cache_background(division_id: str, division_code: str, imp
     실패해도 export 시 on-demand 빌드 가능하므로 non-fatal.
     """
     global _xlsx_build_cancel_event, _xlsx_build_current, _xlsx_build_process, _xlsx_build_start_time
+    print(f"[DEBUG] _build_xlsx_cache_background 함수 진입: {division_id}/{division_code}_{import_date}", flush=True)
     _xlsx_build_current = (division_id, division_code, import_date)
     _xlsx_build_start_time = time.time()
     is_sudo = (division_code == '10')
@@ -5189,7 +5190,9 @@ async def _xlsx_build_worker():
         args = _xlsx_build_queue.pop(0)
         logger.info(f"DS xlsx build queue: {args[0]}/{args[1]}_{args[2]} "
                     f"빌드 시작 (남은 {len(_xlsx_build_queue)}건)")
+        print(f"[DEBUG] _build_xlsx_cache_background 진입 직전: {args}", flush=True)
         await _build_xlsx_cache_background(*args)
+        print(f"[DEBUG] _build_xlsx_cache_background 완료: {args}", flush=True)
     _xlsx_build_task = None
     logger.info("DS xlsx build queue: 모든 빌드 완료")
 
