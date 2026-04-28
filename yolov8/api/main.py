@@ -5084,6 +5084,8 @@ async def _build_xlsx_cache_background(division_id: str, division_code: str, imp
     """
     global _xlsx_build_cancel_event, _xlsx_build_current, _xlsx_build_process, _xlsx_build_start_time
     print(f"[DEBUG] _build_xlsx_cache_background 함수 진입: {division_id}/{division_code}_{import_date}", flush=True)
+    await asyncio.sleep(0)
+    print(f"[DEBUG] asyncio.sleep(0) 완료", flush=True)
     _xlsx_build_current = (division_id, division_code, import_date)
     _xlsx_build_start_time = time.time()
     is_sudo = (division_code == '10')
