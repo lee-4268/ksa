@@ -5138,17 +5138,18 @@ async def _build_xlsx_cache_background(division_id: str, division_code: str, imp
             except Exception as e:
                 logger.warning(f"DS bg xlsx 수도권: city_hdqt_map 로드 실패 (fallback 사용): {e}")
 
-            hdqts = ['강남', '강북', '경기', '인천']
-            try:
-                await _build_multiple_xlsx_cache(
-                    division_id, division_code, import_date,
-                    zip_temp, cancel_ev,
-                    hdqts=hdqts, city_hdqt_map=city_hdqt_map,
-                )
-            except InterruptedError:
-                raise
-            except Exception as e:
-                logger.warning(f"DS bg xlsx 수도권 다중 빌드 실패 (non-fatal): {e}")
+            # 본부별 순차 빌드: 각 서브프로세스 종료 후 메모리 해제 (OOM 방지)
+            for hdqt in ['강남', '강북', '경기', '인천']:
+                try:
+                    await _build_one_xlsx_cache(
+                        division_id, division_code, import_date,
+                        zip_temp, cancel_ev,
+                        hdqt_filter=hdqt, city_hdqt_map=city_hdqt_map,
+                    )
+                except InterruptedError:
+                    raise
+                except Exception as e:
+                    logger.warning(f"DS bg xlsx 수도권 {hdqt} 빌드 실패 (non-fatal): {e}")
         else:
             # 비수도권: 기존 단일 xlsx 빌드
             await _build_one_xlsx_cache(
