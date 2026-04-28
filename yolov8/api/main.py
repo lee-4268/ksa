@@ -24,6 +24,7 @@ import hmac as _hmac_mod
 import hashlib
 import base64
 import time as _time_mod
+import time
 import threading
 import multiprocessing
 from urllib.parse import quote
