@@ -4849,7 +4849,7 @@ async def _process_ds_job(job_id: str, job_item: dict):
 # xlsx 캐시 빌드 큐 — 잡 완료 시 등록, 워커 유휴 시 별도 태스크로 실행
 _xlsx_build_queue: list = []
 _xlsx_build_task: Optional[asyncio.Task] = None
-_xlsx_build_cancel_event: Optional[multiprocessing.Event] = None  # 서브프로세스 취소용
+_xlsx_build_cancel_event: Optional[threading.Event] = None  # xlsx 빌드 취소용
 _xlsx_build_current: Optional[tuple] = None  # 현재 빌드 중인 (division_id, division_code, import_date)
 _xlsx_build_process: Optional[multiprocessing.Process] = None  # 현재 빌드 서브프로세스
 _xlsx_build_start_time: Optional[float] = None  # 현재 빌드 시작 epoch time
@@ -5088,7 +5088,7 @@ async def _build_xlsx_cache_background(division_id: str, division_code: str, imp
     is_sudo = (division_code == '10')
     zip_s3_key = f"ds-raw/{division_id}/{division_code}_{import_date}.zip"
     zip_temp = f"/tmp/ds_bgxlsx_{division_id}_{division_code}_{import_date}.zip"
-    cancel_ev = multiprocessing.Event()
+    cancel_ev = threading.Event()
     _xlsx_build_cancel_event = cancel_ev
     _xlsx_build_process = None
     try:
