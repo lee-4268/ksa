@@ -5083,25 +5083,18 @@ async def _build_xlsx_cache_background(division_id: str, division_code: str, imp
     실패해도 export 시 on-demand 빌드 가능하므로 non-fatal.
     """
     global _xlsx_build_cancel_event, _xlsx_build_current, _xlsx_build_process, _xlsx_build_start_time
-    print(f"[DEBUG] _build_xlsx_cache_background 함수 진입: {division_id}/{division_code}_{import_date}", flush=True)
-    await asyncio.sleep(0)
-    print(f"[DEBUG] asyncio.sleep(0) 완료", flush=True)
+    await asyncio.sleep(0)  # 이벤트 루프 양보 (cert 캐시 빌드 스레드 GIL 경합 회피)
     _xlsx_build_current = (division_id, division_code, import_date)
     _xlsx_build_start_time = time.time()
     is_sudo = (division_code == '10')
     zip_s3_key = f"ds-raw/{division_id}/{division_code}_{import_date}.zip"
     zip_temp = f"/tmp/ds_bgxlsx_{division_id}_{division_code}_{import_date}.zip"
-    print(f"[DEBUG] threading.Event() 생성 직전", flush=True)
     cancel_ev = threading.Event()
-    print(f"[DEBUG] threading.Event() 생성 완료", flush=True)
     _xlsx_build_cancel_event = cancel_ev
     _xlsx_build_process = None
-    print(f"[DEBUG] 초기화 완료, try 진입 직전", flush=True)
     try:
         # 1. S3 → ZIP 다운로드 (매번 새 클라이언트: CLOSE-WAIT 잔여 커넥션 회피)
-        print(f"[DEBUG] try 블록 진입, cancel_ev={cancel_ev}, zip_s3_key={zip_s3_key}", flush=True)
         logger.info(f"DS xlsx build: S3 다운로드 시작 → {zip_s3_key}")
-        print(f"[DEBUG] logger.info 완료, asyncio.to_thread 호출 직전", flush=True)
         def _download_zip():
             s3 = boto3.client('s3', region_name=S3_REGION, config=_BotoConfig(
                 connect_timeout=30, read_timeout=600,
@@ -5197,9 +5190,7 @@ async def _xlsx_build_worker():
         args = _xlsx_build_queue.pop(0)
         logger.info(f"DS xlsx build queue: {args[0]}/{args[1]}_{args[2]} "
                     f"빌드 시작 (남은 {len(_xlsx_build_queue)}건)")
-        print(f"[DEBUG] _build_xlsx_cache_background 진입 직전: {args}", flush=True)
         await _build_xlsx_cache_background(*args)
-        print(f"[DEBUG] _build_xlsx_cache_background 완료: {args}", flush=True)
     _xlsx_build_task = None
     logger.info("DS xlsx build queue: 모든 빌드 완료")
 
