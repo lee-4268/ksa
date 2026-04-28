@@ -5155,7 +5155,7 @@ async def _build_xlsx_cache_background(division_id: str, division_code: str, imp
                 zip_temp, cancel_ev,
             )
     except asyncio.CancelledError:
-        logger.info(f"DS bg xlsx cache 중단: {division_id}/{division_code}_{import_date} (task cancelled)")
+        logger.warning(f"DS bg xlsx cache CancelledError: {division_id}/{division_code}_{import_date} — 태스크 취소됨")
         raise  # 상위 _xlsx_build_worker도 중단시켜야 함
     except InterruptedError as e:
         logger.info(f"DS bg xlsx cache 중단: {division_id}/{division_code}_{import_date} ({e})")
@@ -5185,13 +5185,18 @@ async def _xlsx_build_worker():
     워커 루프와 독립 실행 → 새 잡이 들어와도 워커가 즉시 처리 가능.
     """
     global _xlsx_build_task
-    while _xlsx_build_queue:
-        args = _xlsx_build_queue.pop(0)
-        logger.info(f"DS xlsx build queue: {args[0]}/{args[1]}_{args[2]} "
-                    f"빌드 시작 (남은 {len(_xlsx_build_queue)}건)")
-        await _build_xlsx_cache_background(*args)
-    _xlsx_build_task = None
-    logger.info("DS xlsx build queue: 모든 빌드 완료")
+    try:
+        while _xlsx_build_queue:
+            args = _xlsx_build_queue.pop(0)
+            logger.info(f"DS xlsx build queue: {args[0]}/{args[1]}_{args[2]} "
+                        f"빌드 시작 (남은 {len(_xlsx_build_queue)}건)")
+            await _build_xlsx_cache_background(*args)
+        _xlsx_build_task = None
+        logger.info("DS xlsx build queue: 모든 빌드 완료")
+    except asyncio.CancelledError:
+        logger.warning(f"DS xlsx build worker CancelledError — 태스크 외부에서 취소됨")
+    except Exception as e:
+        logger.error(f"DS xlsx build worker 예외 발생: {e}", exc_info=True)
 
 
 async def _job_worker_loop():
