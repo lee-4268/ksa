@@ -11694,22 +11694,29 @@ def _process_inspection_sync(job_id: str, s3_key: str, year: int, uploaded_by: s
                     matched += 1
 
                 # ── 4단계 본부/팀 보정 ──
+                # 엑셀 원본 access담당이 유효한 본부명이면 보정 스킵 (원본 우선)
+                # 유효: 정확한 본부명 or "본부명+Access" or "본부명+Access담당"
+                _access_base = re.sub(r'Access담당$|Access$', '', access).strip()
+                _orig_access_is_valid = _access_base in _ACCESS_TO_SKT_HDQT
+                if _orig_access_is_valid and _access_base != access:
+                    access = _access_base  # "강북Access" → "강북" 정규화
                 if 품질 in INSP_TEAM_TO_HDQT:
-                    # 1) 현재 팀명 → 본부 직접 보정
-                    access = INSP_TEAM_TO_HDQT[품질]
+                    # 1) 현재 팀명 → 본부 직접 보정 (단, 원본 본부명이 유효하면 본부는 유지)
+                    if not _orig_access_is_valid:
+                        access = INSP_TEAM_TO_HDQT[품질]
                 elif 품질 in _DEPRECATED_TEAM_MAP:
                     # 2) 알려진 폐지 팀 → 현재 팀으로 교체
                     품질 = _DEPRECATED_TEAM_MAP[품질]
-                    access = INSP_TEAM_TO_HDQT.get(품질, access)
-                else:
-                    # 3) tongsi/gongtae → cert DB 재조회
+                    if not _orig_access_is_valid:
+                        access = INSP_TEAM_TO_HDQT.get(품질, access)
+                elif not _orig_access_is_valid:
+                    # 3) 원본 본부명이 없거나 무효한 경우만 tongsi/gongtae → cert DB 재조회
                     fb_access, fb_team = _match_access(tongsi, gongtae)
                     if fb_team and fb_team in INSP_TEAM_TO_HDQT:
                         access = INSP_TEAM_TO_HDQT[fb_team]
                         품질 = fb_team
                     else:
                         # 4) 주소 키워드로 팀 추론 (ERP cert DB 학습 맵 + Seoul 구명)
-                        #    설치장소/도로명주소 등 — 헤더 기반 인덱스 활용
                         addr_parts = []
                         for ci in {IDX_LOC, IDX_ROAD, IDX_EXTRA1, 22}:
                             if ci >= 0 and len(row) > ci and row[ci]:
@@ -11724,8 +11731,8 @@ def _process_inspection_sync(job_id: str, s3_key: str, year: int, uploaded_by: s
                         elif inferred_hdqt:
                             access = inferred_hdqt
 
-                # 5) 여전히 미배정이면 PNU코드 → 법정동 주소 변환 → 팀 추론
-                if not 품질 or 품질 not in INSP_TEAM_TO_HDQT:
+                # 5) 원본 본부명 없고 팀 미배정이면 PNU코드 → 법정동 주소 변환 → 팀 추론
+                if not _orig_access_is_valid and (not 품질 or 품질 not in INSP_TEAM_TO_HDQT):
                     pnu_raw = str(row[IDX_PNU] or '').strip() if len(row) > IDX_PNU else ''
                     if pnu_raw and len(pnu_raw) >= 10:
                         pnu_addr = _pnu_to_addr(pnu_raw)
