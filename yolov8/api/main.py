@@ -3787,9 +3787,10 @@ def _process_zip_to_multiple_xlsx_sync(zip_temp_path: str, hdqts: list, progress
             data_fmt_dict = {}
 
             for h in hdqts:
-                out_path = f"/tmp/ds_xlsx_multi_{h}_{id(zip_temp_path)}.xlsx"
+                h_key = h if h is not None else "full"
+                out_path = f"/tmp/ds_xlsx_multi_{h_key}_{id(zip_temp_path)}.xlsx"
                 results[h]["path"] = out_path
-                tmpdir = f"/tmp/ds_xlsxbuild_{h}_{os.getpid()}"
+                tmpdir = f"/tmp/ds_xlsxbuild_{h_key}_{os.getpid()}"
                 os.makedirs(tmpdir, exist_ok=True)
                 _xlsxwriter_tmpdirs.append(tmpdir)
 
@@ -3847,8 +3848,9 @@ def _process_zip_to_multiple_xlsx_sync(zip_temp_path: str, hdqts: list, progress
                         if lic_to_hdqt and lic_xlsx_col >= 0:
                             lic = row_vals[lic_xlsx_col].strip() if lic_xlsx_col < len(row_vals) else ''
                             if hd := lic_to_hdqt.get(lic):
-                                target_hdqts = [hd] if hd in hdqts else []
-                        
+                                # None(전체합)은 항상 포함, 매핑된 본부만 추가
+                                target_hdqts = ([hd] if hd in hdqts else []) + ([None] if None in hdqts else [])
+
                         for h in target_hdqts:
                             if sheet_row_idx[h][sheet_name] > 1_000_000:
                                 split_num = sheet_split_num[h].get(sheet_name, 1) + 1
@@ -4874,7 +4876,9 @@ def _subprocess_multiple_xlsx_entry(zip_path: str, hdqts: list, result_path: str
         results = _process_zip_to_multiple_xlsx_sync(
             zip_path, hdqts, cancel_event=cancel_ev, city_hdqt_map=city_hdqt_map
         )
-        out = {"success": True, "results": results}
+        # None 키는 JSON 직렬화 시 "__full__"로 변환
+        serializable = {"__full__" if k is None else k: v for k, v in results.items()}
+        out = {"success": True, "results": serializable}
     except InterruptedError:
         out = {"success": False, "cancelled": True, "error": "cancelled"}
     except Exception as e:
@@ -4980,13 +4984,20 @@ async def _build_multiple_xlsx_cache(
 
         s3 = get_s3_client()
         for hdqt, hdqt_res in result["results"].items():
-            hdqt_key = _HDQT_S3_KEY.get(hdqt, hdqt)
-            s3_key = f"ds-exports/{division_id}/{division_code}_{import_date}_{hdqt_key}.xlsx"
-            xlsx_temp = hdqt_res[0]
+            if hdqt == "__full__":
+                # 전체합: suffix 없음 → 10_YYYYMMDD.xlsx
+                s3_key = f"ds-exports/{division_id}/{division_code}_{import_date}.xlsx"
+            else:
+                hdqt_key = _HDQT_S3_KEY.get(hdqt, hdqt)
+                s3_key = f"ds-exports/{division_id}/{division_code}_{import_date}_{hdqt_key}.xlsx"
+            xlsx_temp = hdqt_res["path"]
+            total_rows = hdqt_res.get("rows", 0)
+            logger.info(f"DS xlsx multi upload: {s3_key} ({total_rows}행)")
             await asyncio.to_thread(
                 s3.upload_file, xlsx_temp, S3_BUCKET_NAME, s3_key,
                 ExtraArgs={"ContentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},
             )
+            logger.info(f"DS xlsx multi upload 완료: {s3_key}")
             try:
                 if os.path.exists(xlsx_temp): os.remove(xlsx_temp)
             except Exception: pass
@@ -5169,11 +5180,9 @@ async def _merge_hdqt_xlsx_from_s3(
             pass
 
 
-async def _build_xlsx_cache_background(division_id: str, division_code: str, import_date: str, full_only: bool = False):
-    """S3 ZIP → 서브프로세스에서 xlsx 빌드 → S3 캐싱
-    수도권(code '10')은 강남/강북/경기/인천 4개 본부별 xlsx를 순차 빌드.
-    full_only=True이면 전체 합 xlsx만 빌드 (본부별 4개는 이미 캐시된 경우).
-    서브프로세스 exit 시 OS가 메모리 100% 회수 (pymalloc 단편화 문제 완전 해결).
+async def _build_xlsx_cache_background(division_id: str, division_code: str, import_date: str):
+    """S3 ZIP → xlsx 빌드 → S3 캐싱.
+    수도권(code '10')은 1-Pass Fan-out으로 5개(강남/강북/경기/인천/전체합) 동시 생성.
     실패해도 export 시 on-demand 빌드 가능하므로 non-fatal.
     """
     global _xlsx_build_cancel_event, _xlsx_build_current, _xlsx_build_process, _xlsx_build_start_time
@@ -5183,20 +5192,6 @@ async def _build_xlsx_cache_background(division_id: str, division_code: str, imp
     cancel_ev = threading.Event()
     _xlsx_build_cancel_event = cancel_ev
     _xlsx_build_process = None
-
-    # full_only: ZIP 다운로드 없이 S3 본부별 xlsx 병합으로 바로 처리
-    if is_sudo and full_only:
-        try:
-            await _merge_hdqt_xlsx_from_s3(division_id, division_code, import_date, cancel_ev)
-        except InterruptedError:
-            raise
-        except Exception as e:
-            logger.warning(f"DS bg xlsx 수도권 전체 합 병합 실패 (non-fatal): {e}")
-        finally:
-            _xlsx_build_cancel_event = None
-            _xlsx_build_current = None
-            _xlsx_build_start_time = None
-        return
 
     zip_s3_key = f"ds-raw/{division_id}/{division_code}_{import_date}.zip"
     zip_temp = f"/tmp/ds_bgxlsx_{division_id}_{division_code}_{import_date}.zip"
@@ -5216,7 +5211,7 @@ async def _build_xlsx_cache_background(division_id: str, division_code: str, imp
 
         if is_sudo:
             if not full_only:
-                # 본부별 4개 순차 빌드: city_hdqt_map 조회 후 진행
+                # 1-Pass Fan-out: ZIP 1번 읽어 5개(강남/강북/경기/인천/전체합) 동시 생성
                 city_hdqt_map = None
                 try:
                     import sqlite3
@@ -5247,27 +5242,13 @@ async def _build_xlsx_cache_background(division_id: str, division_code: str, imp
                 except Exception as e:
                     logger.warning(f"DS bg xlsx 수도권: city_hdqt_map 로드 실패 (fallback 사용): {e}")
 
-                for hdqt in ['강남', '강북', '경기', '인천']:
-                    try:
-                        await _build_one_xlsx_cache(
-                            division_id, division_code, import_date,
-                            zip_temp, cancel_ev,
-                            hdqt_filter=hdqt, city_hdqt_map=city_hdqt_map,
-                        )
-                    except InterruptedError:
-                        raise
-                    except Exception as e:
-                        logger.warning(f"DS bg xlsx 수도권 {hdqt} 빌드 실패 (non-fatal): {e}")
-
-                # 본부별 4개 완료 후 S3 병합으로 전체합 생성 (OOM 방지: ZIP 재파싱 없음)
-                try:
-                    await _merge_hdqt_xlsx_from_s3(
-                        division_id, division_code, import_date, cancel_ev
-                    )
-                except InterruptedError:
-                    raise
-                except Exception as e:
-                    logger.warning(f"DS bg xlsx 수도권 전체 합 병합 실패 (non-fatal): {e}")
+                # None = 전체합 (필터 없음), ZIP 1번 읽기로 5개 동시 생성
+                await _build_multiple_xlsx_cache(
+                    division_id, division_code, import_date,
+                    zip_temp, cancel_ev,
+                    hdqts=['강남', '강북', '경기', '인천', None],
+                    city_hdqt_map=city_hdqt_map,
+                )
 
         else:
             # 비수도권: 기존 단일 xlsx 빌드
@@ -5309,13 +5290,9 @@ async def _xlsx_build_worker():
     try:
         while _xlsx_build_queue:
             args = _xlsx_build_queue.pop(0)
-            full_only = len(args) == 4 and args[3] == "full_only"
-            label = f"{args[0]}/{args[1]}_{args[2]}" + (" (전체합만)" if full_only else "")
+            label = f"{args[0]}/{args[1]}_{args[2]}"
             logger.info(f"DS xlsx build queue: {label} 빌드 시작 (남은 {len(_xlsx_build_queue)}건)")
-            if full_only:
-                await _build_xlsx_cache_background(args[0], args[1], args[2], full_only=True)
-            else:
-                await _build_xlsx_cache_background(*args)
+            await _build_xlsx_cache_background(*args)
         _xlsx_build_task = None
         logger.info("DS xlsx build queue: 모든 빌드 완료")
     except asyncio.CancelledError:
@@ -6671,23 +6648,17 @@ def _scan_missing_xlsx_caches_sync() -> tuple:
         import_date = parts[1]
         is_sudo = (division_code == '10')
 
-        # xlsx 캐시 존재 체크: 수도권은 본부별 4개 + 전체 합 5개 필요
+        # xlsx 캐시 존재 체크: 수도권은 본부별 4개 + 전체 합 5개 모두 있어야 완성
         if is_sudo:
-            hdqt_all_cached = all(
-                _s3_key_exists(s3, f"ds-exports/{division_id}/{division_code}_{import_date}_{_HDQT_S3_KEY[h]}.xlsx")
-                for h in _SUDO_HDQTS
+            all_cached = (
+                all(
+                    _s3_key_exists(s3, f"ds-exports/{division_id}/{division_code}_{import_date}_{_HDQT_S3_KEY[h]}.xlsx")
+                    for h in _SUDO_HDQTS
+                ) and
+                _s3_key_exists(s3, f"ds-exports/{division_id}/{division_code}_{import_date}.xlsx")
             )
-            full_cached = _s3_key_exists(s3, f"ds-exports/{division_id}/{division_code}_{import_date}.xlsx")
-            if hdqt_all_cached and full_cached:
-                # 5개 모두 있음 → 스킵
+            if all_cached:
                 skipped.append(f"{division_id}/{division_code}_{import_date}")
-                continue
-            elif hdqt_all_cached and not full_cached:
-                # 본부별 4개는 있고 전체 합만 없음 → 전체 합만 빌드 큐 등록 (special marker)
-                entry = (division_id, division_code, import_date, "full_only")
-                if entry not in _xlsx_build_queue:
-                    _xlsx_build_queue.append(entry)
-                    queued.append(f"{division_id}/{division_code}_{import_date} (전체합만)")
                 continue
         else:
             xlsx_key = f"ds-exports/{division_id}/{division_code}_{import_date}.xlsx"
