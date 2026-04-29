@@ -5364,6 +5364,10 @@ async def ds_export_presign(
             qs = f"divisionId={divisionId}&importDate={importDate}&divisionCode={divisionCode}"
             if hdqt:
                 qs += f"&hdqt={hdqt}"
+            # 토큰을 쿼리파라미터로 포함 (브라우저 fetch 시 헤더 설정 불필요)
+            raw_token = request.headers.get("Authorization", "")[7:]  # "Bearer " 제거
+            if raw_token:
+                qs += f"&token={raw_token}"
             proxy_url = f"{origin}/ds/proxy-xlsx?{qs}"
             return {"success": True, "url": proxy_url, "type": "xlsx"}
         except ClientError:
@@ -5518,9 +5522,18 @@ async def ds_proxy_xlsx(
     importDate: str = Query(...),
     divisionCode: str = Query(""),
     hdqt: str = Query(""),
+    token: str = Query(""),
 ):
-    """S3 캐시 xlsx → EC2 프록시 스트리밍 (브라우저 CORS 우회)"""
-    await _verify_auth(request)
+    """S3 캐시 xlsx → EC2 프록시 스트리밍 (브라우저 CORS 우회)
+    Authorization 헤더 또는 token 쿼리파라미터로 인증.
+    """
+    # 헤더에 없으면 쿼리파라미터 token으로 fallback
+    if token and not request.headers.get("Authorization"):
+        empno = _verify_token(token)
+        if not empno:
+            raise HTTPException(status_code=401, detail="토큰이 만료되었거나 유효하지 않습니다")
+    else:
+        await _verify_auth(request)
     hdqt_key = _HDQT_S3_KEY.get(hdqt, hdqt) if hdqt else None
     suffix = f"_{hdqt_key}" if hdqt_key else ""
     s3_key = f"ds-exports/{divisionId}/{divisionCode}_{importDate}{suffix}.xlsx"
