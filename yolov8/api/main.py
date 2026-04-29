@@ -5114,7 +5114,19 @@ async def _build_xlsx_cache_background(division_id: str, division_code: str, imp
 
         if is_sudo:
             if not full_only:
-                # 수도권: city_hdqt_map 조회 후 본부별 4개 xlsx 순차 빌드
+                # 전체 합 먼저 빌드 (메모리 깨끗한 상태에서 진행, 본부별보다 우선)
+                try:
+                    await _build_one_xlsx_cache(
+                        division_id, division_code, import_date,
+                        zip_temp, cancel_ev,
+                        hdqt_filter=None, city_hdqt_map=None,
+                    )
+                except InterruptedError:
+                    raise
+                except Exception as e:
+                    logger.warning(f"DS bg xlsx 수도권 전체 합 빌드 실패 (non-fatal): {e}")
+
+                # 본부별 4개 순차 빌드: city_hdqt_map 조회 후 진행
                 city_hdqt_map = None
                 try:
                     import sqlite3
@@ -5145,7 +5157,6 @@ async def _build_xlsx_cache_background(division_id: str, division_code: str, imp
                 except Exception as e:
                     logger.warning(f"DS bg xlsx 수도권: city_hdqt_map 로드 실패 (fallback 사용): {e}")
 
-                # 본부별 순차 빌드: 각 서브프로세스 종료 후 메모리 해제 (OOM 방지)
                 for hdqt in ['강남', '강북', '경기', '인천']:
                     try:
                         await _build_one_xlsx_cache(
@@ -5158,28 +5169,18 @@ async def _build_xlsx_cache_background(division_id: str, division_code: str, imp
                     except Exception as e:
                         logger.warning(f"DS bg xlsx 수도권 {hdqt} 빌드 실패 (non-fatal): {e}")
 
-            # 전체 합 xlsx 빌드 (지하철품질개선팀 등 수도권 전체 조회용)
-            try:
-                if HAS_PSUTIL:
-                    mem = psutil.virtual_memory()
-                    if mem.available < 500 * 1024 * 1024:
-                        logger.warning(f"DS bg xlsx 수도권 전체 합 빌드 스킵: 가용 메모리 부족 ({mem.available // 1024 // 1024}MB)")
-                    else:
-                        await _build_one_xlsx_cache(
-                            division_id, division_code, import_date,
-                            zip_temp, cancel_ev,
-                            hdqt_filter=None, city_hdqt_map=None,
-                        )
-                else:
+            else:
+                # full_only: 본부별 4개는 이미 캐시됨, 전체 합만 빌드
+                try:
                     await _build_one_xlsx_cache(
                         division_id, division_code, import_date,
                         zip_temp, cancel_ev,
                         hdqt_filter=None, city_hdqt_map=None,
                     )
-            except InterruptedError:
-                raise
-            except Exception as e:
-                logger.warning(f"DS bg xlsx 수도권 전체 합 빌드 실패 (non-fatal): {e}")
+                except InterruptedError:
+                    raise
+                except Exception as e:
+                    logger.warning(f"DS bg xlsx 수도권 전체 합 빌드 실패 (non-fatal): {e}")
         else:
             # 비수도권: 기존 단일 xlsx 빌드
             await _build_one_xlsx_cache(
