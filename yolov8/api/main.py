@@ -6556,7 +6556,7 @@ def _scan_missing_xlsx_caches_sync() -> tuple:
         # xlsx 캐시 존재 체크: 수도권은 본부별 4개 모두 있어야 완성
         if is_sudo:
             all_cached = all(
-                _s3_key_exists(s3, f"ds-exports/{division_id}/{division_code}_{import_date}_{h}.xlsx")
+                _s3_key_exists(s3, f"ds-exports/{division_id}/{division_code}_{import_date}_{_HDQT_S3_KEY[h]}.xlsx")
                 for h in _SUDO_HDQTS
             )
             # 기존 전체 xlsx(suffix 없음)가 남아있으면 삭제
