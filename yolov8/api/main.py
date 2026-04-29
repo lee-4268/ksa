@@ -5155,6 +5155,29 @@ async def _build_xlsx_cache_background(division_id: str, division_code: str, imp
                     raise
                 except Exception as e:
                     logger.warning(f"DS bg xlsx 수도권 {hdqt} 빌드 실패 (non-fatal): {e}")
+
+            # 전체 합 xlsx 빌드 (지하철품질개선팀 등 수도권 전체 조회용)
+            try:
+                if HAS_PSUTIL:
+                    mem = psutil.virtual_memory()
+                    if mem.available < 500 * 1024 * 1024:
+                        logger.warning(f"DS bg xlsx 수도권 전체 합 빌드 스킵: 가용 메모리 부족 ({mem.available // 1024 // 1024}MB)")
+                    else:
+                        await _build_one_xlsx_cache(
+                            division_id, division_code, import_date,
+                            zip_temp, cancel_ev,
+                            hdqt_filter=None, city_hdqt_map=None,
+                        )
+                else:
+                    await _build_one_xlsx_cache(
+                        division_id, division_code, import_date,
+                        zip_temp, cancel_ev,
+                        hdqt_filter=None, city_hdqt_map=None,
+                    )
+            except InterruptedError:
+                raise
+            except Exception as e:
+                logger.warning(f"DS bg xlsx 수도권 전체 합 빌드 실패 (non-fatal): {e}")
         else:
             # 비수도권: 기존 단일 xlsx 빌드
             await _build_one_xlsx_cache(
@@ -6553,11 +6576,14 @@ def _scan_missing_xlsx_caches_sync() -> tuple:
         import_date = parts[1]
         is_sudo = (division_code == '10')
 
-        # xlsx 캐시 존재 체크: 수도권은 본부별 4개 모두 있어야 완성
+        # xlsx 캐시 존재 체크: 수도권은 본부별 4개 + 전체 합 모두 있어야 완성
         if is_sudo:
-            all_cached = all(
-                _s3_key_exists(s3, f"ds-exports/{division_id}/{division_code}_{import_date}_{_HDQT_S3_KEY[h]}.xlsx")
-                for h in _SUDO_HDQTS
+            all_cached = (
+                all(
+                    _s3_key_exists(s3, f"ds-exports/{division_id}/{division_code}_{import_date}_{_HDQT_S3_KEY[h]}.xlsx")
+                    for h in _SUDO_HDQTS
+                )
+                and _s3_key_exists(s3, f"ds-exports/{division_id}/{division_code}_{import_date}.xlsx")
             )
             # 기존 전체 xlsx(suffix 없음)가 남아있으면 삭제
             old_key = f"ds-exports/{division_id}/{division_code}_{import_date}.xlsx"
