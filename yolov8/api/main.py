@@ -5180,11 +5180,26 @@ async def _build_xlsx_cache_background(division_id: str, division_code: str, imp
     _xlsx_build_current = (division_id, division_code, import_date)
     _xlsx_build_start_time = time.time()
     is_sudo = (division_code == '10')
-    zip_s3_key = f"ds-raw/{division_id}/{division_code}_{import_date}.zip"
-    zip_temp = f"/tmp/ds_bgxlsx_{division_id}_{division_code}_{import_date}.zip"
     cancel_ev = threading.Event()
     _xlsx_build_cancel_event = cancel_ev
     _xlsx_build_process = None
+
+    # full_only: ZIP 다운로드 없이 S3 본부별 xlsx 병합으로 바로 처리
+    if is_sudo and full_only:
+        try:
+            await _merge_hdqt_xlsx_from_s3(division_id, division_code, import_date, cancel_ev)
+        except InterruptedError:
+            raise
+        except Exception as e:
+            logger.warning(f"DS bg xlsx 수도권 전체 합 병합 실패 (non-fatal): {e}")
+        finally:
+            _xlsx_build_cancel_event = None
+            _xlsx_build_current = None
+            _xlsx_build_start_time = None
+        return
+
+    zip_s3_key = f"ds-raw/{division_id}/{division_code}_{import_date}.zip"
+    zip_temp = f"/tmp/ds_bgxlsx_{division_id}_{division_code}_{import_date}.zip"
     try:
         # 1. S3 → ZIP 다운로드 (매번 새 클라이언트: CLOSE-WAIT 잔여 커넥션 회피)
         logger.info(f"DS xlsx build: S3 다운로드 시작 → {zip_s3_key}")
@@ -5256,17 +5271,6 @@ async def _build_xlsx_cache_background(division_id: str, division_code: str, imp
                     except Exception as e:
                         logger.warning(f"DS bg xlsx 수도권 {hdqt} 빌드 실패 (non-fatal): {e}")
 
-            else:
-                # full_only: 본부별 4개 xlsx가 이미 S3에 있음 → S3에서 내려받아 병합
-                # 원본 ZIP 재파싱 없이 openpyxl read_only+write_only 스트리밍으로 메모리 절약
-                try:
-                    await _merge_hdqt_xlsx_from_s3(
-                        division_id, division_code, import_date, cancel_ev
-                    )
-                except InterruptedError:
-                    raise
-                except Exception as e:
-                    logger.warning(f"DS bg xlsx 수도권 전체 합 병합 실패 (non-fatal): {e}")
         else:
             # 비수도권: 기존 단일 xlsx 빌드
             await _build_one_xlsx_cache(
