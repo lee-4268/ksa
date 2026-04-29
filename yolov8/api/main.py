@@ -5082,6 +5082,93 @@ async def _build_one_xlsx_cache(
                 pass
 
 
+async def _merge_hdqt_xlsx_from_s3(
+    division_id: str, division_code: str, import_date: str, cancel_ev
+):
+    """S3에 캐시된 4개 본부 xlsx를 내려받아 하나로 병합 → S3 저장.
+    openpyxl read_only + write_only 스트리밍: 한 번에 한 본부만 메모리에 올림.
+    """
+    import openpyxl
+    hdqt_order = ['강남', '강북', '경기', '인천']
+    tmp_inputs = []
+    full_xlsx_temp = f"/tmp/ds_bgxlsx_{division_id}_{division_code}_{import_date}_full.xlsx"
+    s3_key_full = f"ds-exports/{division_id}/{division_code}_{import_date}.xlsx"
+
+    try:
+        # 1. 4개 본부 xlsx S3 → /tmp 다운로드 (순차)
+        for hdqt in hdqt_order:
+            if cancel_ev.is_set():
+                raise InterruptedError("xlsx merge cancelled")
+            hdqt_key = _HDQT_S3_KEY[hdqt]
+            s3_key = f"ds-exports/{division_id}/{division_code}_{import_date}_{hdqt_key}.xlsx"
+            tmp_path = f"/tmp/ds_bgxlsx_merge_{division_id}_{division_code}_{import_date}_{hdqt_key}.xlsx"
+            logger.info(f"DS xlsx 전체합 병합: {hdqt} 다운로드 → {tmp_path}")
+            def _dl(key=s3_key, path=tmp_path):
+                s3c = boto3.client('s3', region_name=S3_REGION, config=_BotoConfig(
+                    connect_timeout=30, read_timeout=300, retries={'max_attempts': 2}
+                ))
+                s3c.download_file(S3_BUCKET_NAME, key, path)
+            await asyncio.to_thread(_dl)
+            tmp_inputs.append((hdqt, tmp_path))
+
+        if cancel_ev.is_set():
+            raise InterruptedError("xlsx merge cancelled after download")
+
+        # 2. write_only 워크북 생성 → 4개 본부 순서대로 read_only 스트리밍 append
+        logger.info(f"DS xlsx 전체합 병합: openpyxl 스트리밍 병합 시작")
+        def _merge():
+            wb_out = openpyxl.Workbook(write_only=True)
+            ws_out = wb_out.create_sheet("DS데이터")
+            header_written = False
+            total = 0
+            for hdqt, tmp_path in tmp_inputs:
+                wb_in = openpyxl.load_workbook(tmp_path, read_only=True, data_only=True)
+                ws_in = wb_in.active
+                first_row = True
+                for row in ws_in.iter_rows(values_only=True):
+                    if first_row:
+                        first_row = False
+                        if not header_written:
+                            ws_out.append(list(row))
+                            header_written = True
+                        continue  # 본부별 헤더행은 첫 번째 이후 스킵
+                    ws_out.append(list(row))
+                    total += 1
+                wb_in.close()
+            wb_out.save(full_xlsx_temp)
+            return total
+        total_rows = await asyncio.to_thread(_merge)
+        logger.info(f"DS xlsx 전체합 병합: {total_rows}행 병합 완료 → S3 업로드")
+
+        if cancel_ev.is_set():
+            raise InterruptedError("xlsx merge cancelled before upload")
+
+        # 3. S3 업로드
+        def _upload():
+            s3c = boto3.client('s3', region_name=S3_REGION, config=_BotoConfig(
+                connect_timeout=30, read_timeout=600, retries={'max_attempts': 2}
+            ))
+            s3c.upload_file(
+                full_xlsx_temp, S3_BUCKET_NAME, s3_key_full,
+                ExtraArgs={"ContentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},
+            )
+        await asyncio.to_thread(_upload)
+        logger.info(f"DS xlsx 전체합 병합: S3 업로드 완료 → {s3_key_full} ({total_rows}행)")
+
+    finally:
+        for _, p in tmp_inputs:
+            try:
+                if os.path.exists(p):
+                    os.remove(p)
+            except Exception:
+                pass
+        try:
+            if os.path.exists(full_xlsx_temp):
+                os.remove(full_xlsx_temp)
+        except Exception:
+            pass
+
+
 async def _build_xlsx_cache_background(division_id: str, division_code: str, import_date: str, full_only: bool = False):
     """S3 ZIP → 서브프로세스에서 xlsx 빌드 → S3 캐싱
     수도권(code '10')은 강남/강북/경기/인천 4개 본부별 xlsx를 순차 빌드.
@@ -5170,17 +5257,16 @@ async def _build_xlsx_cache_background(division_id: str, division_code: str, imp
                         logger.warning(f"DS bg xlsx 수도권 {hdqt} 빌드 실패 (non-fatal): {e}")
 
             else:
-                # full_only: 본부별 4개는 이미 캐시됨, 전체 합만 빌드
+                # full_only: 본부별 4개 xlsx가 이미 S3에 있음 → S3에서 내려받아 병합
+                # 원본 ZIP 재파싱 없이 openpyxl read_only+write_only 스트리밍으로 메모리 절약
                 try:
-                    await _build_one_xlsx_cache(
-                        division_id, division_code, import_date,
-                        zip_temp, cancel_ev,
-                        hdqt_filter=None, city_hdqt_map=None,
+                    await _merge_hdqt_xlsx_from_s3(
+                        division_id, division_code, import_date, cancel_ev
                     )
                 except InterruptedError:
                     raise
                 except Exception as e:
-                    logger.warning(f"DS bg xlsx 수도권 전체 합 빌드 실패 (non-fatal): {e}")
+                    logger.warning(f"DS bg xlsx 수도권 전체 합 병합 실패 (non-fatal): {e}")
         else:
             # 비수도권: 기존 단일 xlsx 빌드
             await _build_one_xlsx_cache(
