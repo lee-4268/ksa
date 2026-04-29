@@ -5216,18 +5216,6 @@ async def _build_xlsx_cache_background(division_id: str, division_code: str, imp
 
         if is_sudo:
             if not full_only:
-                # 전체 합 먼저 빌드 (메모리 깨끗한 상태에서 진행, 본부별보다 우선)
-                try:
-                    await _build_one_xlsx_cache(
-                        division_id, division_code, import_date,
-                        zip_temp, cancel_ev,
-                        hdqt_filter=None, city_hdqt_map=None,
-                    )
-                except InterruptedError:
-                    raise
-                except Exception as e:
-                    logger.warning(f"DS bg xlsx 수도권 전체 합 빌드 실패 (non-fatal): {e}")
-
                 # 본부별 4개 순차 빌드: city_hdqt_map 조회 후 진행
                 city_hdqt_map = None
                 try:
@@ -5270,6 +5258,16 @@ async def _build_xlsx_cache_background(division_id: str, division_code: str, imp
                         raise
                     except Exception as e:
                         logger.warning(f"DS bg xlsx 수도권 {hdqt} 빌드 실패 (non-fatal): {e}")
+
+                # 본부별 4개 완료 후 S3 병합으로 전체합 생성 (OOM 방지: ZIP 재파싱 없음)
+                try:
+                    await _merge_hdqt_xlsx_from_s3(
+                        division_id, division_code, import_date, cancel_ev
+                    )
+                except InterruptedError:
+                    raise
+                except Exception as e:
+                    logger.warning(f"DS bg xlsx 수도권 전체 합 병합 실패 (non-fatal): {e}")
 
         else:
             # 비수도권: 기존 단일 xlsx 빌드
