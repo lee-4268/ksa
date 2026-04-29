@@ -3811,6 +3811,7 @@ def _process_zip_to_multiple_xlsx_sync(zip_temp_path: str, hdqts: list, progress
                 total_inserted += len(row_buffer)
                 row_buffer = []
 
+            total_files = len(process_list)
             for file_idx, fname in enumerate(process_list):
                 if cancel_event and cancel_event.is_set(): raise InterruptedError("xlsx build cancelled")
                 xls_tmp_path = f"/tmp/ds_xls_{id(zf)}_{file_idx}.xls"
@@ -3822,6 +3823,7 @@ def _process_zip_to_multiple_xlsx_sync(zip_temp_path: str, hdqts: list, progress
                     if os.path.exists(xls_tmp_path): os.remove(xls_tmp_path)
                     continue
 
+                file_rows = 0
                 for sheet_idx in range(wb.nsheets):
                     sheet = wb.sheet_by_index(sheet_idx)
                     orig_sheet_name = sheet.name.strip()
@@ -3851,6 +3853,7 @@ def _process_zip_to_multiple_xlsx_sync(zip_temp_path: str, hdqts: list, progress
                                 hd = mapped
 
                         row_buffer.append((sheet_name, hd, json.dumps(row_vals, ensure_ascii=False, separators=(',', ':'))))
+                        file_rows += 1
                         if len(row_buffer) >= BATCH_SIZE:
                             _flush_buffer()
 
@@ -3859,8 +3862,12 @@ def _process_zip_to_multiple_xlsx_sync(zip_temp_path: str, hdqts: list, progress
                 try: os.remove(xls_tmp_path)
                 except Exception: pass
 
+                # 10개 파일마다 진행 로그
+                if (file_idx + 1) % 10 == 0 or file_idx + 1 == total_files:
+                    logger.info(f"DS xlsx Phase A: [{file_idx+1}/{total_files}] 누적 {total_inserted + len(row_buffer)}행")
+
             _flush_buffer()
-            logger.info(f"DS xlsx SQLite 적재 완료: {total_inserted}행 → {sqlite_path}")
+            logger.info(f"DS xlsx Phase A 완료: SQLite 적재 {total_inserted}행 → {sqlite_path}")
             _release_memory()
 
             # 인덱스 생성 (Phase B SELECT 가속)
@@ -3868,10 +3875,12 @@ def _process_zip_to_multiple_xlsx_sync(zip_temp_path: str, hdqts: list, progress
             conn.commit()
 
         # ── Phase B: SQLite → 본부별 xlsx 순차 생성 ──
-        for h in hdqts:
+        logger.info(f"DS xlsx Phase B 시작: {len(hdqts)}개 본부 순차 생성")
+        for h_idx, h in enumerate(hdqts):
             if cancel_event and cancel_event.is_set(): raise InterruptedError("xlsx build cancelled")
 
             h_key = h if h is not None else "full"
+            logger.info(f"DS xlsx Phase B [{h_idx+1}/{len(hdqts)}] 시작: hdqt={h_key}")
             out_path = f"/tmp/ds_xlsx_multi_{h_key}_{id(zip_temp_path)}.xlsx"
             results[h]["path"] = out_path
             tmpdir = f"/tmp/ds_xlsxbuild_{h_key}_{os.getpid()}"
@@ -5024,7 +5033,7 @@ async def _build_multiple_xlsx_cache(
                     proc.join(timeout=5)
                 raise InterruptedError("xlsx build cancelled")
 
-            if time.time() - start_wait_time > 3600:
+            if time.time() - start_wait_time > 10800:
                 logger.error(f"DS bg xlsx 타임아웃 발생 (강제 종료): {tag}")
                 proc.terminate()
                 proc.join(timeout=5)
