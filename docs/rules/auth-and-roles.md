@@ -72,6 +72,12 @@ auth.isDivisionAdmin // admin || manager
 '서부본부'/'서부' → 'seobu'
 ```
 
+### 수도권 4개 본부 → sudogwon (divisionCode=10)
+```
+강남, 강북, 인천, 경기 → divisionId='sudogwon'
+```
+DS 조회/업로드 시 4개 본부가 같은 divisionId를 공유하며, xlsx는 본부별로 분리 저장.
+
 ### region → access담당 (검사 데이터 매칭)
 ```
 "경북Access담당" → .replace("Access담당", "") → "경북"

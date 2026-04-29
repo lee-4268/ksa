@@ -10,6 +10,7 @@
 | 백엔드 API 수정 | `docs/rules/api-guide.md` + 해당 도메인 문서 |
 | 검사/실적 관련 | `docs/rules/inspection-domain.md` |
 | DS/호출명칭/설치확인서 | `docs/rules/data-domain.md` |
+| DS xlsx 빌드/다운로드/CORS | `docs/rules/ds-xlsx-pipeline.md` |
 | 인증/권한 관련 | `docs/rules/auth-and-roles.md` |
 | 구조/배포/DB | `docs/rules/architecture.md` |
 
