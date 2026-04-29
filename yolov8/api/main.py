@@ -5082,9 +5082,10 @@ async def _build_one_xlsx_cache(
                 pass
 
 
-async def _build_xlsx_cache_background(division_id: str, division_code: str, import_date: str):
+async def _build_xlsx_cache_background(division_id: str, division_code: str, import_date: str, full_only: bool = False):
     """S3 ZIP → 서브프로세스에서 xlsx 빌드 → S3 캐싱
     수도권(code '10')은 강남/강북/경기/인천 4개 본부별 xlsx를 순차 빌드.
+    full_only=True이면 전체 합 xlsx만 빌드 (본부별 4개는 이미 캐시된 경우).
     서브프로세스 exit 시 OS가 메모리 100% 회수 (pymalloc 단편화 문제 완전 해결).
     실패해도 export 시 on-demand 빌드 가능하므로 non-fatal.
     """
@@ -5112,49 +5113,50 @@ async def _build_xlsx_cache_background(division_id: str, division_code: str, imp
             raise InterruptedError("xlsx build cancelled before processing")
 
         if is_sudo:
-            # 수도권: city_hdqt_map 조회 후 본부별 4개 xlsx 순차 빌드
-            city_hdqt_map = None
-            try:
-                import sqlite3
-                conn = sqlite3.connect(_INSP_DB, timeout=10)
-                rows = conn.execute(
-                    "SELECT 도로명주소, access담당 FROM inspection_targets "
-                    "WHERE 도로명주소 IS NOT NULL AND 도로명주소 != '' "
-                    "AND access담당 IS NOT NULL AND access담당 != ''"
-                ).fetchall()
-                conn.close()
-                from collections import defaultdict
-                city_counts: dict = defaultdict(lambda: defaultdict(int))
-                for addr, hdqt in rows:
-                    parts = addr.split()
-                    if len(parts) < 2:
-                        continue
-                    p0 = parts[0]
-                    if '서울' in p0: region = '서울'
-                    elif '인천' in p0: region = '인천'
-                    elif '경기' in p0: region = '경기'
-                    else: continue
-                    city_counts[f"{region} {parts[1]}"][hdqt] += 1
-                city_hdqt_map = {
-                    city: max(cnt, key=cnt.get)
-                    for city, cnt in city_counts.items()
-                }
-                logger.info(f"DS bg xlsx 수도권: city_hdqt_map {len(city_hdqt_map)}개 시/군 로드")
-            except Exception as e:
-                logger.warning(f"DS bg xlsx 수도권: city_hdqt_map 로드 실패 (fallback 사용): {e}")
-
-            # 본부별 순차 빌드: 각 서브프로세스 종료 후 메모리 해제 (OOM 방지)
-            for hdqt in ['강남', '강북', '경기', '인천']:
+            if not full_only:
+                # 수도권: city_hdqt_map 조회 후 본부별 4개 xlsx 순차 빌드
+                city_hdqt_map = None
                 try:
-                    await _build_one_xlsx_cache(
-                        division_id, division_code, import_date,
-                        zip_temp, cancel_ev,
-                        hdqt_filter=hdqt, city_hdqt_map=city_hdqt_map,
-                    )
-                except InterruptedError:
-                    raise
+                    import sqlite3
+                    conn = sqlite3.connect(_INSP_DB, timeout=10)
+                    rows = conn.execute(
+                        "SELECT 도로명주소, access담당 FROM inspection_targets "
+                        "WHERE 도로명주소 IS NOT NULL AND 도로명주소 != '' "
+                        "AND access담당 IS NOT NULL AND access담당 != ''"
+                    ).fetchall()
+                    conn.close()
+                    from collections import defaultdict
+                    city_counts: dict = defaultdict(lambda: defaultdict(int))
+                    for addr, hdqt in rows:
+                        parts = addr.split()
+                        if len(parts) < 2:
+                            continue
+                        p0 = parts[0]
+                        if '서울' in p0: region = '서울'
+                        elif '인천' in p0: region = '인천'
+                        elif '경기' in p0: region = '경기'
+                        else: continue
+                        city_counts[f"{region} {parts[1]}"][hdqt] += 1
+                    city_hdqt_map = {
+                        city: max(cnt, key=cnt.get)
+                        for city, cnt in city_counts.items()
+                    }
+                    logger.info(f"DS bg xlsx 수도권: city_hdqt_map {len(city_hdqt_map)}개 시/군 로드")
                 except Exception as e:
-                    logger.warning(f"DS bg xlsx 수도권 {hdqt} 빌드 실패 (non-fatal): {e}")
+                    logger.warning(f"DS bg xlsx 수도권: city_hdqt_map 로드 실패 (fallback 사용): {e}")
+
+                # 본부별 순차 빌드: 각 서브프로세스 종료 후 메모리 해제 (OOM 방지)
+                for hdqt in ['강남', '강북', '경기', '인천']:
+                    try:
+                        await _build_one_xlsx_cache(
+                            division_id, division_code, import_date,
+                            zip_temp, cancel_ev,
+                            hdqt_filter=hdqt, city_hdqt_map=city_hdqt_map,
+                        )
+                    except InterruptedError:
+                        raise
+                    except Exception as e:
+                        logger.warning(f"DS bg xlsx 수도권 {hdqt} 빌드 실패 (non-fatal): {e}")
 
             # 전체 합 xlsx 빌드 (지하철품질개선팀 등 수도권 전체 조회용)
             try:
@@ -5218,9 +5220,13 @@ async def _xlsx_build_worker():
     try:
         while _xlsx_build_queue:
             args = _xlsx_build_queue.pop(0)
-            logger.info(f"DS xlsx build queue: {args[0]}/{args[1]}_{args[2]} "
-                        f"빌드 시작 (남은 {len(_xlsx_build_queue)}건)")
-            await _build_xlsx_cache_background(*args)
+            full_only = len(args) == 4 and args[3] == "full_only"
+            label = f"{args[0]}/{args[1]}_{args[2]}" + (" (전체합만)" if full_only else "")
+            logger.info(f"DS xlsx build queue: {label} 빌드 시작 (남은 {len(_xlsx_build_queue)}건)")
+            if full_only:
+                await _build_xlsx_cache_background(args[0], args[1], args[2], full_only=True)
+            else:
+                await _build_xlsx_cache_background(*args)
         _xlsx_build_task = None
         logger.info("DS xlsx build queue: 모든 빌드 완료")
     except asyncio.CancelledError:
@@ -6576,25 +6582,23 @@ def _scan_missing_xlsx_caches_sync() -> tuple:
         import_date = parts[1]
         is_sudo = (division_code == '10')
 
-        # xlsx 캐시 존재 체크: 수도권은 본부별 4개 + 전체 합 모두 있어야 완성
+        # xlsx 캐시 존재 체크: 수도권은 본부별 4개 + 전체 합 5개 필요
         if is_sudo:
-            all_cached = (
-                all(
-                    _s3_key_exists(s3, f"ds-exports/{division_id}/{division_code}_{import_date}_{_HDQT_S3_KEY[h]}.xlsx")
-                    for h in _SUDO_HDQTS
-                )
-                and _s3_key_exists(s3, f"ds-exports/{division_id}/{division_code}_{import_date}.xlsx")
+            hdqt_all_cached = all(
+                _s3_key_exists(s3, f"ds-exports/{division_id}/{division_code}_{import_date}_{_HDQT_S3_KEY[h]}.xlsx")
+                for h in _SUDO_HDQTS
             )
-            # 기존 전체 xlsx(suffix 없음)가 남아있으면 삭제
-            old_key = f"ds-exports/{division_id}/{division_code}_{import_date}.xlsx"
-            if _s3_key_exists(s3, old_key):
-                try:
-                    s3.delete_object(Bucket=S3_BUCKET_NAME, Key=old_key)
-                    logger.info(f"DS xlsx cache: 수도권 전체 xlsx 삭제 → {old_key}")
-                except Exception as de:
-                    logger.warning(f"DS xlsx cache: 전체 xlsx 삭제 실패: {de}")
-            if all_cached:
+            full_cached = _s3_key_exists(s3, f"ds-exports/{division_id}/{division_code}_{import_date}.xlsx")
+            if hdqt_all_cached and full_cached:
+                # 5개 모두 있음 → 스킵
                 skipped.append(f"{division_id}/{division_code}_{import_date}")
+                continue
+            elif hdqt_all_cached and not full_cached:
+                # 본부별 4개는 있고 전체 합만 없음 → 전체 합만 빌드 큐 등록 (special marker)
+                entry = (division_id, division_code, import_date, "full_only")
+                if entry not in _xlsx_build_queue:
+                    _xlsx_build_queue.append(entry)
+                    queued.append(f"{division_id}/{division_code}_{import_date} (전체합만)")
                 continue
         else:
             xlsx_key = f"ds-exports/{division_id}/{division_code}_{import_date}.xlsx"
