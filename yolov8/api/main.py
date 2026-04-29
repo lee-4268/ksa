@@ -5350,19 +5350,22 @@ async def ds_export_presign(
     try:
         s3 = get_s3_client()
 
-        # 1순위: 미리 생성된 xlsx (본부별 or 전체)
+        # 1순위: 미리 생성된 xlsx (본부별 or 전체) → EC2 프록시로 반환 (S3 CORS 우회)
         hdqt_key = _HDQT_S3_KEY.get(hdqt, hdqt) if hdqt else None
         suffix = f"_{hdqt_key}" if hdqt_key else ""
         xlsx_key = f"ds-exports/{divisionId}/{divisionCode}_{importDate}{suffix}.xlsx"
         _validate_s3_key(xlsx_key, ALLOWED_S3_READ_PREFIXES)
         try:
             s3.head_object(Bucket=S3_BUCKET_NAME, Key=xlsx_key)
-            url = s3.generate_presigned_url(
-                "get_object",
-                Params={"Bucket": S3_BUCKET_NAME, "Key": xlsx_key},
-                ExpiresIn=3600,
-            )
-            return {"success": True, "url": url, "type": "xlsx"}
+            # EC2 프록시 URL — X-Forwarded-Host 기준으로 origin 추정
+            forwarded_proto = request.headers.get("x-forwarded-proto", "https")
+            forwarded_host = request.headers.get("x-forwarded-host") or request.headers.get("host", "")
+            origin = f"{forwarded_proto}://{forwarded_host}"
+            qs = f"divisionId={divisionId}&importDate={importDate}&divisionCode={divisionCode}"
+            if hdqt:
+                qs += f"&hdqt={hdqt}"
+            proxy_url = f"{origin}/ds/proxy-xlsx?{qs}"
+            return {"success": True, "url": proxy_url, "type": "xlsx"}
         except ClientError:
             pass
 
@@ -5506,6 +5509,49 @@ async def ds_city_hdqt_map(request: Request):
     _city_hdqt_cache = result
     _city_hdqt_cache_ts = now
     return result
+
+
+@app.get("/ds/proxy-xlsx")
+async def ds_proxy_xlsx(
+    request: Request,
+    divisionId: str = Query(...),
+    importDate: str = Query(...),
+    divisionCode: str = Query(""),
+    hdqt: str = Query(""),
+):
+    """S3 캐시 xlsx → EC2 프록시 스트리밍 (브라우저 CORS 우회)"""
+    await _verify_auth(request)
+    hdqt_key = _HDQT_S3_KEY.get(hdqt, hdqt) if hdqt else None
+    suffix = f"_{hdqt_key}" if hdqt_key else ""
+    s3_key = f"ds-exports/{divisionId}/{divisionCode}_{importDate}{suffix}.xlsx"
+    _validate_s3_key(s3_key, ALLOWED_S3_READ_PREFIXES)
+    s3 = get_s3_client()
+    try:
+        head = s3.head_object(Bucket=S3_BUCKET_NAME, Key=s3_key)
+    except ClientError:
+        raise HTTPException(status_code=404, detail="xlsx 파일 없음")
+
+    content_length = head["ContentLength"]
+
+    async def _stream():
+        obj = await asyncio.to_thread(
+            s3.get_object, Bucket=S3_BUCKET_NAME, Key=s3_key
+        )
+        body = obj["Body"]
+        try:
+            while True:
+                chunk = await asyncio.to_thread(body.read, 65536)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            body.close()
+
+    return StreamingResponse(
+        _stream(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Length": str(content_length)},
+    )
 
 
 @app.get("/ds/proxy-raw-zip")

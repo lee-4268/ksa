@@ -537,13 +537,14 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
               return;
             }
 
-            // 2. pre-built xlsx → presign 직접 다운로드
+            // 2. pre-built xlsx → EC2 프록시 다운로드
             if (type == 'xlsx') {
               onProgress('Excel 파일 다운로드 중...', 10);
               final result = await platform_export.downloadXlsxFromUrl(
                 url: data['url'] as String,
                 filename: filename,
                 onProgress: onProgress,
+                authToken: authToken,
               );
               if (mounted) {
                 setState(() => _exportingId = null);
