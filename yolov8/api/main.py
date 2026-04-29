@@ -214,6 +214,9 @@ DYNAMODB_TABLES = {
     "user_roles": os.getenv("DYNAMODB_USER_ROLES_TABLE", "kca-user-roles"),
 }
 
+# 수도권 본부명 한글 → S3 키용 영문 변환 (presigned URL 인코딩 문제 방지)
+_HDQT_S3_KEY: dict = {'강남': 'gangnam', '강북': 'gangbuk', '경기': 'gyeonggi', '인천': 'incheon'}
+
 # DS 전파관리소 지역코드 → 회사 본부 매핑
 # 수도권(10) → 강남/강북/인천/경기 4개 본부 통합 저장
 # 충남(50)+충북(55) → 충청본부, 전남(30)+전북(70) → 서부본부
@@ -4977,7 +4980,8 @@ async def _build_multiple_xlsx_cache(
 
         s3 = get_s3_client()
         for hdqt, hdqt_res in result["results"].items():
-            s3_key = f"ds-exports/{division_id}/{division_code}_{import_date}_{hdqt}.xlsx"
+            hdqt_key = _HDQT_S3_KEY.get(hdqt, hdqt)
+            s3_key = f"ds-exports/{division_id}/{division_code}_{import_date}_{hdqt_key}.xlsx"
             xlsx_temp = hdqt_res[0]
             await asyncio.to_thread(
                 s3.upload_file, xlsx_temp, S3_BUCKET_NAME, s3_key,
@@ -5001,7 +5005,8 @@ async def _build_one_xlsx_cache(
 ) -> int:
     """단일 xlsx 빌드 → S3 저장. 성공 시 total_rows 반환. 취소/실패 시 예외."""
     global _xlsx_build_process
-    suffix = f"_{hdqt_filter}" if hdqt_filter else ""
+    hdqt_key = _HDQT_S3_KEY.get(hdqt_filter, hdqt_filter) if hdqt_filter else None
+    suffix = f"_{hdqt_key}" if hdqt_key else ""
     tag = f"{division_id}/{division_code}_{import_date}{suffix}"
     xlsx_temp = f"/tmp/ds_bgxlsx_{division_id}_{division_code}_{import_date}{suffix}.xlsx"
     result_json = f"/tmp/ds_bgxlsx_{division_id}_{division_code}_{import_date}{suffix}_result.json"
@@ -5346,7 +5351,8 @@ async def ds_export_presign(
         s3 = get_s3_client()
 
         # 1순위: 미리 생성된 xlsx (본부별 or 전체)
-        suffix = f"_{hdqt}" if hdqt else ""
+        hdqt_key = _HDQT_S3_KEY.get(hdqt, hdqt) if hdqt else None
+        suffix = f"_{hdqt_key}" if hdqt_key else ""
         xlsx_key = f"ds-exports/{divisionId}/{divisionCode}_{importDate}{suffix}.xlsx"
         _validate_s3_key(xlsx_key, ALLOWED_S3_READ_PREFIXES)
         try:
@@ -5394,7 +5400,8 @@ async def ds_xlsx_build_status(request: Request, divisionId: str, divisionCode: 
     _sudoHdqts = ["강남", "강북", "경기", "인천"]
     cached = {}
     for hdqt in _sudoHdqts:
-        key = f"ds-exports/{divisionId}/{divisionCode}_{importDate}_{hdqt}.xlsx"
+        hdqt_key = _HDQT_S3_KEY.get(hdqt, hdqt)
+        key = f"ds-exports/{divisionId}/{divisionCode}_{importDate}_{hdqt_key}.xlsx"
         try:
             s3.head_object(Bucket=S3_BUCKET_NAME, Key=key)
             cached[hdqt] = True
