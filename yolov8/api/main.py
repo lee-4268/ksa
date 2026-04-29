@@ -3662,23 +3662,64 @@ def _read_xls_from_zip_paginated_sync(
 
 def _process_zip_to_multiple_xlsx_sync(zip_temp_path: str, hdqts: list, progress_cb=None,
                                        cancel_event=None, city_hdqt_map: dict = None) -> dict:
-    """1-Pass Fan-out: 원본 ZIP을 한 번만 읽어 여러 본부(hdqts)의 xlsx를 동시 생성
+    """SQLite 중간 저장 방식: ZIP 1번만 읽어 SQLite에 적재 → 본부별 xlsx 순차 생성
+
+    Phase A: ZIP → SQLite (모든 행을 하나의 임시 DB에 저장, hdqt 컬럼으로 본부 분류)
+    Phase B: SQLite → 5개 xlsx 순차 생성 (Workbook 1개씩 생성/close → 메모리 해제)
+
     Returns: { hdqt: (xlsx_path, sheet_stats, total_rows, sheet_headers) }
     """
-    import copy
+    import copy, sqlite3, json
     if not HAS_XLRD or not HAS_XLSXWRITER:
         raise RuntimeError("xlrd or xlsxwriter not installed")
 
     results = {h: {"stats": {}, "rows": 0, "headers": {}} for h in hdqts}
     _xwb_refs = {}
     _xlsxwriter_tmpdirs = []
+    sqlite_path = f"/tmp/ds_xlsx_stage_{os.getpid()}_{id(zip_temp_path)}.db"
+    if os.path.exists(sqlite_path):
+        try: os.remove(sqlite_path)
+        except Exception: pass
 
+    def _addr_to_hdqt(addr: str) -> str:
+        if not addr: return ''
+        parts = addr.strip().split()
+        if city_hdqt_map and len(parts) >= 2:
+            p0, p1 = parts[0], parts[1]
+            key = f'서울 {p1}' if '서울' in p0 else f'인천 {p1}' if '인천' in p0 else f'경기 {p1}' if '경기' in p0 else None
+            if key and key in city_hdqt_map: return city_hdqt_map[key]
+        if '인천' in addr: return '인천'
+        if '경기' in addr: return '경기'
+        if '서울' in addr:
+            for gu, hdqt in [('강남구','강남'),('서초구','강남'),('관악구','강남'),('동작구','강남'),('강동구','강남'),('송파구','강남'),('양천구','강남'),('강서구','강남'),('영등포구','강남'),('구로구','강남'),('금천구','강남')]:
+                if gu in addr: return hdqt
+            return '강북'
+        return ''
+
+    _SHEET_BASE_ORDER = ['일반사항', '장치', '전파형식', '주파수', '안테나', '설치장소', '종사자', '부적합무선국']
+    def _sheet_sort_key(n):
+        import re
+        is_before = 1 if '(검사전)' in n else 0
+        m = re.search(r'\((\d+)\)', n)
+        num = int(m.group(1)) if m else 0
+        base = re.sub(r'\(검사전\)|\(\d+\)', '', n).strip()
+        base_idx = _SHEET_BASE_ORDER.index(base) if base in _SHEET_BASE_ORDER else len(_SHEET_BASE_ORDER)
+        return (base_idx, is_before, num)
+
+    conn = None
     try:
+        conn = sqlite3.connect(sqlite_path)
+        conn.execute("PRAGMA journal_mode=OFF")
+        conn.execute("PRAGMA synchronous=OFF")
+        conn.execute("PRAGMA temp_store=MEMORY")
+        conn.execute("PRAGMA cache_size=-20000")  # 20MB 캐시
+        conn.execute("CREATE TABLE rows (sheet_name TEXT NOT NULL, hdqt TEXT, values_json TEXT NOT NULL)")
+
         with zipfile.ZipFile(zip_temp_path, "r") as zf:
             all_names = zf.namelist()
             name_map = {n: _fix_zip_filename(n) for n in all_names}
             xls_names = [n for n in all_names if name_map[n].lower().endswith(".xls") and not os.path.basename(name_map[n]).startswith("~")]
-            
+
             classified = {"base": [], "numbered": [], "spt": [], "hundred": []}
             hundred_files = set()
             for fname in xls_names:
@@ -3687,28 +3728,13 @@ def _process_zip_to_multiple_xlsx_sync(zip_temp_path: str, hdqts: list, progress
                 cls = _classify_ds_file(b_fname)
                 classified[cls].append(fname)
                 if cls == "hundred": hundred_files.add(fname)
-            
+
             process_list = classified["base"] + classified["numbered"] + classified["spt"] + classified["hundred"]
             if not process_list: raise ValueError("처리할 XLS 파일 없음")
 
             # ── Pass 1: 헤더 및 허가번호 매핑 스캔 ──
             global_sheet_headers = {}
             lic_to_hdqt = {}
-            
-            def _addr_to_hdqt(addr: str) -> str:
-                if not addr: return ''
-                parts = addr.strip().split()
-                if city_hdqt_map and len(parts) >= 2:
-                    p0, p1 = parts[0], parts[1]
-                    key = f'서울 {p1}' if '서울' in p0 else f'인천 {p1}' if '인천' in p0 else f'경기 {p1}' if '경기' in p0 else None
-                    if key and key in city_hdqt_map: return city_hdqt_map[key]
-                if '인천' in addr: return '인천'
-                if '경기' in addr: return '경기'
-                if '서울' in addr:
-                    for gu, hdqt in [('강남구','강남'),('서초구','강남'),('관악구','강남'),('동작구','강남'),('강동구','강남'),('송파구','강남'),('양천구','강남'),('강서구','강남'),('영등포구','강남'),('구로구','강남'),('금천구','강남')]:
-                        if gu in addr: return hdqt
-                    return '강북'
-                return ''
 
             for fname in process_list:
                 if cancel_event and cancel_event.is_set(): raise InterruptedError("xlsx build cancelled")
@@ -3749,7 +3775,7 @@ def _process_zip_to_multiple_xlsx_sync(zip_temp_path: str, hdqts: list, progress
                             for ri in range(1, sheet.nrows):
                                 lic = _xlrd_cell_to_str(sheet, ri, lic_col).strip()
                                 if not lic: continue
-                                addr = ((_xlrd_cell_to_str(sheet, ri, road_col) if road_col >= 0 else '') or 
+                                addr = ((_xlrd_cell_to_str(sheet, ri, road_col) if road_col >= 0 else '') or
                                         (_xlrd_cell_to_str(sheet, ri, inp_col) if inp_col >= 0 else ''))
                                 hd = _addr_to_hdqt(addr.strip())
                                 if hd in hdqts: lic_to_hdqt[lic] = hd
@@ -3762,56 +3788,28 @@ def _process_zip_to_multiple_xlsx_sync(zip_temp_path: str, hdqts: list, progress
             if not global_sheet_headers: raise ValueError("처리할 시트가 없습니다.")
             _release_memory()
 
-            _SHEET_BASE_ORDER = ['일반사항', '장치', '전파형식', '주파수', '안테나', '설치장소', '종사자', '부적합무선국']
-            def _sheet_sort_key(n):
-                import re
-                is_before = 1 if '(검사전)' in n else 0
-                m = re.search(r'\((\d+)\)', n)
-                num = int(m.group(1)) if m else 0
-                base = re.sub(r'\(검사전\)|\(\d+\)', '', n).strip()
-                base_idx = _SHEET_BASE_ORDER.index(base) if base in _SHEET_BASE_ORDER else len(_SHEET_BASE_ORDER)
-                return (base_idx, is_before, num)
-
             sorted_sheet_names = sorted(global_sheet_headers.keys(), key=_sheet_sort_key)
             global_sheet_headers = {k: global_sheet_headers[k] for k in sorted_sheet_names}
 
             for h in hdqts:
                 results[h]["headers"] = copy.deepcopy(global_sheet_headers)
-
-            # ── Pass 2: 다중 Workbook에 쓰기 ──
-            xwb_dict = {}
-            worksheets_dict = {h: {} for h in hdqts}
-            sheet_row_idx = {h: {} for h in hdqts}
-            sheet_split_num = {h: {} for h in hdqts}
-            header_fmt_dict = {}
-            data_fmt_dict = {}
-
-            for h in hdqts:
-                h_key = h if h is not None else "full"
-                out_path = f"/tmp/ds_xlsx_multi_{h_key}_{id(zip_temp_path)}.xlsx"
-                results[h]["path"] = out_path
-                tmpdir = f"/tmp/ds_xlsxbuild_{h_key}_{os.getpid()}"
-                os.makedirs(tmpdir, exist_ok=True)
-                _xlsxwriter_tmpdirs.append(tmpdir)
-
-                xwb = xlsxwriter.Workbook(out_path, {"constant_memory": True, "tmpdir": tmpdir})
-                _xwb_refs[h] = xwb
-                xwb_dict[h] = xwb
-
-                header_fmt_dict[h] = xwb.add_format({"font_name": "Arial", "font_size": 10, "bold": True, "align": "center", "valign": "vcenter", "bg_color": "#BFBFBF", "border": 1})
-                data_fmt_dict[h] = xwb.add_format({"font_name": "Arial", "font_size": 10, "align": "center", "valign": "vcenter", "border": 1})
-
-                for sname, hdrs in global_sheet_headers.items():
-                    xws = xwb.add_worksheet(sname[:31])
-                    xws.set_row(0, 12.75)
-                    for ci, col_h in enumerate(hdrs):
-                        xws.set_column(ci, ci, 20)
-                        xws.write(0, ci, col_h, header_fmt_dict[h])
-                    worksheets_dict[h][sname] = xws
-                    sheet_row_idx[h][sname] = 1
+                for sname in global_sheet_headers:
                     results[h]["stats"][sname] = 0
 
             header_col_maps = {sname: {col_h: i for i, col_h in enumerate(hdrs)} for sname, hdrs in global_sheet_headers.items()}
+
+            # ── Phase A: XLS → SQLite 적재 ──
+            BATCH_SIZE = 5000
+            row_buffer = []
+            total_inserted = 0
+
+            def _flush_buffer():
+                nonlocal row_buffer, total_inserted
+                if not row_buffer: return
+                conn.executemany("INSERT INTO rows (sheet_name, hdqt, values_json) VALUES (?, ?, ?)", row_buffer)
+                conn.commit()
+                total_inserted += len(row_buffer)
+                row_buffer = []
 
             for file_idx, fname in enumerate(process_list):
                 if cancel_event and cancel_event.is_set(): raise InterruptedError("xlsx build cancelled")
@@ -3844,45 +3842,96 @@ def _process_zip_to_multiple_xlsx_sync(zip_temp_path: str, hdqts: list, progress
                             val = _xlrd_cell_to_str(sheet, row_idx, xls_col)
                             if val: row_vals[xlsx_col] = val
 
-                        target_hdqts = hdqts
+                        # 매핑된 본부 결정 (None이면 미매핑 → 전체합에만 포함)
+                        hd = None
                         if lic_to_hdqt and lic_xlsx_col >= 0:
                             lic = row_vals[lic_xlsx_col].strip() if lic_xlsx_col < len(row_vals) else ''
-                            if hd := lic_to_hdqt.get(lic):
-                                # None(전체합)은 항상 포함, 매핑된 본부만 추가
-                                target_hdqts = ([hd] if hd in hdqts else []) + ([None] if None in hdqts else [])
+                            mapped = lic_to_hdqt.get(lic)
+                            if mapped and mapped in hdqts:
+                                hd = mapped
 
-                        for h in target_hdqts:
-                            if sheet_row_idx[h][sheet_name] > 1_000_000:
-                                split_num = sheet_split_num[h].get(sheet_name, 1) + 1
-                                sheet_split_num[h][sheet_name] = split_num
-                                split_ws_name = f"{sheet_name}({split_num})"[:31]
-                                new_xws = xwb_dict[h].add_worksheet(split_ws_name)
-                                new_xws.set_row(0, 12.75)
-                                for ci, col_h in enumerate(global_sheet_headers[sheet_name]):
-                                    new_xws.set_column(ci, ci, 20)
-                                    new_xws.write(0, ci, col_h, header_fmt_dict[h])
-                                worksheets_dict[h][sheet_name] = new_xws
-                                sheet_row_idx[h][sheet_name] = 1
-
-                            ri = sheet_row_idx[h][sheet_name]
-                            xws = worksheets_dict[h][sheet_name]
-                            xws.set_row(ri, 12.75)
-                            for ci, val in enumerate(row_vals): xws.write(ri, ci, val, data_fmt_dict[h])
-                            sheet_row_idx[h][sheet_name] += 1
-                            results[h]["stats"][sheet_name] += 1
-                            results[h]["rows"] += 1
+                        row_buffer.append((sheet_name, hd, json.dumps(row_vals, ensure_ascii=False, separators=(',', ':'))))
+                        if len(row_buffer) >= BATCH_SIZE:
+                            _flush_buffer()
 
                 wb.release_resources()
                 del wb
                 try: os.remove(xls_tmp_path)
                 except Exception: pass
-                _release_memory()
 
-            for h in hdqts: xwb_dict[h].close()
-            _xwb_refs.clear()
-            for tmpdir in _xlsxwriter_tmpdirs:
-                if os.path.isdir(tmpdir): shutil.rmtree(tmpdir, ignore_errors=True)
-                
+            _flush_buffer()
+            logger.info(f"DS xlsx SQLite 적재 완료: {total_inserted}행 → {sqlite_path}")
+            _release_memory()
+
+            # 인덱스 생성 (Phase B SELECT 가속)
+            conn.execute("CREATE INDEX idx_rows_sheet_hdqt ON rows (sheet_name, hdqt)")
+            conn.commit()
+
+        # ── Phase B: SQLite → 본부별 xlsx 순차 생성 ──
+        for h in hdqts:
+            if cancel_event and cancel_event.is_set(): raise InterruptedError("xlsx build cancelled")
+
+            h_key = h if h is not None else "full"
+            out_path = f"/tmp/ds_xlsx_multi_{h_key}_{id(zip_temp_path)}.xlsx"
+            results[h]["path"] = out_path
+            tmpdir = f"/tmp/ds_xlsxbuild_{h_key}_{os.getpid()}"
+            os.makedirs(tmpdir, exist_ok=True)
+            _xlsxwriter_tmpdirs.append(tmpdir)
+
+            xwb = xlsxwriter.Workbook(out_path, {"constant_memory": True, "tmpdir": tmpdir})
+            _xwb_refs[h] = xwb
+            header_fmt = xwb.add_format({"font_name": "Arial", "font_size": 10, "bold": True, "align": "center", "valign": "vcenter", "bg_color": "#BFBFBF", "border": 1})
+            data_fmt = xwb.add_format({"font_name": "Arial", "font_size": 10, "align": "center", "valign": "vcenter", "border": 1})
+
+            for sname, hdrs in global_sheet_headers.items():
+                if cancel_event and cancel_event.is_set(): raise InterruptedError("xlsx build cancelled")
+
+                xws = xwb.add_worksheet(sname[:31])
+                xws.set_row(0, 12.75)
+                for ci, col_h in enumerate(hdrs):
+                    xws.set_column(ci, ci, 20)
+                    xws.write(0, ci, col_h, header_fmt)
+
+                # 본부 필터: None(전체합)은 모든 행, 본부별은 (해당 본부 OR NULL 제외)
+                # 정확히는 None=전체합이므로 모든 행, 그 외는 hdqt=해당본부 행만
+                if h is None:
+                    cur = conn.execute("SELECT values_json FROM rows WHERE sheet_name=?", (sname,))
+                else:
+                    cur = conn.execute("SELECT values_json FROM rows WHERE sheet_name=? AND hdqt=?", (sname, h))
+
+                ri = 1
+                split_num = 1
+                cur_xws = xws
+                rows_in_sheet = 0
+                for (values_json,) in cur:
+                    if ri > 1_000_000:
+                        split_num += 1
+                        split_ws_name = f"{sname}({split_num})"[:31]
+                        cur_xws = xwb.add_worksheet(split_ws_name)
+                        cur_xws.set_row(0, 12.75)
+                        for ci, col_h in enumerate(hdrs):
+                            cur_xws.set_column(ci, ci, 20)
+                            cur_xws.write(0, ci, col_h, header_fmt)
+                        ri = 1
+
+                    row_vals = json.loads(values_json)
+                    cur_xws.set_row(ri, 12.75)
+                    for ci, val in enumerate(row_vals):
+                        cur_xws.write(ri, ci, val, data_fmt)
+                    ri += 1
+                    rows_in_sheet += 1
+
+                results[h]["stats"][sname] = rows_in_sheet
+                results[h]["rows"] += rows_in_sheet
+
+            xwb.close()
+            del _xwb_refs[h]
+            logger.info(f"DS xlsx Phase B 완료: hdqt={h_key} ({results[h]['rows']}행)")
+            _release_memory()
+
+        for tmpdir in _xlsxwriter_tmpdirs:
+            if os.path.isdir(tmpdir): shutil.rmtree(tmpdir, ignore_errors=True)
+
     except Exception:
         for xwb in _xwb_refs.values():
             try: xwb.close()
@@ -3890,6 +3939,13 @@ def _process_zip_to_multiple_xlsx_sync(zip_temp_path: str, hdqts: list, progress
         for tmpdir in _xlsxwriter_tmpdirs:
             if os.path.isdir(tmpdir): shutil.rmtree(tmpdir, ignore_errors=True)
         raise
+    finally:
+        if conn is not None:
+            try: conn.close()
+            except Exception: pass
+        try:
+            if os.path.exists(sqlite_path): os.remove(sqlite_path)
+        except Exception: pass
 
     _release_memory()
     return {h: (results[h]["path"], results[h]["stats"], results[h]["rows"], results[h]["headers"]) for h in hdqts}
@@ -4876,8 +4932,12 @@ def _subprocess_multiple_xlsx_entry(zip_path: str, hdqts: list, result_path: str
         results = _process_zip_to_multiple_xlsx_sync(
             zip_path, hdqts, cancel_event=cancel_ev, city_hdqt_map=city_hdqt_map
         )
-        # None 키는 JSON 직렬화 시 "__full__"로 변환
-        serializable = {"__full__" if k is None else k: v for k, v in results.items()}
+        # None 키 → "__full__", tuple → dict로 변환 (JSON 직렬화 + 호출부 호환)
+        serializable = {}
+        for k, v in results.items():
+            key = "__full__" if k is None else k
+            path, stats, rows, headers = v
+            serializable[key] = {"path": path, "stats": stats, "rows": rows, "headers": headers}
         out = {"success": True, "results": serializable}
     except InterruptedError:
         out = {"success": False, "cancelled": True, "error": "cancelled"}
