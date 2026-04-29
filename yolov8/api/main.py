@@ -5210,45 +5210,44 @@ async def _build_xlsx_cache_background(division_id: str, division_code: str, imp
             raise InterruptedError("xlsx build cancelled before processing")
 
         if is_sudo:
-            if not full_only:
-                # 1-Pass Fan-out: ZIP 1번 읽어 5개(강남/강북/경기/인천/전체합) 동시 생성
-                city_hdqt_map = None
-                try:
-                    import sqlite3
-                    conn = sqlite3.connect(_INSP_DB, timeout=10)
-                    rows = conn.execute(
-                        "SELECT 도로명주소, access담당 FROM inspection_targets "
-                        "WHERE 도로명주소 IS NOT NULL AND 도로명주소 != '' "
-                        "AND access담당 IS NOT NULL AND access담당 != ''"
-                    ).fetchall()
-                    conn.close()
-                    from collections import defaultdict
-                    city_counts: dict = defaultdict(lambda: defaultdict(int))
-                    for addr, hdqt in rows:
-                        parts = addr.split()
-                        if len(parts) < 2:
-                            continue
-                        p0 = parts[0]
-                        if '서울' in p0: region = '서울'
-                        elif '인천' in p0: region = '인천'
-                        elif '경기' in p0: region = '경기'
-                        else: continue
-                        city_counts[f"{region} {parts[1]}"][hdqt] += 1
-                    city_hdqt_map = {
-                        city: max(cnt, key=cnt.get)
-                        for city, cnt in city_counts.items()
-                    }
-                    logger.info(f"DS bg xlsx 수도권: city_hdqt_map {len(city_hdqt_map)}개 시/군 로드")
-                except Exception as e:
-                    logger.warning(f"DS bg xlsx 수도권: city_hdqt_map 로드 실패 (fallback 사용): {e}")
+            # 1-Pass Fan-out: ZIP 1번 읽어 5개(강남/강북/경기/인천/전체합) 동시 생성
+            city_hdqt_map = None
+            try:
+                import sqlite3
+                conn = sqlite3.connect(_INSP_DB, timeout=10)
+                rows = conn.execute(
+                    "SELECT 도로명주소, access담당 FROM inspection_targets "
+                    "WHERE 도로명주소 IS NOT NULL AND 도로명주소 != '' "
+                    "AND access담당 IS NOT NULL AND access담당 != ''"
+                ).fetchall()
+                conn.close()
+                from collections import defaultdict
+                city_counts: dict = defaultdict(lambda: defaultdict(int))
+                for addr, hdqt in rows:
+                    parts = addr.split()
+                    if len(parts) < 2:
+                        continue
+                    p0 = parts[0]
+                    if '서울' in p0: region = '서울'
+                    elif '인천' in p0: region = '인천'
+                    elif '경기' in p0: region = '경기'
+                    else: continue
+                    city_counts[f"{region} {parts[1]}"][hdqt] += 1
+                city_hdqt_map = {
+                    city: max(cnt, key=cnt.get)
+                    for city, cnt in city_counts.items()
+                }
+                logger.info(f"DS bg xlsx 수도권: city_hdqt_map {len(city_hdqt_map)}개 시/군 로드")
+            except Exception as e:
+                logger.warning(f"DS bg xlsx 수도권: city_hdqt_map 로드 실패 (fallback 사용): {e}")
 
-                # None = 전체합 (필터 없음), ZIP 1번 읽기로 5개 동시 생성
-                await _build_multiple_xlsx_cache(
-                    division_id, division_code, import_date,
-                    zip_temp, cancel_ev,
-                    hdqts=['강남', '강북', '경기', '인천', None],
-                    city_hdqt_map=city_hdqt_map,
-                )
+            # None = 전체합 (필터 없음), ZIP 1번 읽기로 5개 동시 생성
+            await _build_multiple_xlsx_cache(
+                division_id, division_code, import_date,
+                zip_temp, cancel_ev,
+                hdqts=['강남', '강북', '경기', '인천', None],
+                city_hdqt_map=city_hdqt_map,
+            )
 
         else:
             # 비수도권: 기존 단일 xlsx 빌드
