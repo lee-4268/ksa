@@ -44,6 +44,9 @@ class _HomeScreenState extends State<HomeScreen> {
   int _selectedIndex = 0;
   bool _sidebarCollapsed = false;
 
+  // 일정화면 → 전산비교 이동 시 전달할 데이터
+  ({List<String> nos, String? div, bool multi})? _pendingCompare;
+
   @override
   void initState() {
     super.initState();
@@ -110,13 +113,31 @@ class _HomeScreenState extends State<HomeScreen> {
     switch (title) {
       case '홈': return _HomeContent(onNavigate: (i) { setState(() => _selectedIndex = i); _logMenuAccess(items[i].title); }, menuItems: items);
       case '실적 관리': return const InspectionResultsScreen();
-      case '일정 및 통계': return const InspectionScheduleScreen();
+      case '일정 및 통계': return InspectionScheduleScreen(
+        onCompareNavigate: (nos, div, multi) {
+          final compareIdx = items.indexWhere((m) => m.title == '전산비교');
+          if (compareIdx >= 0) {
+            setState(() {
+              _pendingCompare = (nos: nos, div: div, multi: multi);
+              _selectedIndex = compareIdx;
+            });
+          }
+        },
+      );
       case '현장 수검 Map': return const InspectionMyListScreen();
       case 'DS 데이터': return const DsDashboardScreen();
       case 'DS 병합': return const DsMergeScreen();
       case '호출명칭': return const CallnameScreen();
       case '설치확인서': return const CertificateScreen();
-      case '전산비교': return const ErpDsCompareScreen();
+      case '전산비교': {
+        final data = _pendingCompare;
+        _pendingCompare = null;
+        return ErpDsCompareScreen(
+          initialLicenseNos: data?.nos,
+          initialAccessDivision: data?.div,
+          initialMultiDivision: data?.multi ?? false,
+        );
+      }
       case '부적합 관리': return const InadequateManagementScreen();
       case '변경개설신고': return const ChangeNotificationScreen();
       case '커뮤니티': return CommunityScreen();

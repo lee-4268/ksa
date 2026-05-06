@@ -6,13 +6,13 @@ import 'package:provider/provider.dart';
 import '../services/auth_service.dart';
 import '../services/inspection_service.dart';
 import '../widgets/progress_dialog.dart';
-import 'erp_ds_compare_screen.dart' show ErpDsCompareScreen;
 import 'inspection_result_screen.dart';
 // ignore: avoid_web_libraries_in_flutter
 import 'dart:html' as html;
 
 class InspectionScheduleScreen extends StatefulWidget {
-  const InspectionScheduleScreen({super.key});
+  final void Function(List<String> licenseNos, String? accessDivision, bool multiDivision)? onCompareNavigate;
+  const InspectionScheduleScreen({super.key, this.onCompareNavigate});
   @override
   State<InspectionScheduleScreen> createState() => _InspectionScheduleScreenState();
 }
@@ -662,18 +662,8 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
         : counter.entries.reduce((a, b) => a.value >= b.value ? a : b).key;
     final multiDivision = counter.keys.length > 1;
 
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => ErpDsCompareScreen(
-          initialLicenseNos: licenseNos,
-          initialAccessDivision: dominantAccess,
-          initialMultiDivision: multiDivision,
-        ),
-      ),
-    ).then((_) {
-      if (mounted) setState(() => _selectedLicenseNos.clear());
-    });
+    setState(() => _selectedLicenseNos.clear());
+    widget.onCompareNavigate?.call(licenseNos, dominantAccess, multiDivision);
   }
 
   Future<void> _showBulkUpsertDialog(List<Map<String, dynamic>> targetItems, String actionTitle) async {
