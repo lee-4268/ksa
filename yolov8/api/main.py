@@ -13712,6 +13712,11 @@ async def inspection_schedule_upsert(request: Request, req: InspectionScheduleRe
             (pk, req.year, req.허가번호, req.호출명칭, req.분기, req.skt본부,
              req.access담당, req.품질개선팀, req.수검예정주차,
              req.수검시작일, req.수검종료일, req.지역, empno, now, req.검사관, req.조))
+        # 검사결과 기본값 '합격' 자동 생성 (기존 결과 있으면 덮어쓰지 않음)
+        c.execute('''INSERT OR IGNORE INTO inspection_results
+            (pk, year, 허가번호, status, 입력자, 입력일시)
+            VALUES (?,?,?,?,?,?)''',
+            (pk, req.year, req.허가번호, '합격', empno, now))
         c.commit(); c.close()
     await asyncio.to_thread(_write)
     await asyncio.to_thread(_record_audit_log_sync, "inspection_schedule_upsert", "inspection_schedule", pk, empno)
