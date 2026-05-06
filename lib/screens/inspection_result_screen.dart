@@ -615,7 +615,12 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
                 child: Text('설치장소',
                     style: TextStyle(fontSize: 13, color: Colors.grey.shade600)),
               ),
-              Expanded(child: Text(installAddr, style: const TextStyle(fontSize: 13))),
+              Expanded(
+                child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Flexible(child: Text(installAddr, style: const TextStyle(fontSize: 13))),
+                  if (_changeBadge('설치장소') != null) _changeBadge('설치장소')!,
+                ]),
+              ),
               if (navLat != null && navLng != null) ...[
                 _naviButton('Tmap', const Color(0xFF005BAC), () => _openTmap(navLat, navLng, installAddr)),
                 const SizedBox(width: 4),
@@ -630,12 +635,13 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
             target?['호출명칭']?.toString() ?? widget.callname),
         if (gain.isNotEmpty)      _infoRow('이득(dB)', gain),
         if (antCount.isNotEmpty)  _infoRow('기수',     antCount),
-        if (mountType.isNotEmpty) _infoRow('설치대',   mountType),
+        if (mountType.isNotEmpty) _infoRow('설치대', mountType, badge: _changeBadge('설치형태')),
         if (_typeApprovalNumbers(deviceList).isNotEmpty)
-          _infoRow('형식검정번호', _typeApprovalNumbers(deviceList)),
+          _infoRow('형식검정번호', _typeApprovalNumbers(deviceList), badge: _changeBadge('형식검정번호')),
         if (facilityNames.isNotEmpty || serial.isNotEmpty)
           _infoRow('일련번호 및 통합시설명칭',
-              facilityNames.isNotEmpty ? facilityNames.join('\n') : serial),
+              facilityNames.isNotEmpty ? facilityNames.join('\n') : serial,
+              badge: _changeBadge('일련번호')),
         if (lat.isNotEmpty && lng.isNotEmpty)
           _infoRow('좌표', '$lat, $lng'),
         if (_inspDateCtrl.text.isNotEmpty)
@@ -1318,7 +1324,7 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
     );
   }
 
-  Widget _infoRow(String label, String value) {
+  Widget _infoRow(String label, String value, {Widget? badge}) {
     if (value.isEmpty) return const SizedBox.shrink();
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
@@ -1328,9 +1334,42 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
           child: Text(label,
               style: TextStyle(fontSize: 13, color: Colors.grey.shade600)),
         ),
-        Expanded(child: Text(value, style: const TextStyle(fontSize: 13))),
+        Expanded(
+          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Flexible(child: Text(value, style: const TextStyle(fontSize: 13))),
+            if (badge != null) badge,
+          ]),
+        ),
       ]),
     );
+  }
+
+  List<Map<String, dynamic>> get _dsChanges =>
+      (_data?['ds_changes'] as List<dynamic>? ?? [])
+          .cast<Map<String, dynamic>>();
+
+  Widget? _changeBadge(String fieldType) {
+    try {
+      final change = _dsChanges.firstWhere((c) => c['필드명'] == fieldType);
+      final date = change['변경일자'] as String? ?? '';
+      return Container(
+        margin: const EdgeInsets.only(left: 6, top: 1),
+        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+        decoration: BoxDecoration(
+          color: const Color(0xFF1E88E5).withValues(alpha: 0.1),
+          borderRadius: BorderRadius.circular(4),
+          border: Border.all(
+              color: const Color(0xFF1E88E5).withValues(alpha: 0.4)),
+        ),
+        child: Text('$date 변경',
+            style: const TextStyle(
+                fontSize: 10,
+                color: Color(0xFF1565C0),
+                fontWeight: FontWeight.w600)),
+      );
+    } catch (_) {
+      return null;
+    }
   }
 }
 

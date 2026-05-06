@@ -11562,6 +11562,17 @@ def _init_ds_detail_db():
     conn.execute('CREATE INDEX IF NOT EXISTS idx_dsd_안테나 ON ds_안테나(허가번호)')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_dsd_전파 ON ds_전파형식(허가번호)')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_dsd_주파수 ON ds_주파수(허가번호)')
+    conn.execute('''CREATE TABLE IF NOT EXISTS ds_변경이력 (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        허가번호 TEXT NOT NULL,
+        변경일자 TEXT NOT NULL,
+        시트 TEXT NOT NULL,
+        필드명 TEXT NOT NULL,
+        변경전값 TEXT,
+        변경후값 TEXT,
+        장치번호 TEXT
+    )''')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_dsh_허가번호 ON ds_변경이력(허가번호)')
     conn.commit(); conn.close()
 
 try:
@@ -13652,7 +13663,24 @@ async def inspection_detail(request: Request, year: int, 허가번호: str):
     if target is not None:
         target['zpprac1'] = zpprac1_val
 
-    return {"target": target, "ds": ds_info, "schedule": schedule, "result": result, "callname_list": callname_list}
+    # 5. ds_변경이력 조회
+    ds_changes: list = []
+    if os.path.exists(_DS_DETAIL_DB):
+        def _read_changes():
+            c = sqlite3.connect(_DS_DETAIL_DB, timeout=10); c.row_factory = sqlite3.Row
+            try:
+                rows = c.execute(
+                    'SELECT * FROM ds_변경이력 WHERE 허가번호=? ORDER BY 변경일자 DESC, id DESC',
+                    (허가번호.replace('-', ''),)
+                ).fetchall()
+                return [dict(r) for r in rows]
+            except Exception:
+                return []
+            finally:
+                c.close()
+        ds_changes = await asyncio.to_thread(_read_changes)
+
+    return {"target": target, "ds": ds_info, "schedule": schedule, "result": result, "callname_list": callname_list, "ds_changes": ds_changes}
 
 @app.patch("/inspection/target-review")
 async def inspection_target_review(request: Request, year: int, 허가번호: str, 시기조정: str = ""):
@@ -16149,6 +16177,21 @@ async def document_change_notification(request: Request, file1: UploadFile = Fil
             changes_norm[norm] = chg_list
         logger.info(f"변경개설신고: norm keys 샘플={list(changes_norm.keys())[:3]}")
 
+        # 5-1. 호출명칭 맵 (ds_detail.db 조회 → 없으면 빈값)
+        callname_map = {}
+        if os.path.exists(_DS_DETAIL_DB):
+            try:
+                import sqlite3 as _sq3
+                _dc = _sq3.connect(_DS_DETAIL_DB, timeout=10)
+                _norms = list(changes_norm.keys())
+                if _norms:
+                    _ph = ','.join('?' * len(_norms))
+                    for _r in _dc.execute(f'SELECT 허가번호, 호출명칭, 무선국명 FROM ds_일반사항 WHERE 허가번호 IN ({_ph})', _norms):
+                        callname_map[_r[0]] = _r[1] or _r[2] or ''
+                _dc.close()
+            except Exception:
+                pass
+
         # 6. B파일을 xlwt로 복사 + 서식 적용 (실제 xls 포맷)
         import xlwt
 
@@ -16345,6 +16388,7 @@ async def document_change_notification(request: Request, file1: UploadFile = Fil
                             change_log.append({
                                 '허가번호': hn_norm, 'sheet': sn,
                                 'type': parsed['type'], 'old': old_val, 'new': new_val,
+                                '장치번호': a_device or b_device_no,
                             })
 
                     # 일반사항: AU열에 변경내역 기입
@@ -16381,34 +16425,113 @@ async def document_change_notification(request: Request, file1: UploadFile = Fil
 
         logger.info(f"변경개설신고: {len(au_entries)}건 AU열 기입, {len(change_log)}건 변경 적용, 일반사항 빈열 2개 삽입")
 
-        # 6. 결과 바이트 반환
+        # 7. 결과 바이트 생성
         buf = io.BytesIO()
         out_wb.save(buf)
         buf.seek(0)
-        # 변경 유형 수집
-        types = list(set(c['type'] for c in change_log)) if change_log else []
-        # B파일(DS) 원본 파일명 (확장자 제거)
+
+        # 8. diff 구조 빌드 (허가번호별 그룹핑, 중복 제거)
+        import base64
+        diff_map: dict = {}
+        for _entry in change_log:
+            _hn = _entry['허가번호']
+            if _hn not in diff_map:
+                diff_map[_hn] = {'허가번호': _hn, '호출명칭': callname_map.get(_hn, ''), 'changes': []}
+            _key = (_entry['type'], _entry['sheet'], _entry.get('장치번호', ''))
+            if not any(
+                c['field'] == _entry['type'] and c['sheet'] == _entry['sheet'] and c.get('장치번호', '') == _entry.get('장치번호', '')
+                for c in diff_map[_hn]['changes']
+            ):
+                diff_map[_hn]['changes'].append({
+                    'field': _entry['type'], 'sheet': _entry['sheet'],
+                    'before': _entry['old'], 'after': _entry['new'],
+                    '장치번호': _entry.get('장치번호', ''),
+                })
+
         b_fname = file1.filename if type1 == 'B' else file2.filename
         b_stem = b_fname.rsplit('.', 1)[0] if b_fname and '.' in b_fname else (b_fname or 'DS파일')
-        return buf.getvalue(), len(change_log), len(changes), types, b_stem
+        return {
+            'xls_base64': base64.b64encode(buf.getvalue()).decode('utf-8'),
+            'filename': f"{b_stem}_변경후.xls",
+            'diff': list(diff_map.values()),
+            'change_count': len(change_log),
+            'target_count': len(changes),
+        }
 
     try:
-        data, change_count, target_count, change_types, b_stem = await asyncio.to_thread(_process)
+        result = await asyncio.to_thread(_process)
     except ValueError as e:
         raise HTTPException(400, str(e))
 
-    from urllib.parse import quote as _q
-    filename = f"{b_stem}_변경후.xls"
-    return Response(
-        content=data,
-        media_type="application/vnd.ms-excel",
-        headers={
-            "Content-Disposition": f"attachment; filename*=UTF-8''{_q(filename)}",
-            "X-Change-Count": str(change_count),
-            "X-Target-Count": str(target_count),
-            "X-Change-Types": _q(','.join(change_types)) if change_types else '',
-        }
-    )
+    from fastapi.responses import JSONResponse as _JSONResponse
+    return _JSONResponse(content=result)
+
+
+@app.post("/document/apply-change-notification")
+async def document_apply_change_notification(request: Request):
+    """변경개설신고 diff 결과를 ds_detail.db에 반영하고 이력 저장."""
+    await _verify_auth(request)
+    import sqlite3, datetime as _dt
+    body = await request.json()
+    selected = set(body.get('selected', []))      # 허가번호 norm (하이픈 없음)
+    diff = body.get('diff', [])
+    applied_date = body.get('applied_date', _dt.datetime.now().strftime('%y%m%d'))
+
+    if not selected or not diff:
+        raise HTTPException(400, "선택된 국소가 없습니다.")
+
+    def _apply_sync():
+        dc = sqlite3.connect(_DS_DETAIL_DB, timeout=60)
+        dc.execute('PRAGMA journal_mode=WAL')
+        # ds_변경이력 테이블 보장 (서버 재시작 전 반영 케이스 대비)
+        dc.execute('''CREATE TABLE IF NOT EXISTS ds_변경이력 (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            허가번호 TEXT NOT NULL, 변경일자 TEXT NOT NULL,
+            시트 TEXT NOT NULL, 필드명 TEXT NOT NULL,
+            변경전값 TEXT, 변경후값 TEXT, 장치번호 TEXT
+        )''')
+        ic = sqlite3.connect(_INSP_DB, timeout=60)
+        ic.execute('PRAGMA journal_mode=WAL')
+        applied = 0
+        for item in diff:
+            hn = item.get('허가번호', '')
+            if hn not in selected:
+                continue
+            for chg in item.get('changes', []):
+                field  = chg.get('field', '')
+                sheet  = chg.get('sheet', '')
+                before = chg.get('before', '')
+                after  = chg.get('after', '')
+                jn     = chg.get('장치번호', '')
+                if field == '일련번호':
+                    if jn:
+                        dc.execute('UPDATE ds_장치 SET 기기일련번호=? WHERE 허가번호=? AND 장치번호=?', (after, hn, jn))
+                    else:
+                        dc.execute('UPDATE ds_장치 SET 기기일련번호=? WHERE 허가번호=?', (after, hn))
+                elif field == '형식검정번호':
+                    if jn:
+                        dc.execute('UPDATE ds_장치 SET 형식검정번호=? WHERE 허가번호=? AND 장치번호=?', (after, hn, jn))
+                    else:
+                        dc.execute('UPDATE ds_장치 SET 형식검정번호=? WHERE 허가번호=?', (after, hn))
+                elif field == '설치형태':
+                    if jn:
+                        dc.execute('UPDATE ds_안테나 SET 공중선주설치형태명=? WHERE 허가번호=? AND 장치번호=?', (after, hn, jn))
+                    else:
+                        dc.execute('UPDATE ds_안테나 SET 공중선주설치형태명=? WHERE 허가번호=?', (after, hn))
+                elif field == '설치장소':
+                    ic.execute("UPDATE inspection_targets SET 설치장소=? WHERE REPLACE(허가번호,'-','')=?", (after, hn))
+                dc.execute(
+                    'INSERT INTO ds_변경이력(허가번호,변경일자,시트,필드명,변경전값,변경후값,장치번호) VALUES(?,?,?,?,?,?,?)',
+                    (hn, applied_date, sheet, field, before, after, jn)
+                )
+                applied += 1
+        dc.commit(); ic.commit()
+        dc.close();  ic.close()
+        return applied
+
+    applied = await asyncio.to_thread(_apply_sync)
+    logger.info(f"변경개설신고 반영: {len(selected)}개 국소, {applied}건 적용 (날짜={applied_date})")
+    return {"ok": True, "applied": applied}
 
 
 # ============================================================
