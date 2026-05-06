@@ -657,11 +657,14 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
   Widget _buildDetailList({bool isWebLayout = false}) {
     final inspectionDateOptions = _inspectionDateOptions;
 
-    // 주차별 그룹핑
+    // 주차별 그룹핑 (각 그룹 내 호출명칭 오름차순)
     final weekGroups = <String, List<Map<String, dynamic>>>{};
     for (final item in _filteredItems) {
       final key = item['수검예정주차'] as String? ?? '미정';
       weekGroups.putIfAbsent(key, () => []).add(item);
+    }
+    for (final list in weekGroups.values) {
+      list.sort((a, b) => (a['호출명칭'] as String? ?? '').compareTo(b['호출명칭'] as String? ?? ''));
     }
     final sortedWeeks = weekGroups.keys.toList()..sort();
 
