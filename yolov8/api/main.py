@@ -4880,8 +4880,12 @@ async def _process_ds_job(job_id: str, job_item: dict):
         logger.info(f"DS job {job_id}: 완료! {division_name} {import_date} — {total_rows}행")
 
         # 9. xlsx 캐시 빌드 큐에 등록 (워커 유휴 시 순차 실행)
-        _xlsx_build_queue.append((division_id, division_code, import_date))
-        logger.info(f"DS job {job_id}: xlsx 빌드 큐 등록 ({len(_xlsx_build_queue)}건 대기)")
+        _entry = (division_id, division_code, import_date)
+        if _entry not in _xlsx_build_queue and _xlsx_build_current != _entry:
+            _xlsx_build_queue.append(_entry)
+            logger.info(f"DS job {job_id}: xlsx 빌드 큐 등록 ({len(_xlsx_build_queue)}건 대기)")
+        else:
+            logger.info(f"DS job {job_id}: xlsx 빌드 중복 스킵 (이미 빌드 중 또는 큐에 존재)")
 
         # 9.5. ds_detail.db 갱신 (검사내역서 export용 — non-fatal)
         try:
@@ -6646,8 +6650,6 @@ def _scan_missing_xlsx_caches_sync() -> tuple:
             break
         scan_kwargs["ExclusiveStartKey"] = resp["LastEvaluatedKey"]
 
-    _SUDO_HDQTS = ['강남', '강북', '경기', '인천']
-
     queued = []
     skipped = []
     for item in items:
@@ -6658,25 +6660,12 @@ def _scan_missing_xlsx_caches_sync() -> tuple:
             continue
         division_code = parts[0]
         import_date = parts[1]
-        is_sudo = (division_code == '10')
 
-        # xlsx 캐시 존재 체크: 수도권은 본부별 4개 + 전체 합 5개 모두 있어야 완성
-        if is_sudo:
-            all_cached = (
-                all(
-                    _s3_key_exists(s3, f"ds-exports/{division_id}/{division_code}_{import_date}_{_HDQT_S3_KEY[h]}.xlsx")
-                    for h in _SUDO_HDQTS
-                ) and
-                _s3_key_exists(s3, f"ds-exports/{division_id}/{division_code}_{import_date}.xlsx")
-            )
-            if all_cached:
-                skipped.append(f"{division_id}/{division_code}_{import_date}")
-                continue
-        else:
-            xlsx_key = f"ds-exports/{division_id}/{division_code}_{import_date}.xlsx"
-            if _s3_key_exists(s3, xlsx_key):
-                skipped.append(f"{division_id}/{division_code}_{import_date}")
-                continue
+        # xlsx 캐시 존재 체크: 단일 xlsx 파일 (수도권 포함 전 지역 동일)
+        xlsx_key = f"ds-exports/{division_id}/{division_code}_{import_date}.xlsx"
+        if _s3_key_exists(s3, xlsx_key):
+            skipped.append(f"{division_id}/{division_code}_{import_date}")
+            continue
 
         zip_key = f"ds-raw/{division_id}/{division_code}_{import_date}.zip"
         try:
@@ -6685,7 +6674,7 @@ def _scan_missing_xlsx_caches_sync() -> tuple:
             continue
 
         entry = (division_id, division_code, import_date)
-        if entry not in _xlsx_build_queue:
+        if entry not in _xlsx_build_queue and _xlsx_build_current != entry:
             _xlsx_build_queue.append(entry)
             queued.append(f"{division_id}/{division_code}_{import_date}")
 
