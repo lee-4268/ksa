@@ -397,44 +397,84 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
   // ── Header ────────────────────────────────────────────────────────────
 
   Widget _buildHeader() {
+    final hasDropdowns = (_isDivisionAdmin && _teamOptions.isNotEmpty)
+        || _weekOptions.isNotEmpty
+        || _assignedItems.any((i) => (i['조'] as String? ?? '').isNotEmpty)
+        || _assignedItems.any((i) => (i['검사관'] as String? ?? '').isNotEmpty);
+
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
-      child: Row(
+      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (Navigator.canPop(context))
-            IconButton(
-              icon: const Icon(Icons.arrow_back_ios_new, color: Colors.black54, size: 20),
-              onPressed: () => Navigator.pop(context),
+          // 1행: 제목 + 우측 아이콘
+          Row(
+            children: [
+              if (Navigator.canPop(context))
+                IconButton(
+                  icon: const Icon(Icons.arrow_back_ios_new, color: Colors.black54, size: 20),
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                  onPressed: () => Navigator.pop(context),
+                ),
+              const Text('수검 관리',
+                  style: TextStyle(color: Colors.black87, fontSize: 17, fontWeight: FontWeight.w600)),
+              const Spacer(),
+              if (_loadingInsp)
+                const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 4),
+                  child: SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
+                ),
+              IconButton(
+                icon: Icon(Icons.alt_route,
+                    color: _isRoutePlanMode ? Colors.blue : Colors.black54, size: 22),
+                tooltip: '경로 계획',
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                onPressed: _toggleRoutePlanMode,
+              ),
+              IconButton(
+                icon: const Icon(Icons.refresh_rounded, color: Colors.black54, size: 22),
+                tooltip: '새로고침',
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                onPressed: _loadingInsp ? null : _loadInspection,
+              ),
+              UserProfileButton(onLogout: () => context.read<AuthService>().signOut()),
+              const SizedBox(width: 4),
+            ],
+          ),
+          // 2행: 드롭다운 필터 (있을 때만, Flexible로 균등 분배)
+          if (hasDropdowns)
+            Padding(
+              padding: const EdgeInsets.only(left: 4, right: 4, bottom: 4),
+              child: Builder(builder: (context) {
+                final hasJo = _assignedItems.any((i) => (i['조'] as String? ?? '').trim().isNotEmpty);
+                final filtered = _selectedJo.isEmpty
+                    ? _assignedItems
+                    : _assignedItems.where((i) => (i['조'] as String? ?? '').trim() == _selectedJo).toList();
+                final hasInspector = filtered.any((i) => (i['검사관'] as String? ?? '').trim().isNotEmpty);
+                return Row(
+                  children: [
+                    if (_isDivisionAdmin && _teamOptions.isNotEmpty) ...[
+                      Flexible(child: _buildTeamDropdown(expanded: true)),
+                      const SizedBox(width: 6),
+                    ],
+                    if (_weekOptions.isNotEmpty) ...[
+                      Flexible(child: _buildWeekDropdown(expanded: true)),
+                      const SizedBox(width: 6),
+                    ],
+                    if (hasJo) ...[
+                      Flexible(child: _buildJoDropdown(expanded: true)),
+                      if (hasInspector) const SizedBox(width: 6),
+                    ],
+                    if (hasInspector)
+                      Flexible(child: _buildInspectorDropdown(expanded: true)),
+                  ],
+                );
+              }),
             ),
-          const Text('수검 관리',
-              style: TextStyle(color: Colors.black87, fontSize: 17, fontWeight: FontWeight.w600)),
-          const SizedBox(width: 12),
-          if (_isDivisionAdmin && _teamOptions.isNotEmpty) ...[
-            _buildTeamDropdown(),
-            const SizedBox(width: 8),
-          ],
-          if (_weekOptions.isNotEmpty) ...[
-            _buildWeekDropdown(),
-            const SizedBox(width: 8),
-          ],
-          _buildJoDropdown(),
-          _buildInspectorDropdown(),
-          const Spacer(),
-          if (_loadingInsp)
-            const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
-          IconButton(
-            icon: Icon(Icons.alt_route,
-                color: _isRoutePlanMode ? Colors.blue : Colors.black54),
-            tooltip: '경로 계획',
-            onPressed: _toggleRoutePlanMode,
-          ),
-          IconButton(
-            icon: const Icon(Icons.refresh_rounded, color: Colors.black54),
-            tooltip: '새로고침',
-            onPressed: _loadingInsp ? null : _loadInspection,
-          ),
-          UserProfileButton(onLogout: () => context.read<AuthService>().signOut()),
-          const SizedBox(width: 8),
         ],
       ),
     );
@@ -473,7 +513,7 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
     );
   }
 
-  Widget _buildTeamDropdown() {
+  Widget _buildTeamDropdown({bool expanded = false}) {
     const primaryColor = Color(0xFFE53935);
     final items = <DropdownMenuItem<String>>[
       const DropdownMenuItem(value: '', child: Text('전체 팀')),
@@ -488,7 +528,7 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
       ),
       child: DropdownButtonHideUnderline(
         child: DropdownButton<String>(
-          isExpanded: false,
+          isExpanded: expanded,
           isDense: true,
           icon: const Icon(Icons.arrow_drop_down, color: primaryColor, size: 20),
           dropdownColor: Colors.white,
@@ -506,7 +546,7 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
     );
   }
 
-  Widget _buildJoDropdown() {
+  Widget _buildJoDropdown({bool expanded = false}) {
     const primaryColor = Color(0xFFE53935);
     final joOptions = _assignedItems
         .map((i) => (i['조'] as String? ?? '').trim())
@@ -515,7 +555,7 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
         .toList()..sort();
     if (joOptions.isEmpty) return const SizedBox.shrink();
     return Container(
-      margin: const EdgeInsets.only(right: 8),
+      margin: expanded ? null : const EdgeInsets.only(right: 8),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
       decoration: BoxDecoration(
         color: Colors.white,
@@ -524,7 +564,7 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
       ),
       child: DropdownButtonHideUnderline(
         child: DropdownButton<String>(
-          isExpanded: false,
+          isExpanded: expanded,
           isDense: true,
           icon: const Icon(Icons.arrow_drop_down, color: primaryColor, size: 20),
           dropdownColor: Colors.white,
@@ -541,7 +581,7 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
     );
   }
 
-  Widget _buildInspectorDropdown() {
+  Widget _buildInspectorDropdown({bool expanded = false}) {
     const primaryColor = Color(0xFFE53935);
     final filtered = _selectedJo.isEmpty
         ? _assignedItems
@@ -553,7 +593,7 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
         .toList()..sort();
     if (inspectorOptions.isEmpty) return const SizedBox.shrink();
     return Container(
-      margin: const EdgeInsets.only(right: 8),
+      margin: expanded ? null : const EdgeInsets.only(right: 8),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
       decoration: BoxDecoration(
         color: Colors.white,
@@ -562,7 +602,7 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
       ),
       child: DropdownButtonHideUnderline(
         child: DropdownButton<String>(
-          isExpanded: false,
+          isExpanded: expanded,
           isDense: true,
           icon: const Icon(Icons.arrow_drop_down, color: primaryColor, size: 20),
           dropdownColor: Colors.white,
@@ -579,7 +619,7 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
     );
   }
 
-  Widget _buildWeekDropdown() {
+  Widget _buildWeekDropdown({bool expanded = false}) {
     const primaryColor = Color(0xFFE53935);
     final items = <DropdownMenuItem<String>>[
       const DropdownMenuItem(value: '', child: Text('전체 주차')),
@@ -594,7 +634,7 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
       ),
       child: DropdownButtonHideUnderline(
         child: DropdownButton<String>(
-          isExpanded: false,
+          isExpanded: expanded,
           isDense: true,
           icon: const Icon(Icons.arrow_drop_down, color: primaryColor, size: 20),
           dropdownColor: Colors.white,
