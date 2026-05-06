@@ -5142,7 +5142,7 @@ async def _build_one_xlsx_cache(
                     proc.join(timeout=5)
                 raise InterruptedError("xlsx build cancelled")
 
-            if time.time() - start_wait_time > 1800:
+            if time.time() - start_wait_time > 10800:
                 logger.error(f"DS bg xlsx 타임아웃 발생 (강제 종료): {tag}")
                 proc.terminate()
                 proc.join(timeout=5)
