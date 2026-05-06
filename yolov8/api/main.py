@@ -3974,7 +3974,8 @@ def _process_zip_to_xlsx_sync(zip_temp_path: str, progress_cb=None,
                                xlsx_out_path: str = None,
                                cancel_event: threading.Event = None,
                                hdqt_filter: str = None,
-                               city_hdqt_map: dict = None) -> tuple:
+                               city_hdqt_map: dict = None,
+                               pre_sheet_headers: dict = None) -> tuple:
     """ZIP → XLS 파싱 → xlsx 직접 빌드 (2-pass 스트리밍, 디스크 기반)
 
     Pass 1: 헤더 수집 (행 0만 읽기, 메모리 ~수 KB)
@@ -4027,105 +4028,97 @@ def _process_zip_to_xlsx_sync(zip_temp_path: str, progress_cb=None,
                     f"(base={len(classified['base'])}, numbered={len(classified['numbered'])}, "
                     f"spt={len(classified['spt'])}, hundred={len(classified['hundred'])})")
 
-        # ── Pass 1: 헤더만 수집 (행 0) ──
-        if progress_cb:
-            progress_cb("헤더 분석 중...", 5)
-
-        for fname in process_list:
-            if cancel_event and cancel_event.is_set():
-                logger.info("DS xlsx Pass1: 취소 플래그 감지 → 중단")
-                raise InterruptedError("xlsx build cancelled")
-            is_hundred = fname in hundred_files
-            xls_tmp = f"/tmp/ds_xls_p1_{id(zf)}_{fname.replace('/', '_')}.xls"
-            try:
-                with zf.open(fname) as src, open(xls_tmp, "wb") as dst:
-                    shutil.copyfileobj(src, dst)
-                try:
-                    workbook = xlrd.open_workbook(xls_tmp, on_demand=True)
-                except Exception:
-                    workbook = xlrd.open_workbook(xls_tmp, on_demand=True, ignore_workbook_corruption=True)
-            except Exception as e:
-                logger.warning(f"DS xlsx Pass1: {fname} 실패: {e}")
-                if os.path.exists(xls_tmp):
-                    os.remove(xls_tmp)
-                continue
-
-            if is_hundred:
-                hundred_sheet_names = []
-                for si in range(workbook.nsheets):
-                    s = workbook.sheet_by_index(si)
-                    hundred_sheet_names.append(f"{s.name.strip()}({s.nrows}행)")
-                    workbook.unload_sheet(si)
-                logger.info(f"DS xlsx Pass1: (100) 파일 {os.path.basename(name_map[fname])} "
-                            f"시트: {hundred_sheet_names}")
-
-            for sheet_idx in range(workbook.nsheets):
-                sheet = workbook.sheet_by_index(sheet_idx)
-                orig_sheet_name = sheet.name.strip()
-                if sheet.nrows < 2:
-                    workbook.unload_sheet(sheet_idx)
-                    continue
-
-                if is_hundred:
-                    sheet_name = f"{orig_sheet_name}(검사전)"
-                else:
-                    sheet_name = orig_sheet_name
-
-                headers = []
-                for col in range(sheet.ncols):
-                    h = _xlrd_cell_to_str(sheet, 0, col)
-                    if h:
-                        headers.append(h)
-                if not headers:
-                    workbook.unload_sheet(sheet_idx)
-                    continue
-
-                if sheet_name not in sheet_headers:
-                    sheet_headers[sheet_name] = list(headers)
-                else:
-                    existing = set(sheet_headers[sheet_name])
-                    for h in headers:
-                        if h not in existing:
-                            sheet_headers[sheet_name].append(h)
-                            existing.add(h)
-                workbook.unload_sheet(sheet_idx)
-
-            workbook.release_resources()
-            del workbook
-            try:
-                os.remove(xls_tmp)
-            except Exception:
-                pass
-
-        if not sheet_headers:
-            raise ValueError("처리할 시트가 없습니다.")
-
-        _release_memory()
-
-        # 시트를 종류별로 묶어 정렬: 일반사항 → 장치 → 전파형식 → 주파수 → 안테나 → 설치장소 → 종사자 → 부적합무선국 → 기타
-        # 각 종류 내에서: 기본 → (검사전) → (2) → (3) ...
+        # ── Pass 1: 헤더 수집 (pre_sheet_headers 있으면 스킵) ──
         _SHEET_BASE_ORDER = ['일반사항', '장치', '전파형식', '주파수', '안테나', '설치장소', '종사자', '부적합무선국']
 
         def _sheet_sort_key(name: str):
             import re
-            # "(검사전)" 포함 여부
             is_before = 1 if '(검사전)' in name else 0
-            # "(숫자)" 추출
             m = re.search(r'\((\d+)\)', name)
             num = int(m.group(1)) if m else 0
-            # 기본 이름 추출
             base = re.sub(r'\(검사전\)|\(\d+\)', '', name).strip()
-            # base가 정의된 순서에 없으면 뒤로
             base_idx = _SHEET_BASE_ORDER.index(base) if base in _SHEET_BASE_ORDER else len(_SHEET_BASE_ORDER)
             return (base_idx, is_before, num)
 
+        if pre_sheet_headers:
+            # DynamoDB 헤더 사전 로드 → Pass 1 전체 스킵
+            sheet_headers = dict(pre_sheet_headers)
+            logger.info(f"DS xlsx: DynamoDB 헤더 사용, Pass1 스킵 ({len(sheet_headers)}개 시트)")
+        else:
+            # Pass 1: 모든 XLS 파일에서 헤더 직접 수집
+            if progress_cb:
+                progress_cb("헤더 분석 중...", 5)
+
+            for fname in process_list:
+                if cancel_event and cancel_event.is_set():
+                    logger.info("DS xlsx Pass1: 취소 플래그 감지 → 중단")
+                    raise InterruptedError("xlsx build cancelled")
+                is_hundred = fname in hundred_files
+                xls_tmp = f"/tmp/ds_xls_p1_{id(zf)}_{fname.replace('/', '_')}.xls"
+                try:
+                    with zf.open(fname) as src, open(xls_tmp, "wb") as dst:
+                        shutil.copyfileobj(src, dst)
+                    try:
+                        workbook = xlrd.open_workbook(xls_tmp, on_demand=True)
+                    except Exception:
+                        workbook = xlrd.open_workbook(xls_tmp, on_demand=True, ignore_workbook_corruption=True)
+                except Exception as e:
+                    logger.warning(f"DS xlsx Pass1: {fname} 실패: {e}")
+                    if os.path.exists(xls_tmp):
+                        os.remove(xls_tmp)
+                    continue
+
+                if is_hundred:
+                    hundred_sheet_names = []
+                    for si in range(workbook.nsheets):
+                        s = workbook.sheet_by_index(si)
+                        hundred_sheet_names.append(f"{s.name.strip()}({s.nrows}행)")
+                        workbook.unload_sheet(si)
+                    logger.info(f"DS xlsx Pass1: (100) 파일 {os.path.basename(name_map[fname])} "
+                                f"시트: {hundred_sheet_names}")
+
+                for sheet_idx in range(workbook.nsheets):
+                    sheet = workbook.sheet_by_index(sheet_idx)
+                    orig_sheet_name = sheet.name.strip()
+                    if sheet.nrows < 2:
+                        workbook.unload_sheet(sheet_idx)
+                        continue
+                    sheet_name = f"{orig_sheet_name}(검사전)" if is_hundred else orig_sheet_name
+                    headers = []
+                    for col in range(sheet.ncols):
+                        h = _xlrd_cell_to_str(sheet, 0, col)
+                        if h:
+                            headers.append(h)
+                    if not headers:
+                        workbook.unload_sheet(sheet_idx)
+                        continue
+                    if sheet_name not in sheet_headers:
+                        sheet_headers[sheet_name] = list(headers)
+                    else:
+                        existing = set(sheet_headers[sheet_name])
+                        for h in headers:
+                            if h not in existing:
+                                sheet_headers[sheet_name].append(h)
+                                existing.add(h)
+                    workbook.unload_sheet(sheet_idx)
+
+                workbook.release_resources()
+                del workbook
+                try:
+                    os.remove(xls_tmp)
+                except Exception:
+                    pass
+
+            if not sheet_headers:
+                raise ValueError("처리할 시트가 없습니다.")
+            _release_memory()
+            all_sheets = list(sheet_headers.keys())
+            hundred_sheets = [s for s in all_sheets if "(검사전)" in s]
+            logger.info(f"DS xlsx Pass1 완료: {len(sheet_headers)}개 시트 헤더 수집 "
+                        f"(검사전 시트: {hundred_sheets})")
+
         sorted_sheet_names = sorted(sheet_headers.keys(), key=_sheet_sort_key)
         sheet_headers = {k: sheet_headers[k] for k in sorted_sheet_names}
-
-        all_sheets = list(sheet_headers.keys())
-        hundred_sheets = [s for s in all_sheets if "(검사전)" in s]
-        logger.info(f"DS xlsx Pass1 완료: {len(sheet_headers)}개 시트 헤더 수집 "
-                    f"(검사전 시트: {hundred_sheets})")
 
         # ── hdqt_filter: 설치장소 시트에서 허가번호→본부 매핑 생성 ──
         lic_to_hdqt: dict = {}
@@ -4374,8 +4367,15 @@ def _process_zip_to_xlsx_sync(zip_temp_path: str, progress_cb=None,
                 pass
             total_rows += file_rows
 
-            # 매 파일 후 GC + malloc_trim → 메모리 즉시 OS 반환
-            _release_memory()
+            # 10파일마다 gc.collect, 매 파일 malloc_trim
+            if (file_idx + 1) % 10 == 0 or file_idx + 1 == total_files:
+                _release_memory()  # gc.collect + malloc_trim
+            else:
+                try:
+                    import ctypes
+                    ctypes.CDLL("libc.so.6").malloc_trim(0)
+                except Exception:
+                    pass
             if HAS_PSUTIL:
                 mem = psutil.virtual_memory()
                 swap = psutil.swap_memory()
@@ -4981,7 +4981,7 @@ def _subprocess_multiple_xlsx_entry(zip_path: str, hdqts: list, result_path: str
 def _subprocess_xlsx_entry(zip_path: str, xlsx_path: str, result_path: str,
 
                            cancel_flag_path: str, hdqt_filter: str = None,
-                           city_hdqt_map: dict = None):
+                           city_hdqt_map: dict = None, pre_sheet_headers: dict = None):
     """서브프로세스 진입점: ZIP → xlsx 빌드 후 결과를 JSON으로 저장.
     이 함수가 끝나면 프로세스가 exit → OS가 메모리 100% 회수.
     """
@@ -5001,6 +5001,7 @@ def _subprocess_xlsx_entry(zip_path: str, xlsx_path: str, result_path: str,
         result = _process_zip_to_xlsx_sync(
             zip_path, None, xlsx_path, cancel_event=cancel_ev,
             hdqt_filter=hdqt_filter, city_hdqt_map=city_hdqt_map,
+            pre_sheet_headers=pre_sheet_headers,
         )
         # result = (xlsx_path, sheet_stats, total_rows, sheet_headers)
         out = {
@@ -5118,11 +5119,28 @@ async def _build_one_xlsx_cache(
         if cancel_ev.is_set():
             raise InterruptedError("xlsx build cancelled before subprocess")
 
+        # DynamoDB sheetHeaders 사전 로드 → 서브프로세스에서 Pass1 스킵
+        pre_sheet_headers = {}
+        try:
+            def _fetch_headers_sync():
+                tbl = _dynamodb_resource.Table(DYNAMODB_TABLES["ds_uploads"])
+                item = tbl.get_item(
+                    Key={"divisionId": division_id, "importDate": f"{division_code}#{import_date}"},
+                    ProjectionExpression="sheetHeaders",
+                ).get("Item", {})
+                return item.get("sheetHeaders", {})
+            pre_sheet_headers = await asyncio.to_thread(_fetch_headers_sync)
+            if pre_sheet_headers:
+                logger.info(f"DS bg xlsx: sheetHeaders 로드 완료 ({len(pre_sheet_headers)}개 시트) → Pass1 스킵")
+        except Exception as _he:
+            logger.warning(f"DS bg xlsx: sheetHeaders 로드 실패 ({_he}) → Pass1 실행")
+
         logger.info(f"DS bg xlsx: 서브프로세스 시작 {tag}")
         proc = multiprocessing.Process(
             target=_subprocess_xlsx_entry,
             args=(zip_temp, xlsx_temp, result_json, cancel_flag),
-            kwargs={"hdqt_filter": hdqt_filter, "city_hdqt_map": city_hdqt_map},
+            kwargs={"hdqt_filter": hdqt_filter, "city_hdqt_map": city_hdqt_map,
+                    "pre_sheet_headers": pre_sheet_headers},
             daemon=True,
         )
         _xlsx_build_process = proc
