@@ -16493,6 +16493,7 @@ async def document_apply_change_notification(request: Request):
         ic = sqlite3.connect(_INSP_DB, timeout=60)
         ic.execute('PRAGMA journal_mode=WAL')
         applied = 0
+        not_found_hns: set = set()  # inspection_targets에 없어서 반영 실패한 허가번호
         for item in diff:
             hn = item.get('허가번호', '')
             if hn not in selected:
@@ -16519,7 +16520,10 @@ async def document_apply_change_notification(request: Request):
                     else:
                         dc.execute('UPDATE ds_안테나 SET 공중선주설치형태명=? WHERE 허가번호=?', (after, hn))
                 elif field == '설치장소':
-                    ic.execute("UPDATE inspection_targets SET 설치장소=? WHERE REPLACE(허가번호,'-','')=?", (after, hn))
+                    cur = ic.execute("UPDATE inspection_targets SET 설치장소=? WHERE REPLACE(허가번호,'-','')=?", (after, hn))
+                    if cur.rowcount == 0:
+                        not_found_hns.add(hn)
+                        continue  # 이력 기록 스킵 (실제 반영 안 됐으므로)
                 dc.execute(
                     'INSERT INTO ds_변경이력(허가번호,변경일자,시트,필드명,변경전값,변경후값,장치번호) VALUES(?,?,?,?,?,?,?)',
                     (hn, applied_date, sheet, field, before, after, jn)
@@ -16527,11 +16531,11 @@ async def document_apply_change_notification(request: Request):
                 applied += 1
         dc.commit(); ic.commit()
         dc.close();  ic.close()
-        return applied
+        return applied, sorted(not_found_hns)
 
-    applied = await asyncio.to_thread(_apply_sync)
-    logger.info(f"변경개설신고 반영: {len(selected)}개 국소, {applied}건 적용 (날짜={applied_date})")
-    return {"ok": True, "applied": applied}
+    applied, not_found = await asyncio.to_thread(_apply_sync)
+    logger.info(f"변경개설신고 반영: {len(selected)}개 국소, {applied}건 적용 (날짜={applied_date}), 미반영={not_found}")
+    return {"ok": True, "applied": applied, "not_found": not_found}
 
 
 # ============================================================

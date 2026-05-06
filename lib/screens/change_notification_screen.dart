@@ -146,14 +146,23 @@ class _ChangeNotificationScreenState extends State<ChangeNotificationScreen> {
       if (!mounted) return;
       if (resp.statusCode == 200) {
         final data = json.decode(resp.body) as Map<String, dynamic>;
+        final notFound = (data['not_found'] as List<dynamic>? ?? []).cast<String>();
         setState(() {
           _applying = false;
-          // 반영된 국소는 diff에서 제거
           _diff.removeWhere((d) => _selectedStations.contains(d['허가번호']));
           _selectedStations.clear();
         });
-        _showAlert('반영 완료',
-            '${data['applied']}건 변경이 수검결과 화면에 반영되었습니다.\n변경된 필드 옆에 ($dateStr 변경) 배지가 표시됩니다.');
+        if (notFound.isNotEmpty) {
+          _showAlert(
+            '반영 완료 (일부 경고)',
+            '${data['applied']}건 반영 완료.\n\n'
+            '아래 국소는 수검 대상 목록에 없어 설치장소 변경이 반영되지 않았습니다:\n'
+            '${notFound.join('\n')}',
+          );
+        } else {
+          _showAlert('반영 완료',
+              '${data['applied']}건 변경이 수검결과 화면에 반영되었습니다.\n변경된 필드 옆에 ($dateStr 변경) 배지가 표시됩니다.');
+        }
       } else {
         setState(() => _applying = false);
         _showAlert('반영 실패', '서버 오류: ${resp.body}');
