@@ -13443,6 +13443,113 @@ async def inspection_export_xlsx(request: Request, req: InspectionExportReq):
         headers={"Content-Disposition": f"attachment; filename*=UTF-8''{_q(fname)}"}
     )
 
+class InspectionExportAllReq(BaseModel):
+    year: int
+    access담당: str = ""
+
+@app.post("/inspection/export-all-xlsx")
+async def inspection_export_all_xlsx(request: Request, req: InspectionExportAllReq):
+    """수검 데이터 통합 Excel (4시트: 대상/일정/결과/주차별실적) — Playground import용."""
+    await _verify_auth(request)
+    if not HAS_OPENPYXL:
+        raise HTTPException(503, "openpyxl 미설치")
+    if not os.path.exists(_INSP_DB):
+        raise HTTPException(404, "데이터 없음")
+
+    def _build():
+        import openpyxl
+        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+
+        thin = Border(left=Side(style='thin'), right=Side(style='thin'),
+                      top=Side(style='thin'), bottom=Side(style='thin'))
+        hdr_font = Font(name='Arial', size=10, bold=True, color='FFFFFF')
+        hdr_fill = PatternFill('solid', fgColor='E53935')
+        hdr_align = Alignment(horizontal='center', vertical='center')
+        data_font = Font(name='Arial', size=10)
+        data_align = Alignment(horizontal='center', vertical='center')
+
+        c = sqlite3.connect(_INSP_DB, timeout=60)
+        c.row_factory = sqlite3.Row
+
+        access_filter = ""
+        access_params = (req.year,)
+        if req.access담당:
+            access_filter = " AND access담당 = ?"
+            access_params = (req.year, req.access담당)
+
+        wb = openpyxl.Workbook()
+
+        # ── 시트1: 수검대상 ──
+        ws1 = wb.active
+        ws1.title = "수검대상"
+        h1 = ['허가번호','호출명칭','국종군','부서','분기','연도주기','검사주기','허가상태',
+              '설치장소','도로명주소','장치수','통시','공대','kca검토결과','시기조정',
+              '기준연도','skt본부','access담당','품질개선팀']
+        ws1.append(h1)
+        rows = c.execute(
+            f'SELECT * FROM inspection_targets WHERE year=?{access_filter} ORDER BY id',
+            access_params).fetchall()
+        for row in rows:
+            d = dict(row)
+            ws1.append([d.get(h, '') for h in h1])
+
+        # ── 시트2: 수검일정 ──
+        ws2 = wb.create_sheet("수검일정")
+        h2 = ['허가번호','호출명칭','분기','skt본부','access담당','품질개선팀',
+              '수검예정주차','수검시작일','수검종료일','지역','등록자','등록일시','검사관','조']
+        ws2.append(h2)
+        rows2 = c.execute(
+            f'SELECT * FROM inspection_schedules WHERE year=?{access_filter} ORDER BY rowid',
+            access_params).fetchall()
+        for row in rows2:
+            d = dict(row)
+            ws2.append([d.get(h, '') for h in h2])
+
+        # ── 시트3: 수검결과 ──
+        ws3 = wb.create_sheet("수검결과")
+        h3 = ['허가번호','status','검사일','메모','철탑형태','입력자','입력일시',
+              '진행여부','성능서류','불합격내용','불합격상세','공용화대상','간략불합격',
+              '기타사항','수검자','시스템','기지국구분','전파진흥원','검사관','주차별']
+        ws3.append(h3)
+        rows3 = c.execute(
+            'SELECT * FROM inspection_results WHERE year=? ORDER BY rowid',
+            (req.year,)).fetchall()
+        for row in rows3:
+            d = dict(row)
+            ws3.append([d.get(h, '') for h in h3])
+
+        c.close()
+
+        # 스타일 적용
+        for ws in [ws1, ws2, ws3]:
+            for cell in ws[1]:
+                cell.font = hdr_font
+                cell.fill = hdr_fill
+                cell.alignment = hdr_align
+                cell.border = thin
+            for row in ws.iter_rows(min_row=2, max_row=ws.max_row):
+                for cell in row:
+                    cell.font = data_font
+                    cell.alignment = data_align
+                    cell.border = thin
+            for col in ws.iter_cols(min_row=1, max_row=1):
+                ws.column_dimensions[col[0].column_letter].width = 18
+
+        buf = io.BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+        return buf.getvalue()
+
+    data = await asyncio.to_thread(_build)
+    fname = f"수검데이터_통합_{req.year}년.xlsx"
+    from urllib.parse import quote as _q
+    return Response(
+        content=data,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{_q(fname)}"}
+    )
+
+
 class InspectionSummaryReq(BaseModel):
     year: int
     sheet: str = "all"

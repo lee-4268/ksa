@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../models/radio_station.dart';
 import '../providers/station_provider.dart';
 import '../screens/tower_classification_screen.dart';
@@ -36,6 +37,13 @@ class _StationDetailSheetState extends State<StationDetailSheet> {
   // 테마 색상 (로그인 페이지와 일관성)
   static const Color _primaryColor = Color(0xFFE53935);
 
+  // 글자 크기 조절
+  static const double _minScale = 0.8;
+  static const double _maxScale = 1.6;
+  static const double _scaleStep = 0.1;
+  static const String _textScaleKey = 'station_detail_text_scale';
+  double _textScale = 1.0;
+
   @override
   void initState() {
     super.initState();
@@ -43,6 +51,28 @@ class _StationDetailSheetState extends State<StationDetailSheet> {
     _photoPaths = List<String>.from(widget.station.photoPaths ?? []);
     _currentMemo = widget.station.memo ?? '';
     _currentInstallationType = widget.station.installationType;
+    _loadTextScale();
+  }
+
+  Future<void> _loadTextScale() async {
+    final prefs = await SharedPreferences.getInstance();
+    final saved = prefs.getDouble(_textScaleKey);
+    if (saved != null && mounted) {
+      setState(() => _textScale = saved.clamp(_minScale, _maxScale));
+    }
+  }
+
+  Future<void> _changeTextScale(double? delta) async {
+    setState(() {
+      if (delta == null) {
+        _textScale = 1.0;
+      } else {
+        final next = (_textScale + delta).clamp(_minScale, _maxScale);
+        _textScale = (next * 10).round() / 10;
+      }
+    });
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble(_textScaleKey, _textScale);
   }
 
   @override
@@ -64,14 +94,18 @@ class _StationDetailSheetState extends State<StationDetailSheet> {
         maxChildSize: 0.9,
         expand: false,
         builder: (context, scrollController) {
-          // 스크롤 가능한 콘텐츠
-          final scrollableContent = SingleChildScrollView(
-            controller: scrollController,
-            child: Padding(
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
+          // 스크롤 가능한 콘텐츠 (글자 크기 스케일 적용)
+          final scrollableContent = MediaQuery(
+            data: MediaQuery.of(context).copyWith(
+              textScaler: TextScaler.linear(_textScale),
+            ),
+            child: SingleChildScrollView(
+              controller: scrollController,
+              child: Padding(
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
                   // 드래그 핸들
                   Center(
                     child: Container(
@@ -152,7 +186,54 @@ class _StationDetailSheetState extends State<StationDetailSheet> {
                       ),
                     ],
                   ),
-                  const SizedBox(height: 24),
+                  const SizedBox(height: 8),
+
+                  // 글자 크기 조절
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      OutlinedButton(
+                        onPressed: _textScale > _minScale + 0.001
+                            ? () => _changeTextScale(-_scaleStep)
+                            : null,
+                        style: OutlinedButton.styleFrom(
+                          minimumSize: const Size(36, 32),
+                          padding: EdgeInsets.zero,
+                          side: BorderSide(color: Colors.grey.shade400),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                          foregroundColor: Colors.grey.shade700,
+                        ),
+                        child: const Text('A−', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+                      ),
+                      const SizedBox(width: 4),
+                      OutlinedButton(
+                        onPressed: () => _changeTextScale(null),
+                        style: OutlinedButton.styleFrom(
+                          minimumSize: const Size(52, 32),
+                          padding: const EdgeInsets.symmetric(horizontal: 8),
+                          side: BorderSide(color: Colors.grey.shade400),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                          foregroundColor: Colors.black87,
+                        ),
+                        child: Text('${(_textScale * 100).round()}%', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+                      ),
+                      const SizedBox(width: 4),
+                      OutlinedButton(
+                        onPressed: _textScale < _maxScale - 0.001
+                            ? () => _changeTextScale(_scaleStep)
+                            : null,
+                        style: OutlinedButton.styleFrom(
+                          minimumSize: const Size(36, 32),
+                          padding: EdgeInsets.zero,
+                          side: BorderSide(color: Colors.grey.shade400),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                          foregroundColor: Colors.grey.shade700,
+                        ),
+                        child: const Text('A+', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
 
                   // 상세 정보
                   _buildInfoSection(context),
@@ -175,44 +256,48 @@ class _StationDetailSheetState extends State<StationDetailSheet> {
                 ],
               ),
             ),
+            ),
           );
 
           // 모든 플랫폼에서 이벤트가 맵으로 전파되지 않도록 차단
           // GestureDetector의 behavior: HitTestBehavior.opaque로 터치/마우스 이벤트 소비
-          return GestureDetector(
-            behavior: HitTestBehavior.opaque, // 모든 이벤트를 이 위젯에서 처리
-            onHorizontalDragUpdate: (_) {}, // 수평 드래그 소비
-            onVerticalDragUpdate: (_) {}, // 수직 드래그 소비 (DraggableScrollableSheet과 충돌하지 않음)
-            child: kIsWeb
-                ? Listener(
-                    behavior: HitTestBehavior.opaque, // 이벤트를 이 위젯에서 처리
-                    onPointerSignal: (event) {
-                      // 마우스 휠 이벤트를 감지하여 스크롤 처리
-                      if (event is PointerScrollEvent) {
-                        // GestureBinding을 통해 이벤트를 소비 (전파 차단)
-                        GestureBinding.instance.pointerSignalResolver.register(event, (event) {
-                          // 스크롤 델타를 사용하여 ScrollController로 직접 스크롤
-                          final scrollEvent = event as PointerScrollEvent;
-                          final delta = scrollEvent.scrollDelta.dy;
-                          final currentOffset = scrollController.offset;
-                          final maxOffset = scrollController.position.maxScrollExtent;
-                          final minOffset = scrollController.position.minScrollExtent;
+          final scrollArea = kIsWeb
+              ? Listener(
+                  behavior: HitTestBehavior.opaque, // 이벤트를 이 위젯에서 처리
+                  onPointerSignal: (event) {
+                    // 마우스 휠 이벤트를 감지하여 스크롤 처리
+                    if (event is PointerScrollEvent) {
+                      // GestureBinding을 통해 이벤트를 소비 (전파 차단)
+                      GestureBinding.instance.pointerSignalResolver.register(event, (event) {
+                        // 스크롤 델타를 사용하여 ScrollController로 직접 스크롤
+                        final scrollEvent = event as PointerScrollEvent;
+                        final delta = scrollEvent.scrollDelta.dy;
+                        final currentOffset = scrollController.offset;
+                        final maxOffset = scrollController.position.maxScrollExtent;
+                        final minOffset = scrollController.position.minScrollExtent;
 
-                          // 새 오프셋 계산 (범위 내로 제한)
-                          final newOffset = (currentOffset + delta).clamp(minOffset, maxOffset);
-                          scrollController.jumpTo(newOffset);
-                        });
-                      }
-                    },
-                    child: scrollableContent,
-                  )
-                : scrollableContent,
+                        // 새 오프셋 계산 (범위 내로 제한)
+                        final newOffset = (currentOffset + delta).clamp(minOffset, maxOffset);
+                        scrollController.jumpTo(newOffset);
+                      });
+                    }
+                  },
+                  child: scrollableContent,
+                )
+              : scrollableContent;
+
+          return GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onHorizontalDragUpdate: (_) {},
+            onVerticalDragUpdate: (_) {},
+            child: scrollArea,
           );
         },
       ),
     );
   }
 
+  /// 시트 상단바: 드래그 핸들 + 글자 크기 조절
   Widget _buildTag(String text, Color color) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
@@ -252,6 +337,11 @@ class _StationDetailSheetState extends State<StationDetailSheet> {
         bgColor = Colors.red.shade100;
         textColor = Colors.red.shade700;
         text = '불합격';
+        break;
+      case InspectionStatus.inadequate:
+        bgColor = Colors.purple.shade100;
+        textColor = Colors.purple.shade700;
+        text = '부적합';
         break;
     }
 
@@ -1235,6 +1325,9 @@ class _StationDetailSheetState extends State<StationDetailSheet> {
           break;
         case InspectionStatus.failed:
           message = '불합격으로 표시되었습니다.';
+          break;
+        case InspectionStatus.inadequate:
+          message = '부적합으로 표시되었습니다.';
           break;
       }
 

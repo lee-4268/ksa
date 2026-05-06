@@ -199,6 +199,19 @@ class InspectionService {
     return resp.bodyBytes;
   }
 
+  Future<Uint8List> exportAllXlsx({
+    required int year,
+    String accessTeam = '',
+  }) async {
+    final resp = await http.post(
+      Uri.parse('$_baseUrl/inspection/export-all-xlsx'),
+      headers: _headers,
+      body: json.encode({'year': year, 'access담당': accessTeam}),
+    ).timeout(const Duration(minutes: 5));
+    if (resp.statusCode != 200) throw Exception('통합 Export 실패: ${resp.statusCode}');
+    return resp.bodyBytes;
+  }
+
   Future<Map<String, dynamic>> getDetail(int year, String licenseNo) async {
     final uri = Uri.parse('$_baseUrl/inspection/detail').replace(
         queryParameters: {'year': '$year', '허가번호': licenseNo});

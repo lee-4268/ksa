@@ -6,6 +6,7 @@ import 'dart:ui_web' as ui_web;
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../services/auth_service.dart';
 import '../services/inspection_service.dart';
 import '../services/kakao_geocoding_web.dart';
@@ -54,6 +55,13 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
   bool _photoLoading = false;
   String _pendingReview = '';
 
+  // 글자 크기 조절
+  static const double _minScale = 0.8;
+  static const double _maxScale = 1.6;
+  static const double _scaleStep = 0.1;
+  static const String _textScaleKey = 'insp_result_text_scale';
+  double _textScale = 1.0;
+
   @override
   void initState() {
     super.initState();
@@ -61,6 +69,28 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
       ..setAuthToken(context.read<AuthService>().authToken);
     if (widget.initialData != null) _applyData(widget.initialData!);
     _loadData();
+    _loadTextScale();
+  }
+
+  Future<void> _loadTextScale() async {
+    final prefs = await SharedPreferences.getInstance();
+    final saved = prefs.getDouble(_textScaleKey);
+    if (saved != null && mounted) {
+      setState(() => _textScale = saved.clamp(_minScale, _maxScale));
+    }
+  }
+
+  Future<void> _changeTextScale(double? delta) async {
+    setState(() {
+      if (delta == null) {
+        _textScale = 1.0;
+      } else {
+        final next = (_textScale + delta).clamp(_minScale, _maxScale);
+        _textScale = (next * 10).round() / 10;
+      }
+    });
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble(_textScaleKey, _textScale);
   }
 
   @override
@@ -298,7 +328,11 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
       ),
       // 스크롤 본문
       Expanded(
-        child: SingleChildScrollView(
+        child: MediaQuery(
+          data: MediaQuery.of(context).copyWith(
+            textScaler: TextScaler.linear(_textScale),
+          ),
+          child: SingleChildScrollView(
           padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             _buildHeader(target, ds, schedule),
@@ -316,6 +350,7 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
             _buildResultCard(),
             const SizedBox(height: 8),
           ]),
+        ),
         ),
       ),
       // 하단 고정 영역
@@ -415,7 +450,54 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
           onPressed: () => html.window.open('https://safe.skons.net', '_blank'),
         ),
       ]),
-      const SizedBox(height: 10),
+      const SizedBox(height: 6),
+      // 글자 크기 조절
+      Row(
+        mainAxisAlignment: MainAxisAlignment.end,
+        children: [
+          OutlinedButton(
+            onPressed: _textScale > _minScale + 0.001
+                ? () => _changeTextScale(-_scaleStep)
+                : null,
+            style: OutlinedButton.styleFrom(
+              minimumSize: const Size(36, 30),
+              padding: EdgeInsets.zero,
+              side: BorderSide(color: Colors.grey.shade400),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+              foregroundColor: Colors.grey.shade700,
+            ),
+            child: const Text('A−', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+          ),
+          const SizedBox(width: 4),
+          OutlinedButton(
+            onPressed: () => _changeTextScale(null),
+            style: OutlinedButton.styleFrom(
+              minimumSize: const Size(48, 30),
+              padding: const EdgeInsets.symmetric(horizontal: 6),
+              side: BorderSide(color: Colors.grey.shade400),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+              foregroundColor: Colors.black87,
+            ),
+            child: Text('${(_textScale * 100).round()}%',
+                style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600)),
+          ),
+          const SizedBox(width: 4),
+          OutlinedButton(
+            onPressed: _textScale < _maxScale - 0.001
+                ? () => _changeTextScale(_scaleStep)
+                : null,
+            style: OutlinedButton.styleFrom(
+              minimumSize: const Size(36, 30),
+              padding: EdgeInsets.zero,
+              side: BorderSide(color: Colors.grey.shade400),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+              foregroundColor: Colors.grey.shade700,
+            ),
+            child: const Text('A+', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+      const SizedBox(height: 6),
       // 태그 행
       Row(children: [
         if (schedTag.isNotEmpty)

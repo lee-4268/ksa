@@ -222,6 +222,8 @@ class _StationListDrawerState extends State<StationListDrawer> {
         return Colors.green;
       case InspectionStatus.failed:
         return Colors.red;
+      case InspectionStatus.inadequate:
+        return Colors.purple;
     }
   }
 
@@ -234,6 +236,8 @@ class _StationListDrawerState extends State<StationListDrawer> {
         return Icons.check_circle;
       case InspectionStatus.failed:
         return Icons.cancel;
+      case InspectionStatus.inadequate:
+        return Icons.warning_amber;
     }
   }
 
