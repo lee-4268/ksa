@@ -156,7 +156,7 @@ class _ChangeNotificationScreenState extends State<ChangeNotificationScreen> {
           _showAlert(
             '반영 완료 (일부 경고)',
             '${data['applied']}건 반영 완료.\n\n'
-            '아래 국소는 수검 대상 목록에 없어 설치장소 변경이 반영되지 않았습니다:\n'
+            '아래 국소는 수검 대상 또는 DS 데이터에 없어 반영되지 않았습니다:\n'
             '${notFound.join('\n')}',
           );
         } else {

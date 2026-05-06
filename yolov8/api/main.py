@@ -16506,19 +16506,28 @@ async def document_apply_change_notification(request: Request):
                 jn     = chg.get('장치번호', '')
                 if field == '일련번호':
                     if jn:
-                        dc.execute('UPDATE ds_장치 SET 기기일련번호=? WHERE 허가번호=? AND 장치번호=?', (after, hn, jn))
+                        cur = dc.execute('UPDATE ds_장치 SET 기기일련번호=? WHERE 허가번호=? AND 장치번호=?', (after, hn, jn))
                     else:
-                        dc.execute('UPDATE ds_장치 SET 기기일련번호=? WHERE 허가번호=?', (after, hn))
+                        cur = dc.execute('UPDATE ds_장치 SET 기기일련번호=? WHERE 허가번호=?', (after, hn))
+                    if cur.rowcount == 0:
+                        not_found_hns.add(hn)
+                        continue
                 elif field == '형식검정번호':
                     if jn:
-                        dc.execute('UPDATE ds_장치 SET 형식검정번호=? WHERE 허가번호=? AND 장치번호=?', (after, hn, jn))
+                        cur = dc.execute('UPDATE ds_장치 SET 형식검정번호=? WHERE 허가번호=? AND 장치번호=?', (after, hn, jn))
                     else:
-                        dc.execute('UPDATE ds_장치 SET 형식검정번호=? WHERE 허가번호=?', (after, hn))
+                        cur = dc.execute('UPDATE ds_장치 SET 형식검정번호=? WHERE 허가번호=?', (after, hn))
+                    if cur.rowcount == 0:
+                        not_found_hns.add(hn)
+                        continue
                 elif field == '설치형태':
                     if jn:
-                        dc.execute('UPDATE ds_안테나 SET 공중선주설치형태명=? WHERE 허가번호=? AND 장치번호=?', (after, hn, jn))
+                        cur = dc.execute('UPDATE ds_안테나 SET 공중선주설치형태명=? WHERE 허가번호=? AND 장치번호=?', (after, hn, jn))
                     else:
-                        dc.execute('UPDATE ds_안테나 SET 공중선주설치형태명=? WHERE 허가번호=?', (after, hn))
+                        cur = dc.execute('UPDATE ds_안테나 SET 공중선주설치형태명=? WHERE 허가번호=?', (after, hn))
+                    if cur.rowcount == 0:
+                        not_found_hns.add(hn)
+                        continue
                 elif field == '설치장소':
                     cur = ic.execute("UPDATE inspection_targets SET 설치장소=? WHERE REPLACE(허가번호,'-','')=?", (after, hn))
                     if cur.rowcount == 0:
