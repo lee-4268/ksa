@@ -16,7 +16,16 @@ import 'inspection_result_screen.dart' show RoadviewDialog;
 import 'tower_classification_screen.dart';
 
 class ErpDsCompareScreen extends StatefulWidget {
-  const ErpDsCompareScreen({super.key});
+  final List<String>? initialLicenseNos;
+  final String? initialAccessDivision;
+  final bool initialMultiDivision;
+
+  const ErpDsCompareScreen({
+    super.key,
+    this.initialLicenseNos,
+    this.initialAccessDivision,
+    this.initialMultiDivision = false,
+  });
 
   @override
   State<ErpDsCompareScreen> createState() => _ErpDsCompareScreenState();
@@ -28,6 +37,19 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
   static const Color _blueAccent = Color(0xFF4A90D9);
   static const Color _greenColor = Color(0xFF43A047);
   static const Color _themeColor = Color(0xFF1565C0);
+
+  // access담당 한글명 → auth division ID
+  static const Map<String, String> _accessToAuthId = {
+    '강남': 'gangnam', '강남본부': 'gangnam',
+    '강북': 'gangbuk', '강북본부': 'gangbuk',
+    '경기': 'gyeonggi', '경기본부': 'gyeonggi',
+    '인천': 'incheon', '인천본부': 'incheon',
+    '강원': 'gangwon', '강원본부': 'gangwon',
+    '충청': 'chungcheong', '충청본부': 'chungcheong',
+    '경북': 'gyeongbuk', '경북본부': 'gyeongbuk',
+    '경남': 'gyeongnam', '경남본부': 'gyeongnam',
+    '서부': 'seobu', '서부본부': 'seobu',
+  };
 
   // 본부 목록
   static const _divisionOptions = [
@@ -63,7 +85,20 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
       final auth = context.read<AuthService>();
       _service.setAuthToken(auth.authToken);
       _dsService.setAuthToken(auth.authToken);
-      final divId = auth.currentDivisionId;
+
+      // 일정화면에서 넘어온 경우 허가번호 자동 입력
+      if (widget.initialLicenseNos != null && widget.initialLicenseNos!.isNotEmpty) {
+        _inputCtrl.text = widget.initialLicenseNos!.join('\n');
+        setState(() {});
+      }
+
+      // 본부 결정: initialAccessDivision → 내 본부 순서로 fallback
+      String? divId;
+      if (widget.initialAccessDivision != null) {
+        divId = _accessToAuthId[widget.initialAccessDivision!];
+      }
+      divId ??= auth.currentDivisionId;
+
       if (divId != null) {
         setState(() => _selectedDivisionId = divId);
         _loadDsUploads(divId);
@@ -250,6 +285,47 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        // 일정화면에서 자동 입력된 경우 안내
+        if (widget.initialLicenseNos != null && widget.initialLicenseNos!.isNotEmpty) ...[
+          Container(
+            margin: const EdgeInsets.only(bottom: 12),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              color: _themeColor.withValues(alpha: 0.07),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: _themeColor.withValues(alpha: 0.2)),
+            ),
+            child: Row(children: [
+              const Icon(Icons.check_circle_outline, size: 16, color: _themeColor),
+              const SizedBox(width: 8),
+              Text(
+                '일정 및 통계에서 ${widget.initialLicenseNos!.length}건 자동 입력됨',
+                style: const TextStyle(fontSize: 13, color: _themeColor, fontWeight: FontWeight.w500),
+              ),
+            ]),
+          ),
+          if (widget.initialMultiDivision)
+            Container(
+              margin: const EdgeInsets.only(bottom: 12),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: Colors.orange.shade50,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: Colors.orange.shade200),
+              ),
+              child: Row(children: [
+                Icon(Icons.warning_amber_rounded, size: 16, color: Colors.orange.shade700),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    '선택된 항목에 여러 본부가 포함되어 있습니다. '
+                    'Access담당 기준 가장 많은 본부(${widget.initialAccessDivision})의 DS 파일로 자동 조회됩니다.',
+                    style: TextStyle(fontSize: 12, color: Colors.orange.shade800),
+                  ),
+                ),
+              ]),
+            ),
+        ],
         // 본부 + DS 파일 선택 카드
         _buildCard(
           Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
