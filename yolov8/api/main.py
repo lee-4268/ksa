@@ -3365,9 +3365,9 @@ def _parse_zip_metadata_sync(zip_temp_path: str, progress_cb=None) -> tuple:
 
             try:
                 try:
-                    workbook = xlrd.open_workbook(xls_tmp_path)
+                    workbook = xlrd.open_workbook(xls_tmp_path, on_demand=True)
                 except Exception:
-                    workbook = xlrd.open_workbook(xls_tmp_path, ignore_workbook_corruption=True)
+                    workbook = xlrd.open_workbook(xls_tmp_path, on_demand=True, ignore_workbook_corruption=True)
             except Exception as e:
                 logger.warning(f"DS metadata: XLS 파싱 실패 ({base_fname}): {e}")
                 os.remove(xls_tmp_path)
@@ -3378,6 +3378,7 @@ def _parse_zip_metadata_sync(zip_temp_path: str, progress_cb=None) -> tuple:
                 sheet = workbook.sheet_by_index(sheet_idx)
                 orig_sheet_name = sheet.name.strip()
                 if sheet.nrows < 2:
+                    workbook.unload_sheet(sheet_idx)
                     continue
 
                 # (100) 파일: 모든 시트에 '(검사전)' 접미사 추가
@@ -3417,6 +3418,7 @@ def _parse_zip_metadata_sync(zip_temp_path: str, progress_cb=None) -> tuple:
                     entry["orig"] = orig_sheet_name
                 file_manifest[sheet_name].append(entry)
                 file_rows += data_rows
+                workbook.unload_sheet(sheet_idx)
 
             workbook.release_resources()
             del workbook
@@ -3500,14 +3502,17 @@ def _read_xls_from_zip_paginated_sync(
                 fname = entry["f"]
                 # XLS 내 실제 시트명 (리네임된 경우 "orig" 사용)
                 xls_sheet_name = entry.get("orig", sheet_name)
+                _pag_tmp = f"/tmp/ds_xls_pag_{id(zf)}_{global_row_idx}.xls"
                 try:
-                    xls_bytes = zf.read(fname)
+                    with zf.open(fname) as _src, open(_pag_tmp, "wb") as _dst:
+                        shutil.copyfileobj(_src, _dst)
                     try:
-                        wb = xlrd.open_workbook(file_contents=xls_bytes)
+                        wb = xlrd.open_workbook(_pag_tmp, on_demand=True)
                     except Exception:
-                        wb = xlrd.open_workbook(file_contents=xls_bytes, ignore_workbook_corruption=True)
+                        wb = xlrd.open_workbook(_pag_tmp, on_demand=True, ignore_workbook_corruption=True)
                 except Exception:
                     global_row_idx += entry["r"]
+                    if os.path.exists(_pag_tmp): os.remove(_pag_tmp)
                     continue
 
                 target_sheet = None
@@ -3516,10 +3521,11 @@ def _read_xls_from_zip_paginated_sync(
                     if s.name.strip() == xls_sheet_name:
                         target_sheet = s
                         break
+                    wb.unload_sheet(si)
 
                 if target_sheet is None or target_sheet.nrows < 2:
                     wb.release_resources()
-                    del xls_bytes
+                    if os.path.exists(_pag_tmp): os.remove(_pag_tmp)
                     global_row_idx += entry["r"]
                     continue
 
@@ -3552,13 +3558,13 @@ def _read_xls_from_zip_paginated_sync(
                             })
                             if len(items) >= limit:
                                 wb.release_resources()
-                                del xls_bytes
+                                if os.path.exists(_pag_tmp): os.remove(_pag_tmp)
                                 break
                         scanned += 1
                     global_row_idx += 1
 
                 wb.release_resources()
-                del xls_bytes
+                if os.path.exists(_pag_tmp): os.remove(_pag_tmp)
 
             next_offset = offset + len(items)
             has_more = len(items) >= limit
@@ -3586,15 +3592,18 @@ def _read_xls_from_zip_paginated_sync(
                     cumulative += file_row_count
                     continue
 
+                _pag_tmp2 = f"/tmp/ds_xls_pag2_{id(zf)}_{global_row_idx}.xls"
                 try:
-                    xls_bytes = zf.read(fname)
+                    with zf.open(fname) as _src, open(_pag_tmp2, "wb") as _dst:
+                        shutil.copyfileobj(_src, _dst)
                     try:
-                        wb = xlrd.open_workbook(file_contents=xls_bytes)
+                        wb = xlrd.open_workbook(_pag_tmp2, on_demand=True)
                     except Exception:
-                        wb = xlrd.open_workbook(file_contents=xls_bytes, ignore_workbook_corruption=True)
+                        wb = xlrd.open_workbook(_pag_tmp2, on_demand=True, ignore_workbook_corruption=True)
                 except Exception:
                     global_row_idx += file_row_count
                     cumulative += file_row_count
+                    if os.path.exists(_pag_tmp2): os.remove(_pag_tmp2)
                     continue
 
                 target_sheet = None
@@ -3603,10 +3612,11 @@ def _read_xls_from_zip_paginated_sync(
                     if s.name.strip() == xls_sheet_name:
                         target_sheet = s
                         break
+                    wb.unload_sheet(si)
 
                 if target_sheet is None or target_sheet.nrows < 2:
                     wb.release_resources()
-                    del xls_bytes
+                    if os.path.exists(_pag_tmp2): os.remove(_pag_tmp2)
                     global_row_idx += file_row_count
                     cumulative += file_row_count
                     continue
@@ -3644,7 +3654,7 @@ def _read_xls_from_zip_paginated_sync(
                     rows_remaining -= 1
 
                 wb.release_resources()
-                del xls_bytes
+                if os.path.exists(_pag_tmp2): os.remove(_pag_tmp2)
 
             next_offset = offset + len(items)
             total_sheet_rows = sum(e["r"] for e in file_manifest_entries)
@@ -4031,9 +4041,9 @@ def _process_zip_to_xlsx_sync(zip_temp_path: str, progress_cb=None,
                 with zf.open(fname) as src, open(xls_tmp, "wb") as dst:
                     shutil.copyfileobj(src, dst)
                 try:
-                    workbook = xlrd.open_workbook(xls_tmp)
+                    workbook = xlrd.open_workbook(xls_tmp, on_demand=True)
                 except Exception:
-                    workbook = xlrd.open_workbook(xls_tmp, ignore_workbook_corruption=True)
+                    workbook = xlrd.open_workbook(xls_tmp, on_demand=True, ignore_workbook_corruption=True)
             except Exception as e:
                 logger.warning(f"DS xlsx Pass1: {fname} 실패: {e}")
                 if os.path.exists(xls_tmp):
@@ -4045,6 +4055,7 @@ def _process_zip_to_xlsx_sync(zip_temp_path: str, progress_cb=None,
                 for si in range(workbook.nsheets):
                     s = workbook.sheet_by_index(si)
                     hundred_sheet_names.append(f"{s.name.strip()}({s.nrows}행)")
+                    workbook.unload_sheet(si)
                 logger.info(f"DS xlsx Pass1: (100) 파일 {os.path.basename(name_map[fname])} "
                             f"시트: {hundred_sheet_names}")
 
@@ -4052,6 +4063,7 @@ def _process_zip_to_xlsx_sync(zip_temp_path: str, progress_cb=None,
                 sheet = workbook.sheet_by_index(sheet_idx)
                 orig_sheet_name = sheet.name.strip()
                 if sheet.nrows < 2:
+                    workbook.unload_sheet(sheet_idx)
                     continue
 
                 if is_hundred:
@@ -4065,6 +4077,7 @@ def _process_zip_to_xlsx_sync(zip_temp_path: str, progress_cb=None,
                     if h:
                         headers.append(h)
                 if not headers:
+                    workbook.unload_sheet(sheet_idx)
                     continue
 
                 if sheet_name not in sheet_headers:
@@ -4075,6 +4088,7 @@ def _process_zip_to_xlsx_sync(zip_temp_path: str, progress_cb=None,
                         if h not in existing:
                             sheet_headers[sheet_name].append(h)
                             existing.add(h)
+                workbook.unload_sheet(sheet_idx)
 
             workbook.release_resources()
             del workbook
@@ -4156,12 +4170,13 @@ def _process_zip_to_xlsx_sync(zip_temp_path: str, progress_cb=None,
                     with zf.open(fname) as src, open(xls_scan_path, 'wb') as dst:
                         shutil.copyfileobj(src, dst)
                     try:
-                        wb_scan = xlrd.open_workbook(xls_scan_path)
+                        wb_scan = xlrd.open_workbook(xls_scan_path, on_demand=True)
                     except Exception:
-                        wb_scan = xlrd.open_workbook(xls_scan_path, ignore_workbook_corruption=True)
+                        wb_scan = xlrd.open_workbook(xls_scan_path, on_demand=True, ignore_workbook_corruption=True)
                     for si in range(wb_scan.nsheets):
                         sh = wb_scan.sheet_by_index(si)
                         if sh.name.strip() != inst_sheet_name or sh.nrows < 2:
+                            wb_scan.unload_sheet(si)
                             continue
                         hdr = [_xlrd_cell_to_str(sh, 0, c) for c in range(sh.ncols)]
                         lic_col = next((i for i, h in enumerate(hdr) if h == '허가번호'), -1)
@@ -4180,6 +4195,7 @@ def _process_zip_to_xlsx_sync(zip_temp_path: str, progress_cb=None,
                             hdqt = _addr_to_hdqt(addr.strip())
                             if hdqt:
                                 lic_to_hdqt[lic] = hdqt
+                        wb_scan.unload_sheet(si)
                     wb_scan.release_resources()
                     del wb_scan
                 except Exception as e:
@@ -4266,9 +4282,9 @@ def _process_zip_to_xlsx_sync(zip_temp_path: str, progress_cb=None,
 
             try:
                 try:
-                    workbook = xlrd.open_workbook(xls_tmp_path)
+                    workbook = xlrd.open_workbook(xls_tmp_path, on_demand=True)
                 except Exception:
-                    workbook = xlrd.open_workbook(xls_tmp_path, ignore_workbook_corruption=True)
+                    workbook = xlrd.open_workbook(xls_tmp_path, on_demand=True, ignore_workbook_corruption=True)
             except Exception as e:
                 logger.warning(f"DS xlsx Pass2: XLS 파싱 실패 ({base_fname}): {e}")
                 os.remove(xls_tmp_path)
@@ -4279,6 +4295,7 @@ def _process_zip_to_xlsx_sync(zip_temp_path: str, progress_cb=None,
                 sheet = workbook.sheet_by_index(sheet_idx)
                 orig_sheet_name = sheet.name.strip()
                 if sheet.nrows < 2:
+                    workbook.unload_sheet(sheet_idx)
                     continue
 
                 if is_hundred:
@@ -4287,6 +4304,7 @@ def _process_zip_to_xlsx_sync(zip_temp_path: str, progress_cb=None,
                     sheet_name = orig_sheet_name
 
                 if sheet_name not in worksheets:
+                    workbook.unload_sheet(sheet_idx)
                     continue
 
                 xws = worksheets[sheet_name]
@@ -4300,6 +4318,7 @@ def _process_zip_to_xlsx_sync(zip_temp_path: str, progress_cb=None,
                     if h and h in col_map:
                         xls_col_map.append((col, col_map[h]))
                 if not xls_col_map:
+                    workbook.unload_sheet(sheet_idx)
                     continue
 
                 # hdqt_filter용 허가번호 컬럼 인덱스 (xlsx 기준)
@@ -4309,7 +4328,6 @@ def _process_zip_to_xlsx_sync(zip_temp_path: str, progress_cb=None,
 
                 row_count = 0
                 for row_idx in range(1, sheet.nrows):
-                    # 현재 행 1개만 메모리에 보유
                     row_vals = [""] * num_cols
                     for xls_col, xlsx_col in xls_col_map:
                         val = _xlrd_cell_to_str(sheet, row_idx, xls_col)
@@ -4340,13 +4358,13 @@ def _process_zip_to_xlsx_sync(zip_temp_path: str, progress_cb=None,
 
                     ri = sheet_row_idx[sheet_name]
                     xws.set_row(ri, 12.75)
-                    for ci, val in enumerate(row_vals):
-                        xws.write(ri, ci, val, data_fmt)
+                    xws.write_row(ri, 0, row_vals, data_fmt)
                     sheet_row_idx[sheet_name] += 1
                     row_count += 1
 
                 sheet_stats[sheet_name] += row_count
                 file_rows += row_count
+                workbook.unload_sheet(sheet_idx)
 
             workbook.release_resources()
             del workbook
