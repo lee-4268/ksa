@@ -46,6 +46,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
   // 일정화면 → 전산비교 이동 시 전달할 데이터
   ({List<String> nos, String? div, bool multi})? _pendingCompare;
+  // 전산비교 → 일정화면 이동 시 전달할 허가번호
+  List<String>? _pendingSchedule;
 
   @override
   void initState() {
@@ -113,17 +115,22 @@ class _HomeScreenState extends State<HomeScreen> {
     switch (title) {
       case '홈': return _HomeContent(onNavigate: (i) { setState(() => _selectedIndex = i); _logMenuAccess(items[i].title); }, menuItems: items);
       case '실적 관리': return const InspectionResultsScreen();
-      case '일정 및 통계': return InspectionScheduleScreen(
-        onCompareNavigate: (nos, div, multi) {
-          final compareIdx = items.indexWhere((m) => m.title == '전산비교');
-          if (compareIdx >= 0) {
-            setState(() {
-              _pendingCompare = (nos: nos, div: div, multi: multi);
-              _selectedIndex = compareIdx;
-            });
-          }
-        },
-      );
+      case '일정 및 통계': {
+        final schedNos = _pendingSchedule;
+        _pendingSchedule = null;
+        return InspectionScheduleScreen(
+          initialLicenseNos: schedNos,
+          onCompareNavigate: (nos, div, multi) {
+            final compareIdx = items.indexWhere((m) => m.title == '전산비교');
+            if (compareIdx >= 0) {
+              setState(() {
+                _pendingCompare = (nos: nos, div: div, multi: multi);
+                _selectedIndex = compareIdx;
+              });
+            }
+          },
+        );
+      }
       case '현장 수검 Map': return const InspectionMyListScreen();
       case 'DS 데이터': return const DsDashboardScreen();
       case 'DS 병합': return const DsMergeScreen();
@@ -136,6 +143,15 @@ class _HomeScreenState extends State<HomeScreen> {
           initialLicenseNos: data?.nos,
           initialAccessDivision: data?.div,
           initialMultiDivision: data?.multi ?? false,
+          onScheduleNavigate: (nos) {
+            final schedIdx = items.indexWhere((m) => m.title == '일정 및 통계');
+            if (schedIdx >= 0) {
+              setState(() {
+                _pendingSchedule = nos;
+                _selectedIndex = schedIdx;
+              });
+            }
+          },
         );
       }
       case '부적합 관리': return const InadequateManagementScreen();

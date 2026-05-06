@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import '../services/auth_service.dart';
 import '../services/ds_data_service.dart';
 import '../services/erp_ds_compare_service.dart';
+import '../services/inspection_service.dart';
 import '../services/excel_export_stub.dart'
     if (dart.library.io) '../services/excel_export_mobile.dart'
     if (dart.library.html) '../services/excel_export_web.dart' as platform_export;
@@ -19,12 +20,14 @@ class ErpDsCompareScreen extends StatefulWidget {
   final List<String>? initialLicenseNos;
   final String? initialAccessDivision;
   final bool initialMultiDivision;
+  final void Function(List<String> licenseNos)? onScheduleNavigate;
 
   const ErpDsCompareScreen({
     super.key,
     this.initialLicenseNos,
     this.initialAccessDivision,
     this.initialMultiDivision = false,
+    this.onScheduleNavigate,
   });
 
   @override
@@ -66,6 +69,7 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
 
   final _service = ErpDsCompareService();
   final _dsService = DsDataService();
+  final _inspectionService = InspectionService();
   final _inputCtrl = TextEditingController();
 
   int _step = 0;
@@ -85,6 +89,7 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
       final auth = context.read<AuthService>();
       _service.setAuthToken(auth.authToken);
       _dsService.setAuthToken(auth.authToken);
+      _inspectionService.setAuthToken(auth.authToken);
 
       // 일정화면에서 넘어온 경우 허가번호 자동 입력
       if (widget.initialLicenseNos != null && widget.initialLicenseNos!.isNotEmpty) {
@@ -204,6 +209,25 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
       _filter = '전체';
       _error = null;
     });
+  }
+
+  Future<void> _exportInspectionReport() async {
+    final licenseNos = _result!.items.map((e) => e.zpwino).toList();
+    final d = ProgressDialog(context);
+    d.show(message: '검사내역서 생성 중...');
+    try {
+      final year = DateTime.now().year;
+      final bytes = await _inspectionService.exportInspectionReport(
+        year: year,
+        licenseNos: licenseNos,
+        sheetTitle: '전산비교_${licenseNos.length}건',
+      );
+      final fileName = '검사내역서_${year}년_전산비교.xlsx';
+      await platform_export.saveExcelFile(bytes, fileName);
+      await d.complete(message: '검사내역서 다운로드 완료');
+    } catch (e) {
+      await d.error(message: '검사내역서 생성 실패: $e');
+    }
   }
 
   @override
@@ -759,6 +783,35 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
                 ),
               ),
               const Spacer(),
+              if (widget.onScheduleNavigate != null) ...[
+                ElevatedButton.icon(
+                  onPressed: () => widget.onScheduleNavigate!(
+                      _result!.items.map((e) => e.zpwino).toList()),
+                  icon: const Icon(Icons.event_note, size: 16),
+                  label: const Text('일정 및 통계로 이동', style: TextStyle(fontSize: 13)),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF10B981),
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                    elevation: 0,
+                  ),
+                ),
+                const SizedBox(width: 8),
+              ],
+              ElevatedButton.icon(
+                onPressed: _exportInspectionReport,
+                icon: const Icon(Icons.assignment, size: 16),
+                label: const Text('검사내역서 출력', style: TextStyle(fontSize: 13)),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF1565C0),
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  elevation: 0,
+                ),
+              ),
+              const SizedBox(width: 8),
               ElevatedButton.icon(
                 onPressed: _exportExcel,
                 icon: const Icon(Icons.download, size: 16),

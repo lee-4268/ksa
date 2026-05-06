@@ -12,7 +12,8 @@ import 'dart:html' as html;
 
 class InspectionScheduleScreen extends StatefulWidget {
   final void Function(List<String> licenseNos, String? accessDivision, bool multiDivision)? onCompareNavigate;
-  const InspectionScheduleScreen({super.key, this.onCompareNavigate});
+  final List<String>? initialLicenseNos;
+  const InspectionScheduleScreen({super.key, this.onCompareNavigate, this.initialLicenseNos});
   @override
   State<InspectionScheduleScreen> createState() => _InspectionScheduleScreenState();
 }
@@ -171,6 +172,12 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     _svc = InspectionService()..setAuthToken(context.read<AuthService>().authToken);
     _cacheAuthValues();
     _applyDefaultFilter();
+    if (widget.initialLicenseNos != null && widget.initialLicenseNos!.isNotEmpty) {
+      final searchText = widget.initialLicenseNos!.join(',');
+      _pSearch = searchText;
+      _aSearch = searchText;
+      _searchCtrl.text = searchText;
+    }
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _loadOrgMap();
       _loadAll();
