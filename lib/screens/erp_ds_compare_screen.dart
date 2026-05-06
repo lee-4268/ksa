@@ -790,7 +790,7 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
                   icon: const Icon(Icons.event_note, size: 16),
                   label: const Text('일정 및 통계로 이동', style: TextStyle(fontSize: 13)),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF10B981),
+                    backgroundColor: const Color(0xFF6A1B9A),
                     foregroundColor: Colors.white,
                     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
