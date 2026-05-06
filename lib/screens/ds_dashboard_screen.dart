@@ -183,282 +183,7 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
   // Excel Export
   // ============================================================
 
-  static const _sudoHdqts = ['강남', '강북', '경기', '인천'];
-  static const Color _green = Color(0xFF43A047);
-
-  Future<String?> _showHdqtSelectDialog(DsUploadInfo upload) async {
-    // 수도권 본부(divisionCode 10)만 dialog 표시
-    final isSuDo = upload.divisionCode == '10'
-        || (upload.divisionName ?? '').contains('수도권');
-    if (!isSuDo) return null; // 수도권 아니면 dialog 없이 전체 다운로드
-
-    // 빌드 상태 먼저 조회
-    Map<String, bool> cached = {};
-    bool isBuilding = false;
-    bool inQueue = false;
-    String? currentHdqt;
-    int? estimatedRemainingSec;
-    try {
-      final authToken = context.read<AuthService>().authToken;
-      final uri = Uri.parse('$_baseUrl/ds/xlsx-build-status').replace(queryParameters: {
-        'divisionId': upload.divisionId,
-        'divisionCode': upload.divisionCode,
-        'importDate': upload.actualDate,
-      });
-      final resp = await http.get(uri, headers: {
-        if (authToken != null) 'Authorization': 'Bearer $authToken',
-      }).timeout(const Duration(seconds: 5));
-      if (resp.statusCode == 200) {
-        final data = jsonDecode(resp.body) as Map<String, dynamic>;
-        isBuilding = data['building'] == true;
-        inQueue = data['in_queue'] == true;
-        currentHdqt = data['current'] as String?;
-        estimatedRemainingSec = data['estimated_remaining_sec'] as int?;
-        final rawCached = data['cached'] as Map<String, dynamic>? ?? {};
-        cached = rawCached.map((k, v) => MapEntry(k, v == true));
-      }
-    } catch (_) {}
-
-    String _fmtRemaining(int? secs) {
-      if (secs == null) return '';
-      if (secs <= 0) return '곧 완료';
-      final m = secs ~/ 60;
-      final s = secs % 60;
-      if (m == 0) return '약 ${s}초';
-      if (s == 0) return '약 ${m}분';
-      return '약 ${m}분 ${s}초';
-    }
-
-    String? selected;
-    if (!mounted) return null;
-    return showDialog<String?>(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setS) {
-          // 본부 선택 시 캐시 없으면 다운로드 불가 (전체는 항상 허용)
-          final selectedNotCached = selected != null && selected!.isNotEmpty
-              && cached[selected] == false;
-          final canDownload = selected != null && !selectedNotCached;
-
-          Widget selectChip(String label, bool isSelected, VoidCallback onTap, {bool? hasCached, bool isCurrent = false}) {
-            final Color borderColor;
-            final Color bgColor;
-            final Color textColor;
-            if (isSelected) {
-              borderColor = _green;
-              bgColor = _green.withOpacity(0.08);
-              textColor = _green;
-            } else {
-              borderColor = Colors.grey.shade300;
-              bgColor = Colors.grey.shade50;
-              textColor = Colors.black87;
-            }
-            Widget? trailingIcon;
-            if (isCurrent) {
-              trailingIcon = const SizedBox(
-                width: 10, height: 10,
-                child: CircularProgressIndicator(strokeWidth: 1.5, color: Colors.orange),
-              );
-            } else if (hasCached == true) {
-              trailingIcon = const Icon(Icons.check_circle, size: 12, color: Color(0xFF43A047));
-            } else if (hasCached == false) {
-              trailingIcon = Icon(Icons.hourglass_empty, size: 12, color: Colors.grey.shade400);
-            }
-            return InkWell(
-              onTap: onTap,
-              borderRadius: BorderRadius.circular(8),
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 150),
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                decoration: BoxDecoration(
-                  color: bgColor,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: borderColor, width: isSelected ? 1.5 : 1),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(label, style: TextStyle(fontSize: 12, color: textColor,
-                        fontWeight: isSelected ? FontWeight.bold : FontWeight.normal)),
-                    if (trailingIcon != null) ...[
-                      const SizedBox(width: 4),
-                      trailingIcon,
-                    ],
-                  ],
-                ),
-              ),
-            );
-          }
-
-          return AlertDialog(
-            backgroundColor: Colors.white,
-            surfaceTintColor: Colors.white,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-            titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 10),
-            title: Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: _green.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Icon(Icons.description_outlined, color: _green, size: 20),
-                ),
-                const SizedBox(width: 12),
-                const Text('Excel 다운로드 옵션',
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-              ],
-            ),
-            content: SizedBox(
-              width: 400,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text('본부 선택',
-                      style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.black87)),
-                  const SizedBox(height: 4),
-                  Text('수도권 DS 파일을 본부별로 분리하여 다운로드합니다.',
-                      style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
-                  if (isBuilding || inQueue) ...[
-                    const SizedBox(height: 8),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                      decoration: BoxDecoration(
-                        color: Colors.orange.shade50,
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: Colors.orange.shade200),
-                      ),
-                      child: Row(
-                        children: [
-                          const SizedBox(width: 12, height: 12,
-                              child: CircularProgressIndicator(strokeWidth: 1.5, color: Colors.orange)),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              [
-                                if (inQueue && !isBuilding) 'xlsx 빌드 대기 중...'
-                                else if (currentHdqt != null) '$currentHdqt 본부 xlsx 빌드 중...'
-                                else 'xlsx 빌드 중...',
-                                if (estimatedRemainingSec != null)
-                                  '(완료까지 ${_fmtRemaining(estimatedRemainingSec)} 남음)',
-                              ].join(' '),
-                              style: TextStyle(fontSize: 11, color: Colors.orange.shade800),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                  // 선택한 본부 캐시 없을 때 경고
-                  if (selectedNotCached) ...[
-                    const SizedBox(height: 8),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                      decoration: BoxDecoration(
-                        color: Colors.red.shade50,
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: Colors.red.shade200),
-                      ),
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Icon(Icons.info_outline, size: 15, color: Colors.red.shade700),
-                          const SizedBox(width: 6),
-                          Expanded(
-                            child: Text(
-                              '$selected 본부 xlsx가 아직 준비되지 않았습니다.\n빌드 완료 후 다시 시도해 주세요.'
-                              '${estimatedRemainingSec != null ? '\n예상 대기: ${_fmtRemaining(estimatedRemainingSec)}' : ''}',
-                              style: TextStyle(fontSize: 11, color: Colors.red.shade800, height: 1.5),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                  const SizedBox(height: 12),
-                  // 범례
-                  Row(
-                    children: [
-                      const Icon(Icons.check_circle, size: 11, color: Color(0xFF43A047)),
-                      const SizedBox(width: 3),
-                      Text('캐시됨', style: TextStyle(fontSize: 10, color: Colors.grey.shade600)),
-                      const SizedBox(width: 10),
-                      Icon(Icons.hourglass_empty, size: 11, color: Colors.grey.shade400),
-                      const SizedBox(width: 3),
-                      Text('빌드 필요', style: TextStyle(fontSize: 10, color: Colors.grey.shade600)),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [
-                      selectChip('전체 (분리 없음)', selected == '', () => setS(() => selected = '')),
-                      ..._sudoHdqts.map((h) => selectChip(
-                        h, selected == h, () => setS(() => selected = h),
-                        hasCached: cached[h],
-                        isCurrent: currentHdqt == h,
-                      )),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-            actionsPadding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
-            actions: [
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed: () => Navigator.pop(ctx, null),
-                      style: OutlinedButton.styleFrom(
-                        side: BorderSide(color: Colors.grey.shade300),
-                        padding: const EdgeInsets.symmetric(vertical: 16),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                      ),
-                      child: Text('취소',
-                          style: TextStyle(color: Colors.grey.shade600, fontWeight: FontWeight.bold)),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: ElevatedButton(
-                      onPressed: canDownload
-                          ? () => Navigator.pop(ctx, selected)
-                          : null,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: _green,
-                        foregroundColor: Colors.white,
-                        elevation: 0,
-                        padding: const EdgeInsets.symmetric(vertical: 16),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                      ),
-                      child: const Text('다운로드 시작',
-                          style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          );
-        },
-      ),
-    );
-  }
-
   Future<void> _startExport(DsUploadInfo upload) async {
-    // 수도권이면 본부 선택 dialog 먼저
-    final isSuDo = upload.divisionCode == '10'
-        || (upload.divisionName ?? '').contains('수도권');
-    String? selectedHdqt;
-    if (isSuDo) {
-      final dlgResult = await _showHdqtSelectDialog(upload);
-      if (dlgResult == null) return; // 취소
-      selectedHdqt = dlgResult.isEmpty ? null : dlgResult;
-    }
-
     final exportId = '${upload.divisionId}_${upload.actualDate}_${upload.divisionCode}';
     setState(() {
       _exportingId = exportId;
@@ -471,10 +196,8 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
         'divisionId': upload.divisionId,
         'importDate': upload.actualDate,
         'divisionCode': upload.divisionCode,
-        if (selectedHdqt != null) 'hdqt': selectedHdqt,
       };
-      final hdqtSuffix = selectedHdqt != null ? '_$selectedHdqt' : '';
-      final filename = '${upload.divisionName}${hdqtSuffix}_${upload.actualDate}_DS.xlsx';
+      final filename = '${upload.divisionName}_${upload.actualDate}_DS.xlsx';
 
       void onProgress(String stage, double percent) {
         if (mounted) {
@@ -503,8 +226,7 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
 
             // 1. 원본 ZIP → EC2 프록시 → 브라우저 병합 (신규 업로드)
             if (type == 'zip') {
-              // 서버에서 xlsx 빌드 진행 중이면 안내 후 중단 (수도권은 ZIP fallback으로 진행)
-              if (data['building'] == true && !isSuDo) {
+              if (data['building'] == true) {
                 if (mounted) {
                   setState(() => _exportingId = null);
                   final d = ProgressDialog(context);
@@ -513,7 +235,6 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
                 return;
               }
               onProgress('Excel 파일 생성 준비 중...', 3);
-              // EC2 프록시 URL 사용 (S3 CORS 우회)
               final proxyUri = Uri.parse('$_baseUrl/ds/proxy-raw-zip')
                   .replace(queryParameters: params);
               final metaJson = jsonEncode({
@@ -521,7 +242,6 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
                 'divisionId': upload.divisionId,
                 'divisionCode': upload.divisionCode,
                 'importDate': upload.actualDate,
-                if (selectedHdqt != null) 'hdqt': selectedHdqt,
               });
               final result = await platform_export.exportDsFromS3(
                 s3Url: proxyUri.toString(),

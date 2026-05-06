@@ -5251,13 +5251,11 @@ async def _merge_hdqt_xlsx_from_s3(
 
 async def _build_xlsx_cache_background(division_id: str, division_code: str, import_date: str):
     """S3 ZIP → xlsx 빌드 → S3 캐싱.
-    수도권(code '10')은 1-Pass Fan-out으로 5개(강남/강북/경기/인천/전체합) 동시 생성.
     실패해도 export 시 on-demand 빌드 가능하므로 non-fatal.
     """
     global _xlsx_build_cancel_event, _xlsx_build_current, _xlsx_build_process, _xlsx_build_start_time
     _xlsx_build_current = (division_id, division_code, import_date)
     _xlsx_build_start_time = time.time()
-    is_sudo = (division_code == '10')
     cancel_ev = threading.Event()
     _xlsx_build_cancel_event = cancel_ev
     _xlsx_build_process = None
@@ -5278,52 +5276,10 @@ async def _build_xlsx_cache_background(division_id: str, division_code: str, imp
         if cancel_ev.is_set():
             raise InterruptedError("xlsx build cancelled before processing")
 
-        if is_sudo:
-            # 1-Pass Fan-out: ZIP 1번 읽어 5개(강남/강북/경기/인천/전체합) 동시 생성
-            city_hdqt_map = None
-            try:
-                import sqlite3
-                conn = sqlite3.connect(_INSP_DB, timeout=10)
-                rows = conn.execute(
-                    "SELECT 도로명주소, access담당 FROM inspection_targets "
-                    "WHERE 도로명주소 IS NOT NULL AND 도로명주소 != '' "
-                    "AND access담당 IS NOT NULL AND access담당 != ''"
-                ).fetchall()
-                conn.close()
-                from collections import defaultdict
-                city_counts: dict = defaultdict(lambda: defaultdict(int))
-                for addr, hdqt in rows:
-                    parts = addr.split()
-                    if len(parts) < 2:
-                        continue
-                    p0 = parts[0]
-                    if '서울' in p0: region = '서울'
-                    elif '인천' in p0: region = '인천'
-                    elif '경기' in p0: region = '경기'
-                    else: continue
-                    city_counts[f"{region} {parts[1]}"][hdqt] += 1
-                city_hdqt_map = {
-                    city: max(cnt, key=cnt.get)
-                    for city, cnt in city_counts.items()
-                }
-                logger.info(f"DS bg xlsx 수도권: city_hdqt_map {len(city_hdqt_map)}개 시/군 로드")
-            except Exception as e:
-                logger.warning(f"DS bg xlsx 수도권: city_hdqt_map 로드 실패 (fallback 사용): {e}")
-
-            # None = 전체합 (필터 없음), ZIP 1번 읽기로 5개 동시 생성
-            await _build_multiple_xlsx_cache(
-                division_id, division_code, import_date,
-                zip_temp, cancel_ev,
-                hdqts=['강남', '강북', '경기', '인천', None],
-                city_hdqt_map=city_hdqt_map,
-            )
-
-        else:
-            # 비수도권: 기존 단일 xlsx 빌드
-            await _build_one_xlsx_cache(
-                division_id, division_code, import_date,
-                zip_temp, cancel_ev,
-            )
+        await _build_one_xlsx_cache(
+            division_id, division_code, import_date,
+            zip_temp, cancel_ev,
+        )
     except asyncio.CancelledError:
         logger.warning(f"DS bg xlsx cache CancelledError: {division_id}/{division_code}_{import_date} — 태스크 취소됨")
         raise  # 상위 _xlsx_build_worker도 중단시켜야 함
@@ -5504,19 +5460,14 @@ async def ds_export_presign(
     divisionId: str = Query(...),
     importDate: str = Query(...),
     divisionCode: str = Query(""),
-    hdqt: str = Query(""),
 ):
-    """S3 Export용 presigned URL - 병합 xlsx 우선, 없으면 원본 ZIP
-    hdqt: 본부명 (수도권 분리 시) — 지정하면 본부별 xlsx 우선 조회
-    """
+    """S3 Export용 presigned URL - xlsx 우선, 없으면 원본 ZIP"""
     await _verify_auth(request)
     try:
         s3 = get_s3_client()
 
-        # 1순위: 미리 생성된 xlsx (본부별 or 전체) → EC2 프록시로 반환 (S3 CORS 우회)
-        hdqt_key = _HDQT_S3_KEY.get(hdqt, hdqt) if hdqt else None
-        suffix = f"_{hdqt_key}" if hdqt_key else ""
-        xlsx_key = f"ds-exports/{divisionId}/{divisionCode}_{importDate}{suffix}.xlsx"
+        # 1순위: 미리 생성된 xlsx → EC2 프록시로 반환 (S3 CORS 우회)
+        xlsx_key = f"ds-exports/{divisionId}/{divisionCode}_{importDate}.xlsx"
         _validate_s3_key(xlsx_key, ALLOWED_S3_READ_PREFIXES)
         try:
             s3.head_object(Bucket=S3_BUCKET_NAME, Key=xlsx_key)
@@ -5525,8 +5476,6 @@ async def ds_export_presign(
             forwarded_host = request.headers.get("x-forwarded-host") or request.headers.get("host", "")
             origin = f"{forwarded_proto}://{forwarded_host}"
             qs = f"divisionId={divisionId}&importDate={importDate}&divisionCode={divisionCode}"
-            if hdqt:
-                qs += f"&hdqt={hdqt}"
             # 토큰을 쿼리파라미터로 포함 (브라우저 fetch 시 헤더 설정 불필요)
             raw_token = request.headers.get("Authorization", "")[7:]  # "Bearer " 제거
             if raw_token:
@@ -5564,53 +5513,33 @@ async def ds_export_presign(
 
 @app.get("/ds/xlsx-build-status")
 async def ds_xlsx_build_status(request: Request, divisionId: str, divisionCode: str, importDate: str):
-    """수도권 본부별 xlsx 캐시 존재 여부 + 현재 빌드 큐 상태 반환."""
+    """xlsx 캐시 존재 여부 + 현재 빌드 큐 상태 반환."""
     await _verify_auth(request)
     s3 = get_s3_client()
-    _sudoHdqts = ["강남", "강북", "경기", "인천"]
-    cached = {}
-    for hdqt in _sudoHdqts:
-        hdqt_key = _HDQT_S3_KEY.get(hdqt, hdqt)
-        key = f"ds-exports/{divisionId}/{divisionCode}_{importDate}_{hdqt_key}.xlsx"
-        try:
-            s3.head_object(Bucket=S3_BUCKET_NAME, Key=key)
-            cached[hdqt] = True
-        except Exception:
-            cached[hdqt] = False
+    key = f"ds-exports/{divisionId}/{divisionCode}_{importDate}.xlsx"
+    cached = False
+    try:
+        s3.head_object(Bucket=S3_BUCKET_NAME, Key=key)
+        cached = True
+    except Exception:
+        pass
 
     _target = (divisionId, divisionCode, importDate)
     is_building = _xlsx_build_current == _target
     in_queue = _target in _xlsx_build_queue
 
-    # 현재 빌드 중인 본부 = 캐시 안 된 것 중 첫 번째
-    current_hdqt = None
-    if is_building:
-        for hdqt in _sudoHdqts:
-            if not cached[hdqt]:
-                current_hdqt = hdqt
-                break
-
-    # 예상 남은 시간 계산
-    # 수도권 4개 본부 순차 빌드: 본부당 평균 4분 기준
-    SECS_PER_HDQT = 240
-    cached_count = sum(1 for v in cached.values() if v)
-    remaining_count = len(_sudoHdqts) - cached_count
+    SECS_TOTAL = 300
     estimated_remaining_sec = None
     elapsed_sec = None
     if is_building and _xlsx_build_start_time:
         elapsed_sec = int(time.time() - _xlsx_build_start_time)
-        # 경과 시간 기반으로 현재 본부 진행률 보정
-        hdqts_done = cached_count  # 완료된 본부 수
-        current_hdqt_elapsed = elapsed_sec - hdqts_done * SECS_PER_HDQT
-        current_hdqt_remaining = max(0, SECS_PER_HDQT - current_hdqt_elapsed)
-        estimated_remaining_sec = current_hdqt_remaining + max(0, remaining_count - 1) * SECS_PER_HDQT
+        estimated_remaining_sec = max(0, SECS_TOTAL - elapsed_sec)
     elif in_queue:
-        estimated_remaining_sec = remaining_count * SECS_PER_HDQT
+        estimated_remaining_sec = SECS_TOTAL
 
     return {
         "building": is_building or in_queue,
         "in_queue": in_queue,
-        "current": current_hdqt,
         "cached": cached,
         "elapsed_sec": elapsed_sec,
         "estimated_remaining_sec": estimated_remaining_sec,
@@ -5684,7 +5613,6 @@ async def ds_proxy_xlsx(
     divisionId: str = Query(...),
     importDate: str = Query(...),
     divisionCode: str = Query(""),
-    hdqt: str = Query(""),
     token: str = Query(""),
 ):
     """S3 캐시 xlsx → EC2 프록시 스트리밍 (브라우저 CORS 우회)
@@ -5697,9 +5625,7 @@ async def ds_proxy_xlsx(
             raise HTTPException(status_code=401, detail="토큰이 만료되었거나 유효하지 않습니다")
     else:
         await _verify_auth(request)
-    hdqt_key = _HDQT_S3_KEY.get(hdqt, hdqt) if hdqt else None
-    suffix = f"_{hdqt_key}" if hdqt_key else ""
-    s3_key = f"ds-exports/{divisionId}/{divisionCode}_{importDate}{suffix}.xlsx"
+    s3_key = f"ds-exports/{divisionId}/{divisionCode}_{importDate}.xlsx"
     _validate_s3_key(s3_key, ALLOWED_S3_READ_PREFIXES)
     s3 = get_s3_client()
     try:
