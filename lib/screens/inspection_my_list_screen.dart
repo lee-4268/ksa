@@ -1134,6 +1134,13 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
+        // 전체 뷰 리셋
+        _mapFloatingButton(
+          icon: Icons.zoom_out_map,
+          color: Colors.black87,
+          onTap: () => _mapKey.currentState?.resetView(),
+        ),
+        const SizedBox(height: 8),
         // 위성뷰 토글
         _mapFloatingButton(
           icon: _isSatellite ? Icons.map : Icons.satellite_alt,

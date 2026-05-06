@@ -118,6 +118,9 @@ class PlatformMapWidgetState extends State<PlatformMapWidget>
     );
   }
 
+  /// 전체 국소가 보이도록 초기 뷰로 리셋 (외부 호출용)
+  Future<void> resetView() => fitToStations(widget.stations);
+
   /// 여러 스테이션을 한눈에 볼 수 있도록 지도 범위 조정
   Future<void> fitToStations(List<RadioStation> stations) async {
     if (_mapController == null || stations.isEmpty) return;

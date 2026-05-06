@@ -1074,6 +1074,9 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
     html.document.body?.append(html.ScriptElement()..text = addMarkerJs);
   }
 
+  /// 전체 국소가 보이도록 초기 뷰로 리셋 (외부 호출용)
+  void resetView() => _adjustMapBounds();
+
   /// 맵 bounds 조정
   void _adjustMapBounds() {
     final stationsWithCoords = widget.stations.where((s) => s.hasCoordinates).toList();
