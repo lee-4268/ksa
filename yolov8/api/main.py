@@ -3996,8 +3996,10 @@ def _process_zip_to_xlsx_sync(zip_temp_path: str, progress_cb=None,
     sheet_stats: Dict[str, int] = {}
     sheet_headers: Dict[str, list] = {}
     total_rows = 0
-    _xwb_ref = None  # xlsxwriter Workbook 참조 (예외 시 close 보장용)
-    _xlsxwriter_tmpdir = None  # xlsxwriter constant_memory 전용 tmpdir
+    _xwb_ref = None
+    _xlsxwriter_tmpdir = None
+    _sqlite_conn = None
+    sqlite_path = f"/tmp/ds_xlsx_stage_{os.getpid()}_init.db"
 
     try:
       with zipfile.ZipFile(zip_temp_path, "r") as zf:
@@ -4201,76 +4203,62 @@ def _process_zip_to_xlsx_sync(zip_temp_path: str, progress_cb=None,
                         pass
             logger.info(f"DS xlsx hdqt_filter={hdqt_filter}: 허가번호 매핑 {len(lic_to_hdqt)}건")
 
-        # ── Pass 2: xlsxwriter에 직접 행 쓰기 (sheet_rows 없이) ──
+        # ── Phase A: XLS → SQLite (파일 1개씩 처리, 처리 후 즉시 메모리 해제) ──
+        import sqlite3 as _sqlite3, json as _json
         if progress_cb:
-            progress_cb(f"xlsx 생성 중... (0/{total_files})", 10)
+            progress_cb(f"데이터 적재 중... (0/{total_files})", 10)
 
-        if not xlsx_out_path:
-            xlsx_out_path = f"/tmp/ds_xlsx_{os.path.basename(zip_temp_path)}_{id(zip_temp_path)}.xlsx"
-        # xlsxwriter constant_memory 임시파일을 전용 디렉토리에 격리
-        # → _cleanup_stale_temp_files의 tmp* 패턴에 걸리지 않도록
-        _xlsxwriter_tmpdir = f"/tmp/ds_xlsxbuild_{os.getpid()}"
-        os.makedirs(_xlsxwriter_tmpdir, exist_ok=True)
-        xwb = xlsxwriter.Workbook(xlsx_out_path, {
-            "constant_memory": True,
-            "tmpdir": _xlsxwriter_tmpdir,
-        })
-        _xwb_ref = xwb
+        sqlite_path = f"/tmp/ds_xlsx_stage_{os.getpid()}_{id(zip_temp_path)}.db"
+        if os.path.exists(sqlite_path):
+            try: os.remove(sqlite_path)
+            except Exception: pass
 
-        header_fmt = xwb.add_format({
-            "font_name": "Arial", "font_size": 10, "bold": True,
-            "align": "center", "valign": "vcenter",
-            "bg_color": "#BFBFBF",
-            "border": 1,
-        })
-        data_fmt = xwb.add_format({
-            "font_name": "Arial", "font_size": 10,
-            "align": "center", "valign": "vcenter",
-            "border": 1,
-        })
-
-        # 워크시트 생성 + 헤더 행 쓰기
-        MAX_ROWS_PER_SHEET = 1_000_000  # Excel 한도 1,048,576, 안전 여유
-        worksheets: Dict[str, object] = {}
-        sheet_row_idx: Dict[str, int] = {}
-        sheet_split_num: Dict[str, int] = {}  # 시트 분할 번호 추적
-        header_col_maps: Dict[str, Dict[str, int]] = {}
-
-        for sname, hdrs in sheet_headers.items():
-            xws = xwb.add_worksheet(sname[:31])
-            xws.set_row(0, 12.75)
-            for ci, h in enumerate(hdrs):
-                xws.set_column(ci, ci, 20)
-                xws.write(0, ci, h, header_fmt)
-            worksheets[sname] = xws
-            sheet_row_idx[sname] = 1
+        header_col_maps: Dict[str, Dict[str, int]] = {
+            sname: {h: i for i, h in enumerate(hdrs)}
+            for sname, hdrs in sheet_headers.items()
+        }
+        for sname in sheet_headers:
             sheet_stats[sname] = 0
-            header_col_maps[sname] = {h: i for i, h in enumerate(hdrs)}
 
-        last_cb_pct = 0.0
+        _sqlite_conn = _sqlite3.connect(sqlite_path)
+        _sqlite_conn.execute("PRAGMA journal_mode=OFF")
+        _sqlite_conn.execute("PRAGMA synchronous=OFF")
+        _sqlite_conn.execute("PRAGMA temp_store=MEMORY")
+        _sqlite_conn.execute("PRAGMA cache_size=-32000")  # 32MB
+        _sqlite_conn.execute(
+            "CREATE TABLE rows (id INTEGER PRIMARY KEY, sheet_name TEXT NOT NULL, values_json TEXT NOT NULL)"
+        )
+
+        BATCH_SIZE = 5000
+        row_buffer = []
+        total_inserted = 0
+
+        def _flush():
+            nonlocal row_buffer, total_inserted
+            if not row_buffer: return
+            _sqlite_conn.executemany("INSERT INTO rows (sheet_name, values_json) VALUES (?, ?)", row_buffer)
+            _sqlite_conn.commit()
+            total_inserted += len(row_buffer)
+            row_buffer = []
 
         for file_idx, fname in enumerate(process_list):
             if cancel_event and cancel_event.is_set():
-                logger.info("DS xlsx Pass2: 취소 플래그 감지 → 중단")
                 raise InterruptedError("xlsx build cancelled")
             base_fname = os.path.basename(name_map[fname]) or name_map[fname]
             is_hundred = fname in hundred_files
 
             if progress_cb:
-                pct = 10 + (file_idx / total_files) * 80
-                if pct - last_cb_pct >= 5 or file_idx == 0 or file_idx == total_files - 1:
-                    progress_cb(f"xlsx 생성 중... ({file_idx+1}/{total_files})", pct)
-                    last_cb_pct = pct
+                pct = 10 + (file_idx / total_files) * 55
+                if file_idx == 0 or file_idx == total_files - 1 or file_idx % 5 == 0:
+                    progress_cb(f"데이터 적재 중... ({file_idx+1}/{total_files})", pct)
 
-            # XLS를 디스크로 추출 후 파일 경로로 열기 (메모리 절반 절약)
             xls_tmp_path = f"/tmp/ds_xls_{id(zf)}_{file_idx}.xls"
             try:
                 with zf.open(fname) as src, open(xls_tmp_path, "wb") as dst:
-                    shutil.copyfileobj(src, dst)  # 청크 복사, RAM ~64KB
+                    shutil.copyfileobj(src, dst)
             except Exception as e:
-                logger.warning(f"DS xlsx Pass2: {fname} 읽기 실패: {e}")
-                if os.path.exists(xls_tmp_path):
-                    os.remove(xls_tmp_path)
+                logger.warning(f"DS xlsx PhaseA: {fname} 읽기 실패: {e}")
+                if os.path.exists(xls_tmp_path): os.remove(xls_tmp_path)
                 continue
 
             try:
@@ -4279,8 +4267,8 @@ def _process_zip_to_xlsx_sync(zip_temp_path: str, progress_cb=None,
                 except Exception:
                     workbook = xlrd.open_workbook(xls_tmp_path, on_demand=True, ignore_workbook_corruption=True)
             except Exception as e:
-                logger.warning(f"DS xlsx Pass2: XLS 파싱 실패 ({base_fname}): {e}")
-                os.remove(xls_tmp_path)
+                logger.warning(f"DS xlsx PhaseA: XLS 파싱 실패 ({base_fname}): {e}")
+                if os.path.exists(xls_tmp_path): os.remove(xls_tmp_path)
                 continue
 
             file_rows = 0
@@ -4290,122 +4278,140 @@ def _process_zip_to_xlsx_sync(zip_temp_path: str, progress_cb=None,
                 if sheet.nrows < 2:
                     workbook.unload_sheet(sheet_idx)
                     continue
-
-                if is_hundred:
-                    sheet_name = f"{orig_sheet_name}(검사전)"
-                else:
-                    sheet_name = orig_sheet_name
-
-                if sheet_name not in worksheets:
+                sheet_name = f"{orig_sheet_name}(검사전)" if is_hundred else orig_sheet_name
+                if sheet_name not in header_col_maps:
                     workbook.unload_sheet(sheet_idx)
                     continue
 
-                xws = worksheets[sheet_name]
                 col_map = header_col_maps[sheet_name]
                 num_cols = len(sheet_headers[sheet_name])
-
-                # XLS 컬럼 → xlsx 컬럼 매핑
-                xls_col_map = []
-                for col in range(sheet.ncols):
-                    h = _xlrd_cell_to_str(sheet, 0, col)
-                    if h and h in col_map:
-                        xls_col_map.append((col, col_map[h]))
+                xls_col_map = [
+                    (col, col_map[h])
+                    for col in range(sheet.ncols)
+                    if (h := _xlrd_cell_to_str(sheet, 0, col)) and h in col_map
+                ]
                 if not xls_col_map:
                     workbook.unload_sheet(sheet_idx)
                     continue
 
-                # hdqt_filter용 허가번호 컬럼 인덱스 (xlsx 기준)
-                lic_xlsx_col = -1
-                if hdqt_filter and lic_to_hdqt:
-                    lic_xlsx_col = header_col_maps[sheet_name].get('허가번호', -1)
+                lic_xlsx_col = header_col_maps[sheet_name].get('허가번호', -1) if hdqt_filter and lic_to_hdqt else -1
 
-                row_count = 0
                 for row_idx in range(1, sheet.nrows):
                     row_vals = [""] * num_cols
                     for xls_col, xlsx_col in xls_col_map:
                         val = _xlrd_cell_to_str(sheet, row_idx, xls_col)
-                        if val:
-                            row_vals[xlsx_col] = val
+                        if val: row_vals[xlsx_col] = val
 
-                    # 본부 필터링: 허가번호가 있는 시트에서 해당 본부 행만 포함
                     if hdqt_filter and lic_to_hdqt and lic_xlsx_col >= 0:
                         lic = row_vals[lic_xlsx_col].strip() if lic_xlsx_col < len(row_vals) else ''
                         if lic_to_hdqt.get(lic) != hdqt_filter:
                             continue
 
-                    # 시트 행 수 100만 초과 시 자동 분할
-                    if sheet_row_idx[sheet_name] > MAX_ROWS_PER_SHEET:
-                        split_num = sheet_split_num.get(sheet_name, 1) + 1
-                        sheet_split_num[sheet_name] = split_num
-                        split_ws_name = f"{sheet_name}({split_num})"[:31]
-                        new_xws = xwb.add_worksheet(split_ws_name)
-                        new_xws.set_row(0, 12.75)
-                        hdrs = sheet_headers[sheet_name]
-                        for ci, h in enumerate(hdrs):
-                            new_xws.set_column(ci, ci, 20)
-                            new_xws.write(0, ci, h, header_fmt)
-                        worksheets[sheet_name] = new_xws
-                        xws = new_xws
-                        sheet_row_idx[sheet_name] = 1
-                        logger.info(f"DS xlsx build: 시트 분할 → {split_ws_name}")
+                    row_buffer.append((sheet_name, _json.dumps(row_vals, ensure_ascii=False, separators=(',', ':'))))
+                    file_rows += 1
+                    if len(row_buffer) >= BATCH_SIZE:
+                        _flush()
 
-                    ri = sheet_row_idx[sheet_name]
-                    xws.set_row(ri, 12.75)
-                    xws.write_row(ri, 0, row_vals, data_fmt)
-                    sheet_row_idx[sheet_name] += 1
-                    row_count += 1
-
-                sheet_stats[sheet_name] += row_count
-                file_rows += row_count
                 workbook.unload_sheet(sheet_idx)
 
             workbook.release_resources()
             del workbook
-            try:
-                os.remove(xls_tmp_path)
-            except Exception:
-                pass
+            try: os.remove(xls_tmp_path)
+            except Exception: pass
             total_rows += file_rows
 
-            # 10파일마다 gc.collect, 매 파일 malloc_trim
-            if (file_idx + 1) % 10 == 0 or file_idx + 1 == total_files:
-                _release_memory()  # gc.collect + malloc_trim
-            else:
-                try:
-                    import ctypes
-                    ctypes.CDLL("libc.so.6").malloc_trim(0)
-                except Exception:
-                    pass
             if HAS_PSUTIL:
                 mem = psutil.virtual_memory()
                 swap = psutil.swap_memory()
                 total_avail_mb = (mem.available + swap.free) // (1024 * 1024)
-                logger.info(f"DS xlsx build: [{file_idx+1}/{total_files}] {base_fname} → {file_rows}행 "
-                            f"(RAM {mem.percent}%, 가용 {mem.available // (1024*1024)}MB, "
-                            f"스왑 {swap.free // (1024*1024)}MB, 합산 {total_avail_mb}MB)")
-                if total_avail_mb < 300:
-                    logger.warning(f"DS xlsx build: RAM+스왑 합산 가용 {total_avail_mb}MB < 300MB → 10초 대기 + GC")
-                    _time_mod.sleep(10)
-                    gc.collect()
+                logger.info(f"DS xlsx PhaseA: [{file_idx+1}/{total_files}] {base_fname} → {file_rows}행 "
+                            f"(가용 RAM {mem.available//(1024*1024)}MB, 스왑 {swap.free//(1024*1024)}MB, 합산 {total_avail_mb}MB)")
             else:
-                logger.info(f"DS xlsx build: [{file_idx+1}/{total_files}] {base_fname} → {file_rows}행")
+                logger.info(f"DS xlsx PhaseA: [{file_idx+1}/{total_files}] {base_fname} → {file_rows}행")
+
+        _flush()
+        logger.info(f"DS xlsx PhaseA 완료: SQLite 적재 {total_inserted}행 → {sqlite_path}")
+        _sqlite_conn.execute("CREATE INDEX idx_sheet ON rows (sheet_name, id)")
+        _sqlite_conn.commit()
+        _release_memory()
+
+        # ── Phase B: SQLite → xlsx (스트리밍, 최대 ~200MB) ──
+        if progress_cb:
+            progress_cb("xlsx 생성 중...", 70)
+
+        if not xlsx_out_path:
+            xlsx_out_path = f"/tmp/ds_xlsx_{os.path.basename(zip_temp_path)}_{id(zip_temp_path)}.xlsx"
+        _xlsxwriter_tmpdir = f"/tmp/ds_xlsxbuild_{os.getpid()}"
+        os.makedirs(_xlsxwriter_tmpdir, exist_ok=True)
+        xwb = xlsxwriter.Workbook(xlsx_out_path, {"constant_memory": True, "tmpdir": _xlsxwriter_tmpdir})
+        _xwb_ref = xwb
+
+        header_fmt = xwb.add_format({"font_name": "Arial", "font_size": 10, "bold": True,
+                                      "align": "center", "valign": "vcenter", "bg_color": "#BFBFBF", "border": 1})
+        data_fmt = xwb.add_format({"font_name": "Arial", "font_size": 10,
+                                    "align": "center", "valign": "vcenter", "border": 1})
+
+        MAX_ROWS_PER_SHEET = 1_000_000
+        for sname, hdrs in sheet_headers.items():
+            if cancel_event and cancel_event.is_set():
+                raise InterruptedError("xlsx build cancelled")
+
+            xws = xwb.add_worksheet(sname[:31])
+            xws.set_row(0, 12.75)
+            for ci, h in enumerate(hdrs):
+                xws.set_column(ci, ci, 20)
+                xws.write(0, ci, h, header_fmt)
+
+            cur = _sqlite_conn.execute(
+                "SELECT values_json FROM rows WHERE sheet_name=? ORDER BY id", (sname,)
+            )
+            ri = 1
+            split_num = 1
+            cur_xws = xws
+            rows_in_sheet = 0
+            for (values_json,) in cur:
+                if ri > MAX_ROWS_PER_SHEET:
+                    split_num += 1
+                    split_ws_name = f"{sname}({split_num})"[:31]
+                    cur_xws = xwb.add_worksheet(split_ws_name)
+                    cur_xws.set_row(0, 12.75)
+                    for ci, h in enumerate(hdrs):
+                        cur_xws.set_column(ci, ci, 20)
+                        cur_xws.write(0, ci, h, header_fmt)
+                    ri = 1
+                    logger.info(f"DS xlsx PhaseB: 시트 분할 → {split_ws_name}")
+
+                row_vals = _json.loads(values_json)
+                cur_xws.set_row(ri, 12.75)
+                cur_xws.write_row(ri, 0, row_vals, data_fmt)
+                ri += 1
+                rows_in_sheet += 1
+
+            sheet_stats[sname] = rows_in_sheet
+            logger.info(f"DS xlsx PhaseB: {sname} → {rows_in_sheet}행")
 
         xwb.close()
-        _xwb_ref = None  # 정상 close 완료
-        # xlsxwriter 전용 tmpdir 정리
+        _xwb_ref = None
         if _xlsxwriter_tmpdir and os.path.isdir(_xlsxwriter_tmpdir):
             shutil.rmtree(_xlsxwriter_tmpdir, ignore_errors=True)
+
     except Exception:
-        # xlsxwriter constant_memory 임시파일 누수 방지: 예외 시 반드시 close
         if _xwb_ref is not None:
-            try:
-                _xwb_ref.close()
-            except Exception:
-                pass
-        # xlsxwriter 전용 tmpdir 정리 (예외 시에도)
+            try: _xwb_ref.close()
+            except Exception: pass
         if _xlsxwriter_tmpdir and os.path.isdir(_xlsxwriter_tmpdir):
             shutil.rmtree(_xlsxwriter_tmpdir, ignore_errors=True)
         raise
+    finally:
+        try:
+            _sqlite_conn.close()
+        except Exception:
+            pass
+        try:
+            if os.path.exists(sqlite_path):
+                os.remove(sqlite_path)
+        except Exception:
+            pass
 
     _release_memory()
     file_size = os.path.getsize(xlsx_out_path) if os.path.exists(xlsx_out_path) else 0
