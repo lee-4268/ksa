@@ -82,6 +82,29 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
   ErpDsCompareResult? _result;
   String _filter = '전체';
 
+  // 결과 테이블: 헤더-바디 가로 스크롤 동기화 + 컬럼 너비
+  final ScrollController _headerHScroll = ScrollController();
+  final ScrollController _bodyHScroll = ScrollController();
+  bool _hSyncing = false;
+
+  // 컬럼 순서: 입력값, 허가번호, 호출명칭, 본부, 통시, 공대,
+  //           ERP 설치대, DS 설치대, 설치대 비교,
+  //           ERP 기수, DS 기수, 기수 비교,
+  //           ERP 일련번호, DS 일련번호, 일련번호 비교
+  static const List<String> _colTitles = [
+    '입력값', '허가번호', '호출명칭', '본부', '통시', '공대',
+    'ERP 설치대', 'DS 설치대', '설치대 비교',
+    'ERP 기수', 'DS 기수', '기수 비교',
+    'ERP 일련번호', 'DS 일련번호', '일련번호 비교',
+  ];
+  late final List<double> _colWidths = [
+    120, 130, 160, 80, 90, 90,
+    140, 140, 110,
+    80, 80, 100,
+    160, 160, 110,
+  ];
+  static const double _minColWidth = 60;
+
   @override
   void initState() {
     super.initState();
@@ -109,11 +132,31 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
         _loadDsUploads(divId);
       }
     });
+    _headerHScroll.addListener(() {
+      if (_hSyncing) return;
+      if (_bodyHScroll.hasClients &&
+          _bodyHScroll.offset != _headerHScroll.offset) {
+        _hSyncing = true;
+        _bodyHScroll.jumpTo(_headerHScroll.offset);
+        _hSyncing = false;
+      }
+    });
+    _bodyHScroll.addListener(() {
+      if (_hSyncing) return;
+      if (_headerHScroll.hasClients &&
+          _headerHScroll.offset != _bodyHScroll.offset) {
+        _hSyncing = true;
+        _headerHScroll.jumpTo(_bodyHScroll.offset);
+        _hSyncing = false;
+      }
+    });
   }
 
   @override
   void dispose() {
     _inputCtrl.dispose();
+    _headerHScroll.dispose();
+    _bodyHScroll.dispose();
     super.dispose();
   }
 
@@ -829,100 +872,7 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
               ),
             ]),
             const SizedBox(height: 12),
-            SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: DataTable(
-                headingRowColor:
-                    WidgetStateProperty.all(const Color(0xFFF5F7FA)),
-                columnSpacing: 16,
-                horizontalMargin: 12,
-                dataRowMinHeight: 40,
-                dataRowMaxHeight: 56,
-                headingRowHeight: 44,
-                columns: const [
-                  DataColumn(label: Text('입력값', style: _headerStyle)),
-                  DataColumn(label: Text('허가번호', style: _headerStyle)),
-                  DataColumn(label: Text('호출명칭', style: _headerStyle)),
-                  DataColumn(label: Text('본부', style: _headerStyle)),
-                  DataColumn(label: Text('통시', style: _headerStyle)),
-                  DataColumn(label: Text('공대', style: _headerStyle)),
-                  DataColumn(label: Text('ERP 설치대', style: _headerStyle)),
-                  DataColumn(label: Text('DS 설치대', style: _headerStyle)),
-                  DataColumn(label: Text('설치대 비교', style: _headerStyle)),
-                  DataColumn(label: Text('ERP 기수', style: _headerStyle)),
-                  DataColumn(label: Text('DS 기수', style: _headerStyle)),
-                  DataColumn(label: Text('기수 비교', style: _headerStyle)),
-                  DataColumn(label: Text('ERP 일련번호', style: _headerStyle)),
-                  DataColumn(label: Text('DS 일련번호', style: _headerStyle)),
-                  DataColumn(
-                      label: Text('일련번호 비교', style: _headerStyle)),
-                ],
-                rows: filteredItems.map((item) {
-                  final resolve = r.resolveMap[item.zpwino];
-                  final inputVal = resolve?['input'] ?? item.zpwino;
-                  final inputType = resolve?['type'] ?? '';
-                  final showInput =
-                      inputType != '허가번호' && inputType.isNotEmpty;
-                  return DataRow(cells: [
-                    DataCell(SizedBox(
-                        width: 120,
-                        child: showInput
-                            ? Column(
-                                mainAxisAlignment:
-                                    MainAxisAlignment.center,
-                                crossAxisAlignment:
-                                    CrossAxisAlignment.start,
-                                children: [
-                                    Text(inputVal,
-                                        style: _cellStyle,
-                                        overflow:
-                                            TextOverflow.ellipsis),
-                                    Text(inputType,
-                                        style: TextStyle(
-                                            fontSize: 10,
-                                            color: Colors
-                                                .grey.shade500)),
-                                  ])
-                            : Text(inputVal,
-                                style: _cellStyle,
-                                overflow:
-                                    TextOverflow.ellipsis))),
-                    DataCell(Text(item.zpwino, style: _cellStyle)),
-                    DataCell(SizedBox(
-                        width: 100,
-                        child: Text(item.zpwina,
-                            style: _cellStyle,
-                            overflow: TextOverflow.ellipsis))),
-                    DataCell(Text(item.areaHdofcNm, style: _cellStyle)),
-                    DataCell(Text(item.tongsi, style: _cellStyle)),
-                    DataCell(Text(item.gongdae, style: _cellStyle)),
-                    DataCell(SizedBox(
-                        width: 100,
-                        child: Text(item.erpZpirty3,
-                            style: _cellStyle))),
-                    DataCell(SizedBox(
-                        width: 100,
-                        child: Text(item.dsTowerType,
-                            style: _cellStyle))),
-                    DataCell(_buildMatchChip(item.towerMatch, item: item)),
-                    DataCell(Text(item.erpMaxSeqno, style: _cellStyle)),
-                    DataCell(Text(item.dsAntennaKiMax, style: _cellStyle)),
-                    DataCell(_buildMatchChip(item.antennaMatch)),
-                    DataCell(SizedBox(
-                        width: 120,
-                        child: Text(item.erpSerial,
-                            style: _cellStyle,
-                            overflow: TextOverflow.ellipsis))),
-                    DataCell(SizedBox(
-                        width: 120,
-                        child: Text(item.dsSerial,
-                            style: _cellStyle,
-                            overflow: TextOverflow.ellipsis))),
-                    DataCell(_buildMatchChip(item.serialMatch)),
-                  ]);
-                }).toList(),
-              ),
-            ),
+            _buildResultTable(filteredItems, r),
           ]),
         ),
       ],
@@ -1005,6 +955,201 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
         await d.error(message: '엑셀 다운로드 실패: $e');
       }
     }
+  }
+
+  // ── 결과 테이블 (헤더 sticky + 컬럼 리사이즈) ──
+
+  Widget _buildResultTable(List<CompareItem> items, ErpDsCompareResult r) {
+    final totalWidth =
+        _colWidths.fold<double>(0, (a, b) => a + b) + _colWidths.length - 1;
+    const tableHeight = 560.0;
+
+    return SizedBox(
+      height: tableHeight,
+      child: Column(
+        children: [
+          // 헤더 (sticky)
+          Container(
+            decoration: const BoxDecoration(
+              color: Color(0xFFF5F7FA),
+              border: Border(
+                top: BorderSide(color: Color(0xFFE0E4EA)),
+                bottom: BorderSide(color: Color(0xFFE0E4EA)),
+              ),
+            ),
+            child: SingleChildScrollView(
+              controller: _headerHScroll,
+              scrollDirection: Axis.horizontal,
+              physics: const ClampingScrollPhysics(),
+              child: SizedBox(
+                width: totalWidth,
+                height: 44,
+                child: Row(
+                  children: List.generate(_colTitles.length, (i) {
+                    return _buildHeaderCell(i);
+                  }),
+                ),
+              ),
+            ),
+          ),
+          // 바디
+          Expanded(
+            child: Scrollbar(
+              controller: _bodyHScroll,
+              thumbVisibility: true,
+              notificationPredicate: (n) => n.depth == 1,
+              child: SingleChildScrollView(
+                controller: _bodyHScroll,
+                scrollDirection: Axis.horizontal,
+                physics: const ClampingScrollPhysics(),
+                child: SizedBox(
+                  width: totalWidth,
+                  child: ListView.builder(
+                    itemCount: items.length,
+                    itemExtent: 48,
+                    itemBuilder: (ctx, idx) {
+                      return _buildDataRow(items[idx], r, idx);
+                    },
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHeaderCell(int i) {
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        Container(
+          width: _colWidths[i],
+          height: 44,
+          padding: const EdgeInsets.symmetric(horizontal: 10),
+          alignment: Alignment.centerLeft,
+          child: Text(
+            _colTitles[i],
+            style: _headerStyle,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+        // 컬럼 리사이즈 핸들
+        Positioned(
+          right: -3,
+          top: 0,
+          bottom: 0,
+          width: 8,
+          child: MouseRegion(
+            cursor: SystemMouseCursors.resizeColumn,
+            child: GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onHorizontalDragUpdate: (details) {
+                setState(() {
+                  final next = _colWidths[i] + details.delta.dx;
+                  _colWidths[i] = next < _minColWidth ? _minColWidth : next;
+                });
+              },
+              child: Center(
+                child: Container(
+                  width: 1,
+                  color: const Color(0xFFD0D5DB),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildDataRow(CompareItem item, ErpDsCompareResult r, int idx) {
+    final resolve = r.resolveMap[item.zpwino];
+    final inputVal = resolve?['input'] ?? item.zpwino;
+    final inputType = resolve?['type'] ?? '';
+    final showInputType = inputType != '허가번호' && inputType.isNotEmpty;
+
+    final cells = <Widget>[
+      // 0 입력값
+      showInputType
+          ? Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(inputVal,
+                    style: _cellStyle, overflow: TextOverflow.ellipsis),
+                Text(inputType,
+                    style: TextStyle(
+                        fontSize: 10, color: Colors.grey.shade500)),
+              ],
+            )
+          : Text(inputVal,
+              style: _cellStyle, overflow: TextOverflow.ellipsis),
+      // 1 허가번호
+      Text(item.zpwino,
+          style: _cellStyle, overflow: TextOverflow.ellipsis),
+      // 2 호출명칭
+      Text(item.zpwina,
+          style: _cellStyle, overflow: TextOverflow.ellipsis),
+      // 3 본부
+      Text(item.areaHdofcNm,
+          style: _cellStyle, overflow: TextOverflow.ellipsis),
+      // 4 통시
+      Text(item.tongsi,
+          style: _cellStyle, overflow: TextOverflow.ellipsis),
+      // 5 공대
+      Text(item.gongdae,
+          style: _cellStyle, overflow: TextOverflow.ellipsis),
+      // 6 ERP 설치대
+      Text(item.erpZpirty3,
+          style: _cellStyle, overflow: TextOverflow.ellipsis),
+      // 7 DS 설치대
+      Text(item.dsTowerType,
+          style: _cellStyle, overflow: TextOverflow.ellipsis),
+      // 8 설치대 비교
+      _buildMatchChip(item.towerMatch, item: item),
+      // 9 ERP 기수
+      Text(item.erpMaxSeqno,
+          style: _cellStyle, overflow: TextOverflow.ellipsis),
+      // 10 DS 기수
+      Text(item.dsAntennaKiMax,
+          style: _cellStyle, overflow: TextOverflow.ellipsis),
+      // 11 기수 비교
+      _buildMatchChip(item.antennaMatch),
+      // 12 ERP 일련번호
+      Tooltip(
+          message: item.erpSerial,
+          child: Text(item.erpSerial,
+              style: _cellStyle, overflow: TextOverflow.ellipsis)),
+      // 13 DS 일련번호
+      Tooltip(
+          message: item.dsSerial,
+          child: Text(item.dsSerial,
+              style: _cellStyle, overflow: TextOverflow.ellipsis)),
+      // 14 일련번호 비교
+      _buildMatchChip(item.serialMatch),
+    ];
+
+    return Container(
+      decoration: BoxDecoration(
+        color: idx.isEven ? Colors.white : const Color(0xFFFAFBFC),
+        border: const Border(
+          bottom: BorderSide(color: Color(0xFFEEF1F5)),
+        ),
+      ),
+      child: Row(
+        children: List.generate(cells.length, (i) {
+          return Container(
+            width: _colWidths[i],
+            height: 48,
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            alignment: Alignment.centerLeft,
+            child: cells[i],
+          );
+        }),
+      ),
+    );
   }
 
   // ── Helpers ──

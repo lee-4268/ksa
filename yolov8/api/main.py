@@ -10240,6 +10240,27 @@ def _normalize_tower(val: str) -> str:
     return _TOWER_TYPE_NORMALIZE.get(v, v)
 
 
+# 철탑형태 그룹: 같은 그룹에 속하면 부분일치로 인정
+# (간이폴, 분산폴, 비기준 설치대 계열이 ERP/DS에서 서로 다른 정규화 값으로 갈리는 문제 해결)
+_TOWER_TYPE_GROUPS = [
+    {
+        "간이폴 및 비기준 설치대",
+        "복합형(원폴,분산프레임 등)",
+        "간이폴, 분산폴 및 비기준 설치대",
+    },
+]
+
+
+def _tower_group(val: str):
+    """정규화된 설치대 값이 속하는 그룹 set을 반환. 없으면 None."""
+    if not val:
+        return None
+    for g in _TOWER_TYPE_GROUPS:
+        if val in g:
+            return g
+    return None
+
+
 def _parse_serial_strings(s: str) -> list:
     """쉼표로 구분된 일련번호 문자열을 리스트로 변환."""
     if not s:
@@ -10265,8 +10286,13 @@ def _compare_values(erp_val: str, ds_val: str, normalize_fn=None) -> str:
         return "일치"
     elif set(erp_parts).intersection(ds_parts):
         return "부분일치"
-    else:
-        return "불일치"
+    # 설치대 그룹 매칭: 양쪽 값이 같은 그룹에 속하면 부분일치
+    if normalize_fn is _normalize_tower:
+        for ep in erp_parts:
+            g = _tower_group(ep)
+            if g and any(dp in g for dp in ds_parts):
+                return "부분일치"
+    return "불일치"
 
 
 # ── DS SQLite 캐시 (ZIP → SQLite 인덱스 조회) ────────────────
