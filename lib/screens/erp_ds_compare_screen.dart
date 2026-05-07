@@ -849,6 +849,9 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
                   DataColumn(label: Text('ERP 설치대', style: _headerStyle)),
                   DataColumn(label: Text('DS 설치대', style: _headerStyle)),
                   DataColumn(label: Text('설치대 비교', style: _headerStyle)),
+                  DataColumn(label: Text('ERP 기수', style: _headerStyle)),
+                  DataColumn(label: Text('DS 기수', style: _headerStyle)),
+                  DataColumn(label: Text('기수 비교', style: _headerStyle)),
                   DataColumn(label: Text('ERP 일련번호', style: _headerStyle)),
                   DataColumn(label: Text('DS 일련번호', style: _headerStyle)),
                   DataColumn(
@@ -902,6 +905,9 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
                         child: Text(item.dsTowerType,
                             style: _cellStyle))),
                     DataCell(_buildMatchChip(item.towerMatch, item: item)),
+                    DataCell(Text(item.erpMaxSeqno, style: _cellStyle)),
+                    DataCell(Text(item.dsAntennaKiMax, style: _cellStyle)),
+                    DataCell(_buildMatchChip(item.antennaMatch)),
                     DataCell(SizedBox(
                         width: 120,
                         child: Text(item.erpSerial,
@@ -939,6 +945,7 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
       final headers = [
         '입력값', '허가번호', '호출명칭', '본부', '통시', '공대',
         'ERP 설치대', 'DS 설치대', '설치대 비교',
+        'ERP 기수', 'DS 기수', '기수 비교',
         'ERP 일련번호', 'DS 일련번호', '일련번호 비교',
       ];
       for (var i = 0; i < headers.length; i++) {
@@ -962,6 +969,7 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
           inputVal, item.zpwino, item.zpwina, item.areaHdofcNm,
           item.tongsi, item.gongdae,
           item.erpZpirty3, item.dsTowerType, item.towerMatch,
+          item.erpMaxSeqno, item.dsAntennaKiMax, item.antennaMatch,
           item.erpSerial, item.dsSerial, item.serialMatch,
         ];
         for (var colIdx = 0; colIdx < values.length; colIdx++) {
@@ -973,7 +981,7 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
       }
 
       // 컬럼 너비 설정
-      final widths = [15.0, 15.0, 15.0, 10.0, 15.0, 15.0, 10.0, 20.0, 20.0, 10.0];
+      final widths = [15.0, 15.0, 15.0, 10.0, 15.0, 15.0, 10.0, 20.0, 20.0, 10.0, 8.0, 8.0, 10.0, 20.0, 20.0, 10.0];
       for (var i = 0; i < widths.length; i++) {
         sheet.setColumnWidth(i, widths[i]);
       }
@@ -1005,7 +1013,7 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
     if (_result == null) return [];
     if (_filter == '전체') return _result!.items;
     return _result!.items.where((it) {
-      return it.towerMatch == _filter || it.serialMatch == _filter;
+      return it.towerMatch == _filter || it.serialMatch == _filter || it.antennaMatch == _filter;
     }).toList();
   }
 

@@ -243,7 +243,7 @@ CALLNAME_CSV_PREFIX = "callname-db/"
 CALLNAME_CACHE_TTL = 86400  # 24시간
 CALLNAME_SESSION_TTL = 1800  # 30분
 CALLNAME_MAX_SESSIONS = 3
-CALLNAME_USE_COLS = ["zpwina", "zpwino", "zpwiadr", "zpcode", "zpcname", "area_hdofc_nm", "ons_team_nm", "zpirty3", "eqp_ser_no", "zpprac1", "eqp_type"]
+CALLNAME_USE_COLS = ["zpwina", "zpwino", "zpwiadr", "zpcode", "zpcname", "area_hdofc_nm", "ons_team_nm", "zpirty3", "eqp_ser_no", "zpprac1", "eqp_type", "max_seqno"]
 CALLNAME_POSSIBLE_CALLNAME_COLS = ["호출명칭", "callname", "CALLNAME", "호출명", "call_name"]
 CALLNAME_POSSIBLE_TONGSI_COLS = ["통시", "통합시설코드", "zpcode"]
 CALLNAME_POSSIBLE_ZPWINA_COLS = ["zpwina", "ZPWINA", "Zpwina", "호출명칭", "호출명"]
@@ -7500,7 +7500,7 @@ def _cert_cache_load():
         conn.execute("""CREATE TABLE IF NOT EXISTS cert (
             zpwino TEXT, zpwina TEXT, zpwiadr TEXT,
             zpcode TEXT, zpcname TEXT, area_hdofc_nm TEXT, ons_team_nm TEXT, zpirty3 TEXT,
-            eqp_ser_no TEXT, zpprac1 TEXT, eqp_type TEXT
+            eqp_ser_no TEXT, zpprac1 TEXT, eqp_type TEXT, max_seqno TEXT
         )""")
         conn.execute("DELETE FROM cert")
 
@@ -7514,13 +7514,14 @@ def _cert_cache_load():
                 row.get("area_hdofc_nm", ""), row.get("ons_team_nm", ""),
                 row.get("zpirty3", ""), row.get("eqp_ser_no", ""),
                 row.get("zpprac1", ""), row.get("eqp_type", ""),
+                row.get("max_seqno", ""),
             ))
             if len(batch) >= 5000:
-                conn.executemany("INSERT INTO cert VALUES (?,?,?,?,?,?,?,?,?,?,?)", batch)
+                conn.executemany("INSERT INTO cert VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", batch)
                 total += len(batch)
                 batch.clear()
         if batch:
-            conn.executemany("INSERT INTO cert VALUES (?,?,?,?,?,?,?,?,?,?,?)", batch)
+            conn.executemany("INSERT INTO cert VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", batch)
             total += len(batch)
 
         conn.execute("CREATE INDEX IF NOT EXISTS idx_zpwino ON cert(zpwino)")
@@ -8031,7 +8032,7 @@ def _cert_batch_lookup_cached(zpwino_list: list) -> dict:
     if not zpwino_list:
         return {}
     _cert_cache_load()
-    cols = ["zpwino", "zpwina", "zpwiadr", "zpcode", "area_hdofc_nm", "ons_team_nm", "zpirty3", "eqp_ser_no", "zpwilat", "zpwilon"]
+    cols = ["zpwino", "zpwina", "zpwiadr", "zpcode", "area_hdofc_nm", "ons_team_nm", "zpirty3", "eqp_ser_no", "zpwilat", "zpwilon", "max_seqno"]
     results = {}
     try:
         conn = sqlite3.connect(_cert_cache_db_path)
@@ -10666,8 +10667,9 @@ def _erp_ds_compare_sync(
     erp_data = _cert_batch_lookup_cached(zpwino_list)
 
     # 2) DS 데이터: ds_detail.db에서 직접 조회 (ZIP 파싱 불필요)
-    ds_device = {}   # {zpwino: [serial, ...]}
-    ds_antenna = {}  # {zpwino: tower_type}
+    ds_device = {}      # {zpwino: [serial, ...]}
+    ds_antenna = {}     # {zpwino: tower_type}
+    ds_antenna_ki = {}  # {zpwino: max 기수 (int)}
     warnings = []
     BATCH = 900
 
@@ -10690,14 +10692,20 @@ def _erp_ds_compare_sync(
                     if sn and sn not in ds_device[z]:
                         ds_device[z].append(sn)
 
-            # 안테나: 허가번호별 설치형태
+            # 안테나: 허가번호별 설치형태 + 기수
             for i in range(0, len(all_nos), BATCH):
                 batch = all_nos[i:i + BATCH]
                 ph = ','.join('?' * len(batch))
-                for row in conn.execute(f"SELECT 허가번호, 공중선주설치형태명 FROM ds_안테나 WHERE 허가번호 IN ({ph})", batch):
+                for row in conn.execute(f"SELECT 허가번호, 공중선주설치형태명, 기 FROM ds_안테나 WHERE 허가번호 IN ({ph})", batch):
                     z = row['허가번호'].replace('-', '')
                     if z not in ds_antenna:
                         ds_antenna[z] = str(row['공중선주설치형태명'] or '').strip()
+                    try:
+                        ki_int = int(str(row['기'] or '').strip())
+                    except (ValueError, TypeError):
+                        ki_int = 0
+                    if ki_int > ds_antenna_ki.get(z, 0):
+                        ds_antenna_ki[z] = ki_int
 
             conn.close()
         except Exception as e:
@@ -10762,26 +10770,39 @@ def _erp_ds_compare_sync(
         "tower_partial": 0,
         "serial_match": 0, "serial_mismatch": 0, "serial_check": 0,
         "serial_partial": 0,
+        "antenna_match": 0, "antenna_mismatch": 0, "antenna_check": 0,
     }
 
     for z in zpwino_list:
         erp = erp_data.get(z)
         erp_zpirty3 = erp.get("zpirty3", "") if erp else ""
         erp_serial = erp.get("eqp_ser_no", "") if erp else ""
+        erp_max_seqno = erp.get("max_seqno", "") if erp else ""
         z_clean = z.replace('-', '')
         ds_tower = ds_antenna.get(z_clean, "") or ds_antenna.get(z, "")
         ds_serials = ds_device.get(z_clean, []) or ds_device.get(z, [])
         ds_serial_str = ", ".join(ds_serials) if ds_serials else ""
         insp = insp_info.get(z_clean) or insp_info.get(z, {})
 
+        # ERP max_seqno 정규화 (정수 문자열로 통일)
+        try:
+            erp_seqno_norm = str(int(float(erp_max_seqno.strip()))) if erp_max_seqno.strip() else ""
+        except (ValueError, TypeError):
+            erp_seqno_norm = erp_max_seqno.strip()
+        ds_ki_max = ds_antenna_ki.get(z_clean) or ds_antenna_ki.get(z, 0)
+        ds_ki_str = str(ds_ki_max) if ds_ki_max else ""
+
         # 철탑형태 비교
         tower_result = _compare_values(erp_zpirty3, ds_tower, _normalize_tower)
         # 일련번호 비교
         serial_result = _compare_values(erp_serial, ds_serial_str)
+        # 안테나 기수 비교
+        antenna_result = _compare_values(erp_seqno_norm, ds_ki_str)
 
         summary_key_map = {"일치": "match", "부분일치": "partial", "불일치": "mismatch", "확인필요": "check"}
         summary[f"tower_{summary_key_map.get(tower_result, 'check')}"] += 1
         summary[f"serial_{summary_key_map.get(serial_result, 'check')}"] += 1
+        summary[f"antenna_{summary_key_map.get(antenna_result, 'check')}"] += 1
 
         # 주소 우선순위: inspection_targets 도로명주소 > 설치장소 > ERP zpwiadr
         best_address = (insp.get("도로명주소") or insp.get("설치장소")
@@ -10810,10 +10831,13 @@ def _erp_ds_compare_sync(
             "erp_found": bool(erp),
             "erp_zpirty3": erp_zpirty3,
             "erp_serial": erp_serial,
+            "erp_max_seqno": erp_seqno_norm,
             "ds_tower_type": ds_tower,
             "ds_serial": ds_serial_str,
+            "ds_antenna_ki_max": ds_ki_str,
             "tower_match": tower_result,
             "serial_match": serial_result,
+            "antenna_match": antenna_result,
             "통시": insp.get("통시", ""),
             "공대": insp.get("공대", ""),
         })

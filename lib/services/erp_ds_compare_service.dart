@@ -106,10 +106,13 @@ class CompareItem {
   final bool erpFound;
   final String erpZpirty3;
   final String erpSerial;
+  final String erpMaxSeqno;
   final String dsTowerType;
   final String dsSerial;
+  final String dsAntennaKiMax;
   final String towerMatch;
   final String serialMatch;
+  final String antennaMatch;
   final String tongsi;
   final String gongdae;
 
@@ -123,10 +126,13 @@ class CompareItem {
     required this.erpFound,
     required this.erpZpirty3,
     required this.erpSerial,
+    required this.erpMaxSeqno,
     required this.dsTowerType,
     required this.dsSerial,
+    required this.dsAntennaKiMax,
     required this.towerMatch,
     required this.serialMatch,
+    required this.antennaMatch,
     required this.tongsi,
     required this.gongdae,
   });
@@ -142,10 +148,13 @@ class CompareItem {
       erpFound: json['erp_found'] == true,
       erpZpirty3: json['erp_zpirty3'] ?? '',
       erpSerial: json['erp_serial'] ?? '',
+      erpMaxSeqno: json['erp_max_seqno'] ?? '',
       dsTowerType: json['ds_tower_type'] ?? '',
       dsSerial: json['ds_serial'] ?? '',
+      dsAntennaKiMax: json['ds_antenna_ki_max'] ?? '',
       towerMatch: json['tower_match'] ?? '',
       serialMatch: json['serial_match'] ?? '',
+      antennaMatch: json['antenna_match'] ?? '',
       tongsi: json['통시'] ?? '',
       gongdae: json['공대'] ?? '',
     );
