@@ -26,6 +26,8 @@ class _ChangeNotificationScreenState extends State<ChangeNotificationScreen> {
 
   bool _processing = false;
   bool _applying = false;
+  bool _downloadingTemplate = false;
+  bool _uploadingTemplate = false;
   String? _result;
   String? _error;
   List<PlatformFile> _selectedFiles = [];
@@ -38,6 +40,63 @@ class _ChangeNotificationScreenState extends State<ChangeNotificationScreen> {
     'API_BASE_URL',
     defaultValue: 'https://api-sko-kca.skons.net',
   );
+
+  Future<void> _downloadSample() async {
+    setState(() => _downloadingTemplate = true);
+    try {
+      final token = context.read<AuthService>().authToken;
+      final resp = await http.get(
+        Uri.parse('$_apiBase/document/change-notification-sample'),
+        headers: {'Authorization': 'Bearer ${token ?? ''}'},
+      ).timeout(const Duration(seconds: 30));
+      if (!mounted) return;
+      if (resp.statusCode == 200) {
+        final url = (json.decode(resp.body) as Map<String, dynamic>)['url'] as String? ?? '';
+        if (url.isNotEmpty) {
+          html.AnchorElement(href: url).click();
+        }
+      } else if (resp.statusCode == 404) {
+        _showAlert('샘플 없음', '샘플 양식 파일이 없습니다. 관리자에게 문의하세요.');
+      } else {
+        _showAlert('오류', '다운로드 실패: ${resp.body}');
+      }
+    } catch (e) {
+      if (mounted) _showAlert('오류', '다운로드 중 오류: $e');
+    } finally {
+      if (mounted) setState(() => _downloadingTemplate = false);
+    }
+  }
+
+  Future<void> _uploadSample() async {
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: ['xls', 'xlsx'],
+      withData: true,
+    );
+    if (result == null || result.files.isEmpty) return;
+    final file = result.files.first;
+    setState(() => _uploadingTemplate = true);
+    try {
+      final token = context.read<AuthService>().authToken;
+      final uri = Uri.parse('$_apiBase/document/change-notification-sample');
+      final request = http.MultipartRequest('POST', uri)
+        ..headers['Authorization'] = 'Bearer ${token ?? ''}'
+        ..files.add(http.MultipartFile.fromBytes('file', file.bytes!, filename: file.name));
+      final streamed = await request.send().timeout(const Duration(minutes: 2));
+      if (!mounted) return;
+      if (streamed.statusCode == 200) {
+        _showAlert('업로드 완료', '샘플 양식이 업로드되었습니다.');
+      } else {
+        final body = await streamed.stream.bytesToString();
+        if (!mounted) return;
+        _showAlert('업로드 실패', body);
+      }
+    } catch (e) {
+      if (mounted) _showAlert('오류', '업로드 중 오류: $e');
+    } finally {
+      if (mounted) setState(() => _uploadingTemplate = false);
+    }
+  }
 
   Future<void> _pickFiles() async {
     final result = await FilePicker.platform.pickFiles(
@@ -213,6 +272,8 @@ class _ChangeNotificationScreenState extends State<ChangeNotificationScreen> {
                   '수검결과 화면에도 즉시 반영할 수 있습니다.',
                   style: TextStyle(fontSize: 13, color: _textSecondary, height: 1.6),
                 ),
+                const SizedBox(height: 16),
+                _buildSampleRow(),
                 const SizedBox(height: 24),
 
                 // 업로드 카드
@@ -234,6 +295,47 @@ class _ChangeNotificationScreenState extends State<ChangeNotificationScreen> {
           ),
         ),
       ),
+    );
+  }
+
+  Widget _buildSampleRow() {
+    final isAdmin = context.read<AuthService>().isAdmin;
+    return Row(
+      children: [
+        OutlinedButton.icon(
+          onPressed: _downloadingTemplate ? null : _downloadSample,
+          icon: _downloadingTemplate
+              ? const SizedBox(
+                  width: 14, height: 14,
+                  child: CircularProgressIndicator(strokeWidth: 2, color: _blue))
+              : const Icon(Icons.download, size: 16, color: _blue),
+          label: const Text('샘플 양식 다운로드',
+              style: TextStyle(fontSize: 13, color: _blue)),
+          style: OutlinedButton.styleFrom(
+            side: const BorderSide(color: _blue),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          ),
+        ),
+        if (isAdmin) ...[
+          const SizedBox(width: 10),
+          OutlinedButton.icon(
+            onPressed: _uploadingTemplate ? null : _uploadSample,
+            icon: _uploadingTemplate
+                ? const SizedBox(
+                    width: 14, height: 14,
+                    child: CircularProgressIndicator(strokeWidth: 2))
+                : const Icon(Icons.upload, size: 16),
+            label: const Text('샘플 업로드', style: TextStyle(fontSize: 13)),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: _textSecondary,
+              side: const BorderSide(color: _border),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            ),
+          ),
+        ],
+      ],
     );
   }
 

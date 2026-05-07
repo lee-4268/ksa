@@ -16509,6 +16509,61 @@ async def document_apply_change_notification(request: Request):
     return {"ok": True, "applied": applied, "not_found": not_found}
 
 
+_CHANGE_NOTIFICATION_SAMPLE_KEY = "excel/change-notification-sample.xlsx"
+
+
+@app.get("/document/change-notification-sample")
+async def get_change_notification_sample(request: Request):
+    """변경개설신고 샘플 양식 presigned URL 반환 (모든 인증된 사용자)."""
+    await _verify_auth(request)
+    try:
+        await asyncio.to_thread(
+            lambda: _s3_client.head_object(Bucket=S3_BUCKET_NAME, Key=_CHANGE_NOTIFICATION_SAMPLE_KEY)
+        )
+    except ClientError as e:
+        code = e.response.get("Error", {}).get("Code", "")
+        if code in ("404", "NoSuchKey"):
+            raise HTTPException(404, "샘플 양식 파일이 없습니다. 관리자에게 문의하세요.")
+        raise HTTPException(500, f"S3 오류: {e}")
+    url = _s3_client.generate_presigned_url(
+        "get_object",
+        Params={
+            "Bucket": S3_BUCKET_NAME,
+            "Key": _CHANGE_NOTIFICATION_SAMPLE_KEY,
+            "ResponseContentDisposition": "attachment; filename*=UTF-8''%EB%B3%80%EA%B2%BD%EA%B0%9C%EC%84%A4%EC%8B%A0%EA%B3%A0_%EC%83%98%ED%94%8C%EC%96%91%EC%8B%9D.xlsx",
+        },
+        ExpiresIn=300,
+    )
+    return {"url": url}
+
+
+@app.post("/document/change-notification-sample")
+async def upload_change_notification_sample(request: Request, file: UploadFile = File(...)):
+    """변경개설신고 샘플 양식 업로드 (admin/manager 전용)."""
+    empno = await _verify_auth(request)
+    role = await asyncio.to_thread(_get_user_role_sync, empno)
+    if role not in ("admin", "manager"):
+        raise HTTPException(403, "관리자만 샘플 양식을 업로드할 수 있습니다.")
+    if not file.filename.lower().endswith((".xls", ".xlsx")):
+        raise HTTPException(400, "xls 또는 xlsx 파일만 업로드 가능합니다.")
+    data = await file.read()
+    content_type = (
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        if file.filename.lower().endswith(".xlsx")
+        else "application/vnd.ms-excel"
+    )
+    await asyncio.to_thread(
+        lambda: _s3_client.put_object(
+            Bucket=S3_BUCKET_NAME,
+            Key=_CHANGE_NOTIFICATION_SAMPLE_KEY,
+            Body=data,
+            ContentType=content_type,
+        )
+    )
+    logger.info(f"변경개설신고 샘플 업로드: {empno}, {file.filename}, {len(data)} bytes")
+    return {"ok": True}
+
+
 # ============================================================
 # Community Board (공지사항/요청사항)
 # ============================================================
