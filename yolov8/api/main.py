@@ -16509,32 +16509,40 @@ async def document_apply_change_notification(request: Request):
     return {"ok": True, "applied": applied, "not_found": not_found}
 
 
-_CHANGE_NOTIFICATION_SAMPLE_KEY = "excel/change-notification-sample.xlsx"
+_CHANGE_NOTIFICATION_SAMPLE_META_KEY = "excel/change-notification-sample-meta.json"
+_CHANGE_NOTIFICATION_SAMPLE_PREFIX = "excel/change-notification-sample"
+
+
+def _get_sample_meta_sync() -> dict:
+    """현재 샘플 파일 메타(key, filename) 조회. 없으면 빈 dict."""
+    try:
+        obj = _s3_client.get_object(Bucket=S3_BUCKET_NAME, Key=_CHANGE_NOTIFICATION_SAMPLE_META_KEY)
+        return json.loads(obj["Body"].read().decode())
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code", "") in ("404", "NoSuchKey"):
+            return {}
+        raise
 
 
 @app.get("/document/change-notification-sample")
 async def get_change_notification_sample(request: Request):
     """변경개설신고 샘플 양식 presigned URL 반환 (모든 인증된 사용자)."""
     await _verify_auth(request)
-    try:
-        await asyncio.to_thread(
-            lambda: _s3_client.head_object(Bucket=S3_BUCKET_NAME, Key=_CHANGE_NOTIFICATION_SAMPLE_KEY)
-        )
-    except ClientError as e:
-        code = e.response.get("Error", {}).get("Code", "")
-        if code in ("404", "NoSuchKey"):
-            raise HTTPException(404, "샘플 양식 파일이 없습니다. 관리자에게 문의하세요.")
-        raise HTTPException(500, f"S3 오류: {e}")
+    meta = await asyncio.to_thread(_get_sample_meta_sync)
+    if not meta.get("key"):
+        raise HTTPException(404, "샘플 양식 파일이 없습니다. 관리자에게 문의하세요.")
+    original_filename = meta.get("filename", "변경개설신고_샘플양식")
+    encoded_name = quote(original_filename, safe="")
     url = _s3_client.generate_presigned_url(
         "get_object",
         Params={
             "Bucket": S3_BUCKET_NAME,
-            "Key": _CHANGE_NOTIFICATION_SAMPLE_KEY,
-            "ResponseContentDisposition": "attachment; filename*=UTF-8''%EB%B3%80%EA%B2%BD%EA%B0%9C%EC%84%A4%EC%8B%A0%EA%B3%A0_%EC%83%98%ED%94%8C%EC%96%91%EC%8B%9D.xlsx",
+            "Key": meta["key"],
+            "ResponseContentDisposition": f"attachment; filename*=UTF-8''{encoded_name}",
         },
         ExpiresIn=300,
     )
-    return {"url": url}
+    return {"url": url, "filename": original_filename}
 
 
 @app.post("/document/change-notification-sample")
@@ -16544,20 +16552,24 @@ async def upload_change_notification_sample(request: Request, file: UploadFile =
     role = await asyncio.to_thread(_get_user_role_sync, empno)
     if role not in ("admin", "manager"):
         raise HTTPException(403, "관리자만 샘플 양식을 업로드할 수 있습니다.")
-    if not file.filename.lower().endswith((".xls", ".xlsx")):
-        raise HTTPException(400, "xls 또는 xlsx 파일만 업로드 가능합니다.")
+    if not file.filename.lower().endswith((".xls", ".xlsx", ".zip")):
+        raise HTTPException(400, "xls, xlsx, zip 파일만 업로드 가능합니다.")
     data = await file.read()
-    content_type = (
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        if file.filename.lower().endswith(".xlsx")
-        else "application/vnd.ms-excel"
+    ext = file.filename.lower().rsplit(".", 1)[-1]
+    content_type = {
+        "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "xls": "application/vnd.ms-excel",
+        "zip": "application/zip",
+    }.get(ext, "application/octet-stream")
+    s3_key = f"{_CHANGE_NOTIFICATION_SAMPLE_PREFIX}.{ext}"
+    meta = json.dumps({"key": s3_key, "filename": file.filename}, ensure_ascii=False).encode()
+    await asyncio.to_thread(
+        lambda: _s3_client.put_object(Bucket=S3_BUCKET_NAME, Key=s3_key, Body=data, ContentType=content_type)
     )
     await asyncio.to_thread(
         lambda: _s3_client.put_object(
-            Bucket=S3_BUCKET_NAME,
-            Key=_CHANGE_NOTIFICATION_SAMPLE_KEY,
-            Body=data,
-            ContentType=content_type,
+            Bucket=S3_BUCKET_NAME, Key=_CHANGE_NOTIFICATION_SAMPLE_META_KEY,
+            Body=meta, ContentType="application/json",
         )
     )
     logger.info(f"변경개설신고 샘플 업로드: {empno}, {file.filename}, {len(data)} bytes")

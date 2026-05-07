@@ -70,7 +70,7 @@ class _ChangeNotificationScreenState extends State<ChangeNotificationScreen> {
   Future<void> _uploadSample() async {
     final result = await FilePicker.platform.pickFiles(
       type: FileType.custom,
-      allowedExtensions: ['xls', 'xlsx'],
+      allowedExtensions: ['xls', 'xlsx', 'zip'],
       withData: true,
     );
     if (result == null || result.files.isEmpty) return;
