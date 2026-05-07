@@ -1,6 +1,5 @@
 import 'package:excel/excel.dart' as excel_pkg;
 import 'package:flutter/foundation.dart';
-import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -83,11 +82,7 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
   ErpDsCompareResult? _result;
   String _filter = '전체';
 
-  // 결과 테이블: 헤더-바디 가로 스크롤 동기화 + 컬럼 너비
-  final ScrollController _headerHScroll = ScrollController();
-  final ScrollController _bodyHScroll = ScrollController();
-  bool _hSyncing = false;
-
+  // 결과 테이블: 컬럼 정의 (가용 폭에 비례 분배)
   // 컬럼 순서: 허가번호, 호출명칭, 본부, 통시, 공대,
   //           ERP 설치대, DS 설치대, 설치대 비교,
   //           ERP 기수, DS 기수, 기수 비교,
@@ -98,13 +93,13 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
     'ERP 기수', 'DS 기수', '기수 비교',
     'ERP 일련번호', 'DS 일련번호', '일련번호 비교',
   ];
-  late final List<double> _colWidths = [
-    130, 160, 80, 90, 90,
-    140, 140, 110,
-    80, 80, 100,
-    160, 160, 110,
+  // 가중치: 텍스트 분량/중요도에 따라
+  static const List<double> _colFlex = [
+    13, 16, 8, 9, 9,
+    14, 14, 11,
+    8, 8, 10,
+    16, 16, 11,
   ];
-  static const double _minColWidth = 60;
 
   // 그룹 경계: 이 인덱스 컬럼 오른쪽에 진한 구분선 그림
   // 7 = 설치대 비교 / 10 = 기수 비교 / 13 = 일련번호 비교(끝)
@@ -137,31 +132,11 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
         _loadDsUploads(divId);
       }
     });
-    _headerHScroll.addListener(() {
-      if (_hSyncing) return;
-      if (_bodyHScroll.hasClients &&
-          _bodyHScroll.offset != _headerHScroll.offset) {
-        _hSyncing = true;
-        _bodyHScroll.jumpTo(_headerHScroll.offset);
-        _hSyncing = false;
-      }
-    });
-    _bodyHScroll.addListener(() {
-      if (_hSyncing) return;
-      if (_headerHScroll.hasClients &&
-          _headerHScroll.offset != _bodyHScroll.offset) {
-        _hSyncing = true;
-        _headerHScroll.jumpTo(_bodyHScroll.offset);
-        _hSyncing = false;
-      }
-    });
   }
 
   @override
   void dispose() {
     _inputCtrl.dispose();
-    _headerHScroll.dispose();
-    _bodyHScroll.dispose();
     super.dispose();
   }
 
@@ -960,133 +935,80 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
     }
   }
 
-  // ── 결과 테이블 (헤더 sticky + 컬럼 리사이즈) ──
+  // ── 결과 테이블 (헤더 sticky + 가용 폭에 비례 분배) ──
 
   Widget _buildResultTable(List<CompareItem> items, ErpDsCompareResult r) {
-    final totalWidth =
-        _colWidths.fold<double>(0, (a, b) => a + b) + _colWidths.length - 1;
     const tableHeight = 560.0;
 
     return SizedBox(
       height: tableHeight,
-      child: ScrollConfiguration(
-        behavior: const _AlwaysScrollbarBehavior(),
-        child: Column(
-          children: [
-            // 헤더 (sticky)
-            Container(
-              decoration: const BoxDecoration(
-                color: Color(0xFFF5F7FA),
-                border: Border(
-                  top: BorderSide(color: Color(0xFFE0E4EA)),
-                  bottom: BorderSide(color: Color(0xFFE0E4EA)),
-                ),
-              ),
-              child: Scrollbar(
-                controller: _headerHScroll,
-                thumbVisibility: true,
-                trackVisibility: true,
-                thickness: 10,
-                child: SingleChildScrollView(
-                  controller: _headerHScroll,
-                  scrollDirection: Axis.horizontal,
-                  physics: const ClampingScrollPhysics(),
-                  child: SizedBox(
-                    width: totalWidth,
-                    height: 44,
-                    child: Row(
-                      children: List.generate(_colTitles.length, (i) {
-                        return _buildHeaderCell(i);
-                      }),
-                    ),
+      child: LayoutBuilder(
+        builder: (ctx, cons) {
+          final widths = _computeColWidths(cons.maxWidth);
+          return Column(
+            children: [
+              // 헤더 (sticky)
+              Container(
+                decoration: const BoxDecoration(
+                  color: Color(0xFFF5F7FA),
+                  border: Border(
+                    top: BorderSide(color: Color(0xFFE0E4EA)),
+                    bottom: BorderSide(color: Color(0xFFE0E4EA)),
                   ),
                 ),
-              ),
-            ),
-            // 바디
-            Expanded(
-              child: Scrollbar(
-                controller: _bodyHScroll,
-                thumbVisibility: true,
-                trackVisibility: true,
-                thickness: 10,
-                notificationPredicate: (n) => n.depth == 0,
-                child: SingleChildScrollView(
-                  controller: _bodyHScroll,
-                  scrollDirection: Axis.horizontal,
-                  physics: const ClampingScrollPhysics(),
-                  child: SizedBox(
-                    width: totalWidth,
-                    child: ListView.builder(
-                      itemCount: items.length,
-                      itemExtent: 48,
-                      itemBuilder: (ctx, idx) {
-                        return _buildDataRow(items[idx], r, idx);
-                      },
-                    ),
-                  ),
+                height: 44,
+                child: Row(
+                  children: List.generate(_colTitles.length, (i) {
+                    return _buildHeaderCell(i, widths[i]);
+                  }),
                 ),
               ),
-            ),
-          ],
-        ),
+              // 바디 (가로 스크롤 없음, 세로만)
+              Expanded(
+                child: ListView.builder(
+                  itemCount: items.length,
+                  itemExtent: 48,
+                  itemBuilder: (ctx, idx) {
+                    return _buildDataRow(items[idx], r, idx, widths);
+                  },
+                ),
+              ),
+            ],
+          );
+        },
       ),
     );
   }
 
-  Widget _buildHeaderCell(int i) {
+  List<double> _computeColWidths(double maxWidth) {
+    final flexSum = _colFlex.fold<double>(0, (a, b) => a + b);
+    return _colFlex.map((f) => maxWidth * f / flexSum).toList();
+  }
+
+  Widget _buildHeaderCell(int i, double width) {
     final isGroupBoundary = _groupBoundaryRight.contains(i);
-    return Stack(
-      clipBehavior: Clip.none,
-      children: [
-        Container(
-          width: _colWidths[i],
-          height: 44,
-          padding: const EdgeInsets.symmetric(horizontal: 10),
-          alignment: Alignment.centerLeft,
-          decoration: isGroupBoundary
-              ? const BoxDecoration(
-                  border: Border(
-                    right: BorderSide(color: Color(0xFF9AA3AE), width: 2),
-                  ),
-                )
-              : null,
-          child: Text(
-            _colTitles[i],
-            style: _headerStyle,
-            overflow: TextOverflow.ellipsis,
-          ),
-        ),
-        // 컬럼 리사이즈 핸들
-        Positioned(
-          right: -3,
-          top: 0,
-          bottom: 0,
-          width: 8,
-          child: MouseRegion(
-            cursor: SystemMouseCursors.resizeColumn,
-            child: GestureDetector(
-              behavior: HitTestBehavior.translucent,
-              onHorizontalDragUpdate: (details) {
-                setState(() {
-                  final next = _colWidths[i] + details.delta.dx;
-                  _colWidths[i] = next < _minColWidth ? _minColWidth : next;
-                });
-              },
-              child: Center(
-                child: Container(
-                  width: 1,
-                  color: const Color(0xFFD0D5DB),
-                ),
+    return Container(
+      width: width,
+      height: 44,
+      padding: const EdgeInsets.symmetric(horizontal: 8),
+      alignment: Alignment.centerLeft,
+      decoration: isGroupBoundary
+          ? const BoxDecoration(
+              border: Border(
+                right: BorderSide(color: Color(0xFF9AA3AE), width: 2),
               ),
-            ),
-          ),
-        ),
-      ],
+            )
+          : null,
+      child: Text(
+        _colTitles[i],
+        style: _headerStyle,
+        overflow: TextOverflow.ellipsis,
+      ),
     );
   }
 
-  Widget _buildDataRow(CompareItem item, ErpDsCompareResult r, int idx) {
+  Widget _buildDataRow(
+      CompareItem item, ErpDsCompareResult r, int idx, List<double> widths) {
     final cells = <Widget>[
       // 0 허가번호
       Text(item.zpwino,
@@ -1144,9 +1066,9 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
         children: List.generate(cells.length, (i) {
           final isGroupBoundary = _groupBoundaryRight.contains(i);
           return Container(
-            width: _colWidths[i],
+            width: widths[i],
             height: 48,
-            padding: const EdgeInsets.symmetric(horizontal: 10),
+            padding: const EdgeInsets.symmetric(horizontal: 8),
             alignment: Alignment.centerLeft,
             decoration: isGroupBoundary
                 ? const BoxDecoration(
@@ -1555,16 +1477,4 @@ class _TowerMismatchModalState extends State<TowerMismatchModal> {
       ),
     );
   }
-}
-
-class _AlwaysScrollbarBehavior extends ScrollBehavior {
-  const _AlwaysScrollbarBehavior();
-
-  @override
-  Set<PointerDeviceKind> get dragDevices => {
-        PointerDeviceKind.touch,
-        PointerDeviceKind.mouse,
-        PointerDeviceKind.trackpad,
-        PointerDeviceKind.stylus,
-      };
 }
