@@ -740,6 +740,8 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
             const SizedBox(height: 16),
             _buildSummaryRow('설치대', r.summary),
             const SizedBox(height: 10),
+            _buildSummaryRow('기수', r.summary, prefix: 'antenna'),
+            const SizedBox(height: 10),
             _buildSummaryRow('일련번호', r.summary, prefix: 'serial'),
           ]),
         ),
