@@ -996,25 +996,36 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
               ),
             ),
           ),
-          // 바디
-          Expanded(
+          // 가로 스크롤바 (헤더 바로 아래, 항상 표시)
+          SizedBox(
+            height: 12,
             child: Scrollbar(
-              controller: _bodyHScroll,
+              controller: _headerHScroll,
               thumbVisibility: true,
-              notificationPredicate: (n) => n.depth == 1,
+              trackVisibility: true,
+              thickness: 10,
               child: SingleChildScrollView(
-                controller: _bodyHScroll,
+                controller: _headerHScroll,
                 scrollDirection: Axis.horizontal,
                 physics: const ClampingScrollPhysics(),
-                child: SizedBox(
-                  width: totalWidth,
-                  child: ListView.builder(
-                    itemCount: items.length,
-                    itemExtent: 48,
-                    itemBuilder: (ctx, idx) {
-                      return _buildDataRow(items[idx], r, idx);
-                    },
-                  ),
+                child: SizedBox(width: totalWidth, height: 1),
+              ),
+            ),
+          ),
+          // 바디 (세로 스크롤만 — 가로는 위 스크롤바와 헤더가 동기 제어)
+          Expanded(
+            child: SingleChildScrollView(
+              controller: _bodyHScroll,
+              scrollDirection: Axis.horizontal,
+              physics: const ClampingScrollPhysics(),
+              child: SizedBox(
+                width: totalWidth,
+                child: ListView.builder(
+                  itemCount: items.length,
+                  itemExtent: 48,
+                  itemBuilder: (ctx, idx) {
+                    return _buildDataRow(items[idx], r, idx);
+                  },
                 ),
               ),
             ),
