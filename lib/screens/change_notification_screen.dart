@@ -299,7 +299,7 @@ class _ChangeNotificationScreenState extends State<ChangeNotificationScreen> {
   }
 
   Widget _buildSampleRow() {
-    final isAdmin = context.read<AuthService>().isAdmin;
+    final isAdmin = context.read<AuthService>().isSuperAdmin;
     return Row(
       children: [
         OutlinedButton.icon(
