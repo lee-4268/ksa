@@ -1,5 +1,6 @@
 import 'package:excel/excel.dart' as excel_pkg;
 import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -968,67 +969,67 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
 
     return SizedBox(
       height: tableHeight,
-      child: Column(
-        children: [
-          // 헤더 (sticky)
-          Container(
-            decoration: const BoxDecoration(
-              color: Color(0xFFF5F7FA),
-              border: Border(
-                top: BorderSide(color: Color(0xFFE0E4EA)),
-                bottom: BorderSide(color: Color(0xFFE0E4EA)),
-              ),
-            ),
-            child: SingleChildScrollView(
-              controller: _headerHScroll,
-              scrollDirection: Axis.horizontal,
-              physics: const ClampingScrollPhysics(),
-              child: SizedBox(
-                width: totalWidth,
-                height: 44,
-                child: Row(
-                  children: List.generate(_colTitles.length, (i) {
-                    return _buildHeaderCell(i);
-                  }),
+      child: ScrollConfiguration(
+        behavior: const _AlwaysScrollbarBehavior(),
+        child: Column(
+          children: [
+            // 헤더 (sticky)
+            Container(
+              decoration: const BoxDecoration(
+                color: Color(0xFFF5F7FA),
+                border: Border(
+                  top: BorderSide(color: Color(0xFFE0E4EA)),
+                  bottom: BorderSide(color: Color(0xFFE0E4EA)),
                 ),
               ),
-            ),
-          ),
-          // 가로 스크롤바 (헤더 바로 아래, 항상 표시)
-          SizedBox(
-            height: 12,
-            child: Scrollbar(
-              controller: _headerHScroll,
-              thumbVisibility: true,
-              trackVisibility: true,
-              thickness: 10,
-              child: SingleChildScrollView(
+              child: Scrollbar(
                 controller: _headerHScroll,
-                scrollDirection: Axis.horizontal,
-                physics: const ClampingScrollPhysics(),
-                child: SizedBox(width: totalWidth, height: 1),
-              ),
-            ),
-          ),
-          // 바디 (세로 스크롤만 — 가로는 위 스크롤바와 헤더가 동기 제어)
-          Expanded(
-            child: SingleChildScrollView(
-              controller: _bodyHScroll,
-              scrollDirection: Axis.horizontal,
-              physics: const ClampingScrollPhysics(),
-              child: SizedBox(
-                width: totalWidth,
-                child: ListView.builder(
-                  itemCount: items.length,
-                  itemExtent: 48,
-                  itemBuilder: (ctx, idx) {
-                    return _buildDataRow(items[idx], r, idx);
-                  },
+                thumbVisibility: true,
+                trackVisibility: true,
+                thickness: 10,
+                child: SingleChildScrollView(
+                  controller: _headerHScroll,
+                  scrollDirection: Axis.horizontal,
+                  physics: const ClampingScrollPhysics(),
+                  child: SizedBox(
+                    width: totalWidth,
+                    height: 44,
+                    child: Row(
+                      children: List.generate(_colTitles.length, (i) {
+                        return _buildHeaderCell(i);
+                      }),
+                    ),
+                  ),
                 ),
               ),
             ),
-          ),
-        ],
+            // 바디
+            Expanded(
+              child: Scrollbar(
+                controller: _bodyHScroll,
+                thumbVisibility: true,
+                trackVisibility: true,
+                thickness: 10,
+                notificationPredicate: (n) => n.depth == 0,
+                child: SingleChildScrollView(
+                  controller: _bodyHScroll,
+                  scrollDirection: Axis.horizontal,
+                  physics: const ClampingScrollPhysics(),
+                  child: SizedBox(
+                    width: totalWidth,
+                    child: ListView.builder(
+                      itemCount: items.length,
+                      itemExtent: 48,
+                      itemBuilder: (ctx, idx) {
+                        return _buildDataRow(items[idx], r, idx);
+                      },
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1554,4 +1555,16 @@ class _TowerMismatchModalState extends State<TowerMismatchModal> {
       ),
     );
   }
+}
+
+class _AlwaysScrollbarBehavior extends ScrollBehavior {
+  const _AlwaysScrollbarBehavior();
+
+  @override
+  Set<PointerDeviceKind> get dragDevices => {
+        PointerDeviceKind.touch,
+        PointerDeviceKind.mouse,
+        PointerDeviceKind.trackpad,
+        PointerDeviceKind.stylus,
+      };
 }
