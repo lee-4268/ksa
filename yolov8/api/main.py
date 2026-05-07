@@ -7530,13 +7530,16 @@ def _cert_cache_load():
         conn.commit()
         conn.close()
 
-        # 원자적 교체
-        if os.path.exists(db_path):
-            try:
-                os.remove(db_path)
-            except Exception:
-                pass
-        os.rename(tmp_path, db_path)
+        # 원자적 교체 (os.replace = atomic rename, overwrites existing on all OS)
+        os.replace(tmp_path, db_path)
+        # 고아 WAL/SHM 파일 제거 (rename 전 .tmp-wal, .tmp-shm)
+        for _stale_ext in ('-wal', '-shm'):
+            _stale = tmp_path + _stale_ext
+            if os.path.exists(_stale):
+                try:
+                    os.remove(_stale)
+                except Exception:
+                    pass
 
         _cert_cache_db_path = db_path
         _cert_cache_ts = _time_mod.time()
@@ -8035,7 +8038,7 @@ def _cert_batch_lookup_cached(zpwino_list: list) -> dict:
     cols = ["zpwino", "zpwina", "zpwiadr", "zpcode", "area_hdofc_nm", "ons_team_nm", "zpirty3", "eqp_ser_no", "zpwilat", "zpwilon", "max_seqno"]
     results = {}
     try:
-        conn = sqlite3.connect(_cert_cache_db_path)
+        conn = sqlite3.connect(_cert_cache_db_path, timeout=30)
         conn.row_factory = sqlite3.Row
         for q in zpwino_list:
             if q in results:
@@ -8350,7 +8353,7 @@ def _query_callname_db(zpwina_values: list, zpwino_values: list) -> dict:
 
     result = {}
     try:
-        conn = sqlite3.connect(_cert_cache_db_path)
+        conn = sqlite3.connect(_cert_cache_db_path, timeout=30)
         conn.row_factory = sqlite3.Row
 
         # 배치 크기 제한 (SQLite 변수 최대 999개)
@@ -8618,8 +8621,10 @@ def _process_callname_upload_sync(job_id: str, tmp_path: str, filename: str,
             with open(fpath, encoding="utf-8") as cnt_f:
                 uploaded_rows += sum(1 for _ in cnt_f) - 1
 
-        # 스트리밍 방식이므로 캐시 무효화 불필요 (항상 S3에서 직접 읽음)
         _callname_db_row_count = uploaded_rows
+        # 새 CSV로 cert_cache 재빌드 (백그라운드 — ERP비교/호출명칭 조회에 즉시 반영)
+        import threading as _th
+        _th.Thread(target=_cert_cache_force_rebuild, daemon=True).start()
 
         file_count = len(filtered_paths)
         job["status"] = "completed"
@@ -10577,7 +10582,7 @@ def _resolve_inputs_to_zpwino(raw_list: list) -> tuple:
     # 2단계: 텍스트 입력 배치 조회 (WHERE IN)
     BATCH = 900
     try:
-        conn = sqlite3.connect(_cert_cache_db_path)
+        conn = sqlite3.connect(_cert_cache_db_path, timeout=30)
         conn.row_factory = sqlite3.Row
         remaining = list(text_inputs)
 
