@@ -105,6 +105,10 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
   ];
   static const double _minColWidth = 60;
 
+  // 그룹 경계: 이 인덱스 컬럼 오른쪽에 진한 구분선 그림
+  // 8 = 설치대 비교 / 11 = 기수 비교 / 14 = 일련번호 비교(끝)
+  static const Set<int> _groupBoundaryRight = {8, 11};
+
   @override
   void initState() {
     super.initState();
@@ -1021,6 +1025,7 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
   }
 
   Widget _buildHeaderCell(int i) {
+    final isGroupBoundary = _groupBoundaryRight.contains(i);
     return Stack(
       clipBehavior: Clip.none,
       children: [
@@ -1029,6 +1034,13 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
           height: 44,
           padding: const EdgeInsets.symmetric(horizontal: 10),
           alignment: Alignment.centerLeft,
+          decoration: isGroupBoundary
+              ? const BoxDecoration(
+                  border: Border(
+                    right: BorderSide(color: Color(0xFF9AA3AE), width: 2),
+                  ),
+                )
+              : null,
           child: Text(
             _colTitles[i],
             style: _headerStyle,
@@ -1140,11 +1152,19 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
       ),
       child: Row(
         children: List.generate(cells.length, (i) {
+          final isGroupBoundary = _groupBoundaryRight.contains(i);
           return Container(
             width: _colWidths[i],
             height: 48,
             padding: const EdgeInsets.symmetric(horizontal: 10),
             alignment: Alignment.centerLeft,
+            decoration: isGroupBoundary
+                ? const BoxDecoration(
+                    border: Border(
+                      right: BorderSide(color: Color(0xFF9AA3AE), width: 2),
+                    ),
+                  )
+                : null,
             child: cells[i],
           );
         }),
