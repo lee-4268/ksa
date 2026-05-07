@@ -87,18 +87,18 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
   final ScrollController _bodyHScroll = ScrollController();
   bool _hSyncing = false;
 
-  // 컬럼 순서: 입력값, 허가번호, 호출명칭, 본부, 통시, 공대,
+  // 컬럼 순서: 허가번호, 호출명칭, 본부, 통시, 공대,
   //           ERP 설치대, DS 설치대, 설치대 비교,
   //           ERP 기수, DS 기수, 기수 비교,
   //           ERP 일련번호, DS 일련번호, 일련번호 비교
   static const List<String> _colTitles = [
-    '입력값', '허가번호', '호출명칭', '본부', '통시', '공대',
+    '허가번호', '호출명칭', '본부', '통시', '공대',
     'ERP 설치대', 'DS 설치대', '설치대 비교',
     'ERP 기수', 'DS 기수', '기수 비교',
     'ERP 일련번호', 'DS 일련번호', '일련번호 비교',
   ];
   late final List<double> _colWidths = [
-    120, 130, 160, 80, 90, 90,
+    130, 160, 80, 90, 90,
     140, 140, 110,
     80, 80, 100,
     160, 160, 110,
@@ -106,8 +106,8 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
   static const double _minColWidth = 60;
 
   // 그룹 경계: 이 인덱스 컬럼 오른쪽에 진한 구분선 그림
-  // 8 = 설치대 비교 / 11 = 기수 비교 / 14 = 일련번호 비교(끝)
-  static const Set<int> _groupBoundaryRight = {8, 11};
+  // 7 = 설치대 비교 / 10 = 기수 비교 / 13 = 일련번호 비교(끝)
+  static const Set<int> _groupBoundaryRight = {7, 10};
 
   @override
   void initState() {
@@ -897,7 +897,7 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
 
       // 헤더
       final headers = [
-        '입력값', '허가번호', '호출명칭', '본부', '통시', '공대',
+        '허가번호', '호출명칭', '본부', '통시', '공대',
         'ERP 설치대', 'DS 설치대', '설치대 비교',
         'ERP 기수', 'DS 기수', '기수 비교',
         'ERP 일련번호', 'DS 일련번호', '일련번호 비교',
@@ -916,11 +916,9 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
       final items = _getFilteredItems();
       for (var rowIdx = 0; rowIdx < items.length; rowIdx++) {
         final item = items[rowIdx];
-        final resolve = r.resolveMap[item.zpwino];
-        final inputVal = resolve?['input'] ?? item.zpwino;
 
         final values = [
-          inputVal, item.zpwino, item.zpwina, item.areaHdofcNm,
+          item.zpwino, item.zpwina, item.areaHdofcNm,
           item.tongsi, item.gongdae,
           item.erpZpirty3, item.dsTowerType, item.towerMatch,
           item.erpMaxSeqno, item.dsAntennaKiMax, item.antennaMatch,
@@ -935,7 +933,7 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
       }
 
       // 컬럼 너비 설정
-      final widths = [15.0, 15.0, 15.0, 10.0, 15.0, 15.0, 10.0, 20.0, 20.0, 10.0, 8.0, 8.0, 10.0, 20.0, 20.0, 10.0];
+      final widths = [15.0, 15.0, 10.0, 15.0, 15.0, 20.0, 20.0, 10.0, 8.0, 8.0, 10.0, 20.0, 20.0, 10.0];
       for (var i = 0; i < widths.length; i++) {
         sheet.setColumnWidth(i, widths[i]);
       }
@@ -1088,69 +1086,49 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
   }
 
   Widget _buildDataRow(CompareItem item, ErpDsCompareResult r, int idx) {
-    final resolve = r.resolveMap[item.zpwino];
-    final inputVal = resolve?['input'] ?? item.zpwino;
-    final inputType = resolve?['type'] ?? '';
-    final showInputType = inputType != '허가번호' && inputType.isNotEmpty;
-
     final cells = <Widget>[
-      // 0 입력값
-      showInputType
-          ? Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(inputVal,
-                    style: _cellStyle, overflow: TextOverflow.ellipsis),
-                Text(inputType,
-                    style: TextStyle(
-                        fontSize: 10, color: Colors.grey.shade500)),
-              ],
-            )
-          : Text(inputVal,
-              style: _cellStyle, overflow: TextOverflow.ellipsis),
-      // 1 허가번호
+      // 0 허가번호
       Text(item.zpwino,
           style: _cellStyle, overflow: TextOverflow.ellipsis),
-      // 2 호출명칭
+      // 1 호출명칭
       Text(item.zpwina,
           style: _cellStyle, overflow: TextOverflow.ellipsis),
-      // 3 본부
+      // 2 본부
       Text(item.areaHdofcNm,
           style: _cellStyle, overflow: TextOverflow.ellipsis),
-      // 4 통시
+      // 3 통시
       Text(item.tongsi,
           style: _cellStyle, overflow: TextOverflow.ellipsis),
-      // 5 공대
+      // 4 공대
       Text(item.gongdae,
           style: _cellStyle, overflow: TextOverflow.ellipsis),
-      // 6 ERP 설치대
+      // 5 ERP 설치대
       Text(item.erpZpirty3,
           style: _cellStyle, overflow: TextOverflow.ellipsis),
-      // 7 DS 설치대
+      // 6 DS 설치대
       Text(item.dsTowerType,
           style: _cellStyle, overflow: TextOverflow.ellipsis),
-      // 8 설치대 비교
+      // 7 설치대 비교
       _buildMatchChip(item.towerMatch, item: item),
-      // 9 ERP 기수
+      // 8 ERP 기수
       Text(item.erpMaxSeqno,
           style: _cellStyle, overflow: TextOverflow.ellipsis),
-      // 10 DS 기수
+      // 9 DS 기수
       Text(item.dsAntennaKiMax,
           style: _cellStyle, overflow: TextOverflow.ellipsis),
-      // 11 기수 비교
+      // 10 기수 비교
       _buildMatchChip(item.antennaMatch),
-      // 12 ERP 일련번호
+      // 11 ERP 일련번호
       Tooltip(
           message: item.erpSerial,
           child: Text(item.erpSerial,
               style: _cellStyle, overflow: TextOverflow.ellipsis)),
-      // 13 DS 일련번호
+      // 12 DS 일련번호
       Tooltip(
           message: item.dsSerial,
           child: Text(item.dsSerial,
               style: _cellStyle, overflow: TextOverflow.ellipsis)),
-      // 14 일련번호 비교
+      // 13 일련번호 비교
       _buildMatchChip(item.serialMatch),
     ];
 
