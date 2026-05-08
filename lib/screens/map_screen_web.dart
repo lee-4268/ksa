@@ -1351,9 +1351,9 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
 
     final jsCode = '''
       (function() {
-        if (typeof kakao === 'undefined') return;
+        if (typeof kakao === 'undefined') { console.warn('[azimuth] kakao undefined'); return; }
         var map = window['kakaoMapInstance_$_containerId'];
-        if (!map) return;
+        if (!map) { console.warn('[azimuth] map instance missing'); return; }
 
         // 기존 부채꼴 제거
         var existing = window['kakaoAzimuthPolygons_$_containerId'] || [];
@@ -1369,6 +1369,9 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
         var activeSet = {};
         for (var i = 0; i < activeKeys.length; i++) activeSet[activeKeys[i]] = true;
         var allActive = activeKeys.length === 0;
+        console.log('[azimuth] stations=', Object.keys(azimuths).length,
+                    'latlngs=', Object.keys(latlngs).length,
+                    'active=', activeKeys);
 
         var beam = $beamWidthDeg;
         var radius = $radiusMeters;
@@ -1427,6 +1430,7 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
           }
         }
         window['kakaoAzimuthPolygons_$_containerId'] = newPolys;
+        console.log('[azimuth] polygons drawn:', newPolys.length);
       })();
     ''';
     html.document.body?.append(html.ScriptElement()..text = jsCode);

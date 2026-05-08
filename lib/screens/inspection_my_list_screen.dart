@@ -241,6 +241,9 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
     try {
       final data = await _azSvc.fetchBatch(ids);
       if (!mounted) return;
+      // ignore: avoid_print
+      print('[azimuth] fetched stations=${data.length}/${ids.length}, '
+          'sectorsTotal=${data.values.fold<int>(0, (a, l) => a + l.length)}');
       setState(() {
         _azimuthData = data;
         _loadingAzimuth = false;
