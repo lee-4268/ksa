@@ -10606,6 +10606,10 @@ def _extract_service_band(zpannu1: str, eqp_type: str, zpcname: str) -> tuple:
                     if code in zn:
                         band = b
                         break
+        # 3순위: LTE인데 밴드 미식별 → 멀티밴드 장비(MIBOS/IRO/RRH_L/RRU_L 등)
+        # 같은 안테나에서 여러 밴드 동시 송출 → 단일 "멀티" 키로 묶음
+        if band is None:
+            band = "멀티"
     return service, band
 
 

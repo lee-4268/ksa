@@ -87,6 +87,7 @@ const List<BandSpec> kSupportedBands = [
   BandSpec('LTE', '1.8G', 'LTE 1.8G', 0xFF00897B),
   BandSpec('LTE', '2.1G', 'LTE 2.1G', 0xFF7B1FA2),
   BandSpec('LTE', '2.6G', 'LTE 2.6G', 0xFF4A90D9),
+  BandSpec('LTE', '멀티', 'LTE 멀티', 0xFF26C6DA),
   BandSpec('5G', '3.5G', '5G 3.5G', 0xFFE53935),
   BandSpec('5G', '28G', '5G 28G', 0xFFF57C00),
   BandSpec('3G', '', '3G', 0xFF616161),

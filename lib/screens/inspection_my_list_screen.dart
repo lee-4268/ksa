@@ -65,7 +65,8 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
   bool _azBandsExpanded = true;
   Map<String, List<AntennaSector>> _azimuthData = {};
   Set<String> _activeBandKeys = const {
-    'LTE-800M', 'LTE-1.8G', 'LTE-2.1G', 'LTE-2.6G', '5G-3.5G', '5G-28G',
+    'LTE-800M', 'LTE-1.8G', 'LTE-2.1G', 'LTE-2.6G', 'LTE-멀티',
+    '5G-3.5G', '5G-28G',
   };
   bool _loadingAzimuth = false;
 
