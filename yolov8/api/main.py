@@ -10271,10 +10271,19 @@ def _parse_serial_strings(s: str) -> list:
 
 
 def _compare_values(erp_val: str, ds_val: str, normalize_fn=None) -> str:
-    """ERP vs DS 값 비교. 일치/부분일치/불일치/확인필요 반환."""
-    if not ds_val:
+    """ERP vs DS 값 비교. 일치/부분일치/불일치/DS누락/확인필요 반환.
+
+    - 양쪽 다 빈 값: '확인필요' (외부 사이트에서 수동 확인)
+    - ERP만 빈 값: '확인필요' (ERP 누락 — 외부 확인 후 판단)
+    - DS만 빈 값: 'DS누락' (변경개설 대상)
+    """
+    erp_empty = not erp_val
+    ds_empty = not ds_val
+    if erp_empty and ds_empty:
         return "확인필요"
-    if not erp_val:
+    if ds_empty:
+        return "DS누락"
+    if erp_empty:
         return "확인필요"
     if normalize_fn:
         erp_parts = [normalize_fn(x.strip()) for x in erp_val.split(",") if x.strip()]
@@ -10282,7 +10291,11 @@ def _compare_values(erp_val: str, ds_val: str, normalize_fn=None) -> str:
     else:
         erp_parts = _parse_serial_strings(erp_val)
         ds_parts = _parse_serial_strings(ds_val)
-    if not erp_parts or not ds_parts:
+    if not erp_parts and not ds_parts:
+        return "확인필요"
+    if not ds_parts:
+        return "DS누락"
+    if not erp_parts:
         return "확인필요"
     if set(erp_parts) == set(ds_parts) and len(erp_parts) == len(ds_parts):
         return "일치"
@@ -10960,42 +10973,32 @@ def _erp_ds_compare_sync(
     items = []
     summary = {
         "tower_match": 0, "tower_mismatch": 0, "tower_check": 0,
-        "tower_partial": 0,
+        "tower_partial": 0, "tower_ds_missing": 0,
         "serial_match": 0, "serial_mismatch": 0, "serial_check": 0,
-        "serial_partial": 0,
-        "antenna_match": 0, "antenna_mismatch": 0, "antenna_check": 0,
+        "serial_partial": 0, "serial_ds_missing": 0,
     }
 
     for z in zpwino_list:
         erp = erp_data.get(z)
         erp_zpirty3 = erp.get("zpirty3", "") if erp else ""
         erp_serial = erp.get("eqp_ser_no", "") if erp else ""
-        erp_max_seqno = erp.get("max_seqno", "") if erp else ""
         z_clean = z.replace('-', '')
         ds_tower = ds_antenna.get(z_clean, "") or ds_antenna.get(z, "")
         ds_serials = ds_device.get(z_clean, []) or ds_device.get(z, [])
         ds_serial_str = ", ".join(ds_serials) if ds_serials else ""
         insp = insp_info.get(z_clean) or insp_info.get(z, {})
 
-        # ERP max_seqno 정규화 (정수 문자열로 통일)
-        try:
-            erp_seqno_norm = str(int(float(erp_max_seqno.strip()))) if erp_max_seqno.strip() else ""
-        except (ValueError, TypeError):
-            erp_seqno_norm = erp_max_seqno.strip()
-        ds_ki_max = ds_antenna_ki.get(z_clean) or ds_antenna_ki.get(z, 0)
-        ds_ki_str = str(ds_ki_max) if ds_ki_max else ""
-
         # 철탑형태 비교
         tower_result = _compare_values(erp_zpirty3, ds_tower, _normalize_tower)
         # 일련번호 비교
         serial_result = _compare_values(erp_serial, ds_serial_str)
-        # 안테나 기수 비교
-        antenna_result = _compare_values(erp_seqno_norm, ds_ki_str)
 
-        summary_key_map = {"일치": "match", "부분일치": "partial", "불일치": "mismatch", "확인필요": "check"}
+        summary_key_map = {
+            "일치": "match", "부분일치": "partial", "불일치": "mismatch",
+            "DS누락": "ds_missing", "확인필요": "check",
+        }
         summary[f"tower_{summary_key_map.get(tower_result, 'check')}"] += 1
         summary[f"serial_{summary_key_map.get(serial_result, 'check')}"] += 1
-        summary[f"antenna_{summary_key_map.get(antenna_result, 'check')}"] += 1
 
         # 주소 우선순위: inspection_targets 도로명주소 > 설치장소 > ERP zpwiadr
         best_address = (insp.get("도로명주소") or insp.get("설치장소")
@@ -11024,13 +11027,10 @@ def _erp_ds_compare_sync(
             "erp_found": bool(erp),
             "erp_zpirty3": erp_zpirty3,
             "erp_serial": erp_serial,
-            "erp_max_seqno": erp_seqno_norm,
             "ds_tower_type": ds_tower,
             "ds_serial": ds_serial_str,
-            "ds_antenna_ki_max": ds_ki_str,
             "tower_match": tower_result,
             "serial_match": serial_result,
-            "antenna_match": antenna_result,
             "통시": insp.get("통시", ""),
             "공대": insp.get("공대", ""),
         })
@@ -11529,6 +11529,45 @@ def _init_inspection_db():
             conn.execute(f"ALTER TABLE inspection_schedules ADD COLUMN {_col} TEXT DEFAULT {_default}")
         except Exception:
             pass
+    # 워크플로우 상태 머신용 컬럼
+    for _col, _default in [
+        ("workflow_status", "'REGISTERED'"),
+        ("status_updated_at", "''"),
+        ("status_updated_by", "''"),
+        ("pre_check_result", "''"),  # JSON
+        ("report_issued_at", "''"),
+        ("report_issued_by", "''"),
+        ("submission_no", "''"),
+        ("submitted_at", "''"),
+    ]:
+        try:
+            conn.execute(f"ALTER TABLE inspection_schedules ADD COLUMN {_col} TEXT DEFAULT {_default}")
+        except Exception:
+            pass
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_is_status ON inspection_schedules(year, workflow_status)')
+    # 워크플로우 상태 전환 이력
+    conn.execute('''CREATE TABLE IF NOT EXISTS inspection_status_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        schedule_pk TEXT NOT NULL,
+        from_status TEXT,
+        to_status TEXT NOT NULL,
+        changed_by TEXT,
+        changed_at TEXT NOT NULL,
+        memo TEXT
+    )''')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_isl_pk ON inspection_status_log(schedule_pk)')
+    # 기존 데이터 백필: 검사일이 입력된 건은 INSPECTED, 나머지는 REGISTERED (DEFAULT 적용됨)
+    try:
+        conn.execute('''
+            UPDATE inspection_schedules SET workflow_status='INSPECTED'
+            WHERE (workflow_status IS NULL OR workflow_status='' OR workflow_status='REGISTERED')
+              AND pk IN (
+                SELECT pk FROM inspection_results
+                WHERE 검사일 IS NOT NULL AND 검사일 != ''
+              )
+        ''')
+    except Exception:
+        pass
     conn.execute('''CREATE TABLE IF NOT EXISTS inspection_results (
         pk TEXT PRIMARY KEY,
         year INTEGER NOT NULL,
@@ -13912,6 +13951,205 @@ def _geocode_target_sync(year: int, 허가번호: str):
         logger.debug(f"지오코딩 실패 (non-fatal): {허가번호} — {e}")
 
 
+# ============================================================
+# 워크플로우 상태 머신 (Phase 1)
+# ============================================================
+
+# 상태 정의
+WF_REGISTERED = "REGISTERED"
+WF_PRE_CHECK = "PRE_CHECK"
+WF_PRE_CHECK_DONE = "PRE_CHECK_DONE"
+WF_CHANGE_FILING = "CHANGE_FILING"
+WF_RE_CHECK = "RE_CHECK"
+WF_REPORT_ISSUED = "REPORT_ISSUED"
+WF_SUBMITTED = "SUBMITTED"
+WF_INSPECTED = "INSPECTED"
+
+WF_VALID = {WF_REGISTERED, WF_PRE_CHECK, WF_PRE_CHECK_DONE, WF_CHANGE_FILING,
+            WF_RE_CHECK, WF_REPORT_ISSUED, WF_SUBMITTED, WF_INSPECTED}
+
+# 허용 전환 (from -> to 집합). superadmin은 어디든 가능.
+_WF_TRANSITIONS = {
+    None: {WF_REGISTERED},                       # 신규 등록
+    WF_REGISTERED: {WF_PRE_CHECK},
+    WF_PRE_CHECK: {WF_PRE_CHECK_DONE, WF_CHANGE_FILING},
+    WF_CHANGE_FILING: {WF_RE_CHECK},
+    WF_RE_CHECK: {WF_PRE_CHECK_DONE},            # 시스템 자동
+    WF_PRE_CHECK_DONE: {WF_REPORT_ISSUED},
+    WF_REPORT_ISSUED: {WF_SUBMITTED},
+    WF_SUBMITTED: {WF_INSPECTED},
+    WF_INSPECTED: set(),
+}
+
+
+def _wf_can_transition(from_status: str | None, to_status: str, role: str) -> bool:
+    """워크플로우 상태 전환 허용 여부."""
+    if to_status not in WF_VALID:
+        return False
+    if role == "admin":  # superadmin은 강제 롤백 포함 모든 전환 가능
+        return True
+    allowed = _WF_TRANSITIONS.get(from_status, set())
+    return to_status in allowed
+
+
+def _wf_record_log_sync(conn, schedule_pk: str, from_status: str | None,
+                       to_status: str, changed_by: str, memo: str = ""):
+    """상태 전환 이력 기록."""
+    now = datetime.now(timezone.utc).isoformat()
+    conn.execute(
+        'INSERT INTO inspection_status_log(schedule_pk, from_status, to_status, '
+        'changed_by, changed_at, memo) VALUES (?,?,?,?,?,?)',
+        (schedule_pk, from_status, to_status, changed_by, now, memo))
+
+
+def _wf_transition_sync(schedule_pk: str, to_status: str, changed_by: str,
+                       role: str, memo: str = "") -> tuple[bool, str]:
+    """단일 schedule 상태 전환. (성공여부, 메시지) 반환."""
+    if to_status not in WF_VALID:
+        return False, f"잘못된 상태: {to_status}"
+    c = sqlite3.connect(_INSP_DB, timeout=60)
+    try:
+        row = c.execute(
+            'SELECT workflow_status FROM inspection_schedules WHERE pk=?',
+            (schedule_pk,)).fetchone()
+        if not row:
+            return False, "일정 없음"
+        cur = row[0] or WF_REGISTERED
+        if cur == to_status:
+            return False, "이미 해당 상태"
+        if not _wf_can_transition(cur, to_status, role):
+            return False, f"전환 불가: {cur} → {to_status}"
+        now = datetime.now(timezone.utc).isoformat()
+        c.execute(
+            'UPDATE inspection_schedules SET workflow_status=?, '
+            'status_updated_at=?, status_updated_by=? WHERE pk=?',
+            (to_status, now, changed_by, schedule_pk))
+        _wf_record_log_sync(c, schedule_pk, cur, to_status, changed_by, memo)
+        c.commit()
+        return True, "ok"
+    finally:
+        c.close()
+
+
+class WfTransitionReq(BaseModel):
+    to_status: str
+    memo: str = ""
+
+
+class WfBulkTransitionReq(BaseModel):
+    schedule_pks: list[str]
+    to_status: str
+    memo: str = ""
+
+
+@app.patch("/inspection/schedule/{pk:path}/status")
+async def inspection_schedule_transition(pk: str, request: Request, req: WfTransitionReq):
+    """단일 일정의 워크플로우 상태 전환."""
+    empno = await _verify_auth(request)
+    role = await asyncio.to_thread(_get_user_role_sync, empno)
+    ok, msg = await asyncio.to_thread(
+        _wf_transition_sync, pk, req.to_status, empno, role, req.memo)
+    if not ok:
+        raise HTTPException(400, msg)
+    await asyncio.to_thread(_record_audit_log_sync,
+                           "wf_transition", "inspection_schedule", pk, empno)
+    return {"success": True}
+
+
+@app.post("/inspection/schedule/transition-bulk")
+async def inspection_schedule_transition_bulk(request: Request, req: WfBulkTransitionReq):
+    """다중 일정 일괄 상태 전환 (혁신팀 사전점검 의뢰 등)."""
+    empno = await _verify_auth(request)
+    role = await asyncio.to_thread(_get_user_role_sync, empno)
+    if not req.schedule_pks:
+        raise HTTPException(400, "schedule_pks 비어있음")
+
+    def _bulk():
+        results = []
+        for spk in req.schedule_pks:
+            ok, msg = _wf_transition_sync(spk, req.to_status, empno, role, req.memo)
+            results.append({"pk": spk, "ok": ok, "msg": msg})
+        return results
+
+    results = await asyncio.to_thread(_bulk)
+    success = sum(1 for r in results if r["ok"])
+    await asyncio.to_thread(_record_audit_log_sync,
+                           "wf_transition_bulk", "inspection_schedule",
+                           f"count={len(req.schedule_pks)},to={req.to_status}", empno)
+    return {"success": True, "total": len(results), "succeeded": success, "results": results}
+
+
+@app.get("/inspection/schedule/{pk:path}/log")
+async def inspection_schedule_log(pk: str, request: Request):
+    """워크플로우 상태 전환 이력 조회."""
+    await _verify_auth(request)
+    def _read():
+        c = sqlite3.connect(_INSP_DB, timeout=60); c.row_factory = sqlite3.Row
+        rows = c.execute(
+            'SELECT * FROM inspection_status_log WHERE schedule_pk=? ORDER BY id ASC',
+            (pk,)).fetchall()
+        c.close()
+        return [dict(r) for r in rows]
+    items = await asyncio.to_thread(_read)
+    return {"items": items}
+
+
+class PreCheckResultReq(BaseModel):
+    summary: dict      # {tower_match, tower_mismatch, ..., serial_*, ds_missing, check}
+    items: list = []   # zpwino별 상세 (선택)
+    confirmation_acknowledged: bool = False  # 확인필요 포함 회신 동의
+
+
+@app.post("/inspection/schedule/{pk:path}/pre-check-result")
+async def inspection_schedule_pre_check_result(pk: str, request: Request, req: PreCheckResultReq):
+    """전산비교 결과 첨부 + PRE_CHECK_DONE 자동 전환.
+
+    - 불일치 또는 DS누락 0건일 때만 전환 허용
+    - 확인필요 포함 회신 시 confirmation_acknowledged=true 필요
+    """
+    empno = await _verify_auth(request)
+    role = await asyncio.to_thread(_get_user_role_sync, empno)
+
+    s = req.summary or {}
+    mismatch = (s.get("tower_mismatch", 0) + s.get("serial_mismatch", 0))
+    ds_missing = (s.get("tower_ds_missing", 0) + s.get("serial_ds_missing", 0))
+    check = (s.get("tower_check", 0) + s.get("serial_check", 0))
+    if mismatch > 0 or ds_missing > 0:
+        raise HTTPException(400, f"불일치 {mismatch}건/DS누락 {ds_missing}건 — 변경개설 필요")
+    if check > 0 and not req.confirmation_acknowledged:
+        raise HTTPException(400, f"확인필요 {check}건 — 외부 확인 동의 필요")
+
+    now = datetime.now(timezone.utc).isoformat()
+    payload = json.dumps({
+        "summary": s, "items": req.items,
+        "checked_at": now, "checked_by": empno,
+    }, ensure_ascii=False)
+
+    def _save():
+        c = sqlite3.connect(_INSP_DB, timeout=60)
+        row = c.execute('SELECT workflow_status FROM inspection_schedules WHERE pk=?', (pk,)).fetchone()
+        if not row:
+            c.close()
+            return False, "일정 없음"
+        cur = row[0] or WF_REGISTERED
+        if not _wf_can_transition(cur, WF_PRE_CHECK_DONE, role):
+            c.close()
+            return False, f"전환 불가: {cur} → PRE_CHECK_DONE"
+        c.execute(
+            'UPDATE inspection_schedules SET pre_check_result=?, workflow_status=?, '
+            'status_updated_at=?, status_updated_by=? WHERE pk=?',
+            (payload, WF_PRE_CHECK_DONE, now, empno, pk))
+        _wf_record_log_sync(c, pk, cur, WF_PRE_CHECK_DONE, empno,
+                          f"전산비교 회신 (확인필요 {check}건 포함={req.confirmation_acknowledged})")
+        c.commit(); c.close()
+        return True, "ok"
+
+    ok, msg = await asyncio.to_thread(_save)
+    if not ok:
+        raise HTTPException(400, msg)
+    return {"success": True}
+
+
 @app.post("/inspection/schedule")
 async def inspection_schedule_upsert(request: Request, req: InspectionScheduleReq):
     """수검 일정 등록/수정 (관리자/매니저)."""
@@ -13922,18 +14160,26 @@ async def inspection_schedule_upsert(request: Request, req: InspectionScheduleRe
     now = datetime.now(timezone.utc).isoformat()
     def _write():
         c = sqlite3.connect(_INSP_DB, timeout=60)
+        # 기존 행 존재 여부 확인 (신규 INSERT인지 UPDATE인지 판단 → log 기록용)
+        existed = c.execute(
+            'SELECT workflow_status FROM inspection_schedules WHERE pk=?', (pk,)).fetchone()
         c.execute('''INSERT OR REPLACE INTO inspection_schedules
             (pk, year, 허가번호, 호출명칭, 분기, skt본부, access담당, 품질개선팀,
-             수검예정주차, 수검시작일, 수검종료일, 지역, 등록자, 등록일시, 검사관, 조)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+             수검예정주차, 수검시작일, 수검종료일, 지역, 등록자, 등록일시, 검사관, 조,
+             workflow_status, status_updated_at, status_updated_by)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
             (pk, req.year, req.허가번호, req.호출명칭, req.분기, req.skt본부,
              req.access담당, req.품질개선팀, req.수검예정주차,
-             req.수검시작일, req.수검종료일, req.지역, empno, now, req.검사관, req.조))
+             req.수검시작일, req.수검종료일, req.지역, empno, now, req.검사관, req.조,
+             (existed[0] if existed and existed[0] else WF_REGISTERED), now, empno))
         # 검사결과 기본값 '합격' 자동 생성 (기존 결과 있으면 덮어쓰지 않음)
         c.execute('''INSERT OR IGNORE INTO inspection_results
             (pk, year, 허가번호, status, 입력자, 입력일시)
             VALUES (?,?,?,?,?,?)''',
             (pk, req.year, req.허가번호, '합격', empno, now))
+        # 신규 등록 시에만 status_log 기록 (REGISTERED 진입)
+        if not existed:
+            _wf_record_log_sync(c, pk, None, WF_REGISTERED, empno, "일정 등록")
         c.commit(); c.close()
     await asyncio.to_thread(_write)
     await asyncio.to_thread(_record_audit_log_sync, "inspection_schedule_upsert", "inspection_schedule", pk, empno)
