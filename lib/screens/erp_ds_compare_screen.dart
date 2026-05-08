@@ -105,6 +105,11 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
   // 7 = 설치대 비교 / 10 = 기수 비교 / 13 = 일련번호 비교(끝)
   static const Set<int> _groupBoundaryRight = {7, 10};
 
+  // 사용자가 드래그로 조정한 컬럼 너비. null이면 가용폭에 비례 분배.
+  List<double>? _colWidths;
+  double _lastTableWidth = 0;
+  static const double _minColWidth = 50.0;
+
   @override
   void initState() {
     super.initState();
@@ -946,7 +951,8 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
       height: tableHeight,
       child: LayoutBuilder(
         builder: (ctx, cons) {
-          final widths = _computeColWidths(cons.maxWidth);
+          _ensureColWidths(cons.maxWidth);
+          final widths = _colWidths!;
           return Column(
             children: [
               // 헤더 (sticky)
@@ -982,29 +988,96 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
     );
   }
 
-  List<double> _computeColWidths(double maxWidth) {
-    final flexSum = _colFlex.fold<double>(0, (a, b) => a + b);
-    return _colFlex.map((f) => maxWidth * f / flexSum).toList();
+  // 가용 폭 변동 시: 기존 비율 유지하며 너비를 재정규화. 최초 진입 시에는 _colFlex로 초기화.
+  void _ensureColWidths(double maxWidth) {
+    if (maxWidth <= 0) return;
+    if (_colWidths == null) {
+      final flexSum = _colFlex.fold<double>(0, (a, b) => a + b);
+      _colWidths = _colFlex.map((f) => maxWidth * f / flexSum).toList();
+      _lastTableWidth = maxWidth;
+      return;
+    }
+    if ((maxWidth - _lastTableWidth).abs() > 0.5) {
+      final cur = _colWidths!;
+      final curSum = cur.fold<double>(0, (a, b) => a + b);
+      if (curSum > 0) {
+        _colWidths = cur.map((w) => w * maxWidth / curSum).toList();
+      }
+      _lastTableWidth = maxWidth;
+    }
+  }
+
+  // 컬럼 i와 i+1 경계에서 드래그: i는 늘어나고 i+1은 줄어든다 (합계 유지 → 컨테이너 넘침 없음).
+  void _onResizeColumn(int i, double delta) {
+    final widths = _colWidths;
+    if (widths == null || i < 0 || i >= widths.length - 1) return;
+    final left = widths[i];
+    final right = widths[i + 1];
+    double newLeft = left + delta;
+    double newRight = right - delta;
+    if (newLeft < _minColWidth) {
+      newRight -= (_minColWidth - newLeft);
+      newLeft = _minColWidth;
+    }
+    if (newRight < _minColWidth) {
+      newLeft -= (_minColWidth - newRight);
+      newRight = _minColWidth;
+    }
+    if (newLeft < _minColWidth || newRight < _minColWidth) return;
+    setState(() {
+      widths[i] = newLeft;
+      widths[i + 1] = newRight;
+    });
   }
 
   Widget _buildHeaderCell(int i, double width) {
     final isGroupBoundary = _groupBoundaryRight.contains(i);
-    return Container(
+    final isLast = i == _colTitles.length - 1;
+    return SizedBox(
       width: width,
       height: 44,
-      padding: const EdgeInsets.symmetric(horizontal: 8),
-      alignment: Alignment.centerLeft,
-      decoration: isGroupBoundary
-          ? const BoxDecoration(
-              border: Border(
-                right: BorderSide(color: Color(0xFF9AA3AE), width: 2),
-              ),
-            )
-          : null,
-      child: Text(
-        _colTitles[i],
-        style: _headerStyle,
-        overflow: TextOverflow.ellipsis,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Container(
+            width: width,
+            height: 44,
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            alignment: Alignment.center,
+            decoration: isGroupBoundary
+                ? const BoxDecoration(
+                    border: Border(
+                      right: BorderSide(color: Color(0xFF9AA3AE), width: 2),
+                    ),
+                  )
+                : null,
+            child: Text(
+              _colTitles[i],
+              style: _headerStyle,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
+            ),
+          ),
+          if (!isLast)
+            Positioned(
+              right: -4,
+              top: 0,
+              bottom: 0,
+              width: 8,
+              child: _buildResizeHandle(i),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildResizeHandle(int i) {
+    return MouseRegion(
+      cursor: SystemMouseCursors.resizeColumn,
+      child: GestureDetector(
+        behavior: HitTestBehavior.translucent,
+        onHorizontalDragUpdate: (d) => _onResizeColumn(i, d.delta.dx),
+        child: const SizedBox.expand(),
       ),
     );
   }
@@ -1014,45 +1087,67 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
     final cells = <Widget>[
       // 0 허가번호
       Text(item.zpwino,
-          style: _cellStyle, overflow: TextOverflow.ellipsis),
+          style: _cellStyle,
+          overflow: TextOverflow.ellipsis,
+          textAlign: TextAlign.center),
       // 1 호출명칭
       Text(item.zpwina,
-          style: _cellStyle, overflow: TextOverflow.ellipsis),
+          style: _cellStyle,
+          overflow: TextOverflow.ellipsis,
+          textAlign: TextAlign.center),
       // 2 본부
       Text(item.areaHdofcNm,
-          style: _cellStyle, overflow: TextOverflow.ellipsis),
+          style: _cellStyle,
+          overflow: TextOverflow.ellipsis,
+          textAlign: TextAlign.center),
       // 3 통시
       Text(item.tongsi,
-          style: _cellStyle, overflow: TextOverflow.ellipsis),
+          style: _cellStyle,
+          overflow: TextOverflow.ellipsis,
+          textAlign: TextAlign.center),
       // 4 공대
       Text(item.gongdae,
-          style: _cellStyle, overflow: TextOverflow.ellipsis),
+          style: _cellStyle,
+          overflow: TextOverflow.ellipsis,
+          textAlign: TextAlign.center),
       // 5 ERP 설치대
       Text(item.erpZpirty3,
-          style: _cellStyle, overflow: TextOverflow.ellipsis),
+          style: _cellStyle,
+          overflow: TextOverflow.ellipsis,
+          textAlign: TextAlign.center),
       // 6 DS 설치대
       Text(item.dsTowerType,
-          style: _cellStyle, overflow: TextOverflow.ellipsis),
+          style: _cellStyle,
+          overflow: TextOverflow.ellipsis,
+          textAlign: TextAlign.center),
       // 7 설치대 비교
       _buildMatchChip(item.towerMatch, item: item),
       // 8 ERP 기수
       Text(item.erpMaxSeqno,
-          style: _cellStyle, overflow: TextOverflow.ellipsis),
+          style: _cellStyle,
+          overflow: TextOverflow.ellipsis,
+          textAlign: TextAlign.center),
       // 9 DS 기수
       Text(item.dsAntennaKiMax,
-          style: _cellStyle, overflow: TextOverflow.ellipsis),
+          style: _cellStyle,
+          overflow: TextOverflow.ellipsis,
+          textAlign: TextAlign.center),
       // 10 기수 비교
       _buildMatchChip(item.antennaMatch),
       // 11 ERP 일련번호
       Tooltip(
           message: item.erpSerial,
           child: Text(item.erpSerial,
-              style: _cellStyle, overflow: TextOverflow.ellipsis)),
+              style: _cellStyle,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center)),
       // 12 DS 일련번호
       Tooltip(
           message: item.dsSerial,
           child: Text(item.dsSerial,
-              style: _cellStyle, overflow: TextOverflow.ellipsis)),
+              style: _cellStyle,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center)),
       // 13 일련번호 비교
       _buildMatchChip(item.serialMatch),
     ];
@@ -1071,7 +1166,7 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
             width: widths[i],
             height: 48,
             padding: const EdgeInsets.symmetric(horizontal: 8),
-            alignment: Alignment.centerLeft,
+            alignment: Alignment.center,
             decoration: isGroupBoundary
                 ? const BoxDecoration(
                     border: Border(
