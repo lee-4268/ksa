@@ -45,7 +45,7 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _sidebarCollapsed = false;
 
   // 일정화면 → 전산비교 이동 시 전달할 데이터
-  ({List<String> nos, String? div, bool multi})? _pendingCompare;
+  ({List<String> nos, String? div, bool multi, List<String>? schedulePks})? _pendingCompare;
   // 전산비교 → 일정화면 이동 시 전달할 허가번호
   List<String>? _pendingSchedule;
 
@@ -120,11 +120,11 @@ class _HomeScreenState extends State<HomeScreen> {
         _pendingSchedule = null;
         return InspectionScheduleScreen(
           initialLicenseNos: schedNos,
-          onCompareNavigate: (nos, div, multi) {
+          onCompareNavigate: (nos, div, multi, {schedulePks}) {
             final compareIdx = items.indexWhere((m) => m.title == '전산비교');
             if (compareIdx >= 0) {
               setState(() {
-                _pendingCompare = (nos: nos, div: div, multi: multi);
+                _pendingCompare = (nos: nos, div: div, multi: multi, schedulePks: schedulePks);
                 _selectedIndex = compareIdx;
               });
             }
@@ -143,6 +143,7 @@ class _HomeScreenState extends State<HomeScreen> {
           initialLicenseNos: data?.nos,
           initialAccessDivision: data?.div,
           initialMultiDivision: data?.multi ?? false,
+          initialSchedulePks: data?.schedulePks,
           onScheduleNavigate: (nos) {
             final schedIdx = items.indexWhere((m) => m.title == '일정 및 통계');
             if (schedIdx >= 0) {

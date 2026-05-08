@@ -20,6 +20,7 @@ class ErpDsCompareScreen extends StatefulWidget {
   final List<String>? initialLicenseNos;
   final String? initialAccessDivision;
   final bool initialMultiDivision;
+  final List<String>? initialSchedulePks;
   final void Function(List<String> licenseNos)? onScheduleNavigate;
 
   const ErpDsCompareScreen({
@@ -27,6 +28,7 @@ class ErpDsCompareScreen extends StatefulWidget {
     this.initialLicenseNos,
     this.initialAccessDivision,
     this.initialMultiDivision = false,
+    this.initialSchedulePks,
     this.onScheduleNavigate,
   });
 
@@ -85,25 +87,22 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
   // 결과 테이블: 컬럼 정의 (가용 폭에 비례 분배)
   // 컬럼 순서: 허가번호, 호출명칭, 본부, 통시, 공대,
   //           ERP 설치대, DS 설치대, 설치대 비교,
-  //           ERP 기수, DS 기수, 기수 비교,
   //           ERP 일련번호, DS 일련번호, 일련번호 비교
   static const List<String> _colTitles = [
     '허가번호', '호출명칭', '본부', '통시', '공대',
     'ERP 설치대', 'DS 설치대', '설치대 비교',
-    'ERP 기수', 'DS 기수', '기수 비교',
     'ERP 일련번호', 'DS 일련번호', '일련번호 비교',
   ];
   // 가중치: 텍스트 분량/중요도에 따라
   static const List<double> _colFlex = [
     13, 16, 8, 9, 9,
     14, 14, 11,
-    8, 8, 10,
-    16, 16, 11,
+    18, 18, 13,
   ];
 
   // 그룹 경계: 이 인덱스 컬럼 오른쪽에 진한 구분선 그림
-  // 7 = 설치대 비교 / 10 = 기수 비교 / 13 = 일련번호 비교(끝)
-  static const Set<int> _groupBoundaryRight = {7, 10};
+  // 7 = 설치대 비교 / 10 = 일련번호 비교(끝)
+  static const Set<int> _groupBoundaryRight = {7};
 
   // 사용자가 드래그로 조정한 컬럼 너비. null이면 가용폭에 비례 분배.
   List<double>? _colWidths;
@@ -708,6 +707,11 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
             ),
           ),
 
+        // 사전점검 회신 카드 (schedule_pks 자동 입력된 경우만)
+        if (widget.initialSchedulePks != null && widget.initialSchedulePks!.isNotEmpty) ...[
+          _buildPreCheckReplyCard(r),
+          const SizedBox(height: 16),
+        ],
         // 요약 카드
         _buildCard(
           Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -745,8 +749,6 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
             const SizedBox(height: 16),
             _buildSummaryRow('설치대', r.summary),
             const SizedBox(height: 10),
-            _buildSummaryRow('기수', r.summary, prefix: 'antenna'),
-            const SizedBox(height: 10),
             _buildSummaryRow('일련번호', r.summary, prefix: 'serial'),
           ]),
         ),
@@ -774,6 +776,7 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
               _buildFilterChip('일치', null),
               _buildFilterChip('부분일치', null),
               _buildFilterChip('불일치', null),
+              _buildFilterChip('DS누락', null),
               _buildFilterChip('확인필요', null),
             ]),
           ]),
@@ -882,7 +885,6 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
       final headers = [
         '허가번호', '호출명칭', '본부', '통시', '공대',
         'ERP 설치대', 'DS 설치대', '설치대 비교',
-        'ERP 기수', 'DS 기수', '기수 비교',
         'ERP 일련번호', 'DS 일련번호', '일련번호 비교',
       ];
       for (var i = 0; i < headers.length; i++) {
@@ -904,7 +906,6 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
           item.zpwino, item.zpwina, item.areaHdofcNm,
           item.tongsi, item.gongdae,
           item.erpZpirty3, item.dsTowerType, item.towerMatch,
-          item.erpMaxSeqno, item.dsAntennaKiMax, item.antennaMatch,
           item.erpSerial, item.dsSerial, item.serialMatch,
         ];
         for (var colIdx = 0; colIdx < values.length; colIdx++) {
@@ -1122,33 +1123,21 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
           textAlign: TextAlign.center),
       // 7 설치대 비교
       _buildMatchChip(item.towerMatch, item: item),
-      // 8 ERP 기수
-      Text(item.erpMaxSeqno,
-          style: _cellStyle,
-          overflow: TextOverflow.ellipsis,
-          textAlign: TextAlign.center),
-      // 9 DS 기수
-      Text(item.dsAntennaKiMax,
-          style: _cellStyle,
-          overflow: TextOverflow.ellipsis,
-          textAlign: TextAlign.center),
-      // 10 기수 비교
-      _buildMatchChip(item.antennaMatch),
-      // 11 ERP 일련번호
+      // 8 ERP 일련번호
       Tooltip(
           message: item.erpSerial,
           child: Text(item.erpSerial,
               style: _cellStyle,
               overflow: TextOverflow.ellipsis,
               textAlign: TextAlign.center)),
-      // 12 DS 일련번호
+      // 9 DS 일련번호
       Tooltip(
           message: item.dsSerial,
           child: Text(item.dsSerial,
               style: _cellStyle,
               overflow: TextOverflow.ellipsis,
               textAlign: TextAlign.center)),
-      // 13 일련번호 비교
+      // 10 일련번호 비교
       _buildMatchChip(item.serialMatch),
     ];
 
@@ -1187,7 +1176,7 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
     if (_result == null) return [];
     if (_filter == '전체') return _result!.items;
     return _result!.items.where((it) {
-      return it.towerMatch == _filter || it.serialMatch == _filter || it.antennaMatch == _filter;
+      return it.towerMatch == _filter || it.serialMatch == _filter;
     }).toList();
   }
 
@@ -1222,13 +1211,166 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
     );
   }
 
+  // 사전점검 회신 카드 (Phase 1)
+  Widget _buildPreCheckReplyCard(ErpDsCompareResult r) {
+    final s = r.summary;
+    final mismatch = (s['tower_mismatch'] ?? 0) + (s['serial_mismatch'] ?? 0);
+    final dsMissing = (s['tower_ds_missing'] ?? 0) + (s['serial_ds_missing'] ?? 0);
+    final check = (s['tower_check'] ?? 0) + (s['serial_check'] ?? 0);
+    final blocked = mismatch > 0 || dsMissing > 0;
+    final pkCount = widget.initialSchedulePks?.length ?? 0;
+    return _buildCard(
+      Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          const Icon(Icons.assignment_turned_in_outlined, color: Color(0xFF6B47DC), size: 22),
+          const SizedBox(width: 8),
+          const Text('사전점검 회신',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.black87)),
+          const Spacer(),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            decoration: BoxDecoration(
+              color: const Color(0xFF6B47DC).withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Text('수검 건 $pkCount건',
+                style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: Color(0xFF6B47DC))),
+          ),
+        ]),
+        const SizedBox(height: 12),
+        if (blocked) ...[
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: _primaryColor.withValues(alpha: 0.05),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: _primaryColor.withValues(alpha: 0.2)),
+            ),
+            child: Row(children: [
+              Icon(Icons.error_outline, size: 16, color: _primaryColor),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  '불일치 $mismatch건 / DS누락 $dsMissing건이 있어 회신할 수 없습니다.\n'
+                  '변경개설이 필요한 항목이 있다면 변경개설 작업을 진행해주세요. (Phase 2 예정)',
+                  style: const TextStyle(fontSize: 12, color: _primaryColor),
+                ),
+              ),
+            ]),
+          ),
+        ] else ...[
+          Text(
+            check > 0
+                ? '확인필요 $check건은 ACTA/시설현황 등 외부 사이트에서 직접 확인 후 회신해주세요.'
+                : '모든 항목이 일치합니다. 회신 가능 상태입니다.',
+            style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
+          ),
+          const SizedBox(height: 12),
+          Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+            ElevatedButton.icon(
+              icon: const Icon(Icons.check_circle_outline, size: 16),
+              label: const Text('이상 없음 회신'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF6B47DC),
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+              onPressed: () => _submitPreCheckReply(r),
+            ),
+          ]),
+        ],
+      ]),
+    );
+  }
+
+  Future<void> _submitPreCheckReply(ErpDsCompareResult r) async {
+    final pks = widget.initialSchedulePks ?? const [];
+    if (pks.isEmpty) return;
+
+    final s = r.summary;
+    final check = (s['tower_check'] ?? 0) + (s['serial_check'] ?? 0);
+
+    bool acked = false;
+    if (check > 0) {
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          title: const Text('확인필요 항목 포함 회신', style: TextStyle(fontSize: 16)),
+          content: Text(
+              '확인필요 $check건이 포함되어 있습니다.\n\n'
+              '⚠ ACTA/시설현황 등 외부 사이트에서 외부 확인이 완료된 것으로 간주됩니다. 진행하시겠습니까?',
+              style: const TextStyle(fontSize: 13)),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('취소')),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF6B47DC), foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('회신 진행'),
+            ),
+          ],
+        ),
+      );
+      if (ok != true) return;
+      acked = true;
+    } else {
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          title: const Text('이상 없음 회신', style: TextStyle(fontSize: 16)),
+          content: Text(
+              '${pks.length}건을 점검완료 상태로 회신합니다.\n\n'
+              '회신 후 [사전점검중] → [점검완료] 로 상태가 변경됩니다.',
+              style: const TextStyle(fontSize: 13)),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('취소')),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF6B47DC), foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('회신'),
+            ),
+          ],
+        ),
+      );
+      if (ok != true) return;
+    }
+
+    int success = 0;
+    final failed = <String>[];
+    for (final pk in pks) {
+      try {
+        await _inspectionService.submitPreCheckResult(
+          pk, s, confirmationAcknowledged: acked);
+        success++;
+      } catch (e) {
+        failed.add('$pk: $e');
+      }
+    }
+
+    if (!mounted) return;
+    final msg = failed.isEmpty
+        ? '점검완료 회신 성공: $success/${pks.length}건'
+        : '회신 결과: $success/${pks.length}건 성공\n실패: ${failed.length}건';
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(msg),
+      backgroundColor: failed.isEmpty ? const Color(0xFF1A8754) : _primaryColor,
+    ));
+  }
+
   Widget _buildSummaryRow(String label, Map<String, int> summary,
       {String prefix = 'tower'}) {
     final match = (summary['${prefix}_match'] ?? 0) +
         (summary['${prefix}_partial'] ?? 0);
     final mismatch = summary['${prefix}_mismatch'] ?? 0;
+    final dsMissing = summary['${prefix}_ds_missing'] ?? 0;
     final check = summary['${prefix}_check'] ?? 0;
-    final total = match + mismatch + check;
+    final total = match + mismatch + dsMissing + check;
     final rate = total > 0 ? (match / total * 100).toStringAsFixed(1) : '-';
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
@@ -1245,6 +1387,8 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
         _buildMiniStat('일치', match, _greenColor),
         const SizedBox(width: 10),
         _buildMiniStat('불일치', mismatch, _primaryColor),
+        const SizedBox(width: 10),
+        _buildMiniStat('DS누락', dsMissing, const Color(0xFFB85B3D)),
         const SizedBox(width: 10),
         _buildMiniStat('확인필요', check, Colors.orange),
         const Spacer(),
@@ -1326,6 +1470,10 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
       case '불일치':
         bg = _primaryColor.withValues(alpha: 0.1);
         fg = _primaryColor;
+        break;
+      case 'DS누락':
+        bg = const Color(0xFFE17055).withValues(alpha: 0.1);
+        fg = const Color(0xFFB85B3D);
         break;
       default:
         bg = Colors.orange.withValues(alpha: 0.1);

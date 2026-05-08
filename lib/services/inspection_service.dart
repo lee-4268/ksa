@@ -258,6 +258,69 @@ class InspectionService {
     return List<Map<String, dynamic>>.from(body['items'] ?? []);
   }
 
+  // ── Workflow (Phase 1) ───────────────────────────────────
+
+  Future<void> transitionStatus(String pk, String toStatus, {String memo = ''}) async {
+    final resp = await http.patch(
+      Uri.parse('$_baseUrl/inspection/schedule/${Uri.encodeComponent(pk)}/status'),
+      headers: _headers,
+      body: json.encode({'to_status': toStatus, 'memo': memo}),
+    ).timeout(_apiTimeout);
+    if (resp.statusCode != 200) {
+      final b = json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+      throw Exception(b['detail'] ?? '상태 전환 실패');
+    }
+  }
+
+  Future<Map<String, dynamic>> transitionStatusBulk(
+      List<String> schedulePks, String toStatus, {String memo = ''}) async {
+    final resp = await http.post(
+      Uri.parse('$_baseUrl/inspection/schedule/transition-bulk'),
+      headers: _headers,
+      body: json.encode({
+        'schedule_pks': schedulePks,
+        'to_status': toStatus,
+        'memo': memo,
+      }),
+    ).timeout(_apiTimeout);
+    if (resp.statusCode != 200) {
+      final b = json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+      throw Exception(b['detail'] ?? '일괄 전환 실패');
+    }
+    return json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+  }
+
+  Future<List<Map<String, dynamic>>> getStatusLog(String pk) async {
+    final resp = await http.get(
+      Uri.parse('$_baseUrl/inspection/schedule/${Uri.encodeComponent(pk)}/log'),
+      headers: _headers,
+    ).timeout(_apiTimeout);
+    if (resp.statusCode != 200) throw Exception('이력 조회 실패');
+    final body = json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+    return List<Map<String, dynamic>>.from(body['items'] ?? []);
+  }
+
+  Future<void> submitPreCheckResult(
+      String pk,
+      Map<String, dynamic> summary, {
+      List<Map<String, dynamic>> items = const [],
+      bool confirmationAcknowledged = false,
+      }) async {
+    final resp = await http.post(
+      Uri.parse('$_baseUrl/inspection/schedule/${Uri.encodeComponent(pk)}/pre-check-result'),
+      headers: _headers,
+      body: json.encode({
+        'summary': summary,
+        'items': items,
+        'confirmation_acknowledged': confirmationAcknowledged,
+      }),
+    ).timeout(_apiTimeout);
+    if (resp.statusCode != 200) {
+      final b = json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+      throw Exception(b['detail'] ?? '결과 회신 실패');
+    }
+  }
+
   // ── Result ───────────────────────────────────────────────
 
   Future<void> upsertResult(Map<String, dynamic> data) async {

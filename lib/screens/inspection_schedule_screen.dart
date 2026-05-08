@@ -11,7 +11,8 @@ import 'inspection_result_screen.dart';
 import 'dart:html' as html;
 
 class InspectionScheduleScreen extends StatefulWidget {
-  final void Function(List<String> licenseNos, String? accessDivision, bool multiDivision)? onCompareNavigate;
+  final void Function(List<String> licenseNos, String? accessDivision, bool multiDivision,
+      {List<String>? schedulePks})? onCompareNavigate;
   final List<String>? initialLicenseNos;
   const InspectionScheduleScreen({super.key, this.onCompareNavigate, this.initialLicenseNos});
   @override
@@ -61,6 +62,10 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
   Set<String> _scheduledNos = {};
   // 허가번호 → 수검예정주차 맵
   Map<String, String> _scheduleWeekMap = {};
+  // 허가번호 → workflow_status 맵 (Phase 1)
+  Map<String, String> _scheduleStatusMap = {};
+  // 허가번호 → schedule pk 맵 (상태 전환 호출용)
+  Map<String, String> _schedulePkMap = {};
 
   List<Map<String, dynamic>> _items = [];
   int _total = 0;
@@ -300,13 +305,21 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
       final schedules = await _svc.getSchedules(_year);
       final nos = <String>{};
       final weekMap = <String, String>{};
+      final statusMap = <String, String>{};
+      final pkMap = <String, String>{};
       for (final s in schedules) {
         final no = (s['허가번호'] as String? ?? '').trim();
         if (no.isEmpty) continue;
         nos.add(no);
         final week = (s['수검예정주차'] as String? ?? '').trim();
         if (week.isNotEmpty) weekMap[no] = week;
+        final st = (s['workflow_status'] as String? ?? '').trim();
+        if (st.isNotEmpty) statusMap[no] = st;
+        final pk = (s['pk'] as String? ?? '').trim();
+        if (pk.isNotEmpty) pkMap[no] = pk;
       }
+      _scheduleStatusMap = statusMap;
+      _schedulePkMap = pkMap;
       return (nos: nos, weekMap: weekMap, schedules: schedules);
     } catch (_) { return null; }
   }
@@ -612,6 +625,11 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
           final no = '${item['허가번호'] ?? ''}';
           return _selectedLicenseNos.contains(no) && !_isScheduled(no);
         }).toList();
+    // REGISTERED 상태인 일정만 사전점검 의뢰 대상
+    final registeredSelected = scheduledSelected.where((item) {
+      final no = '${item['허가번호'] ?? ''}';
+      return (_scheduleStatusMap[no] ?? 'REGISTERED') == 'REGISTERED';
+    }).toList();
 
     const btnShape = RoundedRectangleBorder(
       borderRadius: BorderRadius.all(Radius.circular(10)),
@@ -651,7 +669,91 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
           onPressed: () => _showBulkDeleteDialog(scheduledSelected),
         ),
       ],
+      if (registeredSelected.isNotEmpty) ...[
+        const SizedBox(width: 8),
+        ElevatedButton.icon(
+          icon: const Icon(Icons.assignment_turned_in, size: 16),
+          label: Text('${registeredSelected.length}건 사전점검 의뢰'),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: const Color(0xFF6B47DC), foregroundColor: Colors.white,
+            shape: btnShape, padding: btnPad,
+          ),
+          onPressed: () => _requestPreCheck(registeredSelected),
+        ),
+      ],
     ];
+  }
+
+  Future<void> _requestPreCheck(List<Map<String, dynamic>> items) async {
+    final pks = items
+        .map((it) => _schedulePkMap['${it['허가번호'] ?? ''}'] ?? '')
+        .where((p) => p.isNotEmpty)
+        .toList();
+    if (pks.isEmpty) {
+      await _showError('사전점검 의뢰 대상이 없습니다.');
+      return;
+    }
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        title: const Text('사전점검 의뢰', style: TextStyle(fontSize: 16)),
+        content: Text(
+            '선택한 ${pks.length}건을 품질개선팀에 사전점검 의뢰합니다.\n\n'
+            '의뢰 후 상태가 [등록됨] → [사전점검중] 으로 변경됩니다.',
+            style: const TextStyle(fontSize: 13)),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('취소')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF6B47DC), foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('의뢰'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      final result = await _withLoading(
+        '사전점검 의뢰 중... (${pks.length}건)',
+        () => _svc.transitionStatusBulk(pks, 'PRE_CHECK', memo: '사전점검 의뢰'),
+      );
+      final succeeded = (result['succeeded'] as num?)?.toInt() ?? 0;
+      final total = (result['total'] as num?)?.toInt() ?? pks.length;
+      await _showSuccess('사전점검 의뢰 완료: $succeeded/$total건');
+      setState(() => _selectedLicenseNos.clear());
+      await _loadScheduledNos();
+    } catch (e) {
+      await _showError('의뢰 실패: $e');
+    }
+  }
+
+  // 워크플로우 상태 배지
+  Widget _buildStatusBadge(String? status) {
+    final s = (status ?? 'REGISTERED').isEmpty ? 'REGISTERED' : status!;
+    final (label, color) = switch (s) {
+      'REGISTERED' => ('등록됨', const Color(0xFF6E7780)),
+      'PRE_CHECK' => ('사전점검중', const Color(0xFF6B47DC)),
+      'PRE_CHECK_DONE' => ('점검완료', const Color(0xFF1A8754)),
+      'CHANGE_FILING' => ('변경개설중', const Color(0xFFE17055)),
+      'RE_CHECK' => ('재점검대기', const Color(0xFFE17055)),
+      'REPORT_ISSUED' => ('내역서발급', const Color(0xFF0984E3)),
+      'SUBMITTED' => ('접수완료', const Color(0xFF0984E3)),
+      'INSPECTED' => ('수검완료', const Color(0xFF2D3436)),
+      _ => (s, const Color(0xFF6E7780)),
+    };
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color.withValues(alpha: 0.4), width: 1),
+      ),
+      child: Text(label,
+          style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: color)),
+    );
   }
 
   // ── 전산비교 화면 이동 ─────────────────────────────────────
@@ -669,8 +771,17 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
         : counter.entries.reduce((a, b) => a.value >= b.value ? a : b).key;
     final multiDivision = counter.keys.length > 1;
 
+    // schedule pk 매핑 (있는 것만)
+    final schedulePks = licenseNos
+        .map((no) => _schedulePkMap[no] ?? '')
+        .where((p) => p.isNotEmpty)
+        .toList();
+
     setState(() => _selectedLicenseNos.clear());
-    widget.onCompareNavigate?.call(licenseNos, dominantAccess, multiDivision);
+    widget.onCompareNavigate?.call(
+      licenseNos, dominantAccess, multiDivision,
+      schedulePks: schedulePks.isEmpty ? null : schedulePks,
+    );
   }
 
   Future<void> _showBulkUpsertDialog(List<Map<String, dynamic>> targetItems, String actionTitle) async {
@@ -1957,7 +2068,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                         onSelectChanged: (_) => _loadDetail(licenseNo),
                         cells: [
                           DataCell(_buildRowCheckbox(item, licenseNo, isChecked)),
-                          DataCell(Text(_scheduleWeekMap[licenseNo] ?? '', style: cellStyle)),
+                          DataCell(_buildScheduleCell(licenseNo)),
                           DataCell(Text(licenseNo, style: cellStyle)),
                           DataCell(SizedBox(width: 180, child: Text('${item['호출명칭'] ?? ''}', style: cellStyle.copyWith(fontWeight: FontWeight.w600), overflow: TextOverflow.ellipsis))),
                           DataCell(Text('${item['국종군'] ?? ''}', style: cellStyle)),
@@ -1987,6 +2098,25 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
       ),
       _buildPagination(),
     ]);
+  }
+
+  Widget _buildScheduleCell(String licenseNo) {
+    final week = _scheduleWeekMap[licenseNo] ?? '';
+    final status = _scheduleStatusMap[licenseNo];
+    if (week.isEmpty && status == null) return const SizedBox.shrink();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        if (week.isNotEmpty)
+          Text(week, style: const TextStyle(fontSize: 12, color: Color(0xFF2D3436))),
+        if (status != null) ...[
+          if (week.isNotEmpty) const SizedBox(height: 2),
+          _buildStatusBadge(status),
+        ],
+      ],
+    );
   }
 
   Widget _buildRowCheckbox(Map<String, dynamic> item, String licenseNo, bool isChecked) {
