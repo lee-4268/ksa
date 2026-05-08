@@ -66,6 +66,8 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
   Map<String, String> _scheduleStatusMap = {};
   // 허가번호 → schedule pk 맵 (상태 전환 호출용)
   Map<String, String> _schedulePkMap = {};
+  // 워크플로우 상태 필터 ('' = 전체)
+  String _statusFilter = '';
 
   List<Map<String, dynamic>> _items = [];
   int _total = 0;
@@ -143,7 +145,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     _myTeam = auth.userTeam ?? '';
   }
 
-  /// 해당 item에 대해 일정 등록/체크 권한이 있는지
+  /// 해당 item에 대해 일정 등록/체크 권한이 있는지 (admin/manager 전용)
   bool _canManageItem(Map<String, dynamic> item) {
     if (_isSuperAdmin) return true;
     if (_isDivisionAdmin) {
@@ -151,6 +153,14 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
       return itemHdqt == _myHdqt;
     }
     return false; // member
+  }
+
+  /// 해당 item이 본인 본부 소속인지 (member 포함, 전산비교 체크박스용)
+  bool _isMyDivision(Map<String, dynamic> item) {
+    if (_isSuperAdmin) return true;
+    if (_myHdqt.isEmpty) return false;
+    final itemHdqt = '${item['access담당'] ?? ''}';
+    return itemHdqt == _myHdqt;
   }
 
   bool _isScheduled(String licenseNo) => _scheduledNos.contains(licenseNo);
@@ -227,7 +237,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     final dataRes    = results[0] as Map<String, dynamic>?;
     final summRes    = results[1] as Map<String, dynamic>?;
     final unassRes   = results[2] as Map<String, dynamic>?;
-    final schedResult = results[3] as ({Set<String> nos, Map<String, String> weekMap, List<Map<String, dynamic>> schedules})?;
+    final schedResult = results[3] as ({Set<String> nos, Map<String, String> weekMap, List<Map<String, dynamic>> schedules, Map<String, String> statusMap, Map<String, String> pkMap})?;
     final progRes    = results[4] as Map<String, dynamic>?;
     setState(() {
       _loading = false;
@@ -252,6 +262,8 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
         _scheduledNos = schedResult.nos;
         _scheduleWeekMap = schedResult.weekMap;
         _schedules = schedResult.schedules;
+        _scheduleStatusMap = schedResult.statusMap;
+        _schedulePkMap = schedResult.pkMap;
       }
       if (progRes != null) {
         _progressTotal = (progRes['total'] as num?)?.toInt() ?? 0;
@@ -300,7 +312,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     } catch (_) { return null; }
   }
 
-  Future<({Set<String> nos, Map<String, String> weekMap, List<Map<String, dynamic>> schedules})?> _fetchScheduledNos() async {
+  Future<({Set<String> nos, Map<String, String> weekMap, List<Map<String, dynamic>> schedules, Map<String, String> statusMap, Map<String, String> pkMap})?> _fetchScheduledNos() async {
     try {
       final schedules = await _svc.getSchedules(_year);
       final nos = <String>{};
@@ -318,9 +330,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
         final pk = (s['pk'] as String? ?? '').trim();
         if (pk.isNotEmpty) pkMap[no] = pk;
       }
-      _scheduleStatusMap = statusMap;
-      _schedulePkMap = pkMap;
-      return (nos: nos, weekMap: weekMap, schedules: schedules);
+      return (nos: nos, weekMap: weekMap, schedules: schedules, statusMap: statusMap, pkMap: pkMap);
     } catch (_) { return null; }
   }
 
@@ -332,6 +342,8 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
       _scheduledNos = result.nos;
       _scheduleWeekMap = result.weekMap;
       _schedules = result.schedules;
+      _scheduleStatusMap = result.statusMap;
+      _schedulePkMap = result.pkMap;
     });
   }
 
@@ -1958,13 +1970,19 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
       );
     }
 
-    // 체크 가능한 항목: 권한 있는 모든 항목 (배정 여부 무관)
+    // 체크 가능한 항목:
+    // - admin/manager: 본부 격리된 모든 항목 (배정 여부 무관)
+    // - member: 본부 격리 + 일정 등록된 항목만 (전산비교 대상 선택용)
+    final source = _statusFilter.isEmpty ? _items : _filteredItems;
     final checkableItems = _isAdmin
-        ? _items.where((item) {
+        ? source.where((item) {
             final no = '${item['허가번호'] ?? ''}';
             return no.isNotEmpty && _canManageItem(item);
           }).toList()
-        : <Map<String, dynamic>>[];
+        : source.where((item) {
+            final no = '${item['허가번호'] ?? ''}';
+            return no.isNotEmpty && _isScheduled(no) && _isMyDivision(item);
+          }).toList();
 
     final allChecked = checkableItems.isNotEmpty &&
         checkableItems.every((item) => _selectedLicenseNos.contains('${item['허가번호'] ?? ''}'));
@@ -1977,9 +1995,13 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     const cellStyle = TextStyle(fontSize: 12, color: Color(0xFF374151));
 
     return Column(children: [
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+        child: _buildStatusFilterBar(),
+      ),
       Expanded(
         child: Container(
-          margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+          margin: const EdgeInsets.fromLTRB(16, 8, 16, 0),
           decoration: BoxDecoration(
             color: Colors.white,
             borderRadius: BorderRadius.circular(12),
@@ -2012,27 +2034,25 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                       border: Border(bottom: BorderSide(color: Color(0xFFE5E7EB))),
                     ),
                     columns: [
-                      DataColumn(label: _isAdmin
-                          ? Checkbox(
-                              value: someChecked ? null : allChecked,
-                              tristate: true,
-                              activeColor: _primary,
-                              onChanged: checkableItems.isEmpty ? null : (v) {
-                                setState(() {
-                                  if (v == true) {
-                                    for (final item in checkableItems) {
-                                      final no = '${item['허가번호'] ?? ''}';
-                                      if (no.isNotEmpty) _selectedLicenseNos.add(no);
-                                    }
-                                  } else {
-                                    for (final item in checkableItems) {
-                                      _selectedLicenseNos.remove('${item['허가번호'] ?? ''}');
-                                    }
-                                  }
-                                });
-                              },
-                            )
-                          : const SizedBox(width: 24)),
+                      DataColumn(label: Checkbox(
+                        value: someChecked ? null : allChecked,
+                        tristate: true,
+                        activeColor: _isAdmin ? _primary : _blue,
+                        onChanged: checkableItems.isEmpty ? null : (v) {
+                          setState(() {
+                            if (v == true) {
+                              for (final item in checkableItems) {
+                                final no = '${item['허가번호'] ?? ''}';
+                                if (no.isNotEmpty) _selectedLicenseNos.add(no);
+                              }
+                            } else {
+                              for (final item in checkableItems) {
+                                _selectedLicenseNos.remove('${item['허가번호'] ?? ''}');
+                              }
+                            }
+                          });
+                        },
+                      )),
                       DataColumn(label: Text('수검일정', style: headerStyle), onSort: (i, a) => _onScheduleSort(1, a)),
                       DataColumn(label: Text('허가번호', style: headerStyle), onSort: (i, a) => _onScheduleSort(2, a)),
                       DataColumn(label: Text('호출명칭', style: headerStyle), onSort: (i, a) => _onScheduleSort(3, a)),
@@ -2052,7 +2072,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                       DataColumn(label: Text('품질개선팀', style: headerStyle), onSort: (i, a) => _onScheduleSort(17, a)),
                       DataColumn(label: Text('검사결과', style: headerStyle), onSort: (i, a) => _onScheduleSort(18, a)),
                     ],
-                    rows: _items.asMap().entries.map((entry) {
+                    rows: _filteredItems.asMap().entries.map((entry) {
                       final idx = entry.key;
                       final item = entry.value;
                       final licenseNo = '${item['허가번호'] ?? ''}';
@@ -2100,6 +2120,83 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     ]);
   }
 
+  // 워크플로우 상태 필터 적용된 items
+  List<Map<String, dynamic>> get _filteredItems {
+    if (_statusFilter.isEmpty) return _items;
+    if (_statusFilter == '미배정') {
+      return _items.where((it) => !_isScheduled('${it['허가번호'] ?? ''}')).toList();
+    }
+    return _items.where((it) {
+      final no = '${it['허가번호'] ?? ''}';
+      if (!_isScheduled(no)) return false;
+      final st = _scheduleStatusMap[no] ?? 'REGISTERED';
+      return st == _statusFilter;
+    }).toList();
+  }
+
+  // 상태별 카운트 (현재 페이지 _items 기준)
+  Map<String, int> get _statusCounts {
+    final counts = <String, int>{
+      '미배정': 0,
+      'REGISTERED': 0, 'PRE_CHECK': 0, 'PRE_CHECK_DONE': 0,
+      'CHANGE_FILING': 0, 'RE_CHECK': 0,
+      'REPORT_ISSUED': 0, 'SUBMITTED': 0, 'INSPECTED': 0,
+    };
+    for (final it in _items) {
+      final no = '${it['허가번호'] ?? ''}';
+      if (!_isScheduled(no)) {
+        counts['미배정'] = (counts['미배정'] ?? 0) + 1;
+        continue;
+      }
+      final st = _scheduleStatusMap[no] ?? 'REGISTERED';
+      counts[st] = (counts[st] ?? 0) + 1;
+    }
+    return counts;
+  }
+
+  Widget _buildStatusFilterBar() {
+    final counts = _statusCounts;
+    Widget chip(String value, String label, Color color) {
+      final selected = _statusFilter == value;
+      final count = value.isEmpty ? _items.length : (counts[value] ?? 0);
+      return Padding(
+        padding: const EdgeInsets.only(right: 6),
+        child: FilterChip(
+          label: Text('$label · $count',
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: selected ? Colors.white : color,
+              )),
+          selected: selected,
+          showCheckmark: false,
+          backgroundColor: Colors.white,
+          selectedColor: color,
+          side: BorderSide(color: color.withValues(alpha: selected ? 0.0 : 0.4)),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          onSelected: (_) => setState(() => _statusFilter = selected ? '' : value),
+        ),
+      );
+    }
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(children: [
+        chip('', '전체', const Color(0xFF607D8B)),
+        chip('미배정', '미배정', const Color(0xFFB0BEC5)),
+        chip('REGISTERED', '등록됨', const Color(0xFF6E7780)),
+        chip('PRE_CHECK', '사전점검중', const Color(0xFF6B47DC)),
+        chip('PRE_CHECK_DONE', '점검완료', const Color(0xFF1A8754)),
+        chip('CHANGE_FILING', '변경개설중', const Color(0xFFE17055)),
+        chip('RE_CHECK', '재점검대기', const Color(0xFFE17055)),
+        chip('REPORT_ISSUED', '내역서발급', const Color(0xFF0984E3)),
+        chip('SUBMITTED', '접수완료', const Color(0xFF0984E3)),
+        chip('INSPECTED', '수검완료', const Color(0xFF2D3436)),
+      ]),
+    );
+  }
+
   Widget _buildScheduleCell(String licenseNo) {
     final week = _scheduleWeekMap[licenseNo] ?? '';
     final status = _scheduleStatusMap[licenseNo];
@@ -2120,8 +2217,30 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
   }
 
   Widget _buildRowCheckbox(Map<String, dynamic> item, String licenseNo, bool isChecked) {
-    // member: 체크박스 미표시
-    if (!_isAdmin) return const SizedBox(width: 24);
+    final scheduled = _isScheduled(licenseNo);
+
+    // member: 일정 등록된 항목만 체크 가능 (전산비교 대상 선택용)
+    if (!_isAdmin) {
+      if (!scheduled) return const SizedBox(width: 24);
+      // 본부 격리: 자기 본부 외 비활성
+      if (!_isMyDivision(item)) {
+        return Tooltip(
+          message: '다른 본부의 국소입니다',
+          child: Checkbox(value: false, activeColor: _blue, onChanged: null),
+        );
+      }
+      return Checkbox(
+        value: isChecked,
+        activeColor: _blue,
+        side: BorderSide(color: _blue.withValues(alpha: 0.6), width: 1.5),
+        onChanged: (v) {
+          setState(() {
+            if (v == true) { _selectedLicenseNos.add(licenseNo); }
+            else { _selectedLicenseNos.remove(licenseNo); }
+          });
+        },
+      );
+    }
 
     // 본부관리자: 본인 본부 외 항목 비활성화
     if (!_canManageItem(item)) {
@@ -2132,7 +2251,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     }
 
     // 이미 일정 등록된 항목: 파란 체크박스 (체크 가능, 수정/제거 대상 선택용)
-    final color = _isScheduled(licenseNo) ? _blue : _primary;
+    final color = scheduled ? _blue : _primary;
     return Checkbox(
       value: isChecked,
       activeColor: color,
