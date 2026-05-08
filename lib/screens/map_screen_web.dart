@@ -1005,7 +1005,7 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
 
         var imageSrc = "$markerImagePath";
         var imageSize = new kakao.maps.Size(30, 30);
-        var imageOption = {offset: new kakao.maps.Point(15, 30)};
+        var imageOption = {offset: new kakao.maps.Point(15, 15)};
         var markerImage = new kakao.maps.MarkerImage(imageSrc, imageSize, imageOption);
 
         var marker = new kakao.maps.Marker({
