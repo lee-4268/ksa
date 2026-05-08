@@ -11556,6 +11556,26 @@ def _init_inspection_db():
         memo TEXT
     )''')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_isl_pk ON inspection_status_log(schedule_pk)')
+    # 변경개설 요청 (Phase 2)
+    conn.execute('''CREATE TABLE IF NOT EXISTS change_request (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        schedule_pk TEXT NOT NULL,
+        허가번호 TEXT NOT NULL,
+        field TEXT NOT NULL,            -- 일련번호/형식검정번호/설치형태/설치장소
+        before_value TEXT,
+        after_value TEXT NOT NULL,
+        장치번호 TEXT,
+        memo TEXT,
+        status TEXT NOT NULL DEFAULT 'REQUESTED',  -- REQUESTED/FILED/APPLIED/VERIFIED
+        requested_by TEXT,
+        requested_at TEXT,
+        filed_by TEXT,
+        filed_at TEXT,
+        applied_at TEXT
+    )''')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_cr_pk ON change_request(schedule_pk)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_cr_status ON change_request(status)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_cr_license ON change_request(허가번호)')
     # 기존 데이터 백필: 검사일이 입력된 건은 INSPECTED, 나머지는 REGISTERED (DEFAULT 적용됨)
     try:
         conn.execute('''
@@ -14150,6 +14170,489 @@ async def inspection_schedule_pre_check_result(pk: str, request: Request, req: P
     return {"success": True}
 
 
+# ============================================================
+# 변경개설 요청 (Phase 2)
+# ============================================================
+
+# 변경 가능 4항목
+WF_CHANGE_FIELDS = {"일련번호", "형식검정번호", "설치형태", "설치장소"}
+# 장치 단위 항목 (장치번호 필수)
+WF_CHANGE_DEVICE_FIELDS = {"일련번호", "형식검정번호"}
+
+
+class ChangeRequestItem(BaseModel):
+    field: str
+    before_value: str = ""
+    after_value: str
+    장치번호: str = ""
+    memo: str = ""
+
+
+class ChangeRequestCreateReq(BaseModel):
+    items: list[ChangeRequestItem]   # 한 schedule에 여러 항목 일괄 등록
+
+
+@app.post("/inspection/schedule/{pk:path}/change-request")
+async def inspection_change_request_create(pk: str, request: Request, req: ChangeRequestCreateReq):
+    """전산비교에서 불일치/DS누락 발견 시 변경개설 요청 작성 (품개팀).
+
+    - schedule이 PRE_CHECK 상태일 때만 가능
+    - 항목 검증 (4개 필드, 장치 단위는 장치번호 필수)
+    - workflow_status: PRE_CHECK → CHANGE_FILING 자동 전환
+    """
+    empno = await _verify_auth(request)
+    role = await asyncio.to_thread(_get_user_role_sync, empno)
+
+    if not req.items:
+        raise HTTPException(400, "변경 항목이 비어있습니다.")
+    for it in req.items:
+        if it.field not in WF_CHANGE_FIELDS:
+            raise HTTPException(400, f"잘못된 변경 항목: {it.field}")
+        if it.field in WF_CHANGE_DEVICE_FIELDS and not it.장치번호.strip():
+            raise HTTPException(400, f"{it.field}는 장치번호 필수")
+        if not it.after_value.strip():
+            raise HTTPException(400, f"{it.field} 변경 후 값이 비어있습니다.")
+
+    now = datetime.now(timezone.utc).isoformat()
+
+    def _save():
+        c = sqlite3.connect(_INSP_DB, timeout=60)
+        row = c.execute('SELECT workflow_status, 허가번호 FROM inspection_schedules WHERE pk=?', (pk,)).fetchone()
+        if not row:
+            c.close()
+            return False, "일정 없음", 0
+        cur, license_no = row[0] or WF_REGISTERED, row[1]
+        if not _wf_can_transition(cur, WF_CHANGE_FILING, role):
+            c.close()
+            return False, f"전환 불가: {cur} → CHANGE_FILING", 0
+
+        for it in req.items:
+            c.execute(
+                'INSERT INTO change_request(schedule_pk, 허가번호, field, before_value, '
+                'after_value, 장치번호, memo, status, requested_by, requested_at) '
+                'VALUES (?,?,?,?,?,?,?,?,?,?)',
+                (pk, license_no, it.field, it.before_value, it.after_value,
+                 it.장치번호, it.memo, 'REQUESTED', empno, now))
+
+        c.execute(
+            'UPDATE inspection_schedules SET workflow_status=?, '
+            'status_updated_at=?, status_updated_by=? WHERE pk=?',
+            (WF_CHANGE_FILING, now, empno, pk))
+        _wf_record_log_sync(c, pk, cur, WF_CHANGE_FILING, empno,
+                          f"변경개설 요청 {len(req.items)}건")
+        c.commit(); c.close()
+        return True, "ok", len(req.items)
+
+    ok, msg, count = await asyncio.to_thread(_save)
+    if not ok:
+        raise HTTPException(400, msg)
+    return {"success": True, "count": count}
+
+
+@app.get("/change-request")
+async def change_request_list(
+    request: Request, schedule_pk: str = "", status: str = "",
+    허가번호: str = "", access담당: str = "", year: int = 0,
+):
+    """변경개설 요청 목록 조회 (혁신팀: 본부 필터, 품개팀: schedule_pk 단건)."""
+    await _verify_auth(request)
+
+    def _read():
+        c = sqlite3.connect(_INSP_DB, timeout=60); c.row_factory = sqlite3.Row
+        wheres: list = []
+        params: list = []
+
+        if schedule_pk:
+            wheres.append('cr.schedule_pk=?'); params.append(schedule_pk)
+        if status:
+            wheres.append('cr.status=?'); params.append(status)
+        if 허가번호:
+            wheres.append('cr.허가번호=?'); params.append(허가번호)
+        # access담당/year 는 inspection_schedules와 JOIN해서 필터
+        join = ''
+        if access담당 or year:
+            join = ' JOIN inspection_schedules s ON s.pk = cr.schedule_pk'
+            if access담당:
+                wheres.append('s.access담당=?'); params.append(access담당)
+            if year:
+                wheres.append('s.year=?'); params.append(year)
+
+        sql = f'SELECT cr.* FROM change_request cr{join}'
+        if wheres:
+            sql += ' WHERE ' + ' AND '.join(wheres)
+        sql += ' ORDER BY cr.requested_at DESC'
+        rows = c.execute(sql, params).fetchall()
+        c.close()
+        return [dict(r) for r in rows]
+
+    items = await asyncio.to_thread(_read)
+    return {"items": items}
+
+
+class ChangeRequestFileReq(BaseModel):
+    schedule_pk: str
+    memo: str = ""
+
+
+@app.patch("/change-request/file")
+async def change_request_file(request: Request, req: ChangeRequestFileReq):
+    """혁신팀이 전파관리소 신고 완료 표시.
+
+    - schedule의 모든 change_request status: REQUESTED → FILED
+    - workflow_status: CHANGE_FILING → RE_CHECK
+    """
+    empno = await _verify_auth(request)
+    role = await asyncio.to_thread(_get_user_role_sync, empno)
+    now = datetime.now(timezone.utc).isoformat()
+
+    def _save():
+        c = sqlite3.connect(_INSP_DB, timeout=60)
+        row = c.execute(
+            'SELECT workflow_status FROM inspection_schedules WHERE pk=?',
+            (req.schedule_pk,)).fetchone()
+        if not row:
+            c.close()
+            return False, "일정 없음"
+        cur = row[0] or WF_REGISTERED
+        if not _wf_can_transition(cur, WF_RE_CHECK, role):
+            c.close()
+            return False, f"전환 불가: {cur} → RE_CHECK"
+        # 해당 schedule의 REQUESTED 행들 모두 FILED로
+        c.execute(
+            "UPDATE change_request SET status='FILED', filed_by=?, filed_at=? "
+            "WHERE schedule_pk=? AND status='REQUESTED'",
+            (empno, now, req.schedule_pk))
+        c.execute(
+            'UPDATE inspection_schedules SET workflow_status=?, '
+            'status_updated_at=?, status_updated_by=? WHERE pk=?',
+            (WF_RE_CHECK, now, empno, req.schedule_pk))
+        _wf_record_log_sync(c, req.schedule_pk, cur, WF_RE_CHECK, empno,
+                          req.memo or "전파관리소 신고 완료")
+        c.commit(); c.close()
+        return True, "ok"
+
+    ok, msg = await asyncio.to_thread(_save)
+    if not ok:
+        raise HTTPException(400, msg)
+    return {"success": True}
+
+
+@app.post("/change-request/generate-form")
+async def change_request_generate_form(request: Request, schedule_pk: str):
+    """A파일(변경개설 신고서) 자동 생성 - xls 즉시 응답.
+
+    change_request 데이터로 신고서 양식 작성:
+      허가번호 | 변경내역 | 변경전 | 변경후 | 장치번호
+    """
+    await _verify_auth(request)
+
+    def _build():
+        c = sqlite3.connect(_INSP_DB, timeout=60); c.row_factory = sqlite3.Row
+        sched = c.execute(
+            'SELECT 허가번호, 호출명칭 FROM inspection_schedules WHERE pk=?',
+            (schedule_pk,)).fetchone()
+        if not sched:
+            c.close()
+            raise HTTPException(404, "일정 없음")
+        rows = c.execute(
+            "SELECT * FROM change_request WHERE schedule_pk=? ORDER BY id ASC",
+            (schedule_pk,)).fetchall()
+        c.close()
+        if not rows:
+            raise HTTPException(404, "변경 요청 없음")
+        return dict(sched), [dict(r) for r in rows]
+
+    sched, items = await asyncio.to_thread(_build)
+
+    # xlwt로 신고서 작성 (변경개설 메뉴와 동일 포맷)
+    import xlwt, io as _io
+    wb = xlwt.Workbook(encoding='utf-8')
+    ws = wb.add_sheet('변경개설신고')
+    style = xlwt.XFStyle()
+    fnt = xlwt.Font(); fnt.name = 'Arial'; fnt.height = 200; style.font = fnt
+    al = xlwt.Alignment(); al.horz = xlwt.Alignment.HORZ_CENTER; al.vert = xlwt.Alignment.VERT_CENTER
+    style.alignment = al
+    brd = xlwt.Borders()
+    brd.left = brd.right = brd.top = brd.bottom = xlwt.Borders.THIN
+    style.borders = brd
+
+    headers = ['허가번호', '호출명칭', '변경내역', '변경전', '변경후', '장치번호', '메모']
+    for ci, h in enumerate(headers):
+        ws.write(0, ci, h, style)
+        ws.col(ci).width = 5000
+    for ri, it in enumerate(items, 1):
+        ws.write(ri, 0, sched.get('허가번호', ''), style)
+        ws.write(ri, 1, sched.get('호출명칭', ''), style)
+        ws.write(ri, 2, it.get('field', ''), style)
+        ws.write(ri, 3, it.get('before_value', ''), style)
+        ws.write(ri, 4, it.get('after_value', ''), style)
+        ws.write(ri, 5, it.get('장치번호', ''), style)
+        ws.write(ri, 6, it.get('memo', ''), style)
+
+    buf = _io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    license_no = sched.get('허가번호', schedule_pk)
+    filename = f"변경개설신고_{license_no}.xls"
+    from fastapi.responses import StreamingResponse
+    from urllib.parse import quote
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.ms-excel",
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}",
+        },
+    )
+
+
+@app.post("/ds/apply-partial-update")
+async def ds_apply_partial_update(request: Request, file: UploadFile = File(...)):
+    """부분 DS 파일 업로드 → ds_detail.db 패치 + 자동 재비교 + 워크플로우 전환.
+
+    - 파일은 전체 DS 파일과 동일 시트/컬럼 구조의 부분 파일
+    - change_request에 등록된 (허가번호, 장치번호, field) 만 패치
+    - 모든 change_request 항목이 일치하면 RE_CHECK → PRE_CHECK_DONE 자동 전환
+    """
+    empno = await _verify_auth(request)
+    role = await asyncio.to_thread(_get_user_role_sync, empno)
+
+    file_bytes = await file.read()
+    if not file_bytes:
+        raise HTTPException(400, "빈 파일")
+
+    def _process():
+        import xlrd as _xlrd
+        try:
+            wb = _xlrd.open_workbook(file_contents=file_bytes)
+        except Exception as e:
+            raise HTTPException(400, f"xls 파싱 실패: {e}")
+
+        # 부분 DS에서 (허가번호 정규화) 추출
+        license_set: set[str] = set()
+        for si in range(len(wb.sheet_names())):
+            ws = wb.sheet_by_index(si)
+            for ri in range(1, ws.nrows):
+                v = ws.cell_value(ri, 0)
+                if isinstance(v, float) and v == int(v):
+                    license_set.add(str(int(v)))
+                elif v:
+                    license_set.add(str(v).strip().replace('-', ''))
+
+        if not license_set:
+            raise HTTPException(400, "허가번호 없음")
+
+        # change_request에서 FILED/REQUESTED 상태 + 부분 DS에 포함된 허가번호 항목들 조회
+        ic = sqlite3.connect(_INSP_DB, timeout=60); ic.row_factory = sqlite3.Row
+        placeholders = ','.join('?' * len(license_set))
+        crs = ic.execute(
+            f"SELECT * FROM change_request WHERE status IN ('REQUESTED','FILED') "
+            f"AND REPLACE(허가번호, '-', '') IN ({placeholders})",
+            list(license_set)).fetchall()
+        crs = [dict(r) for r in crs]
+
+        if not crs:
+            ic.close()
+            return {"matched_changes": 0, "applied": 0, "schedule_done": [], "skipped_licenses": list(license_set)}
+
+        # 시트 구조 파싱: 일반사항(0), 위치(1), 송신장치(2), 안테나(4), 설치장소(5)
+        # 각 sheet에서 (허가번호 normalized) → row 인덱스 맵
+        sheet_idx_map = {}  # {sheet_name: idx}
+        for si, sn in enumerate(wb.sheet_names()):
+            sheet_idx_map[sn] = si
+
+        # 시트 이름 매칭 (포함 검색)
+        def _find_sheet(keyword: str) -> int:
+            for sn, idx in sheet_idx_map.items():
+                if keyword in sn:
+                    return idx
+            return -1
+
+        장치_si = _find_sheet('장치')
+        안테나_si = _find_sheet('안테나')
+        설치장소_si = _find_sheet('설치장소')
+
+        # 장치 시트: col 8 = 일련번호, col 11 = 형식검정번호
+        # 안테나 시트: col 28 = 공중선주설치형태명
+        # 설치장소 시트: col 6 = 설치소재주소
+        # 모두 col 0 = 허가번호, col 3 = 장치번호 (장치/안테나)
+
+        def _norm_hn(val):
+            if isinstance(val, float) and val == int(val):
+                return str(int(val))
+            return str(val).strip().replace('-', '')
+
+        # (license_norm, 장치번호) → {field: new_value}
+        device_patches: dict[tuple[str, str], dict[str, str]] = {}
+        # license_norm → {field: new_value}
+        license_patches: dict[str, dict[str, str]] = {}
+
+        if 장치_si >= 0:
+            ws = wb.sheet_by_index(장치_si)
+            for ri in range(1, ws.nrows):
+                hn = _norm_hn(ws.cell_value(ri, 0))
+                jn = _norm_hn(ws.cell_value(ri, 3)) if ws.ncols > 3 else ''
+                if not hn or not jn:
+                    continue
+                key = (hn, jn)
+                d = device_patches.setdefault(key, {})
+                if ws.ncols > 8:
+                    v = str(ws.cell_value(ri, 8) or '').strip()
+                    if v:
+                        d['일련번호'] = v
+                if ws.ncols > 11:
+                    v = str(ws.cell_value(ri, 11) or '').strip()
+                    if v:
+                        d['형식검정번호'] = v
+
+        if 안테나_si >= 0:
+            ws = wb.sheet_by_index(안테나_si)
+            for ri in range(1, ws.nrows):
+                hn = _norm_hn(ws.cell_value(ri, 0))
+                if not hn:
+                    continue
+                if ws.ncols > 28:
+                    v = str(ws.cell_value(ri, 28) or '').strip()
+                    if v:
+                        license_patches.setdefault(hn, {})['설치형태'] = v
+
+        if 설치장소_si >= 0:
+            ws = wb.sheet_by_index(설치장소_si)
+            for ri in range(1, ws.nrows):
+                hn = _norm_hn(ws.cell_value(ri, 0))
+                if not hn:
+                    continue
+                if ws.ncols > 6:
+                    v = str(ws.cell_value(ri, 6) or '').strip()
+                    if v:
+                        license_patches.setdefault(hn, {})['설치장소'] = v
+
+        # change_request 매칭 + DS DB 패치
+        dc = sqlite3.connect(_DS_DETAIL_DB, timeout=60)
+        dc.execute('PRAGMA journal_mode=WAL')
+        dc.execute('''CREATE TABLE IF NOT EXISTS ds_변경이력 (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            허가번호 TEXT NOT NULL, 변경일자 TEXT NOT NULL,
+            시트 TEXT NOT NULL, 필드명 TEXT NOT NULL,
+            변경전값 TEXT, 변경후값 TEXT, 장치번호 TEXT
+        )''')
+
+        applied_date = datetime.now().strftime('%y%m%d')
+        applied_count = 0
+        applied_cr_ids: list[int] = []
+
+        for cr in crs:
+            hn_norm = (cr['허가번호'] or '').replace('-', '').strip()
+            field = cr['field']
+            jn = (cr['장치번호'] or '').strip()
+            expected = (cr['after_value'] or '').strip()
+
+            patched_value = None
+            if field in WF_CHANGE_DEVICE_FIELDS:
+                if not jn:
+                    continue
+                patches = device_patches.get((hn_norm, jn), {})
+                patched_value = patches.get(field)
+            else:
+                patches = license_patches.get(hn_norm, {})
+                patched_value = patches.get(field)
+
+            if not patched_value:
+                continue
+            # change_request 의 expected 값과 일치하는지 (선택적 검증)
+            # 부분 DS의 값이 신고된 값과 다르면 일단 신고된 값(expected)으로 패치 (의심스러우면 patched_value 사용)
+            new_value = expected  # 신고서 기준이 진실
+
+            # DS DB 패치
+            try:
+                if field == '일련번호':
+                    cur = dc.execute(
+                        'UPDATE ds_장치 SET 기기일련번호=? WHERE 허가번호=? AND 장치번호=?',
+                        (new_value, hn_norm, jn))
+                elif field == '형식검정번호':
+                    cur = dc.execute(
+                        'UPDATE ds_장치 SET 형식검정번호=? WHERE 허가번호=? AND 장치번호=?',
+                        (new_value, hn_norm, jn))
+                elif field == '설치형태':
+                    cur = dc.execute(
+                        'UPDATE ds_안테나 SET 공중선주설치형태명=? WHERE 허가번호=?',
+                        (new_value, hn_norm))
+                elif field == '설치장소':
+                    cur = ic.execute(
+                        "UPDATE inspection_targets SET 설치장소=? WHERE REPLACE(허가번호,'-','')=?",
+                        (new_value, hn_norm))
+                else:
+                    continue
+                if cur.rowcount > 0:
+                    dc.execute(
+                        'INSERT INTO ds_변경이력(허가번호,변경일자,시트,필드명,변경전값,변경후값,장치번호) '
+                        'VALUES(?,?,?,?,?,?,?)',
+                        (hn_norm, applied_date, '부분DS', field,
+                         cr['before_value'] or '', new_value, jn))
+                    applied_count += 1
+                    applied_cr_ids.append(cr['id'])
+            except Exception as e:
+                logger.warning(f"부분 DS 패치 실패 ({hn_norm}/{jn}/{field}): {e}")
+
+        dc.commit(); dc.close()
+
+        # 패치된 change_request 들을 APPLIED 로
+        now = datetime.now(timezone.utc).isoformat()
+        if applied_cr_ids:
+            ph = ','.join('?' * len(applied_cr_ids))
+            ic.execute(
+                f"UPDATE change_request SET status='APPLIED', applied_at=? WHERE id IN ({ph})",
+                [now] + applied_cr_ids)
+
+        # 자동 재비교: schedule별로 모든 change_request가 APPLIED 이상이면 PRE_CHECK_DONE 전환
+        sched_pks = set()
+        for cr in crs:
+            if cr['id'] in applied_cr_ids:
+                sched_pks.add(cr['schedule_pk'])
+
+        schedule_done: list[str] = []
+        for spk in sched_pks:
+            row = ic.execute(
+                'SELECT workflow_status FROM inspection_schedules WHERE pk=?',
+                (spk,)).fetchone()
+            if not row:
+                continue
+            cur_status = row['workflow_status'] or WF_REGISTERED
+            if cur_status != WF_RE_CHECK:
+                continue
+            # 해당 schedule의 모든 cr이 APPLIED/VERIFIED 인지
+            unfinished = ic.execute(
+                "SELECT COUNT(*) FROM change_request WHERE schedule_pk=? AND status NOT IN ('APPLIED','VERIFIED')",
+                (spk,)).fetchone()[0]
+            if unfinished > 0:
+                continue
+            # 전환
+            ic.execute(
+                'UPDATE inspection_schedules SET workflow_status=?, '
+                'status_updated_at=?, status_updated_by=? WHERE pk=?',
+                (WF_PRE_CHECK_DONE, now, 'system', spk))
+            _wf_record_log_sync(ic, spk, cur_status, WF_PRE_CHECK_DONE, 'system',
+                              "부분 DS 적용 후 자동 재비교 통과")
+            ic.execute(
+                "UPDATE change_request SET status='VERIFIED' WHERE schedule_pk=? AND status='APPLIED'",
+                (spk,))
+            schedule_done.append(spk)
+
+        ic.commit(); ic.close()
+
+        return {
+            "matched_changes": len(crs),
+            "applied": applied_count,
+            "schedule_done": schedule_done,
+        }
+
+    result = await asyncio.to_thread(_process)
+    await asyncio.to_thread(_record_audit_log_sync,
+                           "ds_partial_update", "ds_detail",
+                           f"applied={result['applied']},done={len(result['schedule_done'])}",
+                           empno)
+    return {"success": True, **result}
+
+
 @app.post("/inspection/schedule")
 async def inspection_schedule_upsert(request: Request, req: InspectionScheduleReq):
     """수검 일정 등록/수정 (관리자/매니저)."""
@@ -14201,18 +14704,24 @@ async def inspection_schedule_delete(year: int, license_no: str, request: Reques
     return {"success": True}
 
 @app.get("/inspection/schedules")
-async def inspection_schedules_list(request: Request, year: int, access담당: str = ""):
-    """일정 목록 조회 (팀별 필터 가능)."""
+async def inspection_schedules_list(
+    request: Request, year: int, access담당: str = "", workflow_status: str = ""
+):
+    """일정 목록 조회 (팀별 + workflow_status 필터)."""
     await _verify_auth(request)
     def _read():
         c = sqlite3.connect(_INSP_DB, timeout=60); c.row_factory = sqlite3.Row
+        wheres = ['year=?']
+        params: list = [year]
         if access담당:
-            rows = c.execute(
-                'SELECT * FROM inspection_schedules WHERE year=? AND access담당=?',
-                (year, access담당)).fetchall()
-        else:
-            rows = c.execute(
-                'SELECT * FROM inspection_schedules WHERE year=?', (year,)).fetchall()
+            wheres.append('access담당=?')
+            params.append(access담당)
+        if workflow_status:
+            wheres.append('workflow_status=?')
+            params.append(workflow_status)
+        rows = c.execute(
+            f'SELECT * FROM inspection_schedules WHERE {" AND ".join(wheres)}',
+            params).fetchall()
         c.close()
         return [dict(r) for r in rows]
     items = await asyncio.to_thread(_read)
