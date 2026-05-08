@@ -1329,6 +1329,123 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
     html.document.body?.append(html.ScriptElement()..text = jsCode);
   }
 
+  /// 안테나 방위각 데이터 세팅 + 활성 밴드 필터로 부채꼴 그리기.
+  ///
+  /// [stationAzimuths] = { stationId: [ {service, band, swings:[]}, ... ] }
+  /// [stationLatLng]   = { stationId: [lat, lng] }
+  /// [activeBandKeys]  = ["LTE-800M", "5G-3.5G", ...]  비어있으면 전부 표시
+  /// [bandColors]      = { "LTE-800M": "#1565C0", ... }
+  /// [beamWidthDeg], [radiusMeters] = 부채꼴 모양
+  void setAzimuthSectors({
+    required Map<String, List<Map<String, dynamic>>> stationAzimuths,
+    required Map<String, List<double>> stationLatLng,
+    required List<String> activeBandKeys,
+    required Map<String, String> bandColors,
+    double beamWidthDeg = 65,
+    double radiusMeters = 50,
+  }) {
+    final azJson = json.encode(stationAzimuths);
+    final llJson = json.encode(stationLatLng);
+    final activeJson = json.encode(activeBandKeys);
+    final colorJson = json.encode(bandColors);
+
+    final jsCode = '''
+      (function() {
+        if (typeof kakao === 'undefined') return;
+        var map = window['kakaoMapInstance_$_containerId'];
+        if (!map) return;
+
+        // 기존 부채꼴 제거
+        var existing = window['kakaoAzimuthPolygons_$_containerId'] || [];
+        for (var i = 0; i < existing.length; i++) {
+          try { existing[i].setMap(null); } catch (e) {}
+        }
+        window['kakaoAzimuthPolygons_$_containerId'] = [];
+
+        var azimuths = $azJson;
+        var latlngs = $llJson;
+        var activeKeys = $activeJson;
+        var colorMap = $colorJson;
+        var activeSet = {};
+        for (var i = 0; i < activeKeys.length; i++) activeSet[activeKeys[i]] = true;
+        var allActive = activeKeys.length === 0;
+
+        var beam = $beamWidthDeg;
+        var radius = $radiusMeters;
+        var halfBeam = beam / 2;
+        var EARTH_R = 6378137.0;
+        var ARC_STEPS = 12;
+
+        var newPolys = [];
+
+        function destPoint(lat, lng, bearingDeg, distM) {
+          var br = bearingDeg * Math.PI / 180;
+          var lat1 = lat * Math.PI / 180;
+          var lng1 = lng * Math.PI / 180;
+          var ad = distM / EARTH_R;
+          var lat2 = Math.asin(Math.sin(lat1) * Math.cos(ad) +
+                               Math.cos(lat1) * Math.sin(ad) * Math.cos(br));
+          var lng2 = lng1 + Math.atan2(
+            Math.sin(br) * Math.sin(ad) * Math.cos(lat1),
+            Math.cos(ad) - Math.sin(lat1) * Math.sin(lat2)
+          );
+          return [lat2 * 180 / Math.PI, lng2 * 180 / Math.PI];
+        }
+
+        for (var sid in azimuths) {
+          if (!latlngs[sid]) continue;
+          var ll = latlngs[sid];
+          var lat = ll[0], lng = ll[1];
+          var sectors = azimuths[sid];
+          for (var s = 0; s < sectors.length; s++) {
+            var sec = sectors[s];
+            var key = sec.service + '-' + sec.band;
+            if (!allActive && !activeSet[key]) continue;
+            var color = colorMap[key] || '#888888';
+            var swings = sec.swings || [];
+            for (var w = 0; w < swings.length; w++) {
+              var bearing = swings[w];
+              // 부채꼴 정점: 중심 → 호 위 N+1점 → 중심 닫기
+              var path = [new kakao.maps.LatLng(lat, lng)];
+              for (var k = 0; k <= ARC_STEPS; k++) {
+                var t = bearing - halfBeam + (beam * k / ARC_STEPS);
+                var p = destPoint(lat, lng, t, radius);
+                path.push(new kakao.maps.LatLng(p[0], p[1]));
+              }
+              var poly = new kakao.maps.Polygon({
+                path: path,
+                strokeWeight: 1,
+                strokeColor: color,
+                strokeOpacity: 0.85,
+                strokeStyle: 'solid',
+                fillColor: color,
+                fillOpacity: 0.30
+              });
+              poly.setMap(map);
+              newPolys.push(poly);
+            }
+          }
+        }
+        window['kakaoAzimuthPolygons_$_containerId'] = newPolys;
+      })();
+    ''';
+    html.document.body?.append(html.ScriptElement()..text = jsCode);
+  }
+
+  /// 부채꼴 전체 제거
+  void clearAzimuthSectors() {
+    final jsCode = '''
+      (function() {
+        var existing = window['kakaoAzimuthPolygons_$_containerId'] || [];
+        for (var i = 0; i < existing.length; i++) {
+          try { existing[i].setMap(null); } catch (e) {}
+        }
+        window['kakaoAzimuthPolygons_$_containerId'] = [];
+      })();
+    ''';
+    html.document.body?.append(html.ScriptElement()..text = jsCode);
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_errorMessage != null) {

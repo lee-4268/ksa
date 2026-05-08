@@ -7500,7 +7500,8 @@ def _cert_cache_load():
         conn.execute("""CREATE TABLE IF NOT EXISTS cert (
             zpwino TEXT, zpwina TEXT, zpwiadr TEXT,
             zpcode TEXT, zpcname TEXT, area_hdofc_nm TEXT, ons_team_nm TEXT, zpirty3 TEXT,
-            eqp_ser_no TEXT, zpprac1 TEXT, eqp_type TEXT, max_seqno TEXT
+            eqp_ser_no TEXT, zpprac1 TEXT, eqp_type TEXT, max_seqno TEXT,
+            zpannu1 TEXT, swing_list TEXT
         )""")
         conn.execute("DELETE FROM cert")
 
@@ -7515,13 +7516,14 @@ def _cert_cache_load():
                 row.get("zpirty3", ""), row.get("eqp_ser_no", ""),
                 row.get("zpprac1", ""), row.get("eqp_type", ""),
                 row.get("max_seqno", ""),
+                row.get("zpannu1", ""), row.get("swing_list", ""),
             ))
             if len(batch) >= 5000:
-                conn.executemany("INSERT INTO cert VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", batch)
+                conn.executemany("INSERT INTO cert VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", batch)
                 total += len(batch)
                 batch.clear()
         if batch:
-            conn.executemany("INSERT INTO cert VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", batch)
+            conn.executemany("INSERT INTO cert VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", batch)
             total += len(batch)
 
         conn.execute("CREATE INDEX IF NOT EXISTS idx_zpwino ON cert(zpwino)")
@@ -10541,6 +10543,162 @@ def _scan_ds_sheets_by_zpwino(
         result["warnings"].append(f"DS 캐시 조회 실패: {e}")
 
     return result
+
+
+# ============================================================
+# 안테나 방위각 batch 조회 (현장 수검 Map 부채꼴 표시용)
+# ============================================================
+
+# SKT band code → 주파수 대역
+_SKT_BAND_MAP = {
+    "B5": "800M",
+    "B3": "1.8G",
+    "B1": "2.1G",
+    "B7": "2.6G",
+}
+
+
+def _extract_service_band(zpannu1: str, eqp_type: str, zpcname: str) -> tuple:
+    """(service, band) 추출. service: LTE/5G/WCDMA/3G/None, band: 800M/1.8G/2.1G/2.6G/3.5G/28G/None"""
+    annu = (zpannu1 or "").strip().upper()
+    eqp = (eqp_type or "").strip()
+    zn = (zpcname or "").strip()
+
+    # service 매핑
+    if annu == "5G" or "5G" in annu:
+        service = "5G"
+    elif annu == "LTE":
+        service = "LTE"
+    elif annu in ("WCDMA", "3G"):
+        service = "3G"
+    elif annu == "CDMA":
+        service = "CDMA"
+    else:
+        service = annu or None
+
+    # band 매핑
+    band = None
+    if service == "5G":
+        if "28G" in eqp.upper() or "28G" in zn.upper():
+            band = "28G"
+        else:
+            band = "3.5G"  # SKT 5G 기본값
+    elif service == "LTE":
+        # 1순위: eqp_type 직접 명시
+        eqp_u = eqp.upper()
+        if "2.6G" in eqp_u or "L26" in eqp_u:
+            band = "2.6G"
+        elif "1.8G" in eqp_u or "L18" in eqp_u:
+            band = "1.8G"
+        elif "2.1G" in eqp_u or "L21" in eqp_u:
+            band = "2.1G"
+        elif "800" in eqp_u or "L08" in eqp_u or "L800" in eqp_u:
+            band = "800M"
+        else:
+            # 2순위: zpcname의 SKT band code (.B5./.B3./.B1./.B7. 형식 우선)
+            import re as _re
+            m = _re.search(r"[._]?B([1357])[._]", zn)
+            if m:
+                band = _SKT_BAND_MAP.get(f"B{m.group(1)}")
+            else:
+                # fallback: 단어 경계 매칭
+                for code, b in _SKT_BAND_MAP.items():
+                    if code in zn:
+                        band = b
+                        break
+    return service, band
+
+
+def _parse_swing_list(s: str) -> list:
+    """'40,160,280' → [40,160,280] (0~359 정규화, 빈값/비숫자 무시)"""
+    if not s:
+        return []
+    out = []
+    for tok in str(s).split(","):
+        tok = tok.strip()
+        if not tok:
+            continue
+        try:
+            v = int(float(tok)) % 360
+            out.append(v)
+        except (ValueError, TypeError):
+            pass
+    return out
+
+
+@app.post("/azimuths/batch")
+async def azimuths_batch(request: Request):
+    """현장 수검 Map 부채꼴 표시용 batch 안테나 방위각 조회.
+
+    입력: {"zpwino_list": ["322021410002166", ...]}
+    출력: {
+      "items": {
+        "<zpwino>": [
+          {"service": "LTE", "band": "800M", "swings": [0, 120, 240]},
+          {"service": "5G",  "band": "3.5G", "swings": [40, 160, 280]}
+        ]
+      }
+    }
+    """
+    await _verify_auth(request)
+    body = await request.json()
+    raw_list = body.get("zpwino_list", [])
+    zpwino_list = list({str(z).strip() for z in raw_list if str(z).strip()})
+    if not zpwino_list:
+        return {"items": {}}
+    if len(zpwino_list) > 1000:
+        raise HTTPException(status_code=400, detail="최대 1000건까지 조회 가능합니다.")
+
+    _cert_cache_load()
+    result = {z: {} for z in zpwino_list}  # {zpwino: {(service,band): set(swings)}}
+
+    try:
+        import sqlite3 as _sql
+        conn = _sql.connect(_cert_cache_db_path, timeout=30)
+        conn.row_factory = _sql.Row
+        try:
+            BATCH = 900
+            for offset in range(0, len(zpwino_list), BATCH):
+                batch = zpwino_list[offset:offset + BATCH]
+                placeholders = ",".join("?" * len(batch))
+                cur = conn.execute(
+                    f"SELECT zpwino, zpannu1, eqp_type, zpcname, swing_list "
+                    f"FROM cert WHERE zpwino IN ({placeholders})",
+                    batch,
+                )
+                for row in cur:
+                    z = row["zpwino"]
+                    if not z:
+                        continue
+                    service, band = _extract_service_band(
+                        row["zpannu1"] or "",
+                        row["eqp_type"] or "",
+                        row["zpcname"] or "",
+                    )
+                    if not service or not band:
+                        continue
+                    swings = _parse_swing_list(row["swing_list"] or "")
+                    if not swings:
+                        continue
+                    key = (service, band)
+                    bucket = result[z].setdefault(key, set())
+                    for s in swings:
+                        bucket.add(s)
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.warning(f"azimuths/batch 조회 실패: {e}")
+        raise HTTPException(status_code=500, detail=f"방위각 조회 실패: {e}")
+
+    out = {}
+    for z, by_key in result.items():
+        if not by_key:
+            continue
+        out[z] = [
+            {"service": s, "band": b, "swings": sorted(sw)}
+            for (s, b), sw in sorted(by_key.items(), key=lambda x: (x[0][0], x[0][1]))
+        ]
+    return {"items": out}
 
 
 @app.post("/erp-ds/compare")

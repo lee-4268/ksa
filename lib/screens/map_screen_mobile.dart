@@ -701,4 +701,16 @@ class PlatformMapWidgetState extends State<PlatformMapWidget>
       );
     }
   }
+
+  // 안테나 방위각 부채꼴: 모바일은 미지원 (noop)
+  void setAzimuthSectors({
+    required Map<String, List<Map<String, dynamic>>> stationAzimuths,
+    required Map<String, List<double>> stationLatLng,
+    required List<String> activeBandKeys,
+    required Map<String, String> bandColors,
+    double beamWidthDeg = 65,
+    double radiusMeters = 50,
+  }) {}
+
+  void clearAzimuthSectors() {}
 }

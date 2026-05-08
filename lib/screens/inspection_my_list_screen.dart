@@ -15,6 +15,7 @@ import 'inspection_result_screen.dart';
 // MapScreen과 동일한 조건부 import
 import 'map_screen_web.dart' if (dart.library.io) 'map_screen_mobile.dart'
     as platform_map;
+import '../services/azimuth_service.dart';
 
 class InspectionMyListScreen extends StatefulWidget {
   const InspectionMyListScreen({super.key});
@@ -58,6 +59,15 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
   List<RadioStation>? _routeResult;
   bool _routeHasMyLocation = false;
 
+  // 안테나 방위각 표시
+  late final AzimuthService _azSvc;
+  bool _showAzimuth = false;
+  Map<String, List<AntennaSector>> _azimuthData = {};
+  Set<String> _activeBandKeys = const {
+    'LTE-800M', 'LTE-1.8G', 'LTE-2.1G', 'LTE-2.6G', '5G-3.5G', '5G-28G',
+  };
+  bool _loadingAzimuth = false;
+
   // 드래그 (모바일)
   double _listHeightRatio = 0.40;
   static const double _minListRatio = 0.15;
@@ -67,6 +77,8 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
   void initState() {
     super.initState();
     _svc = InspectionService()
+      ..setAuthToken(context.read<AuthService>().authToken);
+    _azSvc = AzimuthService()
       ..setAuthToken(context.read<AuthService>().authToken);
     final auth = context.read<AuthService>();
     _isDivisionAdmin = auth.isDivisionAdmin || auth.isSuperAdmin;
@@ -116,7 +128,19 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
     setState(() { _loadingInsp = true; _inspError = null; });
     try {
       final items = await _svc.getMyList(_year, week: _selectedWeek, team: _selectedTeam);
-      setState(() => _assignedItems = items);
+      setState(() {
+        _assignedItems = items;
+        _azimuthData = {}; // 마커 셋이 바뀌었으므로 무효화
+      });
+      if (_showAzimuth) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          final stations = _markerStations;
+          _loadAzimuth(stations).then((_) {
+            if (mounted) _applyAzimuth(stations);
+          });
+        });
+      }
     } catch (e) {
       setState(() => _inspError = e.toString());
     } finally {
@@ -191,6 +215,74 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
       ));
     }
     return result;
+  }
+
+  // ── 안테나 방위각 ─────────────────────────────────────────────
+  Future<void> _toggleAzimuth(bool on, List<RadioStation> markerStations) async {
+    setState(() => _showAzimuth = on);
+    if (!on) {
+      _mapKey.currentState?.clearAzimuthSectors();
+      return;
+    }
+    if (_azimuthData.isEmpty) {
+      await _loadAzimuth(markerStations);
+    }
+    _applyAzimuth(markerStations);
+  }
+
+  Future<void> _loadAzimuth(List<RadioStation> markerStations) async {
+    final ids = markerStations
+        .map((s) => s.licenseNumber.trim())
+        .where((z) => z.isNotEmpty)
+        .toSet()
+        .toList();
+    if (ids.isEmpty) return;
+    setState(() => _loadingAzimuth = true);
+    try {
+      final data = await _azSvc.fetchBatch(ids);
+      if (!mounted) return;
+      setState(() {
+        _azimuthData = data;
+        _loadingAzimuth = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _loadingAzimuth = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('방위각 조회 실패: $e')),
+      );
+    }
+  }
+
+  void _applyAzimuth(List<RadioStation> markerStations) {
+    if (!_showAzimuth) return;
+    final stationAz = <String, List<Map<String, dynamic>>>{};
+    final stationLL = <String, List<double>>{};
+    for (final st in markerStations) {
+      if (!st.hasCoordinates) continue;
+      final z = st.licenseNumber.trim();
+      if (z.isEmpty) continue;
+      final secs = _azimuthData[z];
+      if (secs == null || secs.isEmpty) continue;
+      stationAz[st.id] = secs
+          .map((s) => {
+                'service': s.service,
+                'band': s.band,
+                'swings': s.swings,
+              })
+          .toList();
+      stationLL[st.id] = [st.latitude!, st.longitude!];
+    }
+    final colorMap = <String, String>{
+      for (final b in kSupportedBands)
+        b.key: '#${b.colorRgb.toRadixString(16).padLeft(8, '0').substring(2)}',
+    };
+    _mapKey.currentState?.setAzimuthSectors(
+      stationAzimuths: stationAz,
+      stationLatLng: stationLL,
+      activeBandKeys: _activeBandKeys.toList(),
+      bandColors: colorMap,
+    );
   }
 
   void _onMarkerTap(RadioStation station) {
@@ -286,6 +378,10 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
                           stations: markerStations,
                           onMarkerTap: _onMarkerTap,
                         ),
+                        Positioned(
+                          left: 12, top: 12,
+                          child: _buildAzimuthControl(markerStations),
+                        ),
                         Positioned(right: 16, bottom: 16, child: _buildMyLocationButton()),
                         if (_isRoutePlanMode)
                           Positioned(
@@ -329,6 +425,10 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
                           key: _mapKey,
                           stations: markerStations,
                           onMarkerTap: _onMarkerTap,
+                        ),
+                        Positioned(
+                          left: 12, top: 12,
+                          child: _buildAzimuthControl(markerStations),
                         ),
                         Positioned(
                           right: 16,
@@ -1129,6 +1229,95 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────
+
+  Widget _buildAzimuthControl(List<RadioStation> markerStations) {
+    return Material(
+      color: Colors.white,
+      elevation: 3,
+      borderRadius: BorderRadius.circular(10),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        constraints: const BoxConstraints(maxWidth: 280),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.cell_tower, size: 18, color: Color(0xFF1565C0)),
+                const SizedBox(width: 6),
+                const Text('안테나 방향',
+                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                const SizedBox(width: 8),
+                if (_loadingAzimuth)
+                  const SizedBox(
+                    width: 14, height: 14,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                else
+                  Transform.scale(
+                    scale: 0.8,
+                    child: Switch(
+                      value: _showAzimuth,
+                      onChanged: (v) => _toggleAzimuth(v, markerStations),
+                      activeColor: const Color(0xFF1565C0),
+                    ),
+                  ),
+              ],
+            ),
+            if (_showAzimuth) ...[
+              const Divider(height: 8),
+              Wrap(
+                spacing: 4,
+                runSpacing: 2,
+                children: kSupportedBands.where((b) {
+                  // 3G/WCDMA는 빈 band이므로 둘 중 하나만(WCDMA만) 표시 — 키가 'WCDMA-'
+                  if (b.service == '3G') return false;
+                  return true;
+                }).map((b) {
+                  final selected = _activeBandKeys.contains(b.key);
+                  return FilterChip(
+                    label: Text(
+                      b.label,
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: selected
+                            ? Colors.white
+                            : Color(b.colorRgb),
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    selected: selected,
+                    showCheckmark: false,
+                    visualDensity: VisualDensity.compact,
+                    materialTapTargetSize:
+                        MaterialTapTargetSize.shrinkWrap,
+                    backgroundColor: Color(b.colorRgb).withValues(alpha: 0.10),
+                    selectedColor: Color(b.colorRgb),
+                    side: BorderSide(color: Color(b.colorRgb), width: 1),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    onSelected: (sel) {
+                      setState(() {
+                        if (sel) {
+                          _activeBandKeys = {..._activeBandKeys, b.key};
+                        } else {
+                          _activeBandKeys = {..._activeBandKeys}..remove(b.key);
+                        }
+                      });
+                      _applyAzimuth(markerStations);
+                    },
+                  );
+                }).toList(),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
 
   Widget _buildMyLocationButton() {
     return Column(
