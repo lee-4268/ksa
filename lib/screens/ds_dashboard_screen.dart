@@ -1,12 +1,15 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:provider/provider.dart';
 import '../services/auth_service.dart';
 import '../services/ds_data_service.dart';
 import '../services/ds_upload_service.dart';
+import '../services/inspection_service.dart';
 import '../services/ds_export_service_stub.dart'
     if (dart.library.html) '../services/ds_export_service_web.dart' as platform_export;
 import 'ds_data_screen.dart';
@@ -938,6 +941,13 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
                   ),
                 ),
                 const SizedBox(width: 4),
+                TextButton.icon(
+                  onPressed: () => _showPartialDsUploadDialog(),
+                  icon: Icon(Icons.upload_file_outlined, size: 18, color: Colors.deepOrange.shade600),
+                  label: Text('데이터 변경요청',
+                      style: TextStyle(color: Colors.deepOrange.shade600, fontSize: 13)),
+                ),
+                const SizedBox(width: 4),
                 FilledButton.icon(
                   onPressed: () => _navigateToData(upload),
                   icon: const Icon(Icons.search, size: 18),
@@ -964,6 +974,82 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
         Text(text, style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
       ],
     );
+  }
+
+  Future<void> _showPartialDsUploadDialog() async {
+    final picked = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: ['xls', 'xlsx'],
+      withData: true,
+    );
+    if (picked == null || picked.files.isEmpty) return;
+    final f = picked.files.first;
+    final bytes = f.bytes;
+    if (bytes == null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('파일을 읽을 수 없습니다.'),
+      ));
+      return;
+    }
+
+    if (!mounted) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        title: const Text('부분 DS 적용', style: TextStyle(fontSize: 16)),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          Text('파일: ${f.name}', style: const TextStyle(fontSize: 13)),
+          const SizedBox(height: 8),
+          const Text(
+            '전파관리소가 회신한 부분 DS 파일로 DB를 패치합니다.\n\n'
+            '대상: 변경개설 신고 완료(FILED) 상태인 항목만\n'
+            '결과: 모든 항목 반영 시 [재점검 대기] → [점검 완료] 자동 전환',
+            style: TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
+          ),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('취소')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFE17055), foregroundColor: Colors.white),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('적용'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+
+    final svc = InspectionService();
+    svc.setAuthToken(context.read<AuthService>().authToken);
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const Center(child: CircularProgressIndicator()),
+    );
+    try {
+      final result = await svc.applyPartialDsUpdate(Uint8List.fromList(bytes), f.name);
+      if (!mounted) return;
+      Navigator.pop(context); // close progress
+      final applied = result['applied'] ?? 0;
+      final matched = result['matched_changes'] ?? 0;
+      final done = (result['schedule_done'] as List?)?.length ?? 0;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('패치 $applied/$matched건 · 점검완료 자동 전환 $done건'),
+        backgroundColor: const Color(0xFF1A8754),
+        duration: const Duration(seconds: 5),
+      ));
+    } catch (e) {
+      if (!mounted) return;
+      Navigator.pop(context); // close progress
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('적용 실패: $e'),
+        backgroundColor: Colors.red,
+      ));
+    }
   }
 
   String _formatTime(String isoTime) {

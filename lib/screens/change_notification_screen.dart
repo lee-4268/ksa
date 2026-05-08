@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:provider/provider.dart';
 import '../services/auth_service.dart';
+import '../services/inspection_service.dart';
 import '../widgets/progress_dialog.dart';
 
 class ChangeNotificationScreen extends StatefulWidget {
@@ -35,6 +36,14 @@ class _ChangeNotificationScreenState extends State<ChangeNotificationScreen> {
   // diff 상태
   List<Map<String, dynamic>> _diff = [];
   Set<String> _selectedStations = {};
+
+  // Phase 2: 탭 모드 ('legacy' = 기존 A+B 업로드, 'requests' = 변경 요청 목록)
+  String _mode = 'legacy';
+  final InspectionService _inspectionSvc = InspectionService();
+  List<Map<String, dynamic>> _changeRequests = [];
+  // schedule_pk → schedule 메타 (품질개선팀/주차/조/access담당/year)
+  Map<String, Map<String, dynamic>> _scheduleMetaMap = {};
+  bool _loadingRequests = false;
 
   static const _apiBase = String.fromEnvironment(
     'API_BASE_URL',
@@ -256,7 +265,7 @@ class _ChangeNotificationScreenState extends State<ChangeNotificationScreen> {
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(24),
           child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 720),
+            constraints: const BoxConstraints(maxWidth: 900),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
@@ -265,37 +274,405 @@ class _ChangeNotificationScreenState extends State<ChangeNotificationScreen> {
                         fontSize: 22,
                         fontWeight: FontWeight.w700,
                         color: _textPrimary)),
-                const SizedBox(height: 8),
-                Text(
-                  '무선국 변경개설신고 파일(A)과 DS 파일(B) 2개를 업로드하면,\n'
-                  '변경 대상을 자동으로 비교하여 DS 파일에 반영된 결과를 다운로드하고\n'
-                  '수검결과 화면에도 즉시 반영할 수 있습니다.',
-                  style: TextStyle(fontSize: 13, color: _textSecondary, height: 1.6),
-                ),
+                const SizedBox(height: 12),
+                _buildModeSwitcher(),
                 const SizedBox(height: 16),
-                _buildSampleRow(),
-                const SizedBox(height: 24),
-
-                // 업로드 카드
-                _buildUploadCard(),
-
-                const SizedBox(height: 16),
-
-                // 결과 메시지
-                if (_result != null) _buildResultBanner(),
-                if (_error != null) _buildErrorBanner(),
-
-                // diff 섹션
-                if (_diff.isNotEmpty) ...[
-                  const SizedBox(height: 8),
-                  _buildDiffSection(),
-                ],
+                if (_mode == 'requests') _buildRequestsView()
+                else ..._buildLegacyView(),
               ],
             ),
           ),
         ),
       ),
     );
+  }
+
+  Widget _buildModeSwitcher() {
+    Widget pill(String value, IconData icon, String label) {
+      final selected = _mode == value;
+      return InkWell(
+        onTap: () {
+          setState(() => _mode = value);
+          if (value == 'requests') _loadRequests();
+        },
+        borderRadius: BorderRadius.circular(8),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          decoration: BoxDecoration(
+            color: selected ? const Color(0xFFE17055) : Colors.transparent,
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Icon(icon, size: 16, color: selected ? Colors.white : _textSecondary),
+            const SizedBox(width: 6),
+            Text(label,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: selected ? Colors.white : _textSecondary,
+                )),
+          ]),
+        ),
+      );
+    }
+    return Container(
+      padding: const EdgeInsets.all(4),
+      decoration: BoxDecoration(
+        color: _surface,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: _border),
+      ),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        pill('requests', Icons.fact_check_outlined, '변경 요청 목록 (혁신팀)'),
+        pill('legacy', Icons.upload_file_outlined, 'A+B 업로드 / 신고서 생성'),
+      ]),
+    );
+  }
+
+  List<Widget> _buildLegacyView() {
+    return [
+      Text(
+        '무선국 변경개설신고 파일(A)과 DS 파일(B) 2개를 업로드하면,\n'
+        '변경 대상을 자동으로 비교하여 DS 파일에 반영된 결과를 다운로드합니다.\n'
+        '※ DS DB 패치는 [DS 데이터 → 데이터 변경요청] 메뉴에서만 수행됩니다.',
+        style: TextStyle(fontSize: 13, color: _textSecondary, height: 1.6),
+      ),
+      const SizedBox(height: 16),
+      _buildSampleRow(),
+      const SizedBox(height: 24),
+      _buildUploadCard(),
+      const SizedBox(height: 16),
+      if (_result != null) _buildResultBanner(),
+      if (_error != null) _buildErrorBanner(),
+      if (_diff.isNotEmpty) ...[
+        const SizedBox(height: 8),
+        _buildDiffSection(),
+      ],
+    ];
+  }
+
+  Future<void> _loadRequests() async {
+    setState(() { _loadingRequests = true; });
+    try {
+      final auth = context.read<AuthService>();
+      _inspectionSvc.setAuthToken(auth.authToken);
+      // 본부별 격리:
+      // - superadmin: 전체
+      // - 그 외: 본인 본부만
+      String accessTeam = '';
+      if (!auth.isSuperAdmin) {
+        final dept = (auth.userDepartment ?? '').replaceAll('Access담당', '').trim();
+        accessTeam = dept;
+      }
+      // change_request 와 schedule 메타 동시 조회
+      final futures = await Future.wait([
+        _inspectionSvc.listChangeRequests(accessTeam: accessTeam),
+        _inspectionSvc.getSchedules(DateTime.now().year, accessTeam: accessTeam),
+      ]);
+      final reqs = futures[0] as List<Map<String, dynamic>>;
+      final scheds = futures[1] as List<Map<String, dynamic>>;
+      final metaMap = <String, Map<String, dynamic>>{};
+      for (final s in scheds) {
+        final pk = (s['pk'] ?? '').toString();
+        if (pk.isNotEmpty) metaMap[pk] = s;
+      }
+      if (!mounted) return;
+      setState(() {
+        _changeRequests = reqs;
+        _scheduleMetaMap = metaMap;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _error = '목록 조회 실패: $e');
+    } finally {
+      if (mounted) setState(() => _loadingRequests = false);
+    }
+  }
+
+  /// 묶음 키 생성: 품질개선팀_주차_N조
+  String _bundleKey(Map<String, dynamic> sched) {
+    final qt = (sched['품질개선팀'] ?? '').toString().trim();
+    final wk = (sched['수검예정주차'] ?? '').toString().trim();
+    final tmRaw = (sched['조'] ?? '').toString().trim();
+    final tm = tmRaw.isEmpty ? '' : (tmRaw.endsWith('조') ? tmRaw : '$tmRaw조');
+    return [qt, wk, tm].where((s) => s.isNotEmpty).join('_');
+  }
+
+  Widget _buildRequestsView() {
+    if (_loadingRequests) {
+      return const Padding(
+        padding: EdgeInsets.all(40),
+        child: Center(child: CircularProgressIndicator()),
+      );
+    }
+    if (_changeRequests.isEmpty) {
+      return Container(
+        padding: const EdgeInsets.all(40),
+        decoration: BoxDecoration(
+          color: _surface,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: _border),
+        ),
+        child: Column(children: [
+          Icon(Icons.inbox_outlined, size: 40, color: Colors.grey.shade400),
+          const SizedBox(height: 8),
+          Text('처리 대기 중인 변경 요청이 없습니다.',
+              style: TextStyle(fontSize: 13, color: _textSecondary)),
+        ]),
+      );
+    }
+
+    // 묶음(품질개선팀_주차_조) 단위로 그룹핑.
+    // 각 change_request는 schedule_pk를 가지며, schedule 메타는 _scheduleMetaMap에서 가져옴.
+    final bundles = <String, List<Map<String, dynamic>>>{};
+    final bundleMeta = <String, Map<String, dynamic>>{};
+    for (final r in _changeRequests) {
+      final spk = (r['schedule_pk'] ?? '').toString();
+      final sched = _scheduleMetaMap[spk] ?? {};
+      final key = _bundleKey(sched);
+      bundles.putIfAbsent(key, () => []).add(r);
+      bundleMeta.putIfAbsent(key, () => sched);
+    }
+
+    final keys = bundles.keys.toList()..sort();
+    return Column(
+      children: [
+        Row(children: [
+          Text('묶음 ${bundles.length}개 / 수검 건 ${_changeRequests.map((r) => r['schedule_pk']).toSet().length}건 / 항목 ${_changeRequests.length}개',
+              style: TextStyle(fontSize: 13, color: _textSecondary)),
+          const Spacer(),
+          IconButton(
+            icon: const Icon(Icons.refresh, size: 18),
+            tooltip: '새로고침',
+            onPressed: _loadRequests,
+          ),
+        ]),
+        const SizedBox(height: 8),
+        ...keys.map((k) => _buildBundleCard(k, bundles[k]!, bundleMeta[k]!)),
+      ],
+    );
+  }
+
+  Widget _buildBundleCard(String bundleKey, List<Map<String, dynamic>> items, Map<String, dynamic> meta) {
+    // 묶음 내 schedule_pk → 항목들
+    final byPk = <String, List<Map<String, dynamic>>>{};
+    for (final it in items) {
+      byPk.putIfAbsent('${it['schedule_pk']}', () => []).add(it);
+    }
+    final qt = (meta['품질개선팀'] ?? '').toString();
+    final wk = (meta['수검예정주차'] ?? '').toString();
+    final tmRaw = (meta['조'] ?? '').toString().trim();
+    final tm = tmRaw.isEmpty ? '' : (tmRaw.endsWith('조') ? tmRaw : '$tmRaw조');
+    final access = (meta['access담당'] ?? '').toString();
+
+    final allRequested = items.every((it) => it['status'] == 'REQUESTED');
+    final anyRequested = items.any((it) => it['status'] == 'REQUESTED');
+    final allFiledOrLater = items.every((it) =>
+      it['status'] == 'FILED' || it['status'] == 'APPLIED' || it['status'] == 'VERIFIED');
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 12),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(10),
+        side: BorderSide(color: _border),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          // 묶음 헤더: 팀 + 주차 + 조
+          Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+            const Icon(Icons.layers, size: 18, color: Color(0xFFE17055)),
+            const SizedBox(width: 6),
+            Expanded(child: Wrap(spacing: 8, runSpacing: 4, children: [
+              if (access.isNotEmpty) _bundlePill(access, const Color(0xFF6B47DC)),
+              if (qt.isNotEmpty) _bundlePill(qt, const Color(0xFFE17055)),
+              if (wk.isNotEmpty) _bundlePill(wk, const Color(0xFF0984E3)),
+              if (tm.isNotEmpty) _bundlePill(tm, const Color(0xFF1A8754)),
+            ])),
+            Text('${byPk.length}국소 · ${items.length}항목',
+                style: TextStyle(fontSize: 11, color: _textSecondary)),
+          ]),
+          const SizedBox(height: 12),
+          // 국소별 항목 리스트
+          ...byPk.entries.map((e) => _buildScheduleSection(e.key, e.value)),
+          const SizedBox(height: 12),
+          Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+            OutlinedButton.icon(
+              icon: const Icon(Icons.download, size: 14),
+              label: const Text('묶음 A파일 다운로드'),
+              onPressed: () => _downloadBundleForm(meta, bundleKey),
+            ),
+            const SizedBox(width: 8),
+            ElevatedButton.icon(
+              icon: const Icon(Icons.task_alt, size: 14),
+              label: Text(allRequested ? '묶음 신고 완료' : (anyRequested ? '미신고만 처리' : '처리 완료')),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: anyRequested ? const Color(0xFF1A8754) : Colors.grey,
+                foregroundColor: Colors.white,
+              ),
+              onPressed: !anyRequested ? null
+                  : () => _markBundleFiled(byPk.keys.toList(), bundleKey),
+            ),
+          ]),
+          if (allFiledOrLater)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Text(
+                '※ 신고 완료된 묶음입니다. 부분 DS 회신 받으면 [DS 데이터 → 데이터 변경요청]에서 적용해주세요.',
+                style: TextStyle(fontSize: 11, color: _textSecondary),
+              ),
+            ),
+        ]),
+      ),
+    );
+  }
+
+  Widget _bundlePill(String text, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: color.withValues(alpha: 0.4)),
+      ),
+      child: Text(text,
+          style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: color)),
+    );
+  }
+
+  Widget _buildScheduleSection(String schedulePk, List<Map<String, dynamic>> items) {
+    final license = items.first['허가번호'] ?? '';
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Container(
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          color: const Color(0xFFFAFAFA),
+          borderRadius: BorderRadius.circular(6),
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('$license', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFFB85B3D))),
+          const SizedBox(height: 4),
+          ...items.map((it) => _buildRequestItemRow(it)),
+        ]),
+      ),
+    );
+  }
+
+  Widget _buildRequestItemRow(Map<String, dynamic> item) {
+    final field = item['field'] ?? '';
+    final dev = (item['장치번호'] ?? '').toString();
+    final before = item['before_value'] ?? '';
+    final after = item['after_value'] ?? '';
+    final status = item['status'] ?? '';
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        SizedBox(width: 92, child: Text(field,
+            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600))),
+        if (dev.isNotEmpty)
+          SizedBox(width: 70, child: Text('장치 $dev',
+              style: const TextStyle(fontSize: 12, color: Colors.grey)))
+        else
+          const SizedBox(width: 70),
+        Expanded(child: Text('$before  →  $after',
+            style: const TextStyle(fontSize: 12))),
+        const SizedBox(width: 8),
+        _buildStatusPill(status, small: true),
+      ]),
+    );
+  }
+
+  Widget _buildStatusPill(String status, {bool small = false}) {
+    final (label, color) = switch (status) {
+      'REQUESTED' => ('요청', const Color(0xFFE17055)),
+      'FILED' => ('신고완료', const Color(0xFF0984E3)),
+      'APPLIED' => ('DB반영', const Color(0xFF6B47DC)),
+      'VERIFIED' => ('검증완료', const Color(0xFF1A8754)),
+      _ => (status, Colors.grey),
+    };
+    return Container(
+      padding: EdgeInsets.symmetric(horizontal: small ? 6 : 8, vertical: small ? 2 : 3),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: color.withValues(alpha: 0.4)),
+      ),
+      child: Text(label,
+          style: TextStyle(
+            fontSize: small ? 10 : 11,
+            fontWeight: FontWeight.w600,
+            color: color,
+          )),
+    );
+  }
+
+  Future<void> _downloadBundleForm(Map<String, dynamic> meta, String bundleKey) async {
+    try {
+      _inspectionSvc.setAuthToken(context.read<AuthService>().authToken);
+      final qt = (meta['품질개선팀'] ?? '').toString();
+      final wk = (meta['수검예정주차'] ?? '').toString();
+      final tm = (meta['조'] ?? '').toString();
+      final year = (meta['year'] as num?)?.toInt() ?? DateTime.now().year;
+      final bytes = await _inspectionSvc.generateChangeRequestForm(
+        qualityTeam: qt,
+        week: wk,
+        team: tm,
+        year: year,
+      );
+      final blob = html.Blob([bytes], 'application/vnd.ms-excel');
+      final url = html.Url.createObjectUrlFromBlob(blob);
+      final filename = '${bundleKey.isEmpty ? "변경개설신고" : bundleKey}.xls';
+      html.AnchorElement(href: url)
+        ..download = filename
+        ..click();
+      html.Url.revokeObjectUrl(url);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('다운로드 실패: $e'),
+      ));
+    }
+  }
+
+  Future<void> _markBundleFiled(List<String> schedulePks, String bundleKey) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        title: const Text('묶음 신고 완료', style: TextStyle(fontSize: 16)),
+        content: Text(
+          '"$bundleKey" 묶음 ${schedulePks.length}국소의 변경개설 신고를 완료했습니까?\n\n'
+          '확인 시 모두 [재점검 대기] 상태로 전환되며, 다음날 부분 DS 회신을 받아 적용해야 합니다.',
+          style: const TextStyle(fontSize: 13),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('취소')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF1A8754), foregroundColor: Colors.white),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('신고 완료'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      _inspectionSvc.setAuthToken(context.read<AuthService>().authToken);
+      final result = await _inspectionSvc.markChangeRequestFiled(schedulePks: schedulePks);
+      if (!mounted) return;
+      final succeeded = (result['succeeded'] as num?)?.toInt() ?? 0;
+      final total = (result['total'] as num?)?.toInt() ?? schedulePks.length;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('묶음 신고 완료: $succeeded/$total건 → 재점검 대기'),
+        backgroundColor: const Color(0xFF1A8754),
+      ));
+      await _loadRequests();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('실패: $e')));
+    }
   }
 
   Widget _buildSampleRow() {

@@ -1251,13 +1251,27 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  '불일치 $mismatch건 / DS누락 $dsMissing건이 있어 회신할 수 없습니다.\n'
-                  '변경개설이 필요한 항목이 있다면 변경개설 작업을 진행해주세요. (Phase 2 예정)',
+                  '불일치 $mismatch건 / DS누락 $dsMissing건이 있습니다.\n'
+                  '변경 필요한 항목을 명시하여 변경개설 요청을 작성해주세요.',
                   style: const TextStyle(fontSize: 12, color: _primaryColor),
                 ),
               ),
             ]),
           ),
+          const SizedBox(height: 12),
+          Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+            ElevatedButton.icon(
+              icon: const Icon(Icons.edit_note, size: 16),
+              label: const Text('변경개설 요청 작성'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFFE17055),
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+              onPressed: () => _openChangeRequestDialog(r),
+            ),
+          ]),
         ] else ...[
           Text(
             check > 0
@@ -1361,6 +1375,33 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
       content: Text(msg),
       backgroundColor: failed.isEmpty ? const Color(0xFF1A8754) : _primaryColor,
     ));
+  }
+
+  // 변경개설 요청 작성 다이얼로그 (Phase 2)
+  Future<void> _openChangeRequestDialog(ErpDsCompareResult r) async {
+    final pks = widget.initialSchedulePks ?? const [];
+    if (pks.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('수검 건과 연결되어 있지 않아 요청 작성이 불가합니다.'),
+      ));
+      return;
+    }
+
+    // 불일치/DS누락 행만 추려서 후보 제공
+    final candidates = r.items.where((it) =>
+      it.towerMatch == '불일치' || it.towerMatch == 'DS누락' ||
+      it.serialMatch == '불일치' || it.serialMatch == 'DS누락'
+    ).toList();
+
+    await showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => _ChangeRequestDialog(
+        candidates: candidates,
+        schedulePks: pks,
+        service: _inspectionService,
+      ),
+    );
   }
 
   Widget _buildSummaryRow(String label, Map<String, int> summary,
@@ -1719,6 +1760,314 @@ class _TowerMismatchModalState extends State<TowerMismatchModal> {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+// ── 변경개설 요청 작성 다이얼로그 (Phase 2) ────────────────────────
+class _ChangeRequestDialog extends StatefulWidget {
+  final List<CompareItem> candidates;
+  final List<String> schedulePks;
+  final InspectionService service;
+  const _ChangeRequestDialog({
+    required this.candidates,
+    required this.schedulePks,
+    required this.service,
+  });
+  @override
+  State<_ChangeRequestDialog> createState() => _ChangeRequestDialogState();
+}
+
+class _ChangeRequestEntry {
+  String licenseNo;
+  String field; // 일련번호/형식검정번호/설치형태/설치장소
+  String deviceNo;
+  String beforeValue;
+  String afterValue;
+  String memo;
+  _ChangeRequestEntry({
+    required this.licenseNo,
+    this.field = '일련번호',
+    this.deviceNo = '',
+    this.beforeValue = '',
+    this.afterValue = '',
+    this.memo = '',
+  });
+}
+
+class _ChangeRequestDialogState extends State<_ChangeRequestDialog> {
+  static const _fields = ['일련번호', '형식검정번호', '설치형태', '설치장소'];
+  static const _deviceFields = {'일련번호', '형식검정번호'};
+  final List<_ChangeRequestEntry> _entries = [];
+  bool _submitting = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // 후보가 1건 이상이면 첫 후보 기준으로 entry 1개 자동 추가
+    if (widget.candidates.isNotEmpty) {
+      _addEntryFor(widget.candidates.first);
+    }
+  }
+
+  void _addEntryFor(CompareItem it) {
+    String field = '일련번호';
+    String before = it.dsSerial;
+    if (it.towerMatch == '불일치' || it.towerMatch == 'DS누락') {
+      field = '설치형태';
+      before = it.dsTowerType;
+    }
+    setState(() {
+      _entries.add(_ChangeRequestEntry(
+        licenseNo: it.zpwino,
+        field: field,
+        beforeValue: before,
+      ));
+    });
+  }
+
+  void _removeEntry(int idx) => setState(() => _entries.removeAt(idx));
+
+  String _schedulePkFor(String licenseNo) {
+    // schedulePks는 "year#허가번호" 형식. licenseNo로 매칭
+    for (final pk in widget.schedulePks) {
+      final parts = pk.split('#');
+      if (parts.length >= 2 && parts[1] == licenseNo) return pk;
+    }
+    return '';
+  }
+
+  Future<void> _submit() async {
+    if (_entries.isEmpty) return;
+    // 검증
+    for (final e in _entries) {
+      if (e.afterValue.trim().isEmpty) {
+        _showError('${e.licenseNo} ${e.field}: 변경 후 값이 비어있습니다.');
+        return;
+      }
+      if (_deviceFields.contains(e.field) && e.deviceNo.trim().isEmpty) {
+        _showError('${e.licenseNo} ${e.field}: 장치번호가 필요합니다.');
+        return;
+      }
+    }
+    // schedule_pk 별로 그룹핑
+    final byPk = <String, List<_ChangeRequestEntry>>{};
+    for (final e in _entries) {
+      final pk = _schedulePkFor(e.licenseNo);
+      if (pk.isEmpty) {
+        _showError('${e.licenseNo}: 연결된 일정을 찾을 수 없습니다.');
+        return;
+      }
+      byPk.putIfAbsent(pk, () => []).add(e);
+    }
+
+    setState(() => _submitting = true);
+    int total = 0;
+    final failed = <String>[];
+    for (final entry in byPk.entries) {
+      final items = entry.value
+          .map((e) => {
+                'field': e.field,
+                'before_value': e.beforeValue,
+                'after_value': e.afterValue,
+                '장치번호': e.deviceNo,
+                'memo': e.memo,
+              })
+          .toList();
+      try {
+        final n = await widget.service.createChangeRequest(entry.key, items);
+        total += n;
+      } catch (e) {
+        failed.add('${entry.key}: $e');
+      }
+    }
+    if (!mounted) return;
+    Navigator.pop(context);
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(failed.isEmpty
+          ? '변경개설 요청 등록 완료: $total건'
+          : '$total건 등록 / 실패 ${failed.length}건'),
+      backgroundColor: failed.isEmpty ? const Color(0xFF1A8754) : const Color(0xFFE53935),
+    ));
+  }
+
+  void _showError(String msg) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 800, maxHeight: 700),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 18, 12, 12),
+            child: Row(children: [
+              const Icon(Icons.edit_note, color: Color(0xFFE17055)),
+              const SizedBox(width: 8),
+              const Text('변경개설 요청 작성',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+              const Spacer(),
+              IconButton(
+                icon: const Icon(Icons.close),
+                onPressed: _submitting ? null : () => Navigator.pop(context),
+              ),
+            ]),
+          ),
+          const Divider(height: 1),
+          Expanded(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(16),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFE17055).withValues(alpha: 0.07),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: const Text(
+                    '품개팀이 변경 필요한 항목을 명시 → 혁신팀이 신고서 다운로드 후 전파관리소 신고\n'
+                    '국소 단위(설치장소/설치형태)는 장치번호 무관, 장치 단위(일련번호/형식검정번호)는 장치번호 필수',
+                    style: TextStyle(fontSize: 12, color: Color(0xFF6E4C44)),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                ..._entries.asMap().entries.map((e) => _buildEntryCard(e.key, e.value)),
+                const SizedBox(height: 8),
+                Wrap(spacing: 8, runSpacing: 8, children: [
+                  for (final c in widget.candidates)
+                    OutlinedButton.icon(
+                      icon: const Icon(Icons.add, size: 14),
+                      label: Text('${c.zpwino} 추가', style: const TextStyle(fontSize: 12)),
+                      onPressed: _submitting ? null : () => _addEntryFor(c),
+                    ),
+                ]),
+              ]),
+            ),
+          ),
+          const Divider(height: 1),
+          Padding(
+            padding: const EdgeInsets.all(12),
+            child: Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+              TextButton(
+                onPressed: _submitting ? null : () => Navigator.pop(context),
+                child: const Text('취소'),
+              ),
+              const SizedBox(width: 8),
+              ElevatedButton.icon(
+                icon: _submitting
+                    ? const SizedBox(width: 14, height: 14,
+                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                    : const Icon(Icons.send, size: 16),
+                label: Text(_submitting ? '제출 중...' : '${_entries.length}건 신고 요청 등록'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFFE17055),
+                  foregroundColor: Colors.white,
+                ),
+                onPressed: _submitting || _entries.isEmpty ? null : _submit,
+              ),
+            ]),
+          ),
+        ]),
+      ),
+    );
+  }
+
+  Widget _buildEntryCard(int idx, _ChangeRequestEntry e) {
+    final isDevice = _deviceFields.contains(e.field);
+    return Card(
+      margin: const EdgeInsets.only(bottom: 10),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(8),
+        side: BorderSide(color: Colors.grey.shade300),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                color: const Color(0xFFE17055).withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Text(e.licenseNo,
+                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFFB85B3D))),
+            ),
+            const Spacer(),
+            IconButton(
+              icon: const Icon(Icons.delete_outline, size: 18, color: Colors.grey),
+              onPressed: () => _removeEntry(idx),
+            ),
+          ]),
+          const SizedBox(height: 8),
+          Row(children: [
+            Expanded(child: DropdownButtonFormField<String>(
+              initialValue: e.field,
+              decoration: const InputDecoration(
+                labelText: '변경 항목',
+                isDense: true,
+                border: OutlineInputBorder(),
+              ),
+              items: _fields.map((f) => DropdownMenuItem(value: f, child: Text(f))).toList(),
+              onChanged: (v) {
+                if (v == null) return;
+                setState(() {
+                  e.field = v;
+                  if (!_deviceFields.contains(v)) e.deviceNo = '';
+                });
+              },
+            )),
+            if (isDevice) ...[
+              const SizedBox(width: 10),
+              SizedBox(width: 110, child: TextFormField(
+                initialValue: e.deviceNo,
+                decoration: const InputDecoration(
+                  labelText: '장치번호',
+                  isDense: true,
+                  border: OutlineInputBorder(),
+                ),
+                onChanged: (v) => e.deviceNo = v,
+              )),
+            ],
+          ]),
+          const SizedBox(height: 10),
+          Row(children: [
+            Expanded(child: TextFormField(
+              initialValue: e.beforeValue,
+              decoration: const InputDecoration(
+                labelText: 'DS 현재값',
+                isDense: true,
+                border: OutlineInputBorder(),
+              ),
+              readOnly: true,
+              style: const TextStyle(color: Colors.grey),
+            )),
+            const SizedBox(width: 10),
+            Expanded(child: TextFormField(
+              initialValue: e.afterValue,
+              decoration: const InputDecoration(
+                labelText: '변경 후 값',
+                isDense: true,
+                border: OutlineInputBorder(),
+              ),
+              onChanged: (v) => e.afterValue = v,
+            )),
+          ]),
+          const SizedBox(height: 10),
+          TextFormField(
+            initialValue: e.memo,
+            decoration: const InputDecoration(
+              labelText: '메모 (선택)',
+              isDense: true,
+              border: OutlineInputBorder(),
+            ),
+            onChanged: (v) => e.memo = v,
+          ),
+        ]),
       ),
     );
   }

@@ -321,6 +321,97 @@ class InspectionService {
     }
   }
 
+  // ── Change Request (Phase 2) ─────────────────────────────
+
+  Future<int> createChangeRequest(String schedulePk, List<Map<String, dynamic>> items) async {
+    final resp = await http.post(
+      Uri.parse('$_baseUrl/inspection/schedule/${Uri.encodeComponent(schedulePk)}/change-request'),
+      headers: _headers,
+      body: json.encode({'items': items}),
+    ).timeout(_apiTimeout);
+    if (resp.statusCode != 200) {
+      final b = json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+      throw Exception(b['detail'] ?? '변경개설 요청 실패');
+    }
+    final body = json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+    return (body['count'] as num?)?.toInt() ?? 0;
+  }
+
+  Future<List<Map<String, dynamic>>> listChangeRequests({
+    String schedulePk = '', String status = '',
+    String licenseNo = '', String accessTeam = '', int year = 0,
+  }) async {
+    final qp = <String, String>{};
+    if (schedulePk.isNotEmpty) qp['schedule_pk'] = schedulePk;
+    if (status.isNotEmpty) qp['status'] = status;
+    if (licenseNo.isNotEmpty) qp['허가번호'] = licenseNo;
+    if (accessTeam.isNotEmpty) qp['access담당'] = accessTeam;
+    if (year > 0) qp['year'] = '$year';
+    final uri = Uri.parse('$_baseUrl/change-request').replace(queryParameters: qp);
+    final resp = await http.get(uri, headers: _headers).timeout(_apiTimeout);
+    if (resp.statusCode != 200) throw Exception('변경 요청 조회 실패');
+    final body = json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+    return List<Map<String, dynamic>>.from(body['items'] ?? []);
+  }
+
+  Future<Map<String, dynamic>> markChangeRequestFiled({
+    String schedulePk = '',
+    List<String> schedulePks = const [],
+    String memo = '',
+  }) async {
+    final body = <String, dynamic>{'memo': memo};
+    if (schedulePk.isNotEmpty) body['schedule_pk'] = schedulePk;
+    if (schedulePks.isNotEmpty) body['schedule_pks'] = schedulePks;
+    final resp = await http.patch(
+      Uri.parse('$_baseUrl/change-request/file'),
+      headers: _headers,
+      body: json.encode(body),
+    ).timeout(_apiTimeout);
+    if (resp.statusCode != 200) {
+      final b = json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+      throw Exception(b['detail'] ?? '신고 완료 처리 실패');
+    }
+    return json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+  }
+
+  /// A파일(신고서) xls 묶음 다운로드 — bytes 반환
+  /// 묶음 키(qualityTeam/week/team/year) 또는 schedule_pk 단건 지원
+  Future<List<int>> generateChangeRequestForm({
+    String schedulePk = '',
+    String qualityTeam = '',
+    String week = '',
+    String team = '',
+    int year = 0,
+  }) async {
+    final qp = <String, String>{};
+    if (schedulePk.isNotEmpty) qp['schedule_pk'] = schedulePk;
+    if (qualityTeam.isNotEmpty) qp['품질개선팀'] = qualityTeam;
+    if (week.isNotEmpty) qp['수검예정주차'] = week;
+    if (team.isNotEmpty) qp['조'] = team;
+    if (year > 0) qp['year'] = '$year';
+    final uri = Uri.parse('$_baseUrl/change-request/generate-form')
+        .replace(queryParameters: qp);
+    final resp = await http.post(uri, headers: _headers).timeout(_apiTimeout);
+    if (resp.statusCode != 200) {
+      throw Exception('신고서 생성 실패: ${resp.statusCode}');
+    }
+    return resp.bodyBytes;
+  }
+
+  /// 부분 DS 업로드 → DB 패치 + 자동 재비교
+  Future<Map<String, dynamic>> applyPartialDsUpdate(Uint8List bytes, String filename) async {
+    final uri = Uri.parse('$_baseUrl/ds/apply-partial-update');
+    final req = http.MultipartRequest('POST', uri)
+      ..headers['Authorization'] = 'Bearer ${_authToken ?? ''}'
+      ..files.add(http.MultipartFile.fromBytes('file', bytes, filename: filename));
+    final streamed = await req.send().timeout(_uploadTimeout);
+    final body = json.decode(utf8.decode(await streamed.stream.toBytes())) as Map<String, dynamic>;
+    if (streamed.statusCode != 200) {
+      throw Exception(body['detail'] ?? '부분 DS 적용 실패');
+    }
+    return body;
+  }
+
   // ── Result ───────────────────────────────────────────────
 
   Future<void> upsertResult(Map<String, dynamic> data) async {

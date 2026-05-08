@@ -14460,9 +14460,9 @@ async def change_request_generate_form(
         ws.col(ci).width = w
 
     # 폰트
-    def _font(height: int):
+    def _font(height: int, name: str = '맑은 고딕'):
         f = xlwt.Font()
-        f.name = '맑은 고딕'
+        f.name = name
         f.height = height
         return f
 
@@ -14492,7 +14492,7 @@ async def change_request_generate_form(
 
     # 스타일들
     style_title = xlwt.XFStyle()
-    style_title.font = _font(220)
+    style_title.font = _font(600)  # 30pt, 기본 폰트(맑은 고딕)
     style_title.alignment = _align('left', 'center', False)
 
     style_header = xlwt.XFStyle()
@@ -14516,8 +14516,8 @@ async def change_request_generate_form(
     ws.row(1).height_mismatch = True; ws.row(1).height = 345
     ws.row(2).height_mismatch = True; ws.row(2).height = 348
 
-    # 제목 (row 0, B열에 텍스트)
-    ws.write_merge(0, 0, 1, 5, '○ 무선국 변경개설신고', style_title)
+    # 제목 (A1 셀)
+    ws.write(0, 0, '○ 무선국 변경개설신고', style_title)
 
     # 헤더 (row 1-2 병합)
     headers = ['순\n번', '호출명칭', '허가번호', '변경내역', '변경전', '변경후',
