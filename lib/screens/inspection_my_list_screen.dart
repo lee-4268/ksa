@@ -62,6 +62,7 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
   // 안테나 방위각 표시
   late final AzimuthService _azSvc;
   bool _showAzimuth = false;
+  bool _azBandsExpanded = true;
   Map<String, List<AntennaSector>> _azimuthData = {};
   Set<String> _activeBandKeys = const {
     'LTE-800M', 'LTE-1.8G', 'LTE-2.1G', 'LTE-2.6G', '5G-3.5G', '5G-28G',
@@ -1267,9 +1268,25 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
                       activeColor: const Color(0xFF1565C0),
                     ),
                   ),
+                if (_showAzimuth)
+                  InkWell(
+                    onTap: () =>
+                        setState(() => _azBandsExpanded = !_azBandsExpanded),
+                    borderRadius: BorderRadius.circular(4),
+                    child: Padding(
+                      padding: const EdgeInsets.all(2),
+                      child: Icon(
+                        _azBandsExpanded
+                            ? Icons.keyboard_arrow_up
+                            : Icons.keyboard_arrow_down,
+                        size: 20,
+                        color: Colors.grey.shade700,
+                      ),
+                    ),
+                  ),
               ],
             ),
-            if (_showAzimuth) ...[
+            if (_showAzimuth && _azBandsExpanded) ...[
               const Divider(height: 8),
               Wrap(
                 spacing: 4,
