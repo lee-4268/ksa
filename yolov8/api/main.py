@@ -19029,12 +19029,15 @@ async def create_request(body: RequestCreate, request: Request):
     async def _notify_admins_new_request():
         try:
             all_users = await asyncio.to_thread(_list_all_users_sync)
+            logger.info(f"[req-notify] total_users={len(all_users)}, requester={empno}")
             admins = [
                 u for u in all_users
                 if u.get("role") == "admin"
                 and not u.get("is_dormant")
                 and u.get("empno") != empno
             ]
+            logger.info(f"[req-notify] admins_to_notify={len(admins)} "
+                       f"(after dormant/self filter)")
             if not admins:
                 return
 
@@ -19053,12 +19056,13 @@ async def create_request(body: RequestCreate, request: Request):
                         ],
                     )
                     conn2.commit()
+                    logger.info(f"[req-notify] inserted {len(admins)} rows for request_id={request_id}")
                 finally:
                     conn2.close()
 
             await asyncio.to_thread(_bulk)
         except Exception as e:
-            logger.warning(f"요청 알림 발송 실패: {e}")
+            logger.warning(f"요청 알림 발송 실패: {e}", exc_info=True)
 
     asyncio.create_task(_notify_admins_new_request())
 

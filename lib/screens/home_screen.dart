@@ -1,7 +1,9 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../providers/station_provider.dart';
 import '../services/auth_service.dart';
 import '../services/cloud_data_service.dart';
@@ -85,6 +87,108 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     _loadCloudData();
+    // 로그인 직후 안 읽음 알림이 있으면 자동 팝업 (오늘 보지 않기 가능)
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _maybeShowLoginNotificationPopup();
+    });
+  }
+
+  Future<void> _maybeShowLoginNotificationPopup() async {
+    try {
+      // 오늘 보지 않기 플래그 체크
+      final prefs = await SharedPreferences.getInstance();
+      final today = DateTime.now();
+      final dateKey =
+          '${today.year}-${today.month.toString().padLeft(2, '0')}-${today.day.toString().padLeft(2, '0')}';
+      if (prefs.getBool('notification_popup_hidden_$dateKey') == true) return;
+      if (!mounted) return;
+
+      // NotificationService의 첫 fetch 완료 대기 (start() 안에서 즉시 fetch 호출됨)
+      // unread 카운트가 채워질 때까지 최대 3초 폴링
+      final notifSvc = context.read<NotificationService>();
+      var waited = 0;
+      while (waited < 3000 && (notifSvc.unreadCount == 0 && notifSvc.items.isEmpty)) {
+        await Future.delayed(const Duration(milliseconds: 200));
+        waited += 200;
+        if (!mounted) return;
+      }
+      if (notifSvc.unreadCount <= 0) return;
+
+      // 팝업 다이얼로그
+      bool hideToday = false;
+      final result = await showDialog<bool>(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) => StatefulBuilder(builder: (ctx, setLocalState) {
+          return AlertDialog(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+            title: Row(children: [
+              const Icon(Icons.notifications_active, color: Color(0xFFE53935), size: 22),
+              const SizedBox(width: 8),
+              Text('새 알림 ${notifSvc.unreadCount}건',
+                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+            ]),
+            content: Column(mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Text('확인하지 않은 알림이 있습니다.',
+                  style: TextStyle(fontSize: 13, color: Color(0xFF374151))),
+              const SizedBox(height: 4),
+              const Text('우상단 종 아이콘에서 자세한 내용을 확인할 수 있습니다.',
+                  style: TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+              const SizedBox(height: 14),
+              InkWell(
+                onTap: () => setLocalState(() => hideToday = !hideToday),
+                borderRadius: BorderRadius.circular(6),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 2),
+                  child: Row(children: [
+                    SizedBox(
+                      width: 20, height: 20,
+                      child: Checkbox(
+                        value: hideToday,
+                        onChanged: (v) => setLocalState(() => hideToday = v ?? false),
+                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        activeColor: const Color(0xFF1565C0),
+                        side: BorderSide(color: Colors.grey.shade400),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    const Text('오늘은 더이상 보지 않기',
+                        style: TextStyle(fontSize: 12, color: Color(0xFF374151))),
+                  ]),
+                ),
+              ),
+            ]),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('닫기'),
+              ),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF1565C0),
+                  foregroundColor: Colors.white,
+                ),
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('알림 보기'),
+              ),
+            ],
+          );
+        }),
+      );
+
+      // '오늘 보지 않기' 저장
+      if (hideToday) {
+        await prefs.setBool('notification_popup_hidden_$dateKey', true);
+      }
+
+      // '알림 보기' 누르면 기존 알림 패널 열기
+      if (result == true && mounted) {
+        _showNotificationPanel(context, notifSvc);
+      }
+    } catch (e) {
+      // 인증 만료 등 — 조용히 무시
+    }
   }
 
   Future<void> _loadCloudData() async {
