@@ -635,6 +635,58 @@ class InspectionService {
     return body;
   }
 
+  // ── Phase 5: 알림 ───────────────────────────────────────
+
+  /// 현재 사용자 알림 목록 조회.
+  Future<List<Map<String, dynamic>>> getNotifications({
+    bool unreadOnly = false,
+    int limit = 50,
+  }) async {
+    final uri = Uri.parse('$_baseUrl/notifications').replace(queryParameters: {
+      if (unreadOnly) 'unread_only': 'true',
+      'limit': '$limit',
+    });
+    final resp = await http.get(uri, headers: _headers).timeout(_apiTimeout);
+    final body = json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+    return List<Map<String, dynamic>>.from(body['items'] ?? []);
+  }
+
+  /// 안 읽음 알림 개수.
+  Future<int> getUnreadNotificationCount() async {
+    final resp = await http.get(
+      Uri.parse('$_baseUrl/notifications/unread-count'),
+      headers: _headers,
+    ).timeout(_apiTimeout);
+    final body = json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+    return (body['count'] as num?)?.toInt() ?? 0;
+  }
+
+  /// 알림 읽음 처리. ids 비워서 보내면 전체 안 읽음 일괄 처리.
+  Future<int> markNotificationsRead({List<int> ids = const []}) async {
+    final resp = await http.post(
+      Uri.parse('$_baseUrl/notifications/mark-read'),
+      headers: _headers,
+      body: json.encode({'ids': ids}),
+    ).timeout(_apiTimeout);
+    final body = json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+    return (body['updated'] as num?)?.toInt() ?? 0;
+  }
+
+  // ── Phase 5: 역할별 대시보드 ────────────────────────────
+
+  /// 역할별 워크플로우 대시보드 집계.
+  /// returns: { role, scope, counts, recheck, overdue, overdue_total }
+  Future<Map<String, dynamic>> getDashboard(int year) async {
+    final uri = Uri.parse('$_baseUrl/inspection/dashboard')
+        .replace(queryParameters: {'year': '$year'});
+    final resp = await http.get(uri, headers: _headers).timeout(_apiTimeout);
+    final body = json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+    if (resp.statusCode != 200) {
+      throw Exception(body['detail'] ?? '대시보드 조회 실패');
+    }
+    return body;
+  }
+
   Future<Map<String, dynamic>> addFromStaging(int year, String licenseNo) async {
     final resp = await http.post(
       Uri.parse('$_baseUrl/inspection/add-from-staging'),

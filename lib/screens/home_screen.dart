@@ -20,6 +20,9 @@ import 'inspection_results_screen.dart';
 import 'community_screen.dart';
 import '../services/community_service.dart';
 import '../services/notification_service.dart';
+import '../services/inspection_service.dart';
+import '../widgets/notification_bell_button.dart';
+import '../widgets/inspection_dashboard_widget.dart';
 
 /// 앱 셸 — 사이드바 상시 표시 + 오른쪽 콘텐츠 전환
 class HomeScreen extends StatefulWidget {
@@ -48,6 +51,14 @@ class _HomeScreenState extends State<HomeScreen> {
   ({List<String> nos, String? div, bool multi, List<String>? schedulePks})? _pendingCompare;
   // 전산비교 → 일정화면 이동 시 전달할 허가번호
   List<String>? _pendingSchedule;
+
+  // 알림 종 아이콘용 InspectionService (지연 초기화 — context.read 사용)
+  InspectionService? _inspSvcCache;
+  InspectionService get _inspSvc {
+    _inspSvcCache ??= InspectionService()
+      ..setAuthToken(context.read<AuthService>().authToken);
+    return _inspSvcCache!;
+  }
 
   @override
   void initState() {
@@ -245,6 +256,8 @@ class _HomeScreenState extends State<HomeScreen> {
             const SizedBox(width: 8),
             Text(item.title, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: _textPrimary)),
             const Spacer(),
+            NotificationBellButton(svc: _inspSvc),
+            const SizedBox(width: 4),
             _buildUserAvatar(),
           ],
         ),
@@ -554,6 +567,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   ],
                 ),
               ),
+              NotificationBellButton(svc: _inspSvc),
             ],
           ),
           const SizedBox(height: 6),
@@ -773,6 +787,19 @@ class _HomeContentState extends State<_HomeContent> {
   WeatherInfo? _weather;
   bool _loadingWeather = true;
 
+  // Phase 5: 대시보드용 InspectionService (지연 초기화)
+  InspectionService? _inspSvcCache;
+  InspectionService get _inspSvc {
+    _inspSvcCache ??= InspectionService()
+      ..setAuthToken(context.read<AuthService>().authToken);
+    return _inspSvcCache!;
+  }
+
+  void _jumpToScheduleScreen() {
+    final idx = widget.menuItems.indexWhere((m) => m.title == '일정 및 통계');
+    if (idx >= 0) widget.onNavigate(idx);
+  }
+
   // 커뮤니티
   final _commSvc = CommunityService();
   bool _commTab = true; // true=공지사항, false=요청사항
@@ -939,6 +966,14 @@ class _HomeContentState extends State<_HomeContent> {
                   ),
                   const SizedBox(height: 20),
 
+                  // 내 할 일 대시보드 (역할별 자동 분기)
+                  InspectionDashboardWidget(
+                    svc: _inspSvc,
+                    year: DateTime.now().year,
+                    onStatusTap: (_) => _jumpToScheduleScreen(),
+                    onRecheckTap: () => _jumpToScheduleScreen(),
+                    onScheduleTap: (_) => _jumpToScheduleScreen(),
+                  ),
                   const SizedBox(height: 20),
 
                   const Text('바로가기',

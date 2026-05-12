@@ -552,43 +552,71 @@ UPDATE inspection_results SET schedule_pk = pk
 
 ---
 
-## Phase 5: 알림 + 대시보드 + 외부 연동
+## Phase 5: 알림 + 대시보드
 
-**목표**: "내 할 일"이 한눈에 보이는 종합 대시보드 + 자동 알림
+**목표**: "내 할 일"이 한눈에 보이는 종합 대시보드 + 워크플로우 전환 자동 알림
 
-### 알림 시스템
-- **1차**: 시스템 내 알림 뱃지 + 이메일
-- **2차**: Slack/Teams webhook (선택)
-- **3차**: 모바일 푸시 (현장팀)
-- 상태 전환 시 다음 액터에게 자동 알림
+### 알림 시스템 (시스템 내 알림 전용)
+- 이메일/Slack/Teams/푸시는 모두 **이번 Phase 5에서 제외** — 시스템 내 알림(우상단 종)만 구현
+- 상태 전환 시 다음 액터에게 자동 알림:
+  · PRE_CHECK_REQUESTED (REGISTERED→PRE_CHECK): 품개팀에게
+  · PRE_CHECK_REPLIED (PRE_CHECK→PRE_CHECK_DONE): 혁신팀에게
+  · CHANGE_REQUESTED (PRE_CHECK→CHANGE_FILING): 혁신팀에게
+  · CHANGE_FILED (CHANGE_FILING→RE_CHECK): 혁신팀에게
+  · RE_CHECK_DONE (RE_CHECK→PRE_CHECK_DONE 자동): 혁신팀에게
+  · REPORT_ISSUED: 혁신팀에게
+  · SUBMITTED: 품개팀(수검 담당)에게
+  · INSPECTED: 혁신팀에게
+- 수신자 결정 (현재 단순 룰): 일정 등록자(혁신팀) 우선, 상태 변경 본인은 제외
+- 향후 본부/팀 매핑은 user_roles 별도 조회로 확장 예정
 
-### 대시보드 (역할별 첫 화면)
-- **혁신팀**: 의뢰 가능 / 회신 받은 / 변경개설 신청 대기 / 발급 대기 / 접수 대기
-- **품질개선팀**: 의뢰받은 / 사전점검 진행중 / 변경개설 작성 중 / 수검 예정
-- **본부장**: 본부 단계별 카운트 + 지연 건 강조
+### 대시보드 (홈 화면 "내 할 일" 섹션 — 커뮤니티 ↔ 바로가기 사이)
+- 역할 자동 분기 (admin/manager/member 권한 그대로 활용 — manager가 곧 본부장 포지션)
+- **admin**: 전사 상태별 카운트 + 전체 지연 건 + 재점검 필요
+- **manager**: 자기 본부(region) 상태별 카운트 + 본부 지연 건
+- **member**: 자기 본부+팀 상태별 카운트 + 팀 지연 건
+- 상태 카드 클릭 → 일정 화면으로 점프 (필터 적용은 향후 확장)
+- 지연 건 상위 5개 미니 리스트 + 클릭 시 일정 점프
 
-### SLA / 지연 알림
-- 단계별 SLA 정의 (예: PRE_CHECK 5일 초과 시 경고)
-- 매일 새벽 백그라운드 워커 체크
+### SLA / 지연 표시 (자동 알림은 미구현 — 대시보드 강조만)
+- 임계점 하드코딩 (`_SLA_DAYS`):
+  · PRE_CHECK 5일 / CHANGE_FILING 3일 / RE_CHECK 7일
+  · REPORT_ISSUED 3일 / SUBMITTED 14일
+- `status_updated_at` 기준 경과 일수로 판정, 임계점 초과 시 overdue 목록에 포함
+- 매일 새벽 배치 워커는 향후 추가 (현재는 대시보드 조회 시점에 실시간 계산)
 
 ### 신규 테이블
 ```sql
 CREATE TABLE notifications (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  user_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,           -- 수신자 사번
   schedule_pk TEXT,
-  type TEXT,           -- ASSIGNED/COMPLETED/OVERDUE/CHANGE_FILING_REQUESTED/...
-  message TEXT,
-  read_at TEXT,
-  created_at TEXT NOT NULL
+  type TEXT NOT NULL,              -- PRE_CHECK_REQUESTED / PRE_CHECK_REPLIED / CHANGE_REQUESTED / CHANGE_FILED / RE_CHECK_DONE / REPORT_ISSUED / SUBMITTED / INSPECTED / SLA_OVERDUE
+  message TEXT NOT NULL,
+  read_at TEXT,                    -- 읽은 시각 (null이면 안 읽음)
+  created_at TEXT NOT NULL,
+  meta TEXT                        -- JSON (호출명칭, 허가번호 등)
 );
 CREATE INDEX idx_n_user ON notifications(user_id, read_at);
+CREATE INDEX idx_n_user_created ON notifications(user_id, created_at);
 ```
 
-### 외부 연동 (선택)
-- 전파관리소 시스템 API 제공 시 접수번호 자동 동기화
+### API
+- `GET /notifications?unread_only=&limit=` — 알림 목록 (최신순, meta JSON 파싱 포함)
+- `GET /notifications/unread-count` — 안 읽음 개수 (종 아이콘 배지용)
+- `POST /notifications/mark-read` body: `{ids?: [int]}` — 단건/일괄 읽음 처리 (ids 비면 전체)
+- `GET /inspection/dashboard?year=` — 역할별 집계 + 지연 건 상위 20
 
-**규모**: 백엔드 ~300줄, 프론트 ~400줄
+### UI
+- **종 아이콘**: 홈 모바일 AppBar / 데스크탑 사이드바 사용자 카드에 추가
+  · 안 읽음 카운트 빨간 배지, 60초마다 폴링
+  · 클릭 시 다이얼로그 패널 (안 읽음 토글 + 모두 읽음 + 타입별 색상 배지 + 상대 시각)
+- **대시보드 위젯**: 홈에 InspectionDashboardWidget 삽입 (역할 라벨/스코프 헤더 + 상태별 8장 카드 + 재점검·지연 카드 + 지연 상위 5건)
+
+### 외부 연동 (이번 Phase 제외)
+- 전파관리소 시스템 API / Slack/Teams webhook / 이메일 / 모바일 푸시 — 모두 Phase 5.x로 분리
+
+**규모**: 백엔드 ~320줄, 프론트 ~600줄 (위젯 2개 + 홈 통합)
 
 ---
 
