@@ -43,12 +43,13 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
   List<String> _allKcaResults = [];
 
   // pending 필터 (UI 선택 중)
-  String _pHdqt = '', _pTeam = '', _pSearch = '', _pScheduled = '', _pSchedWeek = '';
+  String _pHdqt = '', _pTeam = '', _pSearch = '', _pScheduled = '', _pSchedWeek = '', _pCrew = '';
   List<String> _pQuarters = [], _pNationGroups = [], _pKcaResults = [];
 
   // applied 필터 (실제 쿼리)
   String _aHdqt = '', _aTeam = '', _aSearch = '', _aScheduled = '';
   String _aSchedWeek = ''; // 수검예정주차 필터 (매트릭스 카드 클릭 시 세팅)
+  String _aCrew = '';      // 조 필터 (클라이언트 사이드, schedule 매핑 기반)
   List<String> _aQuarters = [], _aNationGroups = [], _aKcaResults = [];
 
   // 매트릭스 탭 전용 필터
@@ -68,6 +69,8 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
   Map<String, String> _schedulePkMap = {};
   // 허가번호 → 전파관리소 접수번호 (Phase 3)
   Map<String, String> _scheduleSubmissionMap = {};
+  // 허가번호 → 조
+  Map<String, String> _scheduleCrewMap = {};
   // 워크플로우 상태 필터 ('' = 전체)
   String _statusFilter = '';
 
@@ -239,7 +242,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     final dataRes    = results[0] as Map<String, dynamic>?;
     final summRes    = results[1] as Map<String, dynamic>?;
     final unassRes   = results[2] as Map<String, dynamic>?;
-    final schedResult = results[3] as ({Set<String> nos, Map<String, String> weekMap, List<Map<String, dynamic>> schedules, Map<String, String> statusMap, Map<String, String> pkMap, Map<String, String> submissionMap})?;
+    final schedResult = results[3] as ({Set<String> nos, Map<String, String> weekMap, List<Map<String, dynamic>> schedules, Map<String, String> statusMap, Map<String, String> pkMap, Map<String, String> submissionMap, Map<String, String> crewMap})?;
     final progRes    = results[4] as Map<String, dynamic>?;
     setState(() {
       _loading = false;
@@ -267,6 +270,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
         _scheduleStatusMap = schedResult.statusMap;
         _schedulePkMap = schedResult.pkMap;
         _scheduleSubmissionMap = schedResult.submissionMap;
+        _scheduleCrewMap = schedResult.crewMap;
       }
       if (progRes != null) {
         _progressTotal = (progRes['total'] as num?)?.toInt() ?? 0;
@@ -315,7 +319,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     } catch (_) { return null; }
   }
 
-  Future<({Set<String> nos, Map<String, String> weekMap, List<Map<String, dynamic>> schedules, Map<String, String> statusMap, Map<String, String> pkMap, Map<String, String> submissionMap})?> _fetchScheduledNos() async {
+  Future<({Set<String> nos, Map<String, String> weekMap, List<Map<String, dynamic>> schedules, Map<String, String> statusMap, Map<String, String> pkMap, Map<String, String> submissionMap, Map<String, String> crewMap})?> _fetchScheduledNos() async {
     try {
       final schedules = await _svc.getSchedules(_year);
       final nos = <String>{};
@@ -323,6 +327,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
       final statusMap = <String, String>{};
       final pkMap = <String, String>{};
       final submissionMap = <String, String>{};
+      final crewMap = <String, String>{};
       for (final s in schedules) {
         final no = (s['허가번호'] as String? ?? '').trim();
         if (no.isEmpty) continue;
@@ -335,10 +340,13 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
         if (pk.isNotEmpty) pkMap[no] = pk;
         final submission = (s['submission_no'] as String? ?? '').trim();
         if (submission.isNotEmpty) submissionMap[no] = submission;
+        final crew = (s['조'] as String? ?? '').trim();
+        if (crew.isNotEmpty) crewMap[no] = crew;
       }
       return (
         nos: nos, weekMap: weekMap, schedules: schedules,
         statusMap: statusMap, pkMap: pkMap, submissionMap: submissionMap,
+        crewMap: crewMap,
       );
     } catch (_) { return null; }
   }
@@ -354,6 +362,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
       _scheduleStatusMap = result.statusMap;
       _schedulePkMap = result.pkMap;
       _scheduleSubmissionMap = result.submissionMap;
+      _scheduleCrewMap = result.crewMap;
     });
   }
 
@@ -408,6 +417,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     _aHdqt = _pHdqt; _aTeam = _pTeam; _aSearch = _pSearch;
     _aScheduled = _pScheduled;
     _aSchedWeek = _pSchedWeek;
+    _aCrew = _pCrew;
     _aQuarters = List.from(_pQuarters);
     _aNationGroups = List.from(_pNationGroups);
     _aKcaResults = List.from(_pKcaResults);
@@ -417,8 +427,8 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
   }
 
   void _resetFilters() {
-    _pHdqt = _pTeam = _pSearch = _pScheduled = _pSchedWeek = '';
-    _aHdqt = _aTeam = _aSearch = _aScheduled = _aSchedWeek = '';
+    _pHdqt = _pTeam = _pSearch = _pScheduled = _pSchedWeek = _pCrew = '';
+    _aHdqt = _aTeam = _aSearch = _aScheduled = _aSchedWeek = _aCrew = '';
     _pQuarters = []; _pNationGroups = []; _pKcaResults = [];
     _aQuarters = []; _aNationGroups = []; _aKcaResults = [];
     _searchCtrl.clear();
@@ -652,6 +662,11 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
       final no = '${item['허가번호'] ?? ''}';
       return (_scheduleStatusMap[no] ?? 'REGISTERED') == 'REGISTERED';
     }).toList();
+    // REPORT_ISSUED 상태인 일정만 접수번호 일괄 입력 대상
+    final reportIssuedSelected = scheduledSelected.where((item) {
+      final no = '${item['허가번호'] ?? ''}';
+      return (_scheduleStatusMap[no] ?? 'REGISTERED') == 'REPORT_ISSUED';
+    }).toList();
 
     const btnShape = RoundedRectangleBorder(
       borderRadius: BorderRadius.all(Radius.circular(10)),
@@ -703,7 +718,35 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
           onPressed: () => _requestPreCheck(registeredSelected),
         ),
       ],
+      if (reportIssuedSelected.isNotEmpty) ...[
+        const SizedBox(width: 8),
+        ElevatedButton.icon(
+          icon: const Icon(Icons.confirmation_number_outlined, size: 16),
+          label: Text('${reportIssuedSelected.length}건 접수번호 일괄 입력'),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: const Color(0xFF0984E3), foregroundColor: Colors.white,
+            shape: btnShape, padding: btnPad,
+          ),
+          onPressed: () => _bulkInputSubmission(reportIssuedSelected),
+        ),
+      ],
     ];
+  }
+
+  Future<void> _bulkInputSubmission(List<Map<String, dynamic>> items) async {
+    final pks = items
+        .map((it) => _schedulePkMap['${it['허가번호'] ?? ''}'] ?? '')
+        .where((p) => p.isNotEmpty)
+        .toList();
+    if (pks.isEmpty) {
+      await _showError('접수번호 입력 대상이 없습니다.');
+      return;
+    }
+    await _promptBulkSubmission(
+      schedulePks: pks,
+      headline: '접수번호 일괄 입력',
+      note: '선택한 ${pks.length}건 모두에 같은 접수번호가 적용됩니다.',
+    );
   }
 
   Future<void> _requestPreCheck(List<Map<String, dynamic>> items) async {
@@ -1337,6 +1380,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     String sheetTitle = '',
   }) async {
     final dlg = ProgressDialog(context);
+    bool downloaded = false;
     try {
       dlg.show(message: '검사내역서 생성 중...');
       final bytes = await _svc.generateInspectionReport(
@@ -1352,9 +1396,86 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
         ..click();
       html.Url.revokeObjectUrl(url);
       await dlg.complete(message: '검사내역서 다운로드 완료');
-      _loadData();  // workflow_status 변경 반영
+      downloaded = true;
     } catch (e) {
       await dlg.error(message: '검사내역서 생성 실패: $e');
+    }
+    if (!downloaded || !mounted) return;
+    // 발급 직후 접수번호 일괄 입력 옵션 (스킵 가능 — 추후 일정 화면에서 일괄 입력도 가능)
+    await _promptBulkSubmission(
+      schedulePks: schedulePks,
+      headline: '검사내역서 발급 완료',
+      note: '전파관리소 접수가 완료됐다면 접수번호를 일괄로 입력할 수 있습니다.\n(나중에 일정 화면에서 다중 선택 → 일괄 입력도 가능)',
+    );
+    _loadData();  // workflow_status 변경 반영
+  }
+
+  /// 접수번호 일괄 입력 다이얼로그.
+  /// schedulePks가 비어있으면 무동작. 사용자가 [건너뛰기]면 false 반환.
+  Future<bool> _promptBulkSubmission({
+    required List<String> schedulePks,
+    String headline = '접수번호 일괄 입력',
+    String note = '',
+  }) async {
+    if (schedulePks.isEmpty) return false;
+    final ctrl = TextEditingController();
+    final result = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: Text(headline, style: const TextStyle(fontSize: 16)),
+        content: Column(mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('대상: ${schedulePks.length}건',
+              style: const TextStyle(fontSize: 12, color: Color(0xFF6E7780))),
+          if (note.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text(note,
+                style: const TextStyle(fontSize: 11, color: Color(0xFF6E7780))),
+          ],
+          const SizedBox(height: 12),
+          TextField(
+            controller: ctrl,
+            autofocus: true,
+            decoration: const InputDecoration(
+              labelText: '접수번호',
+              hintText: '예: 2026-0123',
+              helperText: '접수일은 입력한 시점으로 자동 기록됩니다.',
+              isDense: true,
+              border: OutlineInputBorder(),
+            ),
+            onSubmitted: (_) => Navigator.pop(ctx, true),
+          ),
+        ]),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('건너뛰기'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('저장'),
+          ),
+        ],
+      ),
+    );
+    if (result != true) return false;
+    final no = ctrl.text.trim();
+    if (no.isEmpty) {
+      await _showError('접수번호를 입력하세요.');
+      return false;
+    }
+    try {
+      final res = await _svc.submitInspectionBulk(
+        schedulePks: schedulePks, submissionNo: no);
+      final succeeded = res['succeeded'] as int? ?? 0;
+      final total = res['total'] as int? ?? 0;
+      await _showSuccess('접수번호 저장: $succeeded/$total건');
+      _loadData();
+      return true;
+    } catch (e) {
+      await _showError('저장 실패: $e');
+      return false;
     }
   }
 
@@ -1544,12 +1665,6 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                   (v) => setState(() { _pHdqt = v!; _pTeam = ''; _currentTeams = _orgMap[v] ?? []; })),
               _filterDropdown('팀', _pTeam, ['', ..._currentTeams],
                   (v) => setState(() => _pTeam = v!)),
-              _buildMultiDropdown('분기', _pQuarters, _allQuarters,
-                  (v) => setState(() => _pQuarters = v)),
-              _buildMultiDropdown('밴드선택', _pNationGroups, _allNationGroups,
-                  (v) => setState(() => _pNationGroups = v)),
-              _buildMultiDropdown('검토여부', _pKcaResults, _allKcaResults,
-                  (v) => setState(() => _pKcaResults = v)),
               _filterDropdown('일정등록', _pScheduled, const ['', 'Y', 'N'],
                   (v) => setState(() => _pScheduled = v ?? ''),
                   displayMap: const {'Y': '등록', 'N': '미등록'}),
@@ -1567,6 +1682,23 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                   })];
                 return _filterDropdown('수검일정', _pSchedWeek, weekOptions,
                     (v) => setState(() => _pSchedWeek = v ?? ''));
+              }),
+              Builder(builder: (_) {
+                // 조 옵션 — 현재 필터링된 schedules에서 distinct 수집
+                final crews = <String>{};
+                for (final s in _schedules) {
+                  if (_pHdqt.isNotEmpty &&
+                      (s['access담당'] as String? ?? '').trim() != _pHdqt) continue;
+                  if (_pTeam.isNotEmpty &&
+                      (s['품질개선팀'] as String? ?? '').trim() != _pTeam) continue;
+                  if (_pSchedWeek.isNotEmpty &&
+                      (s['수검예정주차'] as String? ?? '').trim() != _pSchedWeek) continue;
+                  final c = (s['조'] as String? ?? '').trim();
+                  if (c.isNotEmpty) crews.add(c);
+                }
+                final crewOptions = <String>['', ...crews.toList()..sort()];
+                return _filterDropdown('조', _pCrew, crewOptions,
+                    (v) => setState(() => _pCrew = v ?? ''));
               }),
               const SizedBox(width: 4),
               ElevatedButton(
@@ -1771,8 +1903,8 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
             if (v == null) return;
             setState(() {
               _year = v;
-              _pHdqt = _pTeam = _pSearch = '';
-              _aHdqt = _aTeam = _aSearch = '';
+              _pHdqt = _pTeam = _pSearch = _pCrew = '';
+              _aHdqt = _aTeam = _aSearch = _aCrew = '';
               _pQuarters = []; _pNationGroups = []; _pKcaResults = [];
               _aQuarters = []; _aNationGroups = []; _aKcaResults = [];
               _searchCtrl.clear();
@@ -2129,18 +2261,30 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     ]);
   }
 
-  // 워크플로우 상태 필터 적용된 items
+  // 워크플로우 상태 필터 + 조 필터 (클라이언트) 적용된 items
   List<Map<String, dynamic>> get _filteredItems {
-    if (_statusFilter.isEmpty) return _items;
-    if (_statusFilter == '미배정') {
-      return _items.where((it) => !_isScheduled('${it['허가번호'] ?? ''}')).toList();
+    Iterable<Map<String, dynamic>> rows = _items;
+    // 조 필터 (schedule 매핑 기반)
+    if (_aCrew.isNotEmpty) {
+      rows = rows.where((it) {
+        final no = '${it['허가번호'] ?? ''}';
+        return (_scheduleCrewMap[no] ?? '') == _aCrew;
+      });
     }
-    return _items.where((it) {
-      final no = '${it['허가번호'] ?? ''}';
-      if (!_isScheduled(no)) return false;
-      final st = _scheduleStatusMap[no] ?? 'REGISTERED';
-      return st == _statusFilter;
-    }).toList();
+    // 워크플로우 상태 필터 (상단 칩)
+    if (_statusFilter.isNotEmpty) {
+      if (_statusFilter == '미배정') {
+        rows = rows.where((it) => !_isScheduled('${it['허가번호'] ?? ''}'));
+      } else {
+        rows = rows.where((it) {
+          final no = '${it['허가번호'] ?? ''}';
+          if (!_isScheduled(no)) return false;
+          final st = _scheduleStatusMap[no] ?? 'REGISTERED';
+          return st == _statusFilter;
+        });
+      }
+    }
+    return rows.toList();
   }
 
   // 상태별 카운트 (현재 페이지 _items 기준)
@@ -2222,24 +2366,6 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
           if (week.isNotEmpty) const SizedBox(height: 2),
           _buildStatusBadge(status),
         ],
-        // REPORT_ISSUED: "접수번호 입력" 버튼
-        if (status == 'REPORT_ISSUED' && (_isAdmin || _hasInnovationRole())) ...[
-          const SizedBox(height: 2),
-          InkWell(
-            onTap: () => _showSubmissionDialog(licenseNo),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-              decoration: BoxDecoration(
-                color: const Color(0xFF0984E3).withValues(alpha: 0.1),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: const Color(0xFF0984E3), width: 1),
-              ),
-              child: const Text('접수번호 입력',
-                  style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600,
-                      color: Color(0xFF0984E3))),
-            ),
-          ),
-        ],
         // SUBMITTED: 접수번호 표시
         if (status == 'SUBMITTED' && submission.isNotEmpty) ...[
           const SizedBox(height: 2),
@@ -2247,67 +2373,12 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
             message: '접수번호: $submission',
             child: Text('# $submission',
                 style: const TextStyle(fontSize: 10, color: Color(0xFF0984E3),
-                    fontWeight: FontWeight.w600)),
+                    fontWeight: FontWeight.w600),
+                maxLines: 1, overflow: TextOverflow.ellipsis),
           ),
         ],
       ],
     );
-  }
-
-  bool _hasInnovationRole() {
-    // N/W혁신팀 = admin/manager 권한. 권한 매트릭스에 맞춰 manager까지 허용.
-    return _isAdmin;
-  }
-
-  Future<void> _showSubmissionDialog(String licenseNo) async {
-    final pk = _schedulePkMap[licenseNo];
-    if (pk == null || pk.isEmpty) {
-      await _showError('일정 정보를 찾을 수 없습니다.');
-      return;
-    }
-    final ctrl = TextEditingController();
-    final saved = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('전파관리소 접수번호 입력', style: TextStyle(fontSize: 16)),
-        content: Column(mainAxisSize: MainAxisSize.min, children: [
-          Text('허가번호: $licenseNo',
-              style: const TextStyle(fontSize: 12, color: Color(0xFF6E7780))),
-          const SizedBox(height: 12),
-          TextField(
-            controller: ctrl,
-            autofocus: true,
-            decoration: const InputDecoration(
-              labelText: '접수번호',
-              hintText: '예: 2026-0123',
-              isDense: true,
-              border: OutlineInputBorder(),
-            ),
-            onSubmitted: (_) => Navigator.pop(ctx, true),
-          ),
-        ]),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('취소')),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('저장'),
-          ),
-        ],
-      ),
-    );
-    if (saved != true) return;
-    final no = ctrl.text.trim();
-    if (no.isEmpty) {
-      await _showError('접수번호를 입력하세요.');
-      return;
-    }
-    try {
-      await _svc.submitInspection(schedulePk: pk, submissionNo: no);
-      await _showSuccess('접수번호 저장 완료: $no');
-      _loadData();
-    } catch (e) {
-      await _showError('저장 실패: $e');
-    }
   }
 
   Widget _buildRowCheckbox(Map<String, dynamic> item, String licenseNo, bool isChecked) {

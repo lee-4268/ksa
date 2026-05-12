@@ -15799,10 +15799,12 @@ class InspectionReportGenerateReq(BaseModel):
 
 @app.post("/inspection/report/generate")
 async def inspection_report_generate(request: Request, req: InspectionReportGenerateReq):
-    """PRE_CHECK_DONE 다중 schedule → 검사내역서 즉시 다운로드 + REPORT_ISSUED 전환.
+    """다중 schedule → 검사내역서 즉시 다운로드.
 
-    - 기존 /inspection/export-inspection-report 빌더를 그대로 재활용
-    - 발급 성공 후에만 상태 전환 (xls 생성 실패 시 롤백 보호)
+    - 발급 자체는 워크플로우 상태와 무관하게 허용 (REGISTERED/PRE_CHECK_DONE/SUBMITTED/INSPECTED 등 모두)
+    - 단, 상태 전환은 전환 가능한 건(_wf_can_transition)에 한해서만 REPORT_ISSUED로 이동
+      → 이미 SUBMITTED/INSPECTED 같이 진행된 건은 그 상태 유지 (역행 방지)
+    - report_issued_at/by는 발급된 모든 건에 항상 갱신 (재발급 추적)
     """
     empno = await _verify_auth(request)
     role = await asyncio.to_thread(_get_user_role_sync, empno)
@@ -15823,13 +15825,7 @@ async def inspection_report_generate(request: Request, req: InspectionReportGene
     if not scheds:
         raise HTTPException(404, "해당 일정 없음")
 
-    # 전환 가능 여부 사전 검증 (admin 제외 PRE_CHECK_DONE 만 통과)
-    not_ready = [s['pk'] for s in scheds
-                 if not _wf_can_transition(s.get('workflow_status'), WF_REPORT_ISSUED, role)]
-    if not_ready:
-        raise HTTPException(400, f"점검완료 아님 {len(not_ready)}건: {not_ready[:3]}")
-
-    # year/허가번호 추출 — year는 묶음 내 동일 가정 (다르면 첫 건 기준)
+    # year 추출 — 묶음 내 동일 가정 (다르면 차단)
     years = {s['year'] for s in scheds}
     if len(years) > 1:
         raise HTTPException(400, f"여러 연도 혼합 불가: {sorted(years)}")
@@ -15844,25 +15840,36 @@ async def inspection_report_generate(request: Request, req: InspectionReportGene
     )
     response = await inspection_export_report(request, inner_req)
 
-    # 빌더 성공 후 상태 전환
+    # 빌더 성공 후 — 발급 시각 갱신 + 가능한 건만 상태 전환
     def _transition():
         now = datetime.now(timezone.utc).isoformat()
         c = sqlite3.connect(_INSP_DB, timeout=60)
+        transitioned = 0
         for s in scheds:
             cur = s.get('workflow_status') or WF_REGISTERED
-            c.execute(
-                'UPDATE inspection_schedules SET workflow_status=?, '
-                'status_updated_at=?, status_updated_by=?, '
-                'report_issued_at=?, report_issued_by=? WHERE pk=?',
-                (WF_REPORT_ISSUED, now, empno, now, empno, s['pk']))
-            _wf_record_log_sync(c, s['pk'], cur, WF_REPORT_ISSUED, empno,
-                              f"검사내역서 발급 (묶음 {len(scheds)}건)")
+            can_transition = _wf_can_transition(cur, WF_REPORT_ISSUED, role)
+            if can_transition:
+                c.execute(
+                    'UPDATE inspection_schedules SET workflow_status=?, '
+                    'status_updated_at=?, status_updated_by=?, '
+                    'report_issued_at=?, report_issued_by=? WHERE pk=?',
+                    (WF_REPORT_ISSUED, now, empno, now, empno, s['pk']))
+                _wf_record_log_sync(c, s['pk'], cur, WF_REPORT_ISSUED, empno,
+                                  f"검사내역서 발급 (묶음 {len(scheds)}건)")
+                transitioned += 1
+            else:
+                # 상태는 유지하되 발급 시각만 갱신 (재발급 추적)
+                c.execute(
+                    'UPDATE inspection_schedules SET '
+                    'report_issued_at=?, report_issued_by=? WHERE pk=?',
+                    (now, empno, s['pk']))
         c.commit(); c.close()
+        return transitioned
 
-    await asyncio.to_thread(_transition)
+    transitioned = await asyncio.to_thread(_transition)
     await asyncio.to_thread(_record_audit_log_sync,
                            "inspection_report_generate", "inspection_schedule",
-                           f"count={len(scheds)}", empno)
+                           f"count={len(scheds)},transitioned={transitioned}", empno)
     return response
 
 
@@ -15909,6 +15916,61 @@ async def inspection_schedule_submission(pk: str, request: Request, req: Inspect
     await asyncio.to_thread(_record_audit_log_sync,
                            "inspection_submission", "inspection_schedule", pk, empno)
     return {"success": True}
+
+
+class InspectionSubmissionBulkReq(BaseModel):
+    schedule_pks: list[str]
+    submission_no: str
+    submitted_at: str = ""
+
+
+@app.post("/inspection/schedule/submission-bulk")
+async def inspection_schedule_submission_bulk(request: Request, req: InspectionSubmissionBulkReq):
+    """접수번호 일괄 입력 — 다중 schedule_pk에 동일 접수번호 적용 + SUBMITTED 전환.
+
+    - 전환 가능한 건만 처리 (admin 외엔 REPORT_ISSUED → SUBMITTED만 통과)
+    - 나머지는 results에 사유 포함하여 반환
+    """
+    empno = await _verify_auth(request)
+    role = await asyncio.to_thread(_get_user_role_sync, empno)
+    if not req.schedule_pks:
+        raise HTTPException(400, "schedule_pks 비어있음")
+    sub_no = req.submission_no.strip()
+    if not sub_no:
+        raise HTTPException(400, "접수번호 필요")
+    submitted_at = req.submitted_at.strip() or datetime.now(timezone.utc).isoformat()
+
+    def _save():
+        c = sqlite3.connect(_INSP_DB, timeout=60)
+        now = datetime.now(timezone.utc).isoformat()
+        results = []
+        for pk in req.schedule_pks:
+            row = c.execute(
+                'SELECT workflow_status FROM inspection_schedules WHERE pk=?', (pk,)).fetchone()
+            if not row:
+                results.append({"pk": pk, "ok": False, "msg": "일정 없음"})
+                continue
+            cur = row[0] or WF_REGISTERED
+            if not _wf_can_transition(cur, WF_SUBMITTED, role):
+                results.append({"pk": pk, "ok": False, "msg": f"전환 불가: {cur}"})
+                continue
+            c.execute(
+                'UPDATE inspection_schedules SET workflow_status=?, '
+                'status_updated_at=?, status_updated_by=?, '
+                'submission_no=?, submitted_at=? WHERE pk=?',
+                (WF_SUBMITTED, now, empno, sub_no, submitted_at, pk))
+            _wf_record_log_sync(c, pk, cur, WF_SUBMITTED, empno,
+                              f"전파관리소 접수(일괄): {sub_no}")
+            results.append({"pk": pk, "ok": True, "msg": "ok"})
+        c.commit(); c.close()
+        return results
+
+    results = await asyncio.to_thread(_save)
+    success = sum(1 for r in results if r["ok"])
+    await asyncio.to_thread(_record_audit_log_sync,
+                           "inspection_submission_bulk", "inspection_schedule",
+                           f"count={len(req.schedule_pks)},no={sub_no}", empno)
+    return {"success": True, "total": len(results), "succeeded": success, "results": results}
 
 
 class InspAddFromStagingReq(BaseModel):

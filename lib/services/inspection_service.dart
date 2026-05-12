@@ -612,6 +612,29 @@ class InspectionService {
     }
   }
 
+  /// Phase 3: 접수번호 일괄 입력 — 다중 schedule_pk에 동일 접수번호 적용.
+  /// returns: {total, succeeded, results: [{pk, ok, msg}, ...]}
+  Future<Map<String, dynamic>> submitInspectionBulk({
+    required List<String> schedulePks,
+    required String submissionNo,
+    String submittedAt = '',
+  }) async {
+    final resp = await http.post(
+      Uri.parse('$_baseUrl/inspection/schedule/submission-bulk'),
+      headers: _headers,
+      body: json.encode({
+        'schedule_pks': schedulePks,
+        'submission_no': submissionNo,
+        'submitted_at': submittedAt,
+      }),
+    ).timeout(_apiTimeout);
+    final body = json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+    if (resp.statusCode != 200) {
+      throw Exception(body['detail'] ?? '접수번호 일괄 저장 실패');
+    }
+    return body;
+  }
+
   Future<Map<String, dynamic>> addFromStaging(int year, String licenseNo) async {
     final resp = await http.post(
       Uri.parse('$_baseUrl/inspection/add-from-staging'),
