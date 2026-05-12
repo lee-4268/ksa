@@ -11576,6 +11576,20 @@ def _init_inspection_db():
     conn.execute('CREATE INDEX IF NOT EXISTS idx_cr_pk ON change_request(schedule_pk)')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_cr_status ON change_request(status)')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_cr_license ON change_request(허가번호)')
+    # 알림 (Phase 5) — 시스템 내 알림 전용 (이메일 미사용)
+    conn.execute('''CREATE TABLE IF NOT EXISTS notifications (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT NOT NULL,          -- 수신자 사번
+        schedule_pk TEXT,               -- 관련 일정 (없을 수도 있음)
+        type TEXT NOT NULL,             -- PRE_CHECK_REQUESTED / PRE_CHECK_REPLIED / CHANGE_FILED / RE_CHECK_DONE / REPORT_ISSUED / SUBMITTED / INSPECTED / SLA_OVERDUE
+        message TEXT NOT NULL,
+        read_at TEXT,                   -- 읽은 시각 (null이면 안 읽음)
+        created_at TEXT NOT NULL,
+        meta TEXT                       -- JSON 추가 메타 (호출명칭, 허가번호 등)
+    )''')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_n_user ON notifications(user_id, read_at)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_n_user_created ON notifications(user_id, created_at)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_n_pk ON notifications(schedule_pk)')
     # 기존 데이터 백필: 검사일이 입력된 건은 INSPECTED, 나머지는 REGISTERED (DEFAULT 적용됨)
     try:
         conn.execute('''
@@ -14027,12 +14041,125 @@ def _wf_can_transition(from_status: str | None, to_status: str, role: str) -> bo
 
 def _wf_record_log_sync(conn, schedule_pk: str, from_status: str | None,
                        to_status: str, changed_by: str, memo: str = ""):
-    """상태 전환 이력 기록."""
+    """상태 전환 이력 기록 + Phase 5 알림 자동 생성.
+
+    notify=False로 호출하고 싶으면 _wf_record_log_silent_sync()를 사용 (현재 없음).
+    """
     now = datetime.now(timezone.utc).isoformat()
     conn.execute(
         'INSERT INTO inspection_status_log(schedule_pk, from_status, to_status, '
         'changed_by, changed_at, memo) VALUES (?,?,?,?,?,?)',
         (schedule_pk, from_status, to_status, changed_by, now, memo))
+    # 알림 자동 생성 (실패해도 트랜잭션은 영향받지 않게 별도 try)
+    try:
+        _wf_notify_transition_sync(conn, schedule_pk, from_status, to_status, changed_by)
+    except Exception as e:
+        logger.error(f"알림 생성 실패 (schedule={schedule_pk}, to={to_status}): {e}")
+
+
+# ── 알림 (Phase 5) ────────────────────────────────────────────
+
+# SLA 임계점 (일) — 단계별 지연 기준
+_SLA_DAYS = {
+    WF_PRE_CHECK: 5,        # 사전점검 의뢰 후 5일 초과면 지연
+    WF_CHANGE_FILING: 3,    # 변경개설 작성 후 3일 초과면 지연
+    WF_RE_CHECK: 7,         # 부분 DS 회신 대기 7일 초과면 지연
+    WF_REPORT_ISSUED: 3,    # 검사내역서 발급 후 3일 내 접수번호 미입력이면 지연
+    WF_SUBMITTED: 14,       # 접수 완료 후 14일 내 수검 미완료면 지연
+}
+
+
+def _create_notification_sync(conn, user_id: str, type_: str, message: str,
+                              schedule_pk: str = "", meta: dict | None = None):
+    """알림 1건 생성 (DB 기록만). 호출자가 같은 conn을 commit해야 함."""
+    if not user_id:
+        return
+    import json as _j
+    now = datetime.now(timezone.utc).isoformat()
+    meta_json = _j.dumps(meta, ensure_ascii=False) if meta else ''
+    conn.execute(
+        'INSERT INTO notifications(user_id, schedule_pk, type, message, '
+        'created_at, meta) VALUES (?,?,?,?,?,?)',
+        (user_id, schedule_pk, type_, message, now, meta_json))
+
+
+def _notify_targets_for_sync(conn, schedule_pk: str, target_team: str) -> list[str]:
+    """schedule_pk와 target_team('innovation' | 'quality')에 해당하는 수신자 사번 목록.
+
+    - innovation: 일정의 access담당(본부) 소속 manager/admin
+    - quality: 일정의 품질개선팀 소속 member (해당 팀이 없으면 본부 manager fallback)
+
+    DynamoDB users 테이블 조회는 비용이 있어 일단 schedule 본인(등록자) + 상태 변경자를 fallback으로 사용.
+    실제 본부/팀 매핑은 user_roles 별도 조회 필요 → Phase 5.1에서 확장.
+    """
+    sched = conn.execute(
+        'SELECT 등록자, access담당, 품질개선팀, status_updated_by '
+        'FROM inspection_schedules WHERE pk=?',
+        (schedule_pk,)).fetchone()
+    if not sched:
+        return []
+    targets = set()
+    # 최소한의 fallback — 등록자(혁신팀) + 상태변경자
+    if sched['등록자']:
+        targets.add(sched['등록자'])
+    if sched['status_updated_by']:
+        targets.add(sched['status_updated_by'])
+    return list(targets)
+
+
+def _wf_notify_transition_sync(conn, schedule_pk: str, from_status: str | None,
+                              to_status: str, changed_by: str):
+    """워크플로우 전환에 따라 적절한 수신자에게 알림 생성.
+
+    수신자 매트릭스:
+    - PRE_CHECK_REQUESTED (REGISTERED→PRE_CHECK): 품개팀 → 의뢰 알림
+    - PRE_CHECK_REPLIED (PRE_CHECK→PRE_CHECK_DONE): 혁신팀(등록자) → 회신 알림
+    - CHANGE_REQUESTED (PRE_CHECK→CHANGE_FILING): 혁신팀 → 변경개설 작성 요청
+    - CHANGE_FILED (CHANGE_FILING→RE_CHECK): 혁신팀(자기 자신) → 신고 완료 확인
+    - RE_CHECK_DONE (RE_CHECK→PRE_CHECK_DONE): 혁신팀 → 부분 DS 적용 완료 (자동 재비교 통과)
+    - REPORT_ISSUED: 혁신팀 → 발급 완료
+    - SUBMITTED: 품개팀(수검 담당) → 접수 완료, 수검 가능
+    - INSPECTED: 혁신팀 → 수검 완료
+
+    schedule이 없으면 조용히 무시.
+    """
+    sched = conn.execute(
+        'SELECT pk, 호출명칭, 허가번호, 등록자, status_updated_by, 수검예정주차 '
+        'FROM inspection_schedules WHERE pk=?',
+        (schedule_pk,)).fetchone()
+    if not sched:
+        return
+    label = (sched['호출명칭'] or '').strip() or (sched['허가번호'] or '')
+    week = (sched['수검예정주차'] or '').strip()
+    meta = {
+        '호출명칭': sched['호출명칭'] or '',
+        '허가번호': sched['허가번호'] or '',
+        '수검예정주차': week,
+        'from_status': from_status or '',
+        'to_status': to_status,
+    }
+    # 메시지 + 수신자 결정 (현재 단순 fallback — 등록자/상태변경자)
+    msg_map = {
+        WF_PRE_CHECK: ('PRE_CHECK_REQUESTED', f'[{label}] 사전점검이 의뢰되었습니다.'),
+        WF_PRE_CHECK_DONE: ('PRE_CHECK_REPLIED', f'[{label}] 사전점검 완료 회신이 도착했습니다.'),
+        WF_CHANGE_FILING: ('CHANGE_REQUESTED', f'[{label}] 변경개설 신고가 필요합니다.'),
+        WF_RE_CHECK: ('CHANGE_FILED', f'[{label}] 전파관리소 신고가 완료되었습니다.'),
+        WF_REPORT_ISSUED: ('REPORT_ISSUED', f'[{label}] 검사내역서가 발급되었습니다.'),
+        WF_SUBMITTED: ('SUBMITTED', f'[{label}] 전파관리소 접수가 완료되어 수검 가능합니다.'),
+        WF_INSPECTED: ('INSPECTED', f'[{label}] 수검이 완료되었습니다.'),
+    }
+    if to_status not in msg_map:
+        return
+    type_, message = msg_map[to_status]
+    # 수신자: 등록자(혁신팀) + 상태변경자가 다른 경우 둘 다 — 현재 단순 룰
+    recipients = set()
+    if sched['등록자']:
+        recipients.add(sched['등록자'])
+    # 상태 변경자 본인에게는 보내지 않음 (본인 액션의 결과는 화면에 즉시 반영)
+    recipients.discard(changed_by)
+    for uid in recipients:
+        _create_notification_sync(conn, uid, type_, message,
+                                  schedule_pk=schedule_pk, meta=meta)
 
 
 def _wf_transition_sync(schedule_pk: str, to_status: str, changed_by: str,
@@ -14125,6 +14252,195 @@ async def inspection_schedule_log(pk: str, request: Request):
         return [dict(r) for r in rows]
     items = await asyncio.to_thread(_read)
     return {"items": items}
+
+
+# ── 알림 API (Phase 5) ─────────────────────────────────────────
+
+@app.get("/notifications")
+async def notifications_list(request: Request, unread_only: bool = False, limit: int = 50):
+    """현재 사용자 알림 목록 (최신순). unread_only=true면 안 읽음만."""
+    empno = await _verify_auth(request)
+    def _read():
+        import json as _j
+        c = sqlite3.connect(_INSP_DB, timeout=60); c.row_factory = sqlite3.Row
+        sql = 'SELECT * FROM notifications WHERE user_id=?'
+        params: list = [empno]
+        if unread_only:
+            sql += ' AND read_at IS NULL'
+        sql += ' ORDER BY id DESC LIMIT ?'
+        params.append(max(1, min(limit, 200)))
+        rows = c.execute(sql, params).fetchall()
+        c.close()
+        out = []
+        for r in rows:
+            d = dict(r)
+            if d.get('meta'):
+                try: d['meta'] = _j.loads(d['meta'])
+                except Exception: d['meta'] = {}
+            else:
+                d['meta'] = {}
+            out.append(d)
+        return out
+    items = await asyncio.to_thread(_read)
+    return {"items": items}
+
+
+@app.get("/notifications/unread-count")
+async def notifications_unread_count(request: Request):
+    """현재 사용자 안 읽음 알림 개수."""
+    empno = await _verify_auth(request)
+    def _count():
+        c = sqlite3.connect(_INSP_DB, timeout=60)
+        row = c.execute(
+            'SELECT COUNT(*) FROM notifications WHERE user_id=? AND read_at IS NULL',
+            (empno,)).fetchone()
+        c.close()
+        return row[0] if row else 0
+    n = await asyncio.to_thread(_count)
+    return {"count": n}
+
+
+class NotificationReadReq(BaseModel):
+    ids: list[int] = []   # 비어있으면 전체 안 읽음 → 읽음
+
+
+@app.post("/notifications/mark-read")
+async def notifications_mark_read(request: Request, req: NotificationReadReq):
+    """알림 읽음 처리. ids 비어있으면 본인의 모든 안 읽음 알림 일괄 처리."""
+    empno = await _verify_auth(request)
+    def _update():
+        now = datetime.now(timezone.utc).isoformat()
+        c = sqlite3.connect(_INSP_DB, timeout=60)
+        if req.ids:
+            ph = ','.join('?' * len(req.ids))
+            c.execute(
+                f'UPDATE notifications SET read_at=? WHERE user_id=? '
+                f'AND read_at IS NULL AND id IN ({ph})',
+                [now, empno, *req.ids])
+        else:
+            c.execute(
+                'UPDATE notifications SET read_at=? WHERE user_id=? AND read_at IS NULL',
+                (now, empno))
+        affected = c.total_changes
+        c.commit(); c.close()
+        return affected
+    n = await asyncio.to_thread(_update)
+    return {"success": True, "updated": n}
+
+
+# ── 역할별 대시보드 (Phase 5) ──────────────────────────────────
+
+@app.get("/inspection/dashboard")
+async def inspection_dashboard(request: Request, year: int):
+    """역할별 워크플로우 대시보드 집계.
+
+    - admin: 본부 무관 전사
+    - manager: 자기 본부(region)만
+    - member: 자기 본부 + 자기 팀만
+
+    응답: { role, scope, counts (워크플로우 상태별), recheck, overdue (SLA 초과 건 목록) }
+    """
+    empno = await _verify_auth(request)
+    role = await asyncio.to_thread(_get_user_role_sync, empno)
+
+    # 사용자 region/team 조회 (my-list와 동일 패턴)
+    user_data = {}
+    dev = _dev_users.get(empno)
+    if dev:
+        user_data = {"region": dev["region"], "team": dev["team"]}
+    else:
+        try:
+            dynamodb = get_dynamodb_resource()
+            users_table = dynamodb.Table(DYNAMODB_TABLES["users"])
+            item = await asyncio.to_thread(lambda: users_table.get_item(
+                Key={"user_id": empno},
+                ProjectionExpression="#r, team",
+                ExpressionAttributeNames={"#r": "region"},
+            ))
+            user_data = item.get("Item", {})
+        except Exception as e:
+            logger.error(f"dashboard 사용자 조회 실패: {e}")
+    access_team = (user_data.get("region", "") or "").replace("Access담당", "").strip()
+    품질팀 = user_data.get("team", "") or ""
+
+    def _aggregate():
+        c = sqlite3.connect(_INSP_DB, timeout=60); c.row_factory = sqlite3.Row
+        wheres = ['s.year=?']
+        params: list = [year]
+        scope = "전사"
+        if role == "admin":
+            pass
+        elif role == "manager":
+            if access_team:
+                wheres.append('s.access담당=?')
+                params.append(access_team)
+                scope = access_team
+            # region 없는 manager는 전사 (보수적)
+        else:  # member
+            if access_team:
+                wheres.append('s.access담당=?')
+                params.append(access_team)
+                scope = access_team
+            if 품질팀:
+                wheres.append('s.품질개선팀=?')
+                params.append(품질팀)
+                scope = f"{access_team or ''}-{품질팀}" if access_team else 품질팀
+
+        sel = ('SELECT s.workflow_status, s.status_updated_at, s.pk, '
+               's.호출명칭, s.허가번호, r.needs_recheck '
+               'FROM inspection_schedules s '
+               'LEFT JOIN inspection_results r ON r.pk = s.pk '
+               'WHERE ' + ' AND '.join(wheres))
+        rows = c.execute(sel, params).fetchall()
+        c.close()
+
+        # 상태별 카운트
+        counts = {
+            'REGISTERED': 0, 'PRE_CHECK': 0, 'PRE_CHECK_DONE': 0,
+            'CHANGE_FILING': 0, 'RE_CHECK': 0,
+            'REPORT_ISSUED': 0, 'SUBMITTED': 0, 'INSPECTED': 0,
+        }
+        recheck = 0
+        overdue: list[dict] = []
+        now = datetime.now(timezone.utc)
+        for r in rows:
+            st = (r['workflow_status'] or 'REGISTERED')
+            if st in counts:
+                counts[st] += 1
+            if (r['needs_recheck'] or '0') == '1':
+                recheck += 1
+            # SLA 지연 판정
+            threshold = _SLA_DAYS.get(st)
+            if threshold and r['status_updated_at']:
+                try:
+                    updated = datetime.fromisoformat(r['status_updated_at'])
+                    if updated.tzinfo is None:
+                        updated = updated.replace(tzinfo=timezone.utc)
+                    days = (now - updated).days
+                    if days > threshold:
+                        overdue.append({
+                            'pk': r['pk'],
+                            '호출명칭': r['호출명칭'] or '',
+                            '허가번호': r['허가번호'] or '',
+                            'status': st,
+                            'days_overdue': days - threshold,
+                            'threshold': threshold,
+                        })
+                except Exception:
+                    pass
+        # 지연 큰 순으로 정렬, 상위 20건만
+        overdue.sort(key=lambda x: x['days_overdue'], reverse=True)
+        return {
+            'role': role,
+            'scope': scope,
+            'counts': counts,
+            'recheck': recheck,
+            'overdue': overdue[:20],
+            'overdue_total': len(overdue),
+        }
+
+    result = await asyncio.to_thread(_aggregate)
+    return result
 
 
 class PreCheckResultReq(BaseModel):
