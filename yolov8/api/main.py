@@ -14122,48 +14122,79 @@ def _create_notification_sync(conn, user_id: str, sub_type: str, message: str,
         logger.error(f"워크플로우 알림 INSERT 실패: {e}")
 
 
-def _notify_targets_for_sync(conn, schedule_pk: str, target_team: str) -> list[str]:
-    """schedule_pk와 target_team('innovation' | 'quality')에 해당하는 수신자 사번 목록.
+def _notify_targets_for_sync(access담당: str, 품질개선팀: str, target_team: str) -> list[str]:
+    """본부/팀에 해당하는 수신자 사번 목록 (DynamoDB 60초 캐시 사용).
 
-    - innovation: 일정의 access담당(본부) 소속 manager/admin
-    - quality: 일정의 품질개선팀 소속 member (해당 팀이 없으면 본부 manager fallback)
+    target_team:
+    - 'quality': 일정의 품질개선팀 소속 전원 (member/manager 모두)
+                 0명이면 본부 혁신팀(manager) 폴백
+    - 'innovation': 일정의 access담당 본부에 속한 manager/admin (= 혁신팀)
+                    region에서 'Access담당' 제거 후 매칭
 
-    DynamoDB users 테이블 조회는 비용이 있어 일단 schedule 본인(등록자) + 상태 변경자를 fallback으로 사용.
-    실제 본부/팀 매핑은 user_roles 별도 조회 필요 → Phase 5.1에서 확장.
+    반환: 사번 리스트 (중복 제거됨)
     """
-    sched = conn.execute(
-        'SELECT 등록자, access담당, 품질개선팀, status_updated_by '
-        'FROM inspection_schedules WHERE pk=?',
-        (schedule_pk,)).fetchone()
-    if not sched:
+    if not access담당:
         return []
-    targets = set()
-    # 최소한의 fallback — 등록자(혁신팀) + 상태변경자
-    if sched['등록자']:
-        targets.add(sched['등록자'])
-    if sched['status_updated_by']:
-        targets.add(sched['status_updated_by'])
+    try:
+        all_users = _list_all_users_sync()
+    except Exception as e:
+        logger.error(f"수신자 조회 실패 (전체 사용자 캐시): {e}")
+        return []
+
+    def _norm_region(r: str | None) -> str:
+        return (r or '').replace('Access담당', '').strip()
+
+    targets: set[str] = set()
+    if target_team == 'quality' and 품질개선팀:
+        for u in all_users:
+            if u.get('is_dormant'):
+                continue
+            if _norm_region(u.get('region')) != access담당:
+                continue
+            if (u.get('team') or '').strip() != 품질개선팀:
+                continue
+            uid = (u.get('empno') or '').strip()
+            if uid:
+                targets.add(uid)
+        # 폴백: 0명이면 본부 혁신팀
+        if not targets:
+            return _notify_targets_for_sync(access담당, 품질개선팀, 'innovation')
+
+    elif target_team == 'innovation':
+        for u in all_users:
+            if u.get('is_dormant'):
+                continue
+            if _norm_region(u.get('region')) != access담당:
+                continue
+            role = (u.get('role') or '').strip()
+            if role not in ('manager', 'admin'):
+                continue
+            uid = (u.get('empno') or '').strip()
+            if uid:
+                targets.add(uid)
+
     return list(targets)
 
 
 def _wf_notify_transition_sync(conn, schedule_pk: str, from_status: str | None,
                               to_status: str, changed_by: str):
-    """워크플로우 전환에 따라 적절한 수신자에게 알림 생성.
+    """워크플로우 전환 시 도메인 룰에 따라 대상 팀에 알림 생성.
 
-    수신자 매트릭스:
-    - PRE_CHECK_REQUESTED (REGISTERED→PRE_CHECK): 품개팀 → 의뢰 알림
-    - PRE_CHECK_REPLIED (PRE_CHECK→PRE_CHECK_DONE): 혁신팀(등록자) → 회신 알림
-    - CHANGE_REQUESTED (PRE_CHECK→CHANGE_FILING): 혁신팀 → 변경개설 작성 요청
-    - CHANGE_FILED (CHANGE_FILING→RE_CHECK): 혁신팀(자기 자신) → 신고 완료 확인
-    - RE_CHECK_DONE (RE_CHECK→PRE_CHECK_DONE): 혁신팀 → 부분 DS 적용 완료 (자동 재비교 통과)
-    - REPORT_ISSUED: 혁신팀 → 발급 완료
-    - SUBMITTED: 품개팀(수검 담당) → 접수 완료, 수검 가능
-    - INSPECTED: 혁신팀 → 수검 완료
+    수신자 매트릭스 (target_team):
+    - REGISTERED → PRE_CHECK         : 'quality'    — 품개팀 (사전점검 의뢰)
+    - PRE_CHECK → PRE_CHECK_DONE     : 'innovation' — 혁신팀 (회신 도착)
+    - PRE_CHECK → CHANGE_FILING      : 'innovation' — 혁신팀 (변경개설 작성)
+    - CHANGE_FILING → RE_CHECK       : 'innovation' — 혁신팀 (신고 완료 → 같은 팀 다른 사람)
+    - RE_CHECK → PRE_CHECK_DONE      : 'innovation' — 혁신팀 (자동 재비교 통과)
+    - PRE_CHECK_DONE → REPORT_ISSUED : 'innovation' — 혁신팀 (발급 완료 → 같은 팀 다른 사람)
+    - REPORT_ISSUED → SUBMITTED      : 'quality'    — 품개팀 (수검 가능)
+    - SUBMITTED → INSPECTED          : 'innovation' — 혁신팀 (수검 완료 보고)
 
+    상태 변경자 본인은 수신자에서 제외 (본인 액션은 화면에 즉시 반영).
     schedule이 없으면 조용히 무시.
     """
     sched = conn.execute(
-        'SELECT pk, 호출명칭, 허가번호, 등록자, status_updated_by, 수검예정주차 '
+        'SELECT pk, 호출명칭, 허가번호, access담당, 품질개선팀, 수검예정주차 '
         'FROM inspection_schedules WHERE pk=?',
         (schedule_pk,)).fetchone()
     if not sched:
@@ -14177,25 +14208,34 @@ def _wf_notify_transition_sync(conn, schedule_pk: str, from_status: str | None,
         'from_status': from_status or '',
         'to_status': to_status,
     }
-    # (sub_type, title, message)
+    # (sub_type, title, message, target_team)
     msg_map = {
-        WF_PRE_CHECK:      ('PRE_CHECK_REQUESTED', '사전점검 의뢰',     f'[{label}] 사전점검이 의뢰되었습니다.'),
-        WF_PRE_CHECK_DONE: ('PRE_CHECK_REPLIED',   '사전점검 회신',     f'[{label}] 사전점검 완료 회신이 도착했습니다.'),
-        WF_CHANGE_FILING:  ('CHANGE_REQUESTED',    '변경개설 작성 요청', f'[{label}] 변경개설 신고가 필요합니다.'),
-        WF_RE_CHECK:       ('CHANGE_FILED',        '전파관리소 신고 완료', f'[{label}] 전파관리소 신고가 완료되었습니다.'),
-        WF_REPORT_ISSUED:  ('REPORT_ISSUED',       '검사내역서 발급',   f'[{label}] 검사내역서가 발급되었습니다.'),
-        WF_SUBMITTED:      ('SUBMITTED',           '전파관리소 접수 완료', f'[{label}] 전파관리소 접수가 완료되어 수검 가능합니다.'),
-        WF_INSPECTED:      ('INSPECTED',           '수검 완료',         f'[{label}] 수검이 완료되었습니다.'),
+        WF_PRE_CHECK:      ('PRE_CHECK_REQUESTED', '사전점검 의뢰',
+                            f'[{label}] 사전점검이 의뢰되었습니다.', 'quality'),
+        WF_PRE_CHECK_DONE: ('PRE_CHECK_REPLIED',   '사전점검 회신',
+                            f'[{label}] 사전점검 완료 회신이 도착했습니다.', 'innovation'),
+        WF_CHANGE_FILING:  ('CHANGE_REQUESTED',    '변경개설 작성 요청',
+                            f'[{label}] 변경개설 신고가 필요합니다.', 'innovation'),
+        WF_RE_CHECK:       ('CHANGE_FILED',        '전파관리소 신고 완료',
+                            f'[{label}] 전파관리소 신고가 완료되었습니다.', 'innovation'),
+        WF_REPORT_ISSUED:  ('REPORT_ISSUED',       '검사내역서 발급',
+                            f'[{label}] 검사내역서가 발급되었습니다.', 'innovation'),
+        WF_SUBMITTED:      ('SUBMITTED',           '전파관리소 접수 완료',
+                            f'[{label}] 전파관리소 접수가 완료되어 수검 가능합니다.', 'quality'),
+        WF_INSPECTED:      ('INSPECTED',           '수검 완료',
+                            f'[{label}] 수검이 완료되었습니다.', 'innovation'),
     }
     if to_status not in msg_map:
         return
-    sub_type, title, message = msg_map[to_status]
-    # 수신자: 등록자(혁신팀) + 상태변경자가 다른 경우 둘 다 — 현재 단순 룰
-    recipients = set()
-    if sched['등록자']:
-        recipients.add(sched['등록자'])
-    # 상태 변경자 본인에게는 보내지 않음 (본인 액션의 결과는 화면에 즉시 반영)
+    sub_type, title, message, target_team = msg_map[to_status]
+    recipients = set(_notify_targets_for_sync(
+        sched['access담당'] or '', sched['품질개선팀'] or '', target_team))
+    # 상태 변경자 본인은 제외 — 본인 액션 결과는 즉시 화면 반영됨
     recipients.discard(changed_by)
+    if not recipients:
+        logger.info(f"알림 수신자 없음 (schedule={schedule_pk}, to={to_status}, "
+                   f"team={target_team}, access={sched['access담당']}, 품개팀={sched['품질개선팀']})")
+        return
     for uid in recipients:
         _create_notification_sync(conn, uid, sub_type, message,
                                   schedule_pk=schedule_pk, meta=meta,
