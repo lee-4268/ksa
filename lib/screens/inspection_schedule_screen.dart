@@ -2138,7 +2138,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     // 체크 가능한 항목:
     // - admin/manager: 본부 격리된 모든 항목 (배정 여부 무관)
     // - member: 본부 격리 + 일정 등록된 항목만 (전산비교 대상 선택용)
-    final source = _statusFilter.isEmpty ? _items : _filteredItems;
+    final source = _filteredItems;
     final checkableItems = _isAdmin
         ? source.where((item) {
             final no = '${item['허가번호'] ?? ''}';
@@ -2311,7 +2311,16 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     return rows.toList();
   }
 
-  // 상태별 카운트 (현재 페이지 _items 기준)
+  // 조 필터 적용된 items (상태 카운트 산정용 — 상태 필터는 미적용)
+  List<Map<String, dynamic>> get _crewFilteredItems {
+    if (_aCrew.isEmpty) return _items;
+    return _items.where((it) {
+      final no = '${it['허가번호'] ?? ''}';
+      return (_scheduleCrewMap[no] ?? '') == _aCrew;
+    }).toList();
+  }
+
+  // 상태별 카운트 (조 필터 반영, 현재 페이지 기준)
   Map<String, int> get _statusCounts {
     final counts = <String, int>{
       '미배정': 0,
@@ -2319,7 +2328,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
       'CHANGE_FILING': 0, 'RE_CHECK': 0,
       'REPORT_ISSUED': 0, 'SUBMITTED': 0, 'INSPECTED': 0,
     };
-    for (final it in _items) {
+    for (final it in _crewFilteredItems) {
       final no = '${it['허가번호'] ?? ''}';
       if (!_isScheduled(no)) {
         counts['미배정'] = (counts['미배정'] ?? 0) + 1;
@@ -2333,9 +2342,10 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
 
   Widget _buildStatusFilterBar() {
     final counts = _statusCounts;
+    final crewFilteredTotal = _crewFilteredItems.length;
     Widget chip(String value, String label, Color color) {
       final selected = _statusFilter == value;
-      final count = value.isEmpty ? _items.length : (counts[value] ?? 0);
+      final count = value.isEmpty ? crewFilteredTotal : (counts[value] ?? 0);
       return Padding(
         padding: const EdgeInsets.only(right: 6),
         child: FilterChip(
