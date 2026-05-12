@@ -84,6 +84,8 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
   String _statusFilter = '';
   // 재점검 필요 건만 보기 (Phase 4)
   bool _recheckOnly = false;
+  // SLA 임계점 초과 건만 보기 (Phase 5)
+  bool _overdueOnly = false;
 
   List<Map<String, dynamic>> _items = [];
   int _total = 0;
@@ -194,7 +196,8 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
   bool get _hasActiveFilters =>
       _aHdqt.isNotEmpty || _aTeam.isNotEmpty || _aQuarters.isNotEmpty ||
       _aNationGroups.isNotEmpty || _aKcaResults.isNotEmpty || _aSearch.isNotEmpty ||
-      _aScheduled.isNotEmpty || _aSchedWeek.isNotEmpty || _aCrew.isNotEmpty;
+      _aScheduled.isNotEmpty || _aSchedWeek.isNotEmpty || _aCrew.isNotEmpty ||
+      _recheckOnly || _overdueOnly;
 
   @override
   void initState() {
@@ -214,6 +217,8 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     if (f != null && f.isNotEmpty) {
       if (f == 'RECHECK') {
         _recheckOnly = true;
+      } else if (f == 'OVERDUE') {
+        _overdueOnly = true;
       } else {
         _statusFilter = f;
       }
@@ -318,10 +323,11 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
         page: _page, pageSize: 100,
         scheduleYn: _aScheduled,
         scheduleWeek: _aSchedWeek,
-        // Phase 5: 워크플로우 상태/재점검도 서버에 전달
+        // Phase 5: 워크플로우 상태/재점검/SLA 지연도 서버에 전달
         // (클라이언트 _filteredItems도 동일 조건 → 멱등 OK)
         workflowStatus: _statusFilter,
         needsRecheck: _recheckOnly ? '1' : '',
+        overdueOnly: _overdueOnly ? '1' : '',
       );
     } catch (_) { return null; }
   }
@@ -1643,8 +1649,9 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
               if (_total > 0)
                 Builder(builder: (_) {
                   // 조 필터는 클라이언트 사이드라 _total(서버 카운트)에 미반영.
-                  // 조/상태/재점검 필터 활성 시 현재 페이지에서 필터된 건수를 표시.
-                  final clientFiltered = _aCrew.isNotEmpty || _statusFilter.isNotEmpty || _recheckOnly;
+                  // 조/상태/재점검/SLA 필터 활성 시 현재 페이지에서 필터된 건수를 표시.
+                  final clientFiltered = _aCrew.isNotEmpty || _statusFilter.isNotEmpty
+                      || _recheckOnly || _overdueOnly;
                   final shown = clientFiltered ? _filteredItems.length : _total;
                   final truncated = clientFiltered && _total > _items.length;
                   return Tooltip(
@@ -2153,6 +2160,18 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
       addChip('조', _aCrew, () {
         // 조는 클라이언트 필터라 API 재요청 불필요 (setState만으로 _filteredItems 재계산)
         setState(() { _pCrew = ''; _aCrew = ''; _selectedLicenseNos.clear(); });
+      });
+    }
+    if (_recheckOnly) {
+      addChip('재점검', '필요', () {
+        setState(() { _recheckOnly = false; _page = 1; _selectedLicenseNos.clear(); });
+        _loadAll();
+      });
+    }
+    if (_overdueOnly) {
+      addChip('SLA', '지연', () {
+        setState(() { _overdueOnly = false; _page = 1; _selectedLicenseNos.clear(); });
+        _loadAll();
       });
     }
     return Wrap(spacing: 6, runSpacing: 4, children: chips);

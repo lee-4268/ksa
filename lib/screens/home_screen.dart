@@ -83,6 +83,29 @@ class _HomeScreenState extends State<HomeScreen> {
     _logMenuAccess('일정 및 통계');
   }
 
+  void _navigateToScheduleOverdue(List<_MenuItem> items) {
+    final idx = items.indexWhere((m) => m.title == '일정 및 통계');
+    if (idx < 0) return;
+    setState(() {
+      _pendingStatusFilter = 'OVERDUE';   // SLA 임계 초과 건 토글
+      _pendingSchedule = null;
+      _selectedIndex = idx;
+    });
+    _logMenuAccess('일정 및 통계');
+  }
+
+  void _navigateToScheduleSingle(List<_MenuItem> items, String licenseNo) {
+    final idx = items.indexWhere((m) => m.title == '일정 및 통계');
+    if (idx < 0 || licenseNo.isEmpty) return;
+    setState(() {
+      // 검색바에 허가번호 단건을 넣어 해당 건만 표시
+      _pendingSchedule = [licenseNo];
+      _pendingStatusFilter = null;
+      _selectedIndex = idx;
+    });
+    _logMenuAccess('일정 및 통계');
+  }
+
   @override
   void initState() {
     super.initState();
@@ -254,6 +277,8 @@ class _HomeScreenState extends State<HomeScreen> {
         menuItems: items,
         onNavigateToScheduleWithStatus: (status) => _navigateToScheduleWithStatus(items, status),
         onNavigateToScheduleRecheck: () => _navigateToScheduleRecheck(items),
+        onNavigateToScheduleOverdue: () => _navigateToScheduleOverdue(items),
+        onNavigateToScheduleSingle: (licenseNo) => _navigateToScheduleSingle(items, licenseNo),
       );
       case '실적 관리': return const InspectionResultsScreen();
       case '일정 및 통계': {
@@ -308,6 +333,8 @@ class _HomeScreenState extends State<HomeScreen> {
         menuItems: items,
         onNavigateToScheduleWithStatus: (status) => _navigateToScheduleWithStatus(items, status),
         onNavigateToScheduleRecheck: () => _navigateToScheduleRecheck(items),
+        onNavigateToScheduleOverdue: () => _navigateToScheduleOverdue(items),
+        onNavigateToScheduleSingle: (licenseNo) => _navigateToScheduleSingle(items, licenseNo),
       );
     }
   }
@@ -915,11 +942,15 @@ class _HomeContent extends StatefulWidget {
   /// 일정 및 통계로 점프하면서 상태 필터를 같이 적용 (Phase 5 대시보드)
   final void Function(String workflowStatus)? onNavigateToScheduleWithStatus;
   final void Function()? onNavigateToScheduleRecheck;
+  final void Function()? onNavigateToScheduleOverdue;
+  final void Function(String licenseNo)? onNavigateToScheduleSingle;
   const _HomeContent({
     required this.onNavigate,
     required this.menuItems,
     this.onNavigateToScheduleWithStatus,
     this.onNavigateToScheduleRecheck,
+    this.onNavigateToScheduleOverdue,
+    this.onNavigateToScheduleSingle,
   });
 
   @override
@@ -1120,7 +1151,14 @@ class _HomeContentState extends State<_HomeContent> {
                         widget.onNavigateToScheduleWithStatus?.call(status),
                     onRecheckTap: () =>
                         widget.onNavigateToScheduleRecheck?.call(),
-                    onScheduleTap: (_) => _jumpToScheduleScreen(),
+                    onOverdueTap: () =>
+                        widget.onNavigateToScheduleOverdue?.call(),
+                    onScheduleTap: (pk) {
+                      // pk = "year#허가번호" → 허가번호만 추출해 단건 검색으로 이동
+                      final parts = pk.split('#');
+                      final licenseNo = parts.length >= 2 ? parts[1] : pk;
+                      widget.onNavigateToScheduleSingle?.call(licenseNo);
+                    },
                   ),
                   const SizedBox(height: 20),
 

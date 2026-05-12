@@ -147,6 +147,7 @@ class InspectionService {
     String scheduleWeek = '',
     String workflowStatus = '',   // Phase 5: 워크플로우 상태 서버측 필터
     String needsRecheck = '',     // Phase 5: '1' = 재점검 필요만
+    String overdueOnly = '',      // Phase 5: '1' = SLA 임계점 초과 건만
   }) async {
     final resp = await http.post(
       Uri.parse('$_baseUrl/inspection/data'),
@@ -159,6 +160,7 @@ class InspectionService {
         'schedule_week': scheduleWeek,
         'workflow_status': workflowStatus,
         'needs_recheck': needsRecheck,
+        'overdue_only': overdueOnly,
       }),
     ).timeout(_apiTimeout);
     return json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;

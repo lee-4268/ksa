@@ -13458,9 +13458,10 @@ class InspectionDataReq(BaseModel):
     schedule_week: str = ""  # 수검예정주차 필터
     workflow_status: str = ""  # Phase 5: 워크플로우 상태 필터 (서버측, '미배정'은 schedule 미존재)
     needs_recheck: str = ""    # Phase 5: '1' = 재점검 필요만
+    overdue_only: str = ""     # Phase 5: '1' = SLA 임계점 초과 건만
 
 def _build_insp_where(year, sheet, filters, search, addr, schedule_yn="", schedule_week="",
-                     workflow_status="", needs_recheck=""):
+                     workflow_status="", needs_recheck="", overdue_only=""):
     """inspection_data / export 공통 WHERE 절 빌더."""
     ALLOWED_COLS = {'분기','국종군','부서','kca검토결과','시기조정','skt본부','access담당','품질개선팀','허가상태'}
     where = ["year=?"]
@@ -13542,6 +13543,30 @@ def _build_insp_where(year, sheet, filters, search, addr, schedule_yn="", schedu
     if needs_recheck == '1':
         where.append("REPLACE(허가번호,'-','') IN (SELECT REPLACE(허가번호,'-','') FROM inspection_results WHERE year=? AND needs_recheck='1')")
         params.append(year)
+    # Phase 5: SLA 임계점 초과 건만 (단계별 임계 일수 _SLA_DAYS와 동일 로직)
+    # status_updated_at 으로부터 임계점 일수 초과한 건
+    if overdue_only == '1':
+        # SLA 단계별 임계점 (코드의 _SLA_DAYS와 동기화)
+        # SQLite julianday()를 사용해 status_updated_at 으로부터 경과 일수 계산
+        sla_pairs = [
+            ('PRE_CHECK', 5),
+            ('CHANGE_FILING', 3),
+            ('RE_CHECK', 7),
+            ('REPORT_ISSUED', 3),
+            ('SUBMITTED', 14),
+        ]
+        sub_conditions = []
+        for st, days in sla_pairs:
+            sub_conditions.append(
+                f"(workflow_status='{st}' AND status_updated_at != '' "
+                f"AND CAST((julianday('now') - julianday(status_updated_at)) AS INTEGER) > {days})"
+            )
+        where.append(
+            "REPLACE(허가번호,'-','') IN (SELECT REPLACE(허가번호,'-','') "
+            "FROM inspection_schedules WHERE year=? AND (" +
+            " OR ".join(sub_conditions) + "))"
+        )
+        params.append(year)
     return " AND ".join(where), params
 
 @app.post("/inspection/data")
@@ -13549,16 +13574,17 @@ async def inspection_data(request: Request, req: InspectionDataReq):
     """필터 적용 데이터 조회 (페이지네이션)."""
     await _verify_auth(request)
     if not os.path.exists(_INSP_DB): return {"items": [], "total": 0}
-    # Phase 5 디버그: 워크플로우/재점검 필터 적용 시 로그
-    if req.workflow_status or req.needs_recheck:
+    # Phase 5 디버그: 워크플로우/재점검/지연 필터 적용 시 로그
+    if req.workflow_status or req.needs_recheck or req.overdue_only:
         logger.info(
             f"[inspection_data] workflow_status='{req.workflow_status}', "
-            f"needs_recheck='{req.needs_recheck}', year={req.year}, page={req.page}"
+            f"needs_recheck='{req.needs_recheck}', overdue_only='{req.overdue_only}', "
+            f"search='{req.search}', year={req.year}, page={req.page}"
         )
     where_sql, params = _build_insp_where(
         req.year, req.sheet, req.filters, req.search, req.addr,
         req.schedule_yn, req.schedule_week,
-        req.workflow_status, req.needs_recheck)
+        req.workflow_status, req.needs_recheck, req.overdue_only)
     def _read():
         # cert_cache에서 zpcode → zpprac1 매핑 별도 로드
         zpprac1_map: dict = {}

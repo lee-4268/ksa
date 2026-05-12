@@ -8,6 +8,7 @@ class InspectionDashboardWidget extends StatefulWidget {
   final int year;
   final void Function(String workflowStatus)? onStatusTap;
   final VoidCallback? onRecheckTap;
+  final VoidCallback? onOverdueTap;
   final void Function(String pk)? onScheduleTap;
 
   const InspectionDashboardWidget({
@@ -16,6 +17,7 @@ class InspectionDashboardWidget extends StatefulWidget {
     required this.year,
     this.onStatusTap,
     this.onRecheckTap,
+    this.onOverdueTap,
     this.onScheduleTap,
   });
 
@@ -178,7 +180,7 @@ class _InspectionDashboardWidgetState extends State<InspectionDashboardWidget> {
                 color: const Color(0xFFE53935),
                 label: 'SLA 지연',
                 count: overdueTotal,
-                onTap: null,    // 별도 토글 화면 없음 — 아래 목록으로 확인
+                onTap: widget.onOverdueTap,
               ),
             ),
         ]),
