@@ -19065,6 +19065,11 @@ async def create_request(body: RequestCreate, request: Request):
     try:
         all_users = await asyncio.to_thread(_list_all_users_sync)
         logger.info(f"[req-notify] request_id={request_id}, requester={empno}, total_users={len(all_users)}")
+        # 진단: admin 전원 목록 + 필터 사유 기록
+        all_admins = [u for u in all_users if u.get("role") == "admin"]
+        logger.info(f"[req-notify] all_admins_in_cache={len(all_admins)}, "
+                   f"empnos={[u.get('empno') for u in all_admins]}, "
+                   f"dormant={[u.get('empno') for u in all_admins if u.get('is_dormant')]}")
         admins = [
             u for u in all_users
             if u.get("role") == "admin"
@@ -19072,6 +19077,7 @@ async def create_request(body: RequestCreate, request: Request):
             and u.get("empno") != empno
         ]
         logger.info(f"[req-notify] admins_to_notify={len(admins)} "
+                   f"empnos={[u.get('empno') for u in admins]} "
                    f"(after dormant/self filter)")
         if admins:
             def _bulk():
