@@ -236,13 +236,12 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
       _aHdqt = _myHdqt;
       _mHdqt = _myHdqt; // 매트릭스 탭 본부 필터 자동 적용
     }
-    // member(일반 팀원)인 경우 팀까지 자동 필터 (org_map에 있는 팀만)
+    // member(일반 팀원)인 경우 팀까지 자동 필터
+    // 주의: initState에서는 _orgMap이 아직 비어있으므로 검증 없이 바로 적용.
+    // 잘못된 팀명이면 백엔드에서 결과가 비어 사용자가 인지 가능.
     if (!_isAdmin && _myTeam.isNotEmpty) {
-      final teams = _orgMap[_myHdqt] ?? [];
-      if (teams.contains(_myTeam)) {
-        _pTeam = _myTeam;
-        _aTeam = _myTeam;
-      }
+      _pTeam = _myTeam;
+      _aTeam = _myTeam;
     }
   }
 
