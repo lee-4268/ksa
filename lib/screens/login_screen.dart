@@ -20,17 +20,18 @@ class _LoginScreenState extends State<LoginScreen> {
   // 테마 색상 (레드/코랄 계열)
   static const Color _primaryColor = Color(0xFFE53935);
 
+  // 테스트 계정 기본 팀 매핑 (본부별 첫 번째 팀, 경북은 포항품질개선팀)
+  // 실제 운영 사번 로그인 시엔 DynamoDB Users 테이블의 team 값이 그대로 사용됨
   static const _testAccounts = [
-    {'empno': 'TEST_GN', 'name': '테스트_강남', 'region': '강남Access담당', 'role': 'member'},
-    {'empno': 'TEST_GB', 'name': '테스트_강북', 'region': '강북Access담당', 'role': 'member'},
-    {'empno': 'TEST_IC', 'name': '테스트_인천', 'region': '인천Access담당', 'role': 'member'},
-    {'empno': 'TEST_GG', 'name': '테스트_경기', 'region': '경기Access담당', 'role': 'member'},
-    {'empno': 'TEST_GW', 'name': '테스트_강원', 'region': '강원Access담당', 'role': 'member'},
-    {'empno': 'TEST_CC', 'name': '테스트_충청', 'region': '충청Access담당', 'role': 'member'},
-    {'empno': 'TEST_KB', 'name': '테스트_경북', 'region': '경북Access담당', 'role': 'member'},
-    {'empno': 'TEST_KN', 'name': '테스트_경남', 'region': '경남Access담당', 'role': 'member'},
-    {'empno': 'TEST_SB', 'name': '테스트_서부', 'region': '서부Access담당', 'role': 'member'},
-    {'empno': 'TEST_ADMIN', 'name': '테스트_관리자', 'region': 'AT/DT추진담당', 'role': 'admin'},
+    {'empno': 'TEST_GN', 'name': '테스트_강남', 'region': '강남Access담당', 'role': 'member', 'team': '강남품질개선팀'},
+    {'empno': 'TEST_GB', 'name': '테스트_강북', 'region': '강북Access담당', 'role': 'member', 'team': '용산품질개선팀'},
+    {'empno': 'TEST_IC', 'name': '테스트_인천', 'region': '인천Access담당', 'role': 'member', 'team': '북인천품질개선팀'},
+    {'empno': 'TEST_GG', 'name': '테스트_경기', 'region': '경기Access담당', 'role': 'member', 'team': '하남품질개선팀'},
+    {'empno': 'TEST_GW', 'name': '테스트_강원', 'region': '강원Access담당', 'role': 'member', 'team': '원주품질개선팀'},
+    {'empno': 'TEST_CC', 'name': '테스트_충청', 'region': '충청Access담당', 'role': 'member', 'team': '대전품질개선팀'},
+    {'empno': 'TEST_KB', 'name': '테스트_경북', 'region': '경북Access담당', 'role': 'member', 'team': '포항품질개선팀'},
+    {'empno': 'TEST_KN', 'name': '테스트_경남', 'region': '경남Access담당', 'role': 'member', 'team': '동부산품질개선팀'},
+    {'empno': 'TEST_SB', 'name': '테스트_서부', 'region': '서부Access담당', 'role': 'member', 'team': '서광주품질개선팀'},
   ];
 
   @override
@@ -408,7 +409,7 @@ class _LoginScreenState extends State<LoginScreen> {
       name: acc['name']!,
       region: acc['region']!,
       role: acc['role']!,
-      team: acc['team'] ?? '테스트팀',
+      team: acc['team'] ?? '',
     );
     if (!mounted) return;
     if (!success && auth.errorMessage != null) {

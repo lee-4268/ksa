@@ -86,18 +86,20 @@ DS 조회/업로드 시 4개 본부가 같은 divisionId를 공유하며, xlsx�
 
 ## 테스트 계정 (dev-login)
 
-| empno | 이름 | region | role |
-|-------|------|--------|------|
-| TEST_GN | 테스트_강남 | 강남Access담당 | member |
-| TEST_GB | 테스트_강북 | 강북Access담당 | member |
-| TEST_IC | 테스트_인천 | 인천Access담당 | member |
-| TEST_GG | 테스트_경기 | 경기Access담당 | member |
-| TEST_GW | 테스트_강원 | 강원Access담당 | member |
-| TEST_CC | 테스트_충청 | 충청Access담당 | member |
-| TEST_KB | 테스트_경북 | 경북Access담당 | member |
-| TEST_KN | 테스트_경남 | 경남Access담당 | member |
-| TEST_SB | 테스트_서부 | 서부Access담당 | member |
-| TEST_ADMIN | 테스트_관리자 | AT/DT추진담당 | admin |
+각 본부 첫 번째 품질개선팀을 기본 team으로 설정 (경북은 포항품질개선팀).
+실계정 로그인 시엔 DynamoDB Users 테이블의 team 값이 사용됨.
+
+| empno | 이름 | region | team | role |
+|-------|------|--------|------|------|
+| TEST_GN | 테스트_강남 | 강남Access담당 | 강남품질개선팀 | member |
+| TEST_GB | 테스트_강북 | 강북Access담당 | 용산품질개선팀 | member |
+| TEST_IC | 테스트_인천 | 인천Access담당 | 북인천품질개선팀 | member |
+| TEST_GG | 테스트_경기 | 경기Access담당 | 하남품질개선팀 | member |
+| TEST_GW | 테스트_강원 | 강원Access담당 | 원주품질개선팀 | member |
+| TEST_CC | 테스트_충청 | 충청Access담당 | 대전품질개선팀 | member |
+| TEST_KB | 테스트_경북 | 경북Access담당 | 포항품질개선팀 | member |
+| TEST_KN | 테스트_경남 | 경남Access담당 | 동부산품질개선팀 | member |
+| TEST_SB | 테스트_서부 | 서부Access담당 | 서광주품질개선팀 | member |
 
 ## DynamoDB 테이블
 

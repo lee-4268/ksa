@@ -289,7 +289,7 @@ class AuthService extends ChangeNotifier {
     required String empno,
     required String name,
     required String region,
-    String team = '테스트팀',
+    String team = '',
     String role = 'member',
   }) async {
     _isLoading = true;
