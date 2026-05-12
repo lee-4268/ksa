@@ -13991,7 +13991,7 @@ WF_VALID = {WF_REGISTERED, WF_PRE_CHECK, WF_PRE_CHECK_DONE, WF_CHANGE_FILING,
 # 허용 전환 (from -> to 집합). superadmin은 어디든 가능.
 _WF_TRANSITIONS = {
     None: {WF_REGISTERED},                       # 신규 등록
-    WF_REGISTERED: {WF_PRE_CHECK},
+    WF_REGISTERED: {WF_PRE_CHECK, WF_REPORT_ISSUED},  # 사전점검 의뢰 또는 사전점검 스킵 후 즉시 발급
     WF_PRE_CHECK: {WF_PRE_CHECK_DONE, WF_CHANGE_FILING},
     WF_CHANGE_FILING: {WF_RE_CHECK},
     WF_RE_CHECK: {WF_PRE_CHECK_DONE},            # 시스템 자동
@@ -15786,6 +15786,129 @@ async def inspection_export_report(request: Request, req: InspectionReportReq):
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f"attachment; filename*=UTF-8''{_q(fname)}"}
     )
+
+
+# ============================================================
+# 워크플로우 Phase 3: 검사내역서 발급 + 접수 트래킹
+# ============================================================
+
+class InspectionReportGenerateReq(BaseModel):
+    schedule_pks: list[str]
+    sheet_title: str = ""
+
+
+@app.post("/inspection/report/generate")
+async def inspection_report_generate(request: Request, req: InspectionReportGenerateReq):
+    """PRE_CHECK_DONE 다중 schedule → 검사내역서 즉시 다운로드 + REPORT_ISSUED 전환.
+
+    - 기존 /inspection/export-inspection-report 빌더를 그대로 재활용
+    - 발급 성공 후에만 상태 전환 (xls 생성 실패 시 롤백 보호)
+    """
+    empno = await _verify_auth(request)
+    role = await asyncio.to_thread(_get_user_role_sync, empno)
+    if not req.schedule_pks:
+        raise HTTPException(400, "schedule_pks 비어있음")
+
+    def _load():
+        c = sqlite3.connect(_INSP_DB, timeout=60); c.row_factory = sqlite3.Row
+        ph = ','.join('?' * len(req.schedule_pks))
+        rows = c.execute(
+            f'SELECT pk, year, 허가번호, workflow_status FROM inspection_schedules '
+            f'WHERE pk IN ({ph})',
+            list(req.schedule_pks)).fetchall()
+        c.close()
+        return [dict(r) for r in rows]
+
+    scheds = await asyncio.to_thread(_load)
+    if not scheds:
+        raise HTTPException(404, "해당 일정 없음")
+
+    # 전환 가능 여부 사전 검증 (admin 제외 PRE_CHECK_DONE 만 통과)
+    not_ready = [s['pk'] for s in scheds
+                 if not _wf_can_transition(s.get('workflow_status'), WF_REPORT_ISSUED, role)]
+    if not_ready:
+        raise HTTPException(400, f"점검완료 아님 {len(not_ready)}건: {not_ready[:3]}")
+
+    # year/허가번호 추출 — year는 묶음 내 동일 가정 (다르면 첫 건 기준)
+    years = {s['year'] for s in scheds}
+    if len(years) > 1:
+        raise HTTPException(400, f"여러 연도 혼합 불가: {sorted(years)}")
+    year = scheds[0]['year']
+    허가번호_list = [s['허가번호'] for s in scheds]
+
+    # 기존 빌더에 위임
+    inner_req = InspectionReportReq(
+        year=year,
+        허가번호_list=허가번호_list,
+        sheet_title=req.sheet_title,
+    )
+    response = await inspection_export_report(request, inner_req)
+
+    # 빌더 성공 후 상태 전환
+    def _transition():
+        now = datetime.now(timezone.utc).isoformat()
+        c = sqlite3.connect(_INSP_DB, timeout=60)
+        for s in scheds:
+            cur = s.get('workflow_status') or WF_REGISTERED
+            c.execute(
+                'UPDATE inspection_schedules SET workflow_status=?, '
+                'status_updated_at=?, status_updated_by=?, '
+                'report_issued_at=?, report_issued_by=? WHERE pk=?',
+                (WF_REPORT_ISSUED, now, empno, now, empno, s['pk']))
+            _wf_record_log_sync(c, s['pk'], cur, WF_REPORT_ISSUED, empno,
+                              f"검사내역서 발급 (묶음 {len(scheds)}건)")
+        c.commit(); c.close()
+
+    await asyncio.to_thread(_transition)
+    await asyncio.to_thread(_record_audit_log_sync,
+                           "inspection_report_generate", "inspection_schedule",
+                           f"count={len(scheds)}", empno)
+    return response
+
+
+class InspectionSubmissionReq(BaseModel):
+    submission_no: str
+    submitted_at: str = ""    # ISO; 비면 서버 현재시각
+
+
+@app.patch("/inspection/schedule/{pk:path}/submission")
+async def inspection_schedule_submission(pk: str, request: Request, req: InspectionSubmissionReq):
+    """전파관리소 접수번호 입력 → REPORT_ISSUED → SUBMITTED 전환."""
+    empno = await _verify_auth(request)
+    role = await asyncio.to_thread(_get_user_role_sync, empno)
+    if not req.submission_no.strip():
+        raise HTTPException(400, "접수번호 필요")
+
+    submitted_at = req.submitted_at.strip() or datetime.now(timezone.utc).isoformat()
+
+    def _save():
+        c = sqlite3.connect(_INSP_DB, timeout=60)
+        row = c.execute(
+            'SELECT workflow_status FROM inspection_schedules WHERE pk=?', (pk,)).fetchone()
+        if not row:
+            c.close()
+            return False, "일정 없음"
+        cur = row[0] or WF_REGISTERED
+        if not _wf_can_transition(cur, WF_SUBMITTED, role):
+            c.close()
+            return False, f"전환 불가: {cur} → SUBMITTED"
+        now = datetime.now(timezone.utc).isoformat()
+        c.execute(
+            'UPDATE inspection_schedules SET workflow_status=?, '
+            'status_updated_at=?, status_updated_by=?, '
+            'submission_no=?, submitted_at=? WHERE pk=?',
+            (WF_SUBMITTED, now, empno, req.submission_no.strip(), submitted_at, pk))
+        _wf_record_log_sync(c, pk, cur, WF_SUBMITTED, empno,
+                          f"전파관리소 접수: {req.submission_no.strip()}")
+        c.commit(); c.close()
+        return True, "ok"
+
+    ok, msg = await asyncio.to_thread(_save)
+    if not ok:
+        raise HTTPException(400, msg)
+    await asyncio.to_thread(_record_audit_log_sync,
+                           "inspection_submission", "inspection_schedule", pk, empno)
+    return {"success": True}
 
 
 class InspAddFromStagingReq(BaseModel):

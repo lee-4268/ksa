@@ -571,6 +571,47 @@ class InspectionService {
     return resp.bodyBytes;
   }
 
+  /// Phase 3: 검사내역서 발급 (다중 schedule_pk) + REPORT_ISSUED 자동 전환.
+  /// 사전점검 거친 건(PRE_CHECK_DONE) 또는 사전점검 스킵 건(REGISTERED) 둘 다 통과.
+  Future<Uint8List> generateInspectionReport({
+    required List<String> schedulePks,
+    String sheetTitle = '',
+  }) async {
+    final resp = await http.post(
+      Uri.parse('$_baseUrl/inspection/report/generate'),
+      headers: _headers,
+      body: json.encode({
+        'schedule_pks': schedulePks,
+        'sheet_title': sheetTitle,
+      }),
+    ).timeout(const Duration(minutes: 3));
+    if (resp.statusCode != 200) {
+      final b = json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+      throw Exception(b['detail'] ?? '검사내역서 발급 실패');
+    }
+    return resp.bodyBytes;
+  }
+
+  /// Phase 3: 전파관리소 접수번호 입력 → SUBMITTED 전환.
+  Future<void> submitInspection({
+    required String schedulePk,
+    required String submissionNo,
+    String submittedAt = '',
+  }) async {
+    final resp = await http.patch(
+      Uri.parse('$_baseUrl/inspection/schedule/${Uri.encodeComponent(schedulePk)}/submission'),
+      headers: _headers,
+      body: json.encode({
+        'submission_no': submissionNo,
+        'submitted_at': submittedAt,
+      }),
+    ).timeout(_apiTimeout);
+    if (resp.statusCode != 200) {
+      final b = json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+      throw Exception(b['detail'] ?? '접수번호 저장 실패');
+    }
+  }
+
   Future<Map<String, dynamic>> addFromStaging(int year, String licenseNo) async {
     final resp = await http.post(
       Uri.parse('$_baseUrl/inspection/add-from-staging'),
