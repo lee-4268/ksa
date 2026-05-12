@@ -183,7 +183,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
   bool get _hasActiveFilters =>
       _aHdqt.isNotEmpty || _aTeam.isNotEmpty || _aQuarters.isNotEmpty ||
       _aNationGroups.isNotEmpty || _aKcaResults.isNotEmpty || _aSearch.isNotEmpty ||
-      _aScheduled.isNotEmpty || _aSchedWeek.isNotEmpty;
+      _aScheduled.isNotEmpty || _aSchedWeek.isNotEmpty || _aCrew.isNotEmpty;
 
   @override
   void initState() {
@@ -1662,26 +1662,44 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
             crossAxisAlignment: WrapCrossAlignment.center,
             children: [
               _filterDropdown('본부', _pHdqt, ['', ..._hdqts],
-                  (v) => setState(() { _pHdqt = v!; _pTeam = ''; _currentTeams = _orgMap[v] ?? []; })),
+                  (v) => setState(() {
+                    _pHdqt = v!;
+                    _pTeam = '';
+                    _pSchedWeek = '';
+                    _pCrew = '';
+                    _currentTeams = _orgMap[v] ?? [];
+                  })),
               _filterDropdown('팀', _pTeam, ['', ..._currentTeams],
-                  (v) => setState(() => _pTeam = v!)),
+                  (v) => setState(() {
+                    _pTeam = v!;
+                    _pSchedWeek = '';
+                    _pCrew = '';
+                  })),
               _filterDropdown('일정등록', _pScheduled, const ['', 'Y', 'N'],
                   (v) => setState(() => _pScheduled = v ?? ''),
                   displayMap: const {'Y': '등록', 'N': '미등록'}),
               Builder(builder: (_) {
-                final allWeeks = <String>{};
+                // 주차 옵션 — 본부/팀 필터에 따라 좁혀짐
+                final weeks = <String>{};
                 for (final s in _schedules) {
+                  if (_pHdqt.isNotEmpty &&
+                      (s['access담당'] as String? ?? '').trim() != _pHdqt) continue;
+                  if (_pTeam.isNotEmpty &&
+                      (s['품질개선팀'] as String? ?? '').trim() != _pTeam) continue;
                   final w = (s['수검예정주차'] as String? ?? '').trim();
-                  if (w.isNotEmpty) allWeeks.add(w);
+                  if (w.isNotEmpty) weeks.add(w);
                 }
-                final weekOptions = <String>['', ...allWeeks.toList()
+                final weekOptions = <String>['', ...weeks.toList()
                   ..sort((a, b) {
                     final na = int.tryParse(a.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0;
                     final nb = int.tryParse(b.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0;
                     return na.compareTo(nb);
                   })];
                 return _filterDropdown('수검일정', _pSchedWeek, weekOptions,
-                    (v) => setState(() => _pSchedWeek = v ?? ''));
+                    (v) => setState(() {
+                      _pSchedWeek = v ?? '';
+                      _pCrew = '';
+                    }));
               }),
               Builder(builder: (_) {
                 // 조 옵션 — 현재 필터링된 schedules에서 distinct 수집
@@ -2086,6 +2104,12 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
       addChip('수검일정', _aSchedWeek, () {
         setState(() { _pSchedWeek = ''; _aSchedWeek = ''; _page = 1; _selectedLicenseNos.clear(); });
         _loadAll();
+      });
+    }
+    if (_aCrew.isNotEmpty) {
+      addChip('조', _aCrew, () {
+        // 조는 클라이언트 필터라 API 재요청 불필요 (setState만으로 _filteredItems 재계산)
+        setState(() { _pCrew = ''; _aCrew = ''; _selectedLicenseNos.clear(); });
       });
     }
     return Wrap(spacing: 6, runSpacing: 4, children: chips);
