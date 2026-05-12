@@ -52,6 +52,10 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
   String _selectedJo = '';
   String _selectedInspector = '';
 
+  // Phase 4: 수검 가능 건만 보기 (전파관리소 접수 완료 이상)
+  // SUBMITTED / REPORT_ISSUED(접수번호 스킵 케이스) / INSPECTED(완료·재방문)
+  bool _readyOnly = true;
+
   // 경로 계획 모드
   bool _isRoutePlanMode = false;
   final List<RadioStation> _routeSelectedStations = [];
@@ -150,12 +154,19 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
     }
   }
 
+  // Phase 4: 수검 가능 상태 — 전파관리소 접수가 끝났거나 그 이후
+  static const _readyStatuses = {'SUBMITTED', 'REPORT_ISSUED', 'INSPECTED'};
+
   List<Map<String, dynamic>> get _filteredItems => _assignedItems.where((item) {
     if (_selectedJo.isNotEmpty && (item['조'] as String? ?? '').trim() != _selectedJo) return false;
     if (_selectedInspector.isNotEmpty && (item['검사관'] as String? ?? '').trim() != _selectedInspector) return false;
     if (_selectedInspectionDate.isNotEmpty) {
       final inspectionDate = _normalizeInspectionDate(item['검사일'] as String? ?? '');
       if (inspectionDate != _selectedInspectionDate) return false;
+    }
+    if (_readyOnly) {
+      final wf = (item['workflow_status'] as String? ?? '').trim();
+      if (!_readyStatuses.contains(wf)) return false;
     }
     return true;
   }).toList();
@@ -574,8 +585,11 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
                       Flexible(child: _buildJoDropdown(expanded: true)),
                       if (hasInspector) const SizedBox(width: 6),
                     ],
-                    if (hasInspector)
+                    if (hasInspector) ...[
                       Flexible(child: _buildInspectorDropdown(expanded: true)),
+                      const SizedBox(width: 6),
+                    ],
+                    _buildReadyOnlyToggle(),
                   ],
                 );
               }),
@@ -681,6 +695,34 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
             ...joOptions.map((j) => DropdownMenuItem(value: j, child: Text(j))),
           ],
           onChanged: (v) => setState(() { _selectedJo = v ?? ''; _selectedInspector = ''; }),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildReadyOnlyToggle() {
+    const primaryColor = Color(0xFFE53935);
+    final c = _readyOnly ? primaryColor : Colors.grey.shade400;
+    return Tooltip(
+      message: _readyOnly
+          ? '수검 가능 건(접수완료 이후)만 표시 중 — 끄면 전체'
+          : '전체 일정 표시 중 — 켜면 수검 가능 건만',
+      child: InkWell(
+        onTap: () => setState(() => _readyOnly = !_readyOnly),
+        borderRadius: BorderRadius.circular(10),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          decoration: BoxDecoration(
+            color: _readyOnly ? primaryColor.withValues(alpha: 0.08) : Colors.white,
+            border: Border.all(color: c),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Icon(_readyOnly ? Icons.filter_alt : Icons.filter_alt_off, size: 14, color: c),
+            const SizedBox(width: 4),
+            Text('수검가능',
+                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: c)),
+          ]),
         ),
       ),
     );

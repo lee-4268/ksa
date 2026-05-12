@@ -71,8 +71,12 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
   Map<String, String> _scheduleSubmissionMap = {};
   // 허가번호 → 조
   Map<String, String> _scheduleCrewMap = {};
+  // 허가번호 → 재점검 필요 (Phase 4)
+  Set<String> _scheduleNeedsRecheck = <String>{};
   // 워크플로우 상태 필터 ('' = 전체)
   String _statusFilter = '';
+  // 재점검 필요 건만 보기 (Phase 4)
+  bool _recheckOnly = false;
 
   List<Map<String, dynamic>> _items = [];
   int _total = 0;
@@ -242,7 +246,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     final dataRes    = results[0] as Map<String, dynamic>?;
     final summRes    = results[1] as Map<String, dynamic>?;
     final unassRes   = results[2] as Map<String, dynamic>?;
-    final schedResult = results[3] as ({Set<String> nos, Map<String, String> weekMap, List<Map<String, dynamic>> schedules, Map<String, String> statusMap, Map<String, String> pkMap, Map<String, String> submissionMap, Map<String, String> crewMap})?;
+    final schedResult = results[3] as ({Set<String> nos, Map<String, String> weekMap, List<Map<String, dynamic>> schedules, Map<String, String> statusMap, Map<String, String> pkMap, Map<String, String> submissionMap, Map<String, String> crewMap, Set<String> needsRecheck})?;
     final progRes    = results[4] as Map<String, dynamic>?;
     setState(() {
       _loading = false;
@@ -271,6 +275,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
         _schedulePkMap = schedResult.pkMap;
         _scheduleSubmissionMap = schedResult.submissionMap;
         _scheduleCrewMap = schedResult.crewMap;
+        _scheduleNeedsRecheck = schedResult.needsRecheck;
       }
       if (progRes != null) {
         _progressTotal = (progRes['total'] as num?)?.toInt() ?? 0;
@@ -319,7 +324,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     } catch (_) { return null; }
   }
 
-  Future<({Set<String> nos, Map<String, String> weekMap, List<Map<String, dynamic>> schedules, Map<String, String> statusMap, Map<String, String> pkMap, Map<String, String> submissionMap, Map<String, String> crewMap})?> _fetchScheduledNos() async {
+  Future<({Set<String> nos, Map<String, String> weekMap, List<Map<String, dynamic>> schedules, Map<String, String> statusMap, Map<String, String> pkMap, Map<String, String> submissionMap, Map<String, String> crewMap, Set<String> needsRecheck})?> _fetchScheduledNos() async {
     try {
       final schedules = await _svc.getSchedules(_year);
       final nos = <String>{};
@@ -328,6 +333,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
       final pkMap = <String, String>{};
       final submissionMap = <String, String>{};
       final crewMap = <String, String>{};
+      final needsRecheck = <String>{};
       for (final s in schedules) {
         final no = (s['허가번호'] as String? ?? '').trim();
         if (no.isEmpty) continue;
@@ -342,11 +348,12 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
         if (submission.isNotEmpty) submissionMap[no] = submission;
         final crew = (s['조'] as String? ?? '').trim();
         if (crew.isNotEmpty) crewMap[no] = crew;
+        if ((s['needs_recheck'] as String? ?? '') == '1') needsRecheck.add(no);
       }
       return (
         nos: nos, weekMap: weekMap, schedules: schedules,
         statusMap: statusMap, pkMap: pkMap, submissionMap: submissionMap,
-        crewMap: crewMap,
+        crewMap: crewMap, needsRecheck: needsRecheck,
       );
     } catch (_) { return null; }
   }
@@ -363,6 +370,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
       _schedulePkMap = result.pkMap;
       _scheduleSubmissionMap = result.submissionMap;
       _scheduleCrewMap = result.crewMap;
+      _scheduleNeedsRecheck = result.needsRecheck;
     });
   }
 
@@ -1615,8 +1623,8 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
               if (_total > 0)
                 Builder(builder: (_) {
                   // 조 필터는 클라이언트 사이드라 _total(서버 카운트)에 미반영.
-                  // 조/상태 필터 활성 시 현재 페이지에서 필터된 건수를 표시.
-                  final clientFiltered = _aCrew.isNotEmpty || _statusFilter.isNotEmpty;
+                  // 조/상태/재점검 필터 활성 시 현재 페이지에서 필터된 건수를 표시.
+                  final clientFiltered = _aCrew.isNotEmpty || _statusFilter.isNotEmpty || _recheckOnly;
                   final shown = clientFiltered ? _filteredItems.length : _total;
                   final truncated = clientFiltered && _total > _items.length;
                   return Tooltip(
@@ -2285,7 +2293,9 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                           DataCell(Text('${item['skt본부'] ?? ''}', style: cellStyle)),
                           DataCell(Text('${item['access담당'] ?? ''}', style: cellStyle)),
                           DataCell(Text('${item['품질개선팀'] ?? ''}', style: cellStyle)),
-                          DataCell(_buildResultChip('${item['검사결과'] ?? ''}')),
+                          DataCell(_buildResultChip(
+                              '${item['검사결과'] ?? ''}',
+                              wfStatus: _scheduleStatusMap['${item['허가번호'] ?? ''}'])),
                         ],
                       );
                     }).toList(),
@@ -2300,7 +2310,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     ]);
   }
 
-  // 워크플로우 상태 필터 + 조 필터 (클라이언트) 적용된 items
+  // 워크플로우 상태 필터 + 조 필터 + 재점검 필터 (클라이언트) 적용된 items
   List<Map<String, dynamic>> get _filteredItems {
     Iterable<Map<String, dynamic>> rows = _items;
     // 조 필터 (schedule 매핑 기반)
@@ -2322,6 +2332,11 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
           return st == _statusFilter;
         });
       }
+    }
+    // 재점검 필요 (불합격/부적합 결과)
+    if (_recheckOnly) {
+      rows = rows.where((it) =>
+          _scheduleNeedsRecheck.contains('${it['허가번호'] ?? ''}'));
     }
     return rows.toList();
   }
@@ -2382,6 +2397,12 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
         ),
       );
     }
+    // 재점검 필요 카운트 (INSPECTED + needs_recheck — 조 필터 적용된 셋 기준)
+    final recheckCount = _crewFilteredItems.where((it) {
+      final no = '${it['허가번호'] ?? ''}';
+      return _scheduleNeedsRecheck.contains(no);
+    }).length;
+    const recheckColor = Color(0xFFE17055);
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
       child: Row(children: [
@@ -2395,6 +2416,27 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
         chip('REPORT_ISSUED', '내역서발급', const Color(0xFF0984E3)),
         chip('SUBMITTED', '접수완료', const Color(0xFF0984E3)),
         chip('INSPECTED', '수검완료', const Color(0xFF2D3436)),
+        // 재점검 필요 (별도 토글 — 상태 필터와 독립)
+        Padding(
+          padding: const EdgeInsets.only(right: 6),
+          child: FilterChip(
+            avatar: Icon(Icons.warning_amber_rounded,
+                size: 14, color: _recheckOnly ? Colors.white : recheckColor),
+            label: Text('재점검 필요 · $recheckCount',
+                style: TextStyle(
+                    fontSize: 12, fontWeight: FontWeight.w600,
+                    color: _recheckOnly ? Colors.white : recheckColor)),
+            selected: _recheckOnly,
+            showCheckmark: false,
+            backgroundColor: Colors.white,
+            selectedColor: recheckColor,
+            side: BorderSide(color: recheckColor.withValues(alpha: _recheckOnly ? 0.0 : 0.4)),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            onSelected: (_) => setState(() => _recheckOnly = !_recheckOnly),
+          ),
+        ),
       ]),
     );
   }
@@ -2405,6 +2447,8 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     final submission = _scheduleSubmissionMap[licenseNo] ?? '';
     if (week.isEmpty && status == null) return const SizedBox.shrink();
     final showSubmission = status == 'SUBMITTED' && submission.isNotEmpty;
+    final needsRecheck =
+        status == 'INSPECTED' && _scheduleNeedsRecheck.contains(licenseNo);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
@@ -2415,7 +2459,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
               maxLines: 1, overflow: TextOverflow.ellipsis),
         if (status != null) ...[
           if (week.isNotEmpty) const SizedBox(height: 2),
-          // SUBMITTED일 때만 배지 옆에 접수번호 함께 표시 (셀 높이 제한 안 침범)
+          // SUBMITTED → 배지 옆에 접수번호 / INSPECTED+재점검 → 배지 옆에 재점검 칩 (셀 높이 제한 안 침범)
           showSubmission
               ? Row(mainAxisSize: MainAxisSize.min, children: [
                   _buildStatusBadge(status),
@@ -2431,7 +2475,27 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                     ),
                   ),
                 ])
-              : _buildStatusBadge(status),
+              : needsRecheck
+                  ? Row(mainAxisSize: MainAxisSize.min, children: [
+                      _buildStatusBadge(status),
+                      const SizedBox(width: 4),
+                      Tooltip(
+                        message: '검사 결과 합격이 아님 — 재점검 필요',
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFE17055).withValues(alpha: 0.15),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: const Color(0xFFE17055), width: 1),
+                          ),
+                          child: const Text('재점검',
+                              style: TextStyle(
+                                  fontSize: 9, color: Color(0xFFE17055),
+                                  fontWeight: FontWeight.w700)),
+                        ),
+                      ),
+                    ])
+                  : _buildStatusBadge(status),
         ],
       ],
     );
@@ -2511,8 +2575,11 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     );
   }
 
-  Widget _buildResultChip(String val) {
+  Widget _buildResultChip(String val, {String? wfStatus}) {
     if (val.isEmpty) return const SizedBox.shrink();
+    // Phase 4: 두 status 분리 — INSPECTED 미만에선 검사결과 숨김
+    //   (워크플로우 상태가 없으면(미배정) 검사결과도 의미 없음 → 숨김)
+    if (wfStatus != 'INSPECTED') return const SizedBox.shrink();
     Color color;
     if (val == '합격') { color = _green; }
     else if (val.startsWith('불합격')) { color = _primary; }

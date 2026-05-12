@@ -11614,11 +11614,24 @@ def _init_inspection_db():
         ('전파진흥원', "''"),
         ('검사관', "''"),
         ('주차별', "''"),
+        # Phase 4: 일정 연결 + 재점검 필요 플래그
+        ('schedule_pk', "''"),
+        ('needs_recheck', "'0'"),  # '1' = 재점검 필요, '0' = 미해당
     ]:
         try:
             conn.execute(f"ALTER TABLE inspection_results ADD COLUMN {col} TEXT DEFAULT {dflt}")
         except Exception:
             pass
+    # Phase 4: 기존 결과를 schedule과 매칭해 schedule_pk 백필 (pk가 동일 포맷 'year#허가번호')
+    try:
+        conn.execute('''
+            UPDATE inspection_results
+               SET schedule_pk = pk
+             WHERE (schedule_pk IS NULL OR schedule_pk='')
+               AND pk IN (SELECT pk FROM inspection_schedules)
+        ''')
+    except Exception:
+        pass
     # ── inspection_results_raw 테이블 (검사실적 RAW DATA) ──
     conn.execute('''CREATE TABLE IF NOT EXISTS inspection_results_raw (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -14869,20 +14882,27 @@ async def inspection_schedule_delete(year: int, license_no: str, request: Reques
 async def inspection_schedules_list(
     request: Request, year: int, access담당: str = "", workflow_status: str = ""
 ):
-    """일정 목록 조회 (팀별 + workflow_status 필터)."""
+    """일정 목록 조회 (팀별 + workflow_status 필터). Phase 4부터 needs_recheck, 검사결과status 함께 노출."""
     await _verify_auth(request)
     def _read():
         c = sqlite3.connect(_INSP_DB, timeout=60); c.row_factory = sqlite3.Row
-        wheres = ['year=?']
+        wheres = ['s.year=?']
         params: list = [year]
         if access담당:
-            wheres.append('access담당=?')
+            wheres.append('s.access담당=?')
             params.append(access담당)
         if workflow_status:
-            wheres.append('workflow_status=?')
+            wheres.append('s.workflow_status=?')
             params.append(workflow_status)
+        # inspection_results와 LEFT JOIN — needs_recheck, 검사결과 status 노출 (INSPECTED 단계에서만 의미있음)
         rows = c.execute(
-            f'SELECT * FROM inspection_schedules WHERE {" AND ".join(wheres)}',
+            f'''SELECT s.*,
+                       r.needs_recheck AS needs_recheck,
+                       r.status        AS result_status,
+                       r.검사일        AS 검사일
+                  FROM inspection_schedules s
+                  LEFT JOIN inspection_results r ON r.pk = s.pk
+                 WHERE {" AND ".join(wheres)}''',
             params).fetchall()
         c.close()
         return [dict(r) for r in rows]
@@ -14891,28 +14911,59 @@ async def inspection_schedules_list(
 
 @app.post("/inspection/result")
 async def inspection_result_upsert(request: Request, req: InspectionResultReq):
-    """수검 결과 입력 (팀원 가능)."""
-    import json as _j
+    """수검 결과 입력 (팀원 가능).
+
+    Phase 4 자동 처리:
+    - schedule_pk = pk (year#허가번호 동일)
+    - 검사일 입력 시 워크플로우 자동 전환 (SUBMITTED → INSPECTED, 가능한 경우)
+    - status가 불합격/부적합이면 needs_recheck='1' (혁신팀이 재점검 일정을 수동 등록)
+    """
     empno = await _verify_auth(request)
     # 입력자 이름 조회
     user_info = await asyncio.to_thread(_get_user_info_for_community, empno)
     입력자_name = user_info.get("name", empno)
     pk = f"{req.year}#{req.허가번호}"
     now = datetime.now(timezone.utc).isoformat()
+    # 재점검 플래그 판정 — 합격이 아니면(불합격/부적합 등) recheck
+    needs_recheck = '1' if req.status.strip() not in ('합격', '') else '0'
+
     def _write():
         c = sqlite3.connect(_INSP_DB, timeout=60); c.row_factory = sqlite3.Row
         # 기존 사진 목록 보존
         existing = c.execute('SELECT 사진S3키 FROM inspection_results WHERE pk=?', (pk,)).fetchone()
         photos_json = existing['사진S3키'] if existing else '[]'
         c.execute('''INSERT OR REPLACE INTO inspection_results
-            (pk, year, 허가번호, status, 검사일, 메모, 철탑형태, 사진S3키, 입력자, 입력일시)
-            VALUES (?,?,?,?,?,?,?,?,?,?)''',
+            (pk, year, 허가번호, status, 검사일, 메모, 철탑형태, 사진S3키, 입력자, 입력일시,
+             schedule_pk, needs_recheck)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)''',
             (pk, req.year, req.허가번호, req.status, req.검사일,
-             req.메모, req.철탑형태, photos_json, 입력자_name, now))
+             req.메모, req.철탑형태, photos_json, 입력자_name, now,
+             pk, needs_recheck))
+        # 검사일이 입력됐고 schedule이 존재하면 INSPECTED로 자동 전환 시도
+        transitioned = False
+        if (req.검사일 or '').strip():
+            sched = c.execute(
+                'SELECT workflow_status FROM inspection_schedules WHERE pk=?',
+                (pk,)).fetchone()
+            if sched:
+                cur = sched['workflow_status'] or WF_REGISTERED
+                # 시스템 자동 전환 — admin 권한과 동일하게 처리 (역행 방지는 _wf_can_transition으로)
+                if _wf_can_transition(cur, WF_INSPECTED, 'admin') and cur != WF_INSPECTED:
+                    c.execute(
+                        'UPDATE inspection_schedules SET workflow_status=?, '
+                        'status_updated_at=?, status_updated_by=? WHERE pk=?',
+                        (WF_INSPECTED, now, empno, pk))
+                    _wf_record_log_sync(c, pk, cur, WF_INSPECTED, empno,
+                                      f"수검 결과 입력 ({req.status})")
+                    transitioned = True
         c.commit(); c.close()
-    await asyncio.to_thread(_write)
-    await asyncio.to_thread(_record_audit_log_sync, "inspection_result_upsert", "inspection_result", pk, empno)
-    return {"success": True}
+        return transitioned
+
+    transitioned = await asyncio.to_thread(_write)
+    await asyncio.to_thread(_record_audit_log_sync,
+                           "inspection_result_upsert", "inspection_result",
+                           f"{pk},inspected={transitioned},recheck={needs_recheck}", empno)
+    return {"success": True, "inspected": transitioned, "needs_recheck": needs_recheck == '1'}
 
 @app.post("/inspection/station")
 async def inspection_station_add(request: Request, req: InspectionStationReq):

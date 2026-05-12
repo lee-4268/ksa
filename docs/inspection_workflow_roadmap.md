@@ -516,19 +516,37 @@ PATCH /inspection/schedule/{pk}/submission
 
 ### 핵심 설계
 - `inspection_my_list_screen` + `inspection_results` 이미 존재 → schedule_pk로 묶기만
-- 현장수검 Map은 SUBMITTED 상태 건만 표시 (접수 안 된 건 수검 불가)
-- 입회자 "수검 완료" 또는 검사실적 입력 → INSPECTED 자동 전환
-- 불합격/부적합 시 재점검 일정 자동 생성 (선택)
-- INSPECTED 단계부터 검사결과(`inspection_results.status`) 표시
+- 현장수검 Map은 **수검 가능 상태(SUBMITTED/REPORT_ISSUED/INSPECTED) 건만 표시**가 기본,
+  사용자가 토글로 전체 보기 전환 가능 (접수 안 된 건 수검 불가 도메인 룰)
+- 입회자 검사일 입력 → SUBMITTED → INSPECTED 자동 전환 (`_wf_can_transition` 가드)
+- 불합격/부적합 시 **재점검 일정 자동 생성은 안 함, 대신 `needs_recheck` 플래그만 세팅**
+  → 혁신팀이 일정 화면 "재점검 필요" 칩 필터로 식별, 새 일정은 수동 등록
+- INSPECTED 단계부터 검사결과(`inspection_results.status`) 표시 — 그 외 단계엔 숨김 (두 status 분리)
 
 ### 변경
 ```sql
-ALTER TABLE inspection_results ADD COLUMN schedule_pk TEXT;
--- 기존 데이터는 NULL 허용 + (year, 허가번호) 매칭으로 백필
+ALTER TABLE inspection_results ADD COLUMN schedule_pk TEXT DEFAULT '';
+ALTER TABLE inspection_results ADD COLUMN needs_recheck TEXT DEFAULT '0';  -- '1'=재점검 필요
+-- 백필: inspection_results.pk == inspection_schedules.pk (year#허가번호) 이미 동일 포맷이라 자기 자신 복사
+UPDATE inspection_results SET schedule_pk = pk
+ WHERE (schedule_pk IS NULL OR schedule_pk='')
+   AND pk IN (SELECT pk FROM inspection_schedules);
 ```
 
 ### 자동화
-- inspection_results upsert 시 schedule_pk 기반으로 워크플로우 상태 자동 전환
+- `/inspection/result` POST 시:
+  - `schedule_pk` 자동 세팅
+  - 검사일 입력 + schedule 존재 + `_wf_can_transition` 통과 시 INSPECTED로 전환 + 상태 로그 기록
+  - status가 합격이 아니면 `needs_recheck='1'`
+- `/inspection/schedules` 응답에 `needs_recheck`, `result_status` LEFT JOIN으로 노출 → 프론트에서 활용
+
+### UI
+- 일정 화면:
+  - 상태 칩 영역에 별도 토글 "재점검 필요 · N" (상태 필터와 독립적)
+  - INSPECTED 셀에 작은 "재점검" 칩 노출 (배지 옆 한 줄, 셀 높이 제한 안 침범)
+  - 검사결과 컬럼은 INSPECTED일 때만 표시 (그 외 단계엔 빈칸)
+- 현장수검 Map:
+  - 상단 필터 행에 "수검가능" 토글 칩 (기본 ON, 접수 완료 이상 건만 표시)
 
 **규모**: 백엔드 ~120줄, 프론트 ~150줄
 
