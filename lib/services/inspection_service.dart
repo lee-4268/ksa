@@ -639,14 +639,17 @@ class InspectionService {
     return body;
   }
 
-  // ── Phase 5: 알림 ───────────────────────────────────────
+  // ── Phase 5: 워크플로우 알림 ────────────────────────────
+  //
+  // 주의: 기존 NotificationService(시정기한/커뮤니티)와 별개.
+  // 워크플로우 전환 자동 알림은 /inspection/notifications/* 네임스페이스 사용.
 
-  /// 현재 사용자 알림 목록 조회.
+  /// 워크플로우 알림 목록 조회.
   Future<List<Map<String, dynamic>>> getNotifications({
     bool unreadOnly = false,
     int limit = 50,
   }) async {
-    final uri = Uri.parse('$_baseUrl/notifications').replace(queryParameters: {
+    final uri = Uri.parse('$_baseUrl/inspection/notifications').replace(queryParameters: {
       if (unreadOnly) 'unread_only': 'true',
       'limit': '$limit',
     });
@@ -655,20 +658,20 @@ class InspectionService {
     return List<Map<String, dynamic>>.from(body['items'] ?? []);
   }
 
-  /// 안 읽음 알림 개수.
+  /// 워크플로우 알림 안 읽음 개수.
   Future<int> getUnreadNotificationCount() async {
     final resp = await http.get(
-      Uri.parse('$_baseUrl/notifications/unread-count'),
+      Uri.parse('$_baseUrl/inspection/notifications/unread-count'),
       headers: _headers,
     ).timeout(_apiTimeout);
     final body = json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
     return (body['count'] as num?)?.toInt() ?? 0;
   }
 
-  /// 알림 읽음 처리. ids 비워서 보내면 전체 안 읽음 일괄 처리.
+  /// 워크플로우 알림 읽음 처리. ids 비워서 보내면 전체 안 읽음 일괄 처리.
   Future<int> markNotificationsRead({List<int> ids = const []}) async {
     final resp = await http.post(
-      Uri.parse('$_baseUrl/notifications/mark-read'),
+      Uri.parse('$_baseUrl/inspection/notifications/mark-read'),
       headers: _headers,
       body: json.encode({'ids': ids}),
     ).timeout(_apiTimeout);

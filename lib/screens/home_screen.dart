@@ -21,7 +21,6 @@ import 'community_screen.dart';
 import '../services/community_service.dart';
 import '../services/notification_service.dart';
 import '../services/inspection_service.dart';
-import '../widgets/notification_bell_button.dart';
 import '../widgets/inspection_dashboard_widget.dart';
 
 /// 앱 셸 — 사이드바 상시 표시 + 오른쪽 콘텐츠 전환
@@ -291,8 +290,6 @@ class _HomeScreenState extends State<HomeScreen> {
             const SizedBox(width: 8),
             Text(item.title, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: _textPrimary)),
             const Spacer(),
-            NotificationBellButton(svc: _inspSvc),
-            const SizedBox(width: 4),
             _buildUserAvatar(),
           ],
         ),
@@ -862,10 +859,9 @@ class _HomeContentState extends State<_HomeContent> {
     _commSvc.setAuthToken(context.read<AuthService>().authToken);
     _loadWeather();
     _loadComm();
-    // 로그인 직후 자동 알림 팝업 (안 읽음 > 0 이고 '오늘 보지않기' 미설정 시)
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) maybeShowLoginNotificationPopup(context, _inspSvc);
-    });
+    // 로그인 자동 알림 팝업은 비활성화:
+    // 통합된 알림은 기존 NotificationService의 종 아이콘에서 노출되며 30초 폴링됨.
+    // 별도 팝업이 필요해지면 NotificationService unread를 보고 띄우도록 변경.
   }
 
   @override

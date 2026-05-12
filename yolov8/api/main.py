@@ -14087,18 +14087,39 @@ _SLA_DAYS = {
 }
 
 
-def _create_notification_sync(conn, user_id: str, type_: str, message: str,
-                              schedule_pk: str = "", meta: dict | None = None):
-    """알림 1건 생성 (DB 기록만). 호출자가 같은 conn을 commit해야 함."""
+def _create_notification_sync(conn, user_id: str, sub_type: str, message: str,
+                              schedule_pk: str = "", meta: dict | None = None,
+                              title: str = ""):
+    """워크플로우 알림 1건 생성.
+
+    기존 community.db의 notifications 테이블에 통합 저장하여 종 아이콘에서 함께 노출.
+    - type='workflow' 고정, sub_type에 PRE_CHECK_REQUESTED 등 세부 타입 기록
+    - related_type='inspection', related_pk=schedule_pk (related_id는 0 유지)
+
+    호출자(_wf_record_log_sync)는 inspection.db conn을 들고 있으나, 알림은 community.db에
+    별도 연결로 INSERT (트랜잭션은 분리되지만 워크플로우 로그 기록과 알림 생성이 한쪽만
+    성공해도 안전).
+    """
     if not user_id:
         return
     import json as _j
     now = datetime.now(timezone.utc).isoformat()
     meta_json = _j.dumps(meta, ensure_ascii=False) if meta else ''
-    conn.execute(
-        'INSERT INTO notifications(user_id, schedule_pk, type, message, '
-        'created_at, meta) VALUES (?,?,?,?,?,?)',
-        (user_id, schedule_pk, type_, message, now, meta_json))
+    body = message
+    label = title or sub_type
+    try:
+        c2 = sqlite3.connect(_COMMUNITY_DB, timeout=30)
+        c2.execute(
+            'INSERT INTO notifications(user_empno, type, title, body, '
+            'related_type, related_id, related_pk, sub_type, is_read, created_at) '
+            'VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)',
+            (user_id, 'workflow', label, body,
+             'inspection', 0, schedule_pk, sub_type, now))
+        # meta는 별도 필드가 없어 body 끝에 JSON 형태로 부착하진 않고 sub_type만 남김
+        _ = meta_json   # 현재는 사용 안 함 (필요 시 별도 컬럼 추가)
+        c2.commit(); c2.close()
+    except Exception as e:
+        logger.error(f"워크플로우 알림 INSERT 실패: {e}")
 
 
 def _notify_targets_for_sync(conn, schedule_pk: str, target_team: str) -> list[str]:
@@ -14156,19 +14177,19 @@ def _wf_notify_transition_sync(conn, schedule_pk: str, from_status: str | None,
         'from_status': from_status or '',
         'to_status': to_status,
     }
-    # 메시지 + 수신자 결정 (현재 단순 fallback — 등록자/상태변경자)
+    # (sub_type, title, message)
     msg_map = {
-        WF_PRE_CHECK: ('PRE_CHECK_REQUESTED', f'[{label}] 사전점검이 의뢰되었습니다.'),
-        WF_PRE_CHECK_DONE: ('PRE_CHECK_REPLIED', f'[{label}] 사전점검 완료 회신이 도착했습니다.'),
-        WF_CHANGE_FILING: ('CHANGE_REQUESTED', f'[{label}] 변경개설 신고가 필요합니다.'),
-        WF_RE_CHECK: ('CHANGE_FILED', f'[{label}] 전파관리소 신고가 완료되었습니다.'),
-        WF_REPORT_ISSUED: ('REPORT_ISSUED', f'[{label}] 검사내역서가 발급되었습니다.'),
-        WF_SUBMITTED: ('SUBMITTED', f'[{label}] 전파관리소 접수가 완료되어 수검 가능합니다.'),
-        WF_INSPECTED: ('INSPECTED', f'[{label}] 수검이 완료되었습니다.'),
+        WF_PRE_CHECK:      ('PRE_CHECK_REQUESTED', '사전점검 의뢰',     f'[{label}] 사전점검이 의뢰되었습니다.'),
+        WF_PRE_CHECK_DONE: ('PRE_CHECK_REPLIED',   '사전점검 회신',     f'[{label}] 사전점검 완료 회신이 도착했습니다.'),
+        WF_CHANGE_FILING:  ('CHANGE_REQUESTED',    '변경개설 작성 요청', f'[{label}] 변경개설 신고가 필요합니다.'),
+        WF_RE_CHECK:       ('CHANGE_FILED',        '전파관리소 신고 완료', f'[{label}] 전파관리소 신고가 완료되었습니다.'),
+        WF_REPORT_ISSUED:  ('REPORT_ISSUED',       '검사내역서 발급',   f'[{label}] 검사내역서가 발급되었습니다.'),
+        WF_SUBMITTED:      ('SUBMITTED',           '전파관리소 접수 완료', f'[{label}] 전파관리소 접수가 완료되어 수검 가능합니다.'),
+        WF_INSPECTED:      ('INSPECTED',           '수검 완료',         f'[{label}] 수검이 완료되었습니다.'),
     }
     if to_status not in msg_map:
         return
-    type_, message = msg_map[to_status]
+    sub_type, title, message = msg_map[to_status]
     # 수신자: 등록자(혁신팀) + 상태변경자가 다른 경우 둘 다 — 현재 단순 룰
     recipients = set()
     if sched['등록자']:
@@ -14176,8 +14197,9 @@ def _wf_notify_transition_sync(conn, schedule_pk: str, from_status: str | None,
     # 상태 변경자 본인에게는 보내지 않음 (본인 액션의 결과는 화면에 즉시 반영)
     recipients.discard(changed_by)
     for uid in recipients:
-        _create_notification_sync(conn, uid, type_, message,
-                                  schedule_pk=schedule_pk, meta=meta)
+        _create_notification_sync(conn, uid, sub_type, message,
+                                  schedule_pk=schedule_pk, meta=meta,
+                                  title=title)
 
 
 def _wf_transition_sync(schedule_pk: str, to_status: str, changed_by: str,
@@ -14272,11 +14294,18 @@ async def inspection_schedule_log(pk: str, request: Request):
     return {"items": items}
 
 
-# ── 알림 API (Phase 5) ─────────────────────────────────────────
+# ── 워크플로우 알림 API (Phase 5) ─────────────────────────────
+#
+# 주의: 기존 /notifications (커뮤니티/시정기한, _COMMUNITY_DB)와 분리.
+# 워크플로우 전환 자동 알림은 /inspection/notifications/* 네임스페이스 사용.
+# (URL 충돌로 기존 알림이 가려지던 문제 수정)
 
-@app.get("/notifications")
-async def notifications_list(request: Request, unread_only: bool = False, limit: int = 50):
-    """현재 사용자 알림 목록 (최신순). unread_only=true면 안 읽음만."""
+@app.get("/inspection/notifications")
+async def wf_notifications_list(request: Request, unread_only: bool = False, limit: int = 50):
+    """워크플로우 전환 알림 목록 (최신순). unread_only=true면 안 읽음만.
+
+    저장소: inspection.db / notifications 테이블 (커뮤니티 community.db와 별개)
+    """
     empno = await _verify_auth(request)
     def _read():
         import json as _j
@@ -14303,9 +14332,9 @@ async def notifications_list(request: Request, unread_only: bool = False, limit:
     return {"items": items}
 
 
-@app.get("/notifications/unread-count")
-async def notifications_unread_count(request: Request):
-    """현재 사용자 안 읽음 알림 개수."""
+@app.get("/inspection/notifications/unread-count")
+async def wf_notifications_unread_count(request: Request):
+    """워크플로우 알림 안 읽음 개수."""
     empno = await _verify_auth(request)
     def _count():
         c = sqlite3.connect(_INSP_DB, timeout=60)
@@ -14318,13 +14347,13 @@ async def notifications_unread_count(request: Request):
     return {"count": n}
 
 
-class NotificationReadReq(BaseModel):
+class WfNotificationReadReq(BaseModel):
     ids: list[int] = []   # 비어있으면 전체 안 읽음 → 읽음
 
 
-@app.post("/notifications/mark-read")
-async def notifications_mark_read(request: Request, req: NotificationReadReq):
-    """알림 읽음 처리. ids 비어있으면 본인의 모든 안 읽음 알림 일괄 처리."""
+@app.post("/inspection/notifications/mark-read")
+async def wf_notifications_mark_read(request: Request, req: WfNotificationReadReq):
+    """워크플로우 알림 읽음 처리. ids 비어있으면 본인의 모든 안 읽음 일괄 처리."""
     empno = await _verify_auth(request)
     def _update():
         now = datetime.now(timezone.utc).isoformat()
@@ -18364,6 +18393,17 @@ def _init_community_db():
     )''')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_notif_user ON notifications(user_empno, is_read)')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_notif_created ON notifications(created_at)')
+    # Phase 5: 워크플로우 알림 통합용 추가 컬럼
+    # - related_pk: schedule_pk(year#허가번호 문자열)를 related_id 대신 사용
+    # - sub_type: workflow 알림 세부 타입 (PRE_CHECK_REQUESTED 등)
+    for col, dflt in [
+        ('related_pk', "''"),
+        ('sub_type', "''"),
+    ]:
+        try:
+            conn.execute(f"ALTER TABLE notifications ADD COLUMN {col} TEXT DEFAULT {dflt}")
+        except Exception:
+            pass
     conn.commit()
     conn.close()
 
