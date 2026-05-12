@@ -318,6 +318,10 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
         page: _page, pageSize: 100,
         scheduleYn: _aScheduled,
         scheduleWeek: _aSchedWeek,
+        // Phase 5: 워크플로우 상태/재점검도 서버에 전달
+        // (클라이언트 _filteredItems도 동일 조건 → 멱등 OK)
+        workflowStatus: _statusFilter,
+        needsRecheck: _recheckOnly ? '1' : '',
       );
     } catch (_) { return null; }
   }
@@ -2409,7 +2413,14 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
           padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
           materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-          onSelected: (_) => setState(() => _statusFilter = selected ? '' : value),
+          onSelected: (_) {
+            setState(() {
+              _statusFilter = selected ? '' : value;
+              _page = 1;
+              _selectedLicenseNos.clear();
+            });
+            _loadAll();   // 서버측 workflow_status 필터 재조회
+          },
         ),
       );
     }
@@ -2450,7 +2461,14 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
             padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
             materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-            onSelected: (_) => setState(() => _recheckOnly = !_recheckOnly),
+            onSelected: (_) {
+              setState(() {
+                _recheckOnly = !_recheckOnly;
+                _page = 1;
+                _selectedLicenseNos.clear();
+              });
+              _loadAll();   // 서버측 needs_recheck 필터 재조회
+            },
           ),
         ),
       ]),

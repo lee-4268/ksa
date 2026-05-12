@@ -13456,8 +13456,11 @@ class InspectionDataReq(BaseModel):
     page_size: int = 100
     schedule_yn: str = ""    # 일정등록 여부 필터 (Y/N)
     schedule_week: str = ""  # 수검예정주차 필터
+    workflow_status: str = ""  # Phase 5: 워크플로우 상태 필터 (서버측, '미배정'은 schedule 미존재)
+    needs_recheck: str = ""    # Phase 5: '1' = 재점검 필요만
 
-def _build_insp_where(year, sheet, filters, search, addr, schedule_yn="", schedule_week=""):
+def _build_insp_where(year, sheet, filters, search, addr, schedule_yn="", schedule_week="",
+                     workflow_status="", needs_recheck=""):
     """inspection_data / export 공통 WHERE 절 빌더."""
     ALLOWED_COLS = {'분기','국종군','부서','kca검토결과','시기조정','skt본부','access담당','품질개선팀','허가상태'}
     where = ["year=?"]
@@ -13527,6 +13530,18 @@ def _build_insp_where(year, sheet, filters, search, addr, schedule_yn="", schedu
     if schedule_week:
         where.append("REPLACE(허가번호,'-','') IN (SELECT REPLACE(허가번호,'-','') FROM inspection_schedules WHERE year=? AND TRIM(수검예정주차)=TRIM(?))")
         params.extend([year, schedule_week])
+    # Phase 5: 워크플로우 상태 필터 (대시보드 카드 → 일정 화면 점프용)
+    if workflow_status:
+        if workflow_status == '미배정':
+            # 일정 미등록 — schedule이 없는 건만
+            where.append("REPLACE(허가번호,'-','') NOT IN (SELECT REPLACE(허가번호,'-','') FROM inspection_schedules WHERE year=?)")
+            params.append(year)
+        else:
+            where.append("REPLACE(허가번호,'-','') IN (SELECT REPLACE(허가번호,'-','') FROM inspection_schedules WHERE year=? AND workflow_status=?)")
+            params.extend([year, workflow_status])
+    if needs_recheck == '1':
+        where.append("REPLACE(허가번호,'-','') IN (SELECT REPLACE(허가번호,'-','') FROM inspection_results WHERE year=? AND needs_recheck='1')")
+        params.append(year)
     return " AND ".join(where), params
 
 @app.post("/inspection/data")
@@ -13534,7 +13549,10 @@ async def inspection_data(request: Request, req: InspectionDataReq):
     """필터 적용 데이터 조회 (페이지네이션)."""
     await _verify_auth(request)
     if not os.path.exists(_INSP_DB): return {"items": [], "total": 0}
-    where_sql, params = _build_insp_where(req.year, req.sheet, req.filters, req.search, req.addr, req.schedule_yn, req.schedule_week)
+    where_sql, params = _build_insp_where(
+        req.year, req.sheet, req.filters, req.search, req.addr,
+        req.schedule_yn, req.schedule_week,
+        req.workflow_status, req.needs_recheck)
     def _read():
         # cert_cache에서 zpcode → zpprac1 매핑 별도 로드
         zpprac1_map: dict = {}
