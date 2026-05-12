@@ -1613,16 +1613,31 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                 ),
               ),
               if (_total > 0)
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFF0F9FF),
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: const Color(0xFFBAE6FD)),
-                  ),
-                  child: Text('${_formatNumber(_total)}건',
-                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF0369A1))),
-                ),
+                Builder(builder: (_) {
+                  // 조 필터는 클라이언트 사이드라 _total(서버 카운트)에 미반영.
+                  // 조/상태 필터 활성 시 현재 페이지에서 필터된 건수를 표시.
+                  final clientFiltered = _aCrew.isNotEmpty || _statusFilter.isNotEmpty;
+                  final shown = clientFiltered ? _filteredItems.length : _total;
+                  final truncated = clientFiltered && _total > _items.length;
+                  return Tooltip(
+                    message: truncated
+                        ? '서버 전체 ${_formatNumber(_total)}건 중 현재 페이지 ${_formatNumber(_items.length)}건만 클라이언트 필터 대상. 더 정확히 보려면 본부/팀/주차 필터를 먼저 좁혀주세요.'
+                        : '서버 전체 ${_formatNumber(_total)}건',
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFF0F9FF),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: const Color(0xFFBAE6FD)),
+                      ),
+                      child: Text(
+                        clientFiltered
+                            ? '${_formatNumber(shown)}건 / 전체 ${_formatNumber(_total)}건'
+                            : '${_formatNumber(_total)}건',
+                        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF0369A1))),
+                    ),
+                  );
+                }),
               if (_isAdmin)
                 OutlinedButton.icon(
                   icon: const Icon(Icons.add_circle_outline, size: 16),
@@ -2389,27 +2404,34 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     final status = _scheduleStatusMap[licenseNo];
     final submission = _scheduleSubmissionMap[licenseNo] ?? '';
     if (week.isEmpty && status == null) return const SizedBox.shrink();
+    final showSubmission = status == 'SUBMITTED' && submission.isNotEmpty;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
         if (week.isNotEmpty)
-          Text(week, style: const TextStyle(fontSize: 12, color: Color(0xFF2D3436))),
+          Text(week, style: const TextStyle(fontSize: 12, color: Color(0xFF2D3436)),
+              maxLines: 1, overflow: TextOverflow.ellipsis),
         if (status != null) ...[
           if (week.isNotEmpty) const SizedBox(height: 2),
-          _buildStatusBadge(status),
-        ],
-        // SUBMITTED: 접수번호 표시
-        if (status == 'SUBMITTED' && submission.isNotEmpty) ...[
-          const SizedBox(height: 2),
-          Tooltip(
-            message: '접수번호: $submission',
-            child: Text('# $submission',
-                style: const TextStyle(fontSize: 10, color: Color(0xFF0984E3),
-                    fontWeight: FontWeight.w600),
-                maxLines: 1, overflow: TextOverflow.ellipsis),
-          ),
+          // SUBMITTED일 때만 배지 옆에 접수번호 함께 표시 (셀 높이 제한 안 침범)
+          showSubmission
+              ? Row(mainAxisSize: MainAxisSize.min, children: [
+                  _buildStatusBadge(status),
+                  const SizedBox(width: 4),
+                  Flexible(
+                    child: Tooltip(
+                      message: '접수번호: $submission',
+                      child: Text('#$submission',
+                          style: const TextStyle(
+                              fontSize: 10, color: Color(0xFF0984E3),
+                              fontWeight: FontWeight.w600),
+                          maxLines: 1, overflow: TextOverflow.ellipsis),
+                    ),
+                  ),
+                ])
+              : _buildStatusBadge(status),
         ],
       ],
     );
