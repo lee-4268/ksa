@@ -1071,16 +1071,36 @@ def _list_all_users_sync() -> list:
         })
 
 
-    # 대소문자 중복 제거 (대문자 키 우선, 프로필 있는 쪽 우선)
-    deduped = {}
+    # 대소문자 중복 제거.
+    # 동일 사번이 대소문자 다르게 여러 row로 존재할 수 있으므로 안전하게 병합:
+    # - role 우선순위: admin > manager > member (높은 권한 유지)
+    # - last_login: 더 최근 값 유지
+    # - is_dormant: 한 쪽이라도 False면 활성으로 간주
+    # - empno: 대문자 버전으로 통일 (인증/감사 추적 용이)
+    # - 이름/프로필: 채워진 쪽 우선
+    _ROLE_RANK = {"admin": 3, "manager": 2, "member": 1, "": 0}
+    deduped: dict = {}
     for u in users:
         key = u["empno"].upper()
         if key not in deduped:
+            # 키는 대문자로 통일하되 row 자체의 empno도 대문자로 강제
+            u["empno"] = key
             deduped[key] = u
-        else:
-            # 이름이 있는 쪽을 우선 (프로필 조회 성공한 쪽)
-            if not deduped[key].get("name") and u.get("name"):
-                deduped[key] = u
+            continue
+        cur = deduped[key]
+        # role: 우선순위 높은 쪽
+        if _ROLE_RANK.get(u.get("role") or "", 0) > _ROLE_RANK.get(cur.get("role") or "", 0):
+            cur["role"] = u["role"]
+        # last_login: 더 최근
+        if (u.get("last_login") or "") > (cur.get("last_login") or ""):
+            cur["last_login"] = u["last_login"]
+        # is_dormant: 한 쪽이라도 활성이면 활성
+        if not u.get("is_dormant"):
+            cur["is_dormant"] = False
+        # 이름/프로필 정보: 채워진 쪽 우선
+        for fld in ("name", "region", "team", "email", "phone"):
+            if not cur.get(fld) and u.get(fld):
+                cur[fld] = u[fld]
     users = list(deduped.values())
 
     users.sort(key=lambda u: u.get("name") or "")
