@@ -148,3 +148,60 @@ Row(
 - 월 선택 시 `getResultsWeeks()` 호출로 실제 업로드된 주차만 표시
 - 주차 로딩 중 CircularProgressIndicator 표시
 - 선택 항목이 없으면 '전체'로 처리
+
+## 워크플로우 상태 배지 (Phase 1~5)
+
+`_buildStatusBadge(status)` — 모든 화면에서 동일한 색/라벨 사용:
+
+| 상태 | 라벨 | 색 |
+|------|------|-----|
+| REGISTERED | 등록됨 | `#6E7780` |
+| PRE_CHECK | 사전점검중 | `#6B47DC` |
+| PRE_CHECK_DONE | 점검완료 | `#1A8754` |
+| CHANGE_FILING | 변경개설중 | `#E17055` |
+| RE_CHECK | 재점검대기 | `#E17055` |
+| REPORT_ISSUED | 내역서발급 | `#0984E3` |
+| SUBMITTED | 접수완료 | `#0984E3` |
+| INSPECTED | 수검완료 | `#2D3436` |
+
+### 셀 내 배지 + 부가 정보 패턴 (높이 제한 안 침범)
+일정 화면 셀은 `dataRowMaxHeight: 46` 제약이 있어 세 줄 이상은 아래 행을 침범함.
+SUBMITTED 행에 접수번호 / INSPECTED 행에 재점검 칩 같은 부가 정보는 **배지 옆 한 줄**로:
+```dart
+Row(mainAxisSize: MainAxisSize.min, children: [
+  _buildStatusBadge(status),
+  const SizedBox(width: 4),
+  Flexible(child: Text('#$submission',
+      style: ..., maxLines: 1, overflow: TextOverflow.ellipsis)),
+])
+```
+
+## 알림 종 아이콘 (Phase 5)
+
+`widgets/notification_bell_button.dart`의 `NotificationBellButton` 위젯 재사용:
+- 안 읽음 카운트 빨간 배지 (60초 폴링)
+- 클릭 → `NotificationPanel` 다이얼로그 (안 읽음 토글 + 모두 읽음 + 타입별 색상 배지)
+- **홈 화면에만 노출** — 모바일 AppBar 우상단 / 데스크탑은 사이드바 사용자 카드는 중복 회피로 제거됨
+
+### 로그인 자동 팝업
+- `maybeShowLoginNotificationPopup(context, svc)` — 홈 컨텐츠 `initState`에서 `addPostFrameCallback`으로 호출
+- 안 읽음 > 0 이고 오늘 '보지 않기' 미설정 시 자동 표시
+- 패널 푸터에 "오늘은 더이상 보지 않기" 체크박스 → SharedPreferences에 날짜키로 저장 (자정에 자동 초기화)
+- key 포맷: `notification_popup_hidden_YYYY-MM-DD`
+
+## 홈 대시보드 위젯 (Phase 5)
+
+`widgets/inspection_dashboard_widget.dart`의 `InspectionDashboardWidget`:
+- 위치: 홈 화면 커뮤니티 ↔ 바로가기 사이
+- 역할 자동 분기 (admin/manager/member) — 백엔드 `GET /inspection/dashboard?year=`에 위임
+- 상태별 8개 카드 (반응형 그리드: 720+ = 4열 / 480+ = 3열 / 그 외 2열)
+- 재점검 필요 + SLA 지연 알림 카드 (개수 0이면 자동 숨김)
+- 지연 건 상위 5개 미니 리스트
+- 카드 클릭 → 일정 화면으로 점프 + 해당 필터 자동 적용 (`InspectionScheduleScreen.initialStatusFilter`)
+- 재점검 카드 클릭 → 일정 화면 `_recheckOnly` 토글 ON (특수 토큰 `'RECHECK'` 사용)
+
+## 일정 화면 탭 순서 (Phase 5 보정)
+
+- 좌(인덱스 0): 수검 대상 현황 (기본 진입)
+- 우(인덱스 1): 매트릭스
+- 매트릭스 셀 클릭 시 → `_tabCtrl.animateTo(0)`으로 수검대상 탭 이동

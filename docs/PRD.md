@@ -203,6 +203,37 @@ KSA (Korea Station Administration) - 무선국 검사 관리 시스템
 | 로그인 차단 | is_dormant=true 계정 로그인 시 403 반환 | P0 |
 | 관리자 휴면 해제 | 관리자 화면에서 휴면 해제 버튼, POST /admin/undormant/{empno} | P1 |
 
+### 2.17 수검 워크플로우 시스템 (v2.2.0 — Phase 1~5)
+
+연간 수검 일정 등록부터 현장 수검 완료까지 팀 간 인계가 시스템 내에서 논스톱으로 이뤄지도록 만든 전체 흐름.
+상세: [`inspection_workflow_roadmap.md`](inspection_workflow_roadmap.md)
+
+#### 상태 머신
+```
+REGISTERED → PRE_CHECK → PRE_CHECK_DONE → REPORT_ISSUED → SUBMITTED → INSPECTED
+                │            ↑
+                └─ CHANGE_FILING → RE_CHECK ─┘  (변경개설 분기)
+   └────────────────── REPORT_ISSUED 직행 (사전점검 스킵)
+```
+
+| 기능 | 설명 | 우선순위 |
+|------|------|----------|
+| 상태 머신 8단계 | workflow_status 컬럼 + `inspection_status_log` 전환 이력 | P0 |
+| 권한 매트릭스 | admin은 모든 전환 / 그 외는 `_WF_TRANSITIONS` 정의에 따름 | P0 |
+| 사전점검 의뢰 (Phase 1) | 다중 선택 + 일괄 PRE_CHECK 전환, 품개팀에 자동 알림 | P0 |
+| 전산비교 회신 (Phase 1) | 결과 첨부 + 자동 PRE_CHECK_DONE, 불일치/DS누락 0 가드 | P0 |
+| 변경개설 분기 (Phase 2) | change_request 등록 + A파일(신고서) xls 자동 생성 + 부분 DS 적용 후 자동 재비교 | P0 |
+| 검사내역서 발급 (Phase 3) | 다중 schedule_pk 묶음 → xls 즉시 다운로드 + REPORT_ISSUED 자동 전환 (상태 무관 발급 허용) | P0 |
+| 접수번호 입력 (Phase 3) | 단건/일괄 입력 + SUBMITTED 자동 전환, 발급 직후 자동 다이얼로그 + 추후 일정 화면에서도 입력 | P0 |
+| 검사 결과 자동 연결 (Phase 4) | 결과 저장 시 SUBMITTED → INSPECTED 자동 전환, 합격 외엔 `needs_recheck='1'` 세팅 | P0 |
+| 재점검 필요 표시 (Phase 4) | INSPECTED 셀에 "재점검" 칩 + 일정 화면에 "재점검 필요 · N" 토글 필터 (재점검 일정 자동 생성 안 함) | P1 |
+| 두 status 분리 (Phase 4) | `workflow_status` vs `inspection_results.status` 분리, INSPECTED 미만은 결과 컬럼 숨김 | P0 |
+| 현장수검 Map 필터 (Phase 4) | "수검가능" 토글 (기본 ON): SUBMITTED/REPORT_ISSUED/INSPECTED만 마커 표시 | P1 |
+| 시스템 내 알림 (Phase 5) | notifications 테이블 + 전환 시 자동 생성 (7종) + 우상단 종 + 60초 폴링 | P1 |
+| 로그인 자동 팝업 (Phase 5) | 안 읽음 > 0 시 홈 진입 직후 자동 표시, "오늘은 더이상 보지 않기" 체크박스 (SharedPreferences) | P1 |
+| 역할별 대시보드 (Phase 5) | admin=전사 / manager=본부 / member=팀, 상태 8장 카드 + 재점검/SLA 지연 강조 + 일정화면 자동 점프 | P0 |
+| SLA 임계점 (Phase 5) | 단계별 임계점 하드코딩 (_SLA_DAYS), 초과 건 대시보드에 강조 (자동 알림은 향후) | P2 |
+
 ---
 
 ## 3. 데이터 모델
@@ -339,6 +370,7 @@ DynamoDB Table: `kca-user-roles` (PK=user_id)
 
 | 필드명 | 타입 | 설명 |
 |--------|------|------|
+| pk | String | `year#허가번호` — 모든 흐름의 단일 키 |
 | year | String | 수검 연도 |
 | 허가번호 | String | 무선국 허가번호 |
 | 호출명칭 | String | 호출명칭 |
@@ -346,9 +378,42 @@ DynamoDB Table: `kca-user-roles` (PK=user_id)
 | skt본부 | String | SKT 본부 |
 | access담당 | String | Access 담당자 |
 | 품질개선팀 | String | 품질개선팀 담당 |
-| status | String | 수검 상태 |
-| 검사일 | String | 검사 실시일 |
-| 메모 | String | 특이사항 |
+| 수검예정주차 | String | 수검 주차 |
+| 검사관 | String | 검사관 |
+| 조 | String | 조 (1조/2조 등) |
+| **workflow_status** | String | Phase 1: 워크플로우 상태 (REGISTERED ~ INSPECTED) |
+| status_updated_at/by | String | Phase 1: 상태 변경 시각/주체 (SLA 산정 기준) |
+| pre_check_result | TEXT | Phase 1: 전산비교 결과 (JSON) |
+| **report_issued_at/by** | String | Phase 3: 검사내역서 발급 시각/주체 |
+| **submission_no, submitted_at** | String | Phase 3: 전파관리소 접수번호/일시 |
+
+### 3.9.1 검사 결과 (InspectionResult)
+SQLite Table: `inspection_results`
+
+| 필드명 | 타입 | 설명 |
+|--------|------|------|
+| pk | String | `year#허가번호` (= inspection_schedules.pk) |
+| status | String | 검사 결과 (합격/불합격/부적합) — INSPECTED 단계부터만 화면에 표시 |
+| 검사일 | String | 입회자가 검사한 날 |
+| 메모, 철탑형태, 사진S3키, 입력자, 입력일시 | — | 기본 메타 |
+| **schedule_pk** | String | Phase 4: 일정과 명시적 연결 (백필로 자기 자신 복사) |
+| **needs_recheck** | String | Phase 4: '1' = 불합격/부적합 → 혁신팀이 수동으로 재점검 일정 등록 |
+
+### 3.9.2 상태 전환 이력 (InspectionStatusLog)
+SQLite Table: `inspection_status_log`
+- id, schedule_pk, from_status, to_status, changed_by, changed_at, memo
+
+### 3.9.3 변경개설 요청 (ChangeRequest)
+SQLite Table: `change_request`
+- field ∈ {일련번호, 형식검정번호, 설치형태, 설치장소}
+- status: REQUESTED → FILED → APPLIED → VERIFIED
+- 부분 DS 업로드 시 자동 재비교로 VERIFIED 처리
+
+### 3.9.4 알림 (Notification)
+SQLite Table: `notifications` (Phase 5)
+- user_id (수신자 사번), schedule_pk, type, message, read_at, created_at, meta (JSON)
+- type: PRE_CHECK_REQUESTED / PRE_CHECK_REPLIED / CHANGE_REQUESTED / CHANGE_FILED / RE_CHECK_DONE / REPORT_ISSUED / SUBMITTED / INSPECTED / SLA_OVERDUE
+- 워크플로우 전환 시 `_wf_record_log_sync` 내부에서 자동 생성
 
 ### 3.10 실적 결과장 (InspectionResultsRaw)
 SQLite Table: `inspection_results_raw`
@@ -732,3 +797,4 @@ DS 데이터 관리 → 업로드 카드 → Excel Export 버튼
 | 1.4.0 | 2026-03-04 | 보안 강화: HMAC 토큰 인증, 관리자 패널, Rate Limiting, S3 경로 검증, CORS 제한, API 키 분리, 에러 보안 | Dev Team |
 | 2.0.0 | 2026-03-23 | 호출명칭 매칭, 설치확인서 생성, 수검 관리 시스템, ERP-DS 데이터 비교, 본부 대상 관리, 전국 현황 대시보드 추가 | Dev Team |
 | 2.1.0 | 2026-04-06 | 실적 관리 대시보드 고도화 (차트/리포트/지도 동기화), Excel Export 3단계, 내비 딥링크, 휴면계정 배치, 마지막 로그인/휴면 표시, 테스트계정 전체조회 분리, ProgressDialog, 각종 버그 수정 | Dev Team |
+| 2.2.0 | 2026-05-12 | 수검 워크플로우 시스템 Phase 1~5 완료: 상태 머신 8단계 + 변경개설 분기 + 검사내역서 발급/접수번호 트래킹 + 결과 자동 연결 + 재점검 플래그 + 시스템 내 알림 + 역할별 대시보드 + SLA 강조 + 로그인 자동 팝업 | Dev Team |

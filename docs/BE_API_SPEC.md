@@ -1159,6 +1159,129 @@ DS 데이터에서 수검 상세 인덱스 빌드
 
 ---
 
+## 8.5 수검 워크플로우 API (Phase 1~5)
+
+전체 흐름: REGISTERED → PRE_CHECK → PRE_CHECK_DONE → REPORT_ISSUED → SUBMITTED → INSPECTED
+(분기: CHANGE_FILING → RE_CHECK / 사전점검 스킵: REGISTERED → REPORT_ISSUED)
+
+### Phase 1: 상태 전환
+
+#### `PATCH /inspection/schedule/{pk}/status`
+단일 일정 상태 전환.
+- Body: `{ "to_status": "PRE_CHECK", "memo": "" }`
+- `_wf_can_transition` 가드 (admin은 전체 허용)
+- `inspection_status_log` 기록 + Phase 5 알림 자동 생성
+
+#### `POST /inspection/schedule/transition-bulk`
+다중 일정 일괄 전환 (혁신팀 사전점검 의뢰 등).
+- Body: `{ "schedule_pks": [], "to_status": "PRE_CHECK", "memo": "" }`
+- Response: `{ "success": true, "total": N, "succeeded": M, "results": [...] }`
+
+#### `GET /inspection/schedule/{pk}/log`
+상태 전환 이력.
+
+#### `POST /inspection/schedule/{pk}/pre-check-result`
+전산비교 결과 첨부 + PRE_CHECK_DONE 자동 전환.
+- Body: `{ "summary": {...}, "items": [...], "confirmation_acknowledged": true }`
+- 불일치/DS누락 0건이어야 통과, 확인필요는 동의 필요
+
+### Phase 2: 변경개설 분기
+
+#### `POST /inspection/schedule/{pk}/change-request`
+변경 요청 등록 + PRE_CHECK → CHANGE_FILING 전환.
+- Body: `{ "items": [{ "field", "before", "after", "장치번호?", "memo?" }] }`
+
+#### `GET /change-request?schedule_pk=&status=`
+변경 요청 목록 (혁신팀).
+
+#### `PATCH /change-request/file`
+신고 완료 → 모든 change_request FILED + CHANGE_FILING → RE_CHECK 전환.
+- Body: `{ "schedule_pk": "..." }`
+
+#### `POST /change-request/generate-form`
+변경개설 신고서 xls 즉시 다운로드 (묶음 또는 단건).
+- Query: `품질개선팀, 수검예정주차, 조, year` 또는 `schedule_pk`
+- Response: xls 스트림 (xlwt)
+
+#### `POST /ds/apply-partial-update`
+부분 DS 업로드 → ds_detail.db 패치 + 자동 재비교 + 워크플로우 전환.
+- Multipart: `file` (부분 DS xls)
+- Response: `{ "matched_changes": N, "applied": M, "schedule_done": [...] }`
+
+### Phase 3: 검사내역서 발급 + 접수 트래킹
+
+#### `POST /inspection/report/generate`
+다중 schedule_pk → 검사내역서 xls 즉시 다운로드.
+- Body: `{ "schedule_pks": [...], "sheet_title": "" }`
+- **워크플로우 상태 무관 발급 허용** (수검완료 건 포함). 전환 가능한 건만 REPORT_ISSUED로 이동
+- 발급 성공 시 `report_issued_at/by` 모든 건에 갱신
+- 기존 `/inspection/export-inspection-report` 빌더 100% 재활용
+- Response: xls 스트림
+
+#### `PATCH /inspection/schedule/{pk}/submission`
+단건 접수번호 입력 → REPORT_ISSUED → SUBMITTED.
+- Body: `{ "submission_no": "...", "submitted_at": "" }` (submitted_at 비면 서버 시각)
+
+#### `POST /inspection/schedule/submission-bulk`
+다중 일정 접수번호 일괄 입력 (검사내역서 발급 직후 또는 추후 일정 화면에서).
+- Body: `{ "schedule_pks": [...], "submission_no": "...", "submitted_at": "" }`
+- 전환 가능한 건만 처리, results에 사유 포함
+
+### Phase 5: 역할별 대시보드
+
+#### `GET /inspection/dashboard?year=`
+역할별 워크플로우 집계.
+- admin: 전사 / manager: 자기 본부 / member: 자기 본부+팀
+- Response:
+```json
+{
+  "role": "manager",
+  "scope": "경북",
+  "counts": { "REGISTERED": 12, "PRE_CHECK": 5, ... },
+  "recheck": 3,
+  "overdue": [
+    { "pk", "호출명칭", "허가번호", "status", "days_overdue", "threshold" }
+  ],
+  "overdue_total": 8
+}
+```
+- SLA 임계점(`_SLA_DAYS`): PRE_CHECK 5일, CHANGE_FILING 3일, RE_CHECK 7일, REPORT_ISSUED 3일, SUBMITTED 14일
+
+---
+
+## 8.6 알림 API (Phase 5)
+
+시스템 내 알림 전용. 이메일/Slack/푸시 미사용.
+워크플로우 전환 시 `_wf_record_log_sync` 안에서 자동 생성 (`_wf_notify_transition_sync`).
+
+#### `GET /notifications?unread_only=&limit=`
+현재 사용자 알림 목록 (최신순).
+- Response: `{ "items": [{ id, user_id, schedule_pk, type, message, read_at, created_at, meta }] }`
+- meta는 서버에서 JSON 파싱하여 반환
+
+알림 type 매핑:
+| type | 트리거 |
+|------|--------|
+| PRE_CHECK_REQUESTED | REGISTERED → PRE_CHECK |
+| PRE_CHECK_REPLIED | PRE_CHECK → PRE_CHECK_DONE |
+| CHANGE_REQUESTED | PRE_CHECK → CHANGE_FILING |
+| CHANGE_FILED | CHANGE_FILING → RE_CHECK |
+| RE_CHECK_DONE | RE_CHECK → PRE_CHECK_DONE (시스템 자동) |
+| REPORT_ISSUED | (전환 → REPORT_ISSUED) |
+| SUBMITTED | (전환 → SUBMITTED) |
+| INSPECTED | (전환 → INSPECTED) |
+| SLA_OVERDUE | (예약) — 임계점 초과 건 일괄 배치 |
+
+#### `GET /notifications/unread-count`
+- Response: `{ "count": N }`
+- 종 아이콘 빨간 배지에 사용 (60초 폴링)
+
+#### `POST /notifications/mark-read`
+- Body: `{ "ids": [int] }` — 비어있으면 본인의 모든 안 읽음 일괄 처리
+- Response: `{ "success": true, "updated": N }`
+
+---
+
 ## 9. 실적 결과장 API (v2.1.0)
 
 Base URL: `https://api-sko-kca.skons.net`

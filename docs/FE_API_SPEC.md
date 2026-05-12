@@ -542,6 +542,37 @@ class WeatherInfo {
 | `getResultsWeeks` | `Future<List<String>> getResultsWeeks(int year, {String month, String region})` | 업로드된 주차 목록 동적 조회 |
 | `exportResultsXlsx` | `Future<Uint8List> exportResultsXlsx(int year, {String region, String week})` | 결과장 XLSX 다운로드 |
 
+### Workflow Methods (Phase 1~5)
+
+| 메서드 | 시그니처 | 설명 |
+|--------|---------|------|
+| `transitionStatus` | `Future<void> transitionStatus(String pk, String toStatus, {String memo})` | 단일 일정 상태 전환 |
+| `transitionStatusBulk` | `Future<Map> transitionStatusBulk(List<String> pks, String toStatus, {String memo})` | 다중 일정 일괄 전환 |
+| `getScheduleLog` | `Future<List<Map>> getScheduleLog(String pk)` | 전환 이력 조회 |
+| `submitPreCheckResult` | `Future<void> submitPreCheckResult(String pk, Map summary, {List items, bool confirmationAcknowledged})` | 전산비교 결과 첨부 + PRE_CHECK_DONE 전환 |
+| `createChangeRequest` | `Future<void> createChangeRequest(String pk, List<Map> items)` | 변경 요청 등록 |
+| `listChangeRequests` | `Future<List<Map>> listChangeRequests({String schedulePk, String status})` | 변경 요청 목록 |
+| `markChangeRequestsFiled` | `Future<void> markChangeRequestsFiled(String schedulePk)` | 신고 완료 → RE_CHECK |
+| `downloadChangeRequestForm` | `Future<Uint8List> downloadChangeRequestForm(...)` | 신고서 xls 다운로드 |
+| `applyPartialDs` | `Future<Map> applyPartialDs(Uint8List bytes, String filename)` | 부분 DS 업로드 + 자동 재비교 |
+
+### Phase 3: 검사내역서 + 접수
+
+| 메서드 | 시그니처 | 설명 |
+|--------|---------|------|
+| `generateInspectionReport` | `Future<Uint8List> generateInspectionReport({required List<String> schedulePks, String sheetTitle})` | 검사내역서 발급 + REPORT_ISSUED 전환 |
+| `submitInspection` | `Future<void> submitInspection({required String schedulePk, required String submissionNo, String submittedAt})` | 단건 접수번호 입력 → SUBMITTED |
+| `submitInspectionBulk` | `Future<Map> submitInspectionBulk({required List<String> schedulePks, required String submissionNo, String submittedAt})` | 다중 일정 접수번호 일괄 입력 |
+
+### Phase 5: 알림 + 대시보드
+
+| 메서드 | 시그니처 | 설명 |
+|--------|---------|------|
+| `getNotifications` | `Future<List<Map>> getNotifications({bool unreadOnly, int limit})` | 알림 목록 (안 읽음 필터 가능) |
+| `getUnreadNotificationCount` | `Future<int> getUnreadNotificationCount()` | 안 읽음 카운트 (종 배지용) |
+| `markNotificationsRead` | `Future<int> markNotificationsRead({List<int> ids})` | ids 비면 전체 일괄 읽음 |
+| `getDashboard` | `Future<Map> getDashboard(int year)` | 역할별 대시보드 집계 |
+
 ---
 
 ## 16. ErpDsCompareService (v2.0.0)
@@ -636,6 +667,15 @@ ERP vs DS 데이터 비교를 담당합니다. Bearer 토큰 인증 사용.
 ├── AI 철탑형태 분류   → TowerClassificationScreen
 └── 관리자 패널       → AdminPanelScreen (admin/manager only)
 ```
+
+### 공통 위젯 (Phase 5 추가)
+
+| 위젯 | 파일 | 사용처 |
+|------|------|--------|
+| `NotificationBellButton` | `widgets/notification_bell_button.dart` | 홈 모바일 AppBar 우상단 — 안 읽음 빨간 배지 (60초 폴링) + 클릭 시 `NotificationPanel` 다이얼로그 |
+| `NotificationPanel` | `widgets/notification_bell_button.dart` | 종 클릭 시 / 로그인 자동 팝업 (`loginPopupMode: true`) — 안 읽음 토글, 모두 읽음, 오늘 보지 않기 |
+| `maybeShowLoginNotificationPopup` | `widgets/notification_bell_button.dart` | 홈 진입 직후 자동 호출 — SharedPreferences 키 `notification_popup_hidden_YYYY-MM-DD` 확인 |
+| `InspectionDashboardWidget` | `widgets/inspection_dashboard_widget.dart` | 홈 화면 "내 할 일" 섹션 — 역할별 자동 분기, 상태 8장 카드 + 재점검/지연 카드 |
 
 ### DsDashboardScreen 구조
 

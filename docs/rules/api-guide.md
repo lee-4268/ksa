@@ -44,9 +44,33 @@ Authorization: Bearer {base64url(empno:expiry:hmac_sha256)}
 | POST | `/inspection/enqueue` | 대상 확정 (→ 자동 지오코딩 백그라운드 실행) |
 | GET | `/inspection/my-list` | 내 팀 배정 목록 |
 | GET | `/inspection/my-list/weeks` | 내 팀 수검예정주차 목록 |
-| GET | `/inspection/schedules` | 일정 조회 |
-| POST | `/inspection/result` | 검사 결과 저장 |
+| GET | `/inspection/schedules` | 일정 조회 (Phase 4: needs_recheck, result_status LEFT JOIN 포함) |
+| POST | `/inspection/result` | 검사 결과 저장 (Phase 4: SUBMITTED→INSPECTED 자동 전환 + 불합격 시 needs_recheck) |
 | GET | `/inspection/data` | 검사 데이터 조회 |
+
+### 수검 워크플로우 (Phase 1~5)
+| Method | Path | 설명 |
+|--------|------|------|
+| PATCH | `/inspection/schedule/{pk}/status` | 단일 일정 상태 전환 |
+| POST | `/inspection/schedule/transition-bulk` | 다중 일정 일괄 전환 (사전점검 의뢰 등) |
+| GET | `/inspection/schedule/{pk}/log` | 상태 전환 이력 조회 |
+| POST | `/inspection/schedule/{pk}/pre-check-result` | 전산비교 결과 첨부 + PRE_CHECK_DONE 전환 |
+| POST | `/inspection/schedule/{pk}/change-request` | 변경개설 요청 등록 + CHANGE_FILING 전환 |
+| GET | `/change-request` | 변경개설 요청 목록 (혁신팀) |
+| PATCH | `/change-request/file` | 신고 완료 → RE_CHECK 전환 |
+| POST | `/change-request/generate-form` | 변경개설 신고서(A파일) xls 생성 |
+| POST | `/ds/apply-partial-update` | 부분 DS 업로드 + 자동 재비교 |
+| POST | `/inspection/report/generate` | 검사내역서 xls 발급 (Phase 3, 상태 무관 허용) |
+| PATCH | `/inspection/schedule/{pk}/submission` | 단건 접수번호 입력 → SUBMITTED |
+| POST | `/inspection/schedule/submission-bulk` | 다중 일정 접수번호 일괄 입력 (Phase 3) |
+| GET | `/inspection/dashboard?year=` | 역할별 대시보드 집계 + SLA 지연 (Phase 5) |
+
+### 알림 (Phase 5)
+| Method | Path | 설명 |
+|--------|------|------|
+| GET | `/notifications?unread_only=&limit=` | 현재 사용자 알림 목록 |
+| GET | `/notifications/unread-count` | 안 읽음 알림 개수 (종 아이콘 배지용) |
+| POST | `/notifications/mark-read` | 알림 읽음 처리 (ids 비면 일괄) |
 
 ### 실적 관리
 | Method | Path | 설명 |

@@ -39,13 +39,36 @@ skt본부, access담당, 품질개선팀, 위도, 경도, ...
 
 ### inspection_schedules — 수검 일정
 ```sql
-pk (허가번호+year), year, 허가번호, access담당, 품질개선팀,
-수검예정주차, 검사종류(정기/시기조정), ...
+pk (year#허가번호), year, 허가번호, access담당, 품질개선팀,
+수검예정주차, 검사관, 조, 등록자, 등록일시,
+-- Phase 1: 워크플로우 상태 머신
+workflow_status DEFAULT 'REGISTERED',
+status_updated_at, status_updated_by,
+pre_check_result TEXT,    -- JSON (전산비교 결과)
+-- Phase 3: 검사내역서 발급/접수 트래킹
+report_issued_at, report_issued_by,
+submission_no, submitted_at
+```
+
+### inspection_status_log — 워크플로우 전환 이력 (Phase 1)
+```sql
+id, schedule_pk, from_status, to_status, changed_by, changed_at, memo
+```
+
+### change_request — 변경개설 요청 (Phase 2)
+```sql
+id, schedule_pk, 허가번호, field, before_value, after_value,
+장치번호, memo, status (REQUESTED/FILED/APPLIED/VERIFIED),
+requested_by, requested_at, filed_by, filed_at, applied_at
 ```
 
 ### inspection_results — 현장 검사 결과
 ```sql
-pk, status, 검사일, 메모, 철탑형태, 사진S3키, ...
+pk (year#허가번호), status, 검사일, 메모, 철탑형태, 사진S3키, 입력자, 입력일시,
+진행여부, 성능서류, 불합격내용, 불합격상세, 공용화대상, ...,
+-- Phase 4: 일정 연결 + 재점검 필요 플래그
+schedule_pk TEXT DEFAULT '',
+needs_recheck TEXT DEFAULT '0'    -- '1' = 불합격/부적합 → 혁신팀이 수동으로 재점검 일정 등록
 ```
 
 ### inspection_results_raw — 실적 결과장 (업로드 데이터)
@@ -53,6 +76,17 @@ pk, status, 검사일, 메모, 철탑형태, 사진S3키, ...
 year, region, 주차별, 허가번호, 통합시설코드, 합불여부,
 성능서류, 장비타입, 장비타입간소화, ...
 ```
+
+### notifications — 시스템 내 알림 (Phase 5)
+```sql
+id, user_id (수신자 사번), schedule_pk,
+type (PRE_CHECK_REQUESTED/PRE_CHECK_REPLIED/CHANGE_REQUESTED/CHANGE_FILED
+      /RE_CHECK_DONE/REPORT_ISSUED/SUBMITTED/INSPECTED/SLA_OVERDUE),
+message, read_at, created_at,
+meta TEXT    -- JSON (호출명칭, 허가번호, from_status, to_status)
+```
+- 워크플로우 전환 시 `_wf_record_log_sync` 내부에서 자동 생성
+- 이메일/푸시 미사용 (시스템 내 알림 전용)
 
 ## SQLite: cert_cache.db
 
