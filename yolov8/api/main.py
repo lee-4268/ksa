@@ -11479,6 +11479,10 @@ def _init_inspection_db():
     conn.execute('CREATE INDEX IF NOT EXISTS idx_it_품질팀 ON inspection_targets(품질개선팀)')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_it_skt본부 ON inspection_targets(skt본부)')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_it_국종군 ON inspection_targets(국종군)')
+    # Phase 5 성능 — inspection_data 쿼리 최적화용 복합 인덱스
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_it_year_허가번호 ON inspection_targets(year, 허가번호)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_it_year_access ON inspection_targets(year, access담당)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_it_year_team ON inspection_targets(year, 품질개선팀)')
     conn.execute('''CREATE TABLE IF NOT EXISTS inspection_targets_staging (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         year INTEGER, sheet TEXT,
@@ -11523,6 +11527,9 @@ def _init_inspection_db():
     )''')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_is_year ON inspection_schedules(year)')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_is_access ON inspection_schedules(year, access담당)')
+    # Phase 5 성능 — LEFT JOIN 및 서브쿼리 최적화
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_is_year_허가번호 ON inspection_schedules(year, 허가번호)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_is_year_week ON inspection_schedules(year, 수검예정주차)')
     # 마이그레이션: inspection_schedules 확장 컬럼
     for _col, _default in [("검사관", "''"), ("조", "''")]:
         try:
@@ -11612,6 +11619,8 @@ def _init_inspection_db():
     )''')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_ir_year ON inspection_results(year)')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_ir_status ON inspection_results(year, status)')
+    # Phase 5 성능 — LEFT JOIN(year, 허가번호) 최적화
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_ir_year_허가번호 ON inspection_results(year, 허가번호)')
     # 마이그레이션: inspection_results 확장 컬럼
     for col, dflt in [
         ('진행여부', "''"),
@@ -11700,6 +11709,8 @@ def _init_inspection_db():
     conn.execute('CREATE INDEX IF NOT EXISTS idx_irr_region ON inspection_results_raw(region)')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_irr_hn ON inspection_results_raw(허가번호)')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_irr_month ON inspection_results_raw(월)')
+    # Phase 5 성능 — inspection_data 서브쿼리 (year + 허가번호 매칭) 최적화
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_irr_year_hn ON inspection_results_raw(year, 허가번호)')
     # ── inadequate_management 테이블 (부적합 관리) ──
     conn.execute('''CREATE TABLE IF NOT EXISTS inadequate_management (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
