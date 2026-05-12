@@ -51,6 +51,8 @@ class _HomeScreenState extends State<HomeScreen> {
   ({List<String> nos, String? div, bool multi, List<String>? schedulePks})? _pendingCompare;
   // 전산비교 → 일정화면 이동 시 전달할 허가번호
   List<String>? _pendingSchedule;
+  // 홈 대시보드 → 일정화면 이동 시 전달할 초기 워크플로우 상태 필터
+  String? _pendingStatusFilter;
 
   // 알림 종 아이콘용 InspectionService (지연 초기화 — context.read 사용)
   InspectionService? _inspSvcCache;
@@ -58,6 +60,26 @@ class _HomeScreenState extends State<HomeScreen> {
     _inspSvcCache ??= InspectionService()
       ..setAuthToken(context.read<AuthService>().authToken);
     return _inspSvcCache!;
+  }
+
+  void _navigateToScheduleWithStatus(List<_MenuItem> items, String status) {
+    final idx = items.indexWhere((m) => m.title == '일정 및 통계');
+    if (idx < 0) return;
+    setState(() {
+      _pendingStatusFilter = status;
+      _selectedIndex = idx;
+    });
+    _logMenuAccess('일정 및 통계');
+  }
+
+  void _navigateToScheduleRecheck(List<_MenuItem> items) {
+    final idx = items.indexWhere((m) => m.title == '일정 및 통계');
+    if (idx < 0) return;
+    setState(() {
+      _pendingStatusFilter = 'RECHECK';   // 일정 화면에서 특수 토큰으로 처리
+      _selectedIndex = idx;
+    });
+    _logMenuAccess('일정 및 통계');
   }
 
   @override
@@ -124,13 +146,21 @@ class _HomeScreenState extends State<HomeScreen> {
     final title = items[index].title;
 
     switch (title) {
-      case '홈': return _HomeContent(onNavigate: (i) { setState(() => _selectedIndex = i); _logMenuAccess(items[i].title); }, menuItems: items);
+      case '홈': return _HomeContent(
+        onNavigate: (i) { setState(() => _selectedIndex = i); _logMenuAccess(items[i].title); },
+        menuItems: items,
+        onNavigateToScheduleWithStatus: (status) => _navigateToScheduleWithStatus(items, status),
+        onNavigateToScheduleRecheck: () => _navigateToScheduleRecheck(items),
+      );
       case '실적 관리': return const InspectionResultsScreen();
       case '일정 및 통계': {
         final schedNos = _pendingSchedule;
         _pendingSchedule = null;
+        final statusFilter = _pendingStatusFilter;
+        _pendingStatusFilter = null;
         return InspectionScheduleScreen(
           initialLicenseNos: schedNos,
+          initialStatusFilter: statusFilter,
           onCompareNavigate: (nos, div, multi, {schedulePks}) {
             final compareIdx = items.indexWhere((m) => m.title == '전산비교');
             if (compareIdx >= 0) {
@@ -170,7 +200,12 @@ class _HomeScreenState extends State<HomeScreen> {
       case '변경개설신고': return const ChangeNotificationScreen();
       case '커뮤니티': return CommunityScreen();
       case '관리자': return const AdminPanelScreen();
-      default: return _HomeContent(onNavigate: (i) { setState(() => _selectedIndex = i); _logMenuAccess(items[i].title); }, menuItems: items);
+      default: return _HomeContent(
+        onNavigate: (i) { setState(() => _selectedIndex = i); _logMenuAccess(items[i].title); },
+        menuItems: items,
+        onNavigateToScheduleWithStatus: (status) => _navigateToScheduleWithStatus(items, status),
+        onNavigateToScheduleRecheck: () => _navigateToScheduleRecheck(items),
+      );
     }
   }
 
@@ -567,7 +602,6 @@ class _HomeScreenState extends State<HomeScreen> {
                   ],
                 ),
               ),
-              NotificationBellButton(svc: _inspSvc),
             ],
           ),
           const SizedBox(height: 6),
@@ -777,7 +811,15 @@ class _MenuGroup {
 class _HomeContent extends StatefulWidget {
   final void Function(int index) onNavigate;
   final List<_MenuItem> menuItems;
-  const _HomeContent({required this.onNavigate, required this.menuItems});
+  /// 일정 및 통계로 점프하면서 상태 필터를 같이 적용 (Phase 5 대시보드)
+  final void Function(String workflowStatus)? onNavigateToScheduleWithStatus;
+  final void Function()? onNavigateToScheduleRecheck;
+  const _HomeContent({
+    required this.onNavigate,
+    required this.menuItems,
+    this.onNavigateToScheduleWithStatus,
+    this.onNavigateToScheduleRecheck,
+  });
 
   @override
   State<_HomeContent> createState() => _HomeContentState();
@@ -820,6 +862,10 @@ class _HomeContentState extends State<_HomeContent> {
     _commSvc.setAuthToken(context.read<AuthService>().authToken);
     _loadWeather();
     _loadComm();
+    // 로그인 직후 자동 알림 팝업 (안 읽음 > 0 이고 '오늘 보지않기' 미설정 시)
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) maybeShowLoginNotificationPopup(context, _inspSvc);
+    });
   }
 
   @override
@@ -970,8 +1016,10 @@ class _HomeContentState extends State<_HomeContent> {
                   InspectionDashboardWidget(
                     svc: _inspSvc,
                     year: DateTime.now().year,
-                    onStatusTap: (_) => _jumpToScheduleScreen(),
-                    onRecheckTap: () => _jumpToScheduleScreen(),
+                    onStatusTap: (status) =>
+                        widget.onNavigateToScheduleWithStatus?.call(status),
+                    onRecheckTap: () =>
+                        widget.onNavigateToScheduleRecheck?.call(),
                     onScheduleTap: (_) => _jumpToScheduleScreen(),
                   ),
                   const SizedBox(height: 20),

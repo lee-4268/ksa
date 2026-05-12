@@ -10,11 +10,18 @@ import 'inspection_result_screen.dart';
 // ignore: avoid_web_libraries_in_flutter
 import 'dart:html' as html;
 
+// 워크플로우 상태 전체 토큰 (대시보드 → 일정화면 상태칩과 동일 코드)
+// 'RECHECK' 토큰은 별도로 재점검 토글을 활성화하는 특수 값
+
 class InspectionScheduleScreen extends StatefulWidget {
   final void Function(List<String> licenseNos, String? accessDivision, bool multiDivision,
       {List<String>? schedulePks})? onCompareNavigate;
   final List<String>? initialLicenseNos;
-  const InspectionScheduleScreen({super.key, this.onCompareNavigate, this.initialLicenseNos});
+  /// 초기 워크플로우 상태 필터 (홈 대시보드 카드에서 점프 시).
+  /// 'RECHECK' 토큰이면 _recheckOnly 토글을 켜고 statusFilter는 비움.
+  final String? initialStatusFilter;
+  const InspectionScheduleScreen({super.key, this.onCompareNavigate,
+      this.initialLicenseNos, this.initialStatusFilter});
   @override
   State<InspectionScheduleScreen> createState() => _InspectionScheduleScreenState();
 }
@@ -201,6 +208,15 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
       _pSearch = searchText;
       _aSearch = searchText;
       _searchCtrl.text = searchText;
+    }
+    // 홈 대시보드 → 상태칩 자동 적용
+    final f = widget.initialStatusFilter;
+    if (f != null && f.isNotEmpty) {
+      if (f == 'RECHECK') {
+        _recheckOnly = true;
+      } else {
+        _statusFilter = f;
+      }
     }
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _loadOrgMap();
@@ -1532,7 +1548,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
               labelColor: _primary,
               unselectedLabelColor: Colors.grey,
               indicatorColor: _primary,
-              tabs: const [Tab(text: '매트릭스'), Tab(text: '수검 대상 현황')],
+              tabs: const [Tab(text: '수검 대상 현황'), Tab(text: '매트릭스')],
             ),
           ),
           Expanded(
@@ -1553,12 +1569,12 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
       // 탭별 필터바: 수검 대상 현황 탭은 기존 필터, 매트릭스 탭은 별도 필터
       AnimatedBuilder(
         animation: _tabCtrl,
-        builder: (_, __) => _tabCtrl.index == 0 ? _buildMatrixFilterBar() : _buildFilterBar(),
+        builder: (_, __) => _tabCtrl.index == 0 ? _buildFilterBar() : _buildMatrixFilterBar(),
       ),
       Expanded(
         child: TabBarView(
           controller: _tabCtrl,
-          children: [_buildMatrixTab(), _buildDataTab()],
+          children: [_buildDataTab(), _buildMatrixTab()],
         ),
       ),
     ]);
@@ -2796,7 +2812,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
       _page = 1;
       _selectedLicenseNos.clear();
     });
-    _tabCtrl.animateTo(1);
+    _tabCtrl.animateTo(0);   // 새 탭 순서: 0=수검대상현황, 1=매트릭스
     _loadAll();
   }
 

@@ -1,6 +1,34 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../services/inspection_service.dart';
+
+/// 로그인 직후 알림 팝업을 띄울지 결정.
+/// - 안 읽음 > 0 이고 오늘 '보지 않기' 플래그가 없으면 표시.
+/// - 표시한 뒤 사용자가 '오늘은 더이상 보지않기'를 켜면 오늘 날짜 키로 SharedPreferences에 저장.
+Future<void> maybeShowLoginNotificationPopup(
+    BuildContext context, InspectionService svc) async {
+  try {
+    final unread = await svc.getUnreadNotificationCount();
+    if (unread <= 0) return;
+    final prefs = await SharedPreferences.getInstance();
+    final today = DateTime.now();
+    final dateKey =
+        '${today.year}-${today.month.toString().padLeft(2, '0')}-${today.day.toString().padLeft(2, '0')}';
+    if (prefs.getBool('notification_popup_hidden_$dateKey') == true) return;
+    if (!context.mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => NotificationPanel(
+        svc: svc,
+        loginPopupMode: true,
+        unreadCountHint: unread,
+      ),
+    );
+  } catch (_) {
+    // 인증 만료/네트워크 오류 — 조용히 무시
+  }
+}
 
 /// 우상단 종 아이콘 + 안 읽음 배지 + 클릭 시 알림 패널.
 class NotificationBellButton extends StatefulWidget {
@@ -49,7 +77,7 @@ class _NotificationBellButtonState extends State<NotificationBellButton> {
   Future<void> _openPanel() async {
     await showDialog<void>(
       context: context,
-      builder: (ctx) => _NotificationPanel(svc: widget.svc),
+      builder: (ctx) => NotificationPanel(svc: widget.svc),
     );
     if (mounted) _refresh();
   }
@@ -91,23 +119,48 @@ class _NotificationBellButtonState extends State<NotificationBellButton> {
   }
 }
 
-class _NotificationPanel extends StatefulWidget {
+class NotificationPanel extends StatefulWidget {
   final InspectionService svc;
-  const _NotificationPanel({required this.svc});
+  /// 로그인 직후 자동 팝업 모드: 안 읽음만 표시 + '오늘은 더이상 보지않기' 체크박스 노출
+  final bool loginPopupMode;
+  /// 로그인 팝업 헤더에 띄울 안 읽음 수 힌트 (선택)
+  final int unreadCountHint;
+
+  const NotificationPanel({
+    super.key,
+    required this.svc,
+    this.loginPopupMode = false,
+    this.unreadCountHint = 0,
+  });
 
   @override
-  State<_NotificationPanel> createState() => _NotificationPanelState();
+  State<NotificationPanel> createState() => _NotificationPanelState();
 }
 
-class _NotificationPanelState extends State<_NotificationPanel> {
+class _NotificationPanelState extends State<NotificationPanel> {
   bool _loading = true;
   bool _unreadOnly = false;
+  bool _hideToday = false;
   List<Map<String, dynamic>> _items = [];
 
   @override
   void initState() {
     super.initState();
+    // 로그인 팝업 모드에선 안 읽음만 보이도록 기본 켜기
+    if (widget.loginPopupMode) _unreadOnly = true;
     _load();
+  }
+
+  /// 다이얼로그 닫기 직전 '오늘 보지않기' 체크 상태 저장 (로그인 팝업 모드 전용).
+  Future<void> _persistHideTodayIfNeeded() async {
+    if (!widget.loginPopupMode || !_hideToday) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final today = DateTime.now();
+      final dateKey =
+          '${today.year}-${today.month.toString().padLeft(2, '0')}-${today.day.toString().padLeft(2, '0')}';
+      await prefs.setBool('notification_popup_hidden_$dateKey', true);
+    } catch (_) {}
   }
 
   Future<void> _load() async {
@@ -214,8 +267,14 @@ class _NotificationPanelState extends State<_NotificationPanel> {
             child: Row(children: [
               const Icon(Icons.notifications, color: Color(0xFF1565C0), size: 20),
               const SizedBox(width: 8),
-              const Text('알림',
-                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
+              Text(
+                widget.loginPopupMode
+                    ? (widget.unreadCountHint > 0
+                        ? '새 알림 ${widget.unreadCountHint}건'
+                        : '새 알림이 있습니다')
+                    : '알림',
+                style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
+              ),
               const Spacer(),
               // 안 읽음만 토글
               FilterChip(
@@ -249,7 +308,11 @@ class _NotificationPanelState extends State<_NotificationPanel> {
                 icon: const Icon(Icons.close, size: 18),
                 padding: EdgeInsets.zero,
                 constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
-                onPressed: () => Navigator.pop(context),
+                onPressed: () async {
+                  await _persistHideTodayIfNeeded();
+                  if (!mounted) return;
+                  Navigator.pop(context);
+                },
               ),
             ]),
           ),
@@ -336,6 +399,57 @@ class _NotificationPanelState extends State<_NotificationPanel> {
                         },
                       ),
           ),
+          // 로그인 팝업 모드: '오늘은 더이상 보지않기' 체크박스 + 닫기
+          if (widget.loginPopupMode)
+            Container(
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+              decoration: const BoxDecoration(
+                border: Border(top: BorderSide(color: Color(0xFFE5E7EB))),
+                color: Color(0xFFF8F9FA),
+              ),
+              child: Row(children: [
+                Expanded(
+                  child: InkWell(
+                    onTap: () => setState(() => _hideToday = !_hideToday),
+                    borderRadius: BorderRadius.circular(6),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 4),
+                      child: Row(children: [
+                        SizedBox(
+                          width: 20, height: 20,
+                          child: Checkbox(
+                            value: _hideToday,
+                            onChanged: (v) => setState(() => _hideToday = v ?? false),
+                            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            activeColor: const Color(0xFF1565C0),
+                            side: BorderSide(color: Colors.grey.shade400),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        const Text('오늘은 더이상 보지 않기',
+                            style: TextStyle(fontSize: 12, color: Color(0xFF374151))),
+                      ]),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF1565C0),
+                    foregroundColor: Colors.white,
+                    minimumSize: const Size(72, 34),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                    elevation: 0,
+                  ),
+                  onPressed: () async {
+                    await _persistHideTodayIfNeeded();
+                    if (!mounted) return;
+                    Navigator.pop(context);
+                  },
+                  child: const Text('닫기', style: TextStyle(fontSize: 13)),
+                ),
+              ]),
+            ),
         ]),
       ),
     );
