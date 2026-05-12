@@ -13549,6 +13549,12 @@ async def inspection_data(request: Request, req: InspectionDataReq):
     """필터 적용 데이터 조회 (페이지네이션)."""
     await _verify_auth(request)
     if not os.path.exists(_INSP_DB): return {"items": [], "total": 0}
+    # Phase 5 디버그: 워크플로우/재점검 필터 적용 시 로그
+    if req.workflow_status or req.needs_recheck:
+        logger.info(
+            f"[inspection_data] workflow_status='{req.workflow_status}', "
+            f"needs_recheck='{req.needs_recheck}', year={req.year}, page={req.page}"
+        )
     where_sql, params = _build_insp_where(
         req.year, req.sheet, req.filters, req.search, req.addr,
         req.schedule_yn, req.schedule_week,
