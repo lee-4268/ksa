@@ -18466,6 +18466,12 @@ def _init_community_db():
         conn.execute("ALTER TABLE comments ADD COLUMN updated_at TEXT DEFAULT ''")
     except Exception:
         pass
+    # 대댓글(2단계) 지원: parent_id NULL이면 최상위 댓글, 값이 있으면 대댓글
+    try:
+        conn.execute("ALTER TABLE comments ADD COLUMN parent_id INTEGER")
+    except Exception:
+        pass
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_comments_parent ON comments(parent_id)')
     # 기존 테이블에 컬럼 추가 (이미 존재하면 무시)
     for col, default in [('secret_password', "''")]:
         try:
@@ -18548,6 +18554,7 @@ class RequestStatusUpdate(BaseModel):
 
 class CommentCreate(BaseModel):
     content: str
+    parent_id: int | None = None   # 대댓글일 때 부모 댓글 id
 
 class CommentUpdate(BaseModel):
     content: str
@@ -19265,21 +19272,49 @@ async def create_comment(req_id: int, body: CommentCreate, request: Request):
             req_row = conn.execute("SELECT id, author_empno, title FROM requests WHERE id = ?", (req_id,)).fetchone()
             if not req_row:
                 raise HTTPException(404, "요청사항을 찾을 수 없습니다")
+
+            # 대댓글 검증: 2단계만 허용 (대대댓글 금지)
+            parent_id = body.parent_id
+            parent_author = None
+            if parent_id is not None:
+                parent_row = conn.execute(
+                    "SELECT id, request_id, parent_id, author_empno FROM comments WHERE id = ?",
+                    (parent_id,)
+                ).fetchone()
+                if not parent_row:
+                    raise HTTPException(404, "부모 댓글을 찾을 수 없습니다")
+                if parent_row["request_id"] != req_id:
+                    raise HTTPException(400, "부모 댓글이 다른 요청에 속해 있습니다")
+                if parent_row["parent_id"] is not None:
+                    raise HTTPException(400, "대대댓글은 허용되지 않습니다 (2단계까지만 가능)")
+                parent_author = parent_row["author_empno"]
+
             cur = conn.execute(
-                "INSERT INTO comments (request_id, content, author_empno, author_name, author_org, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (req_id, body.content, empno, user_info["name"], user_info["org"], now),
+                "INSERT INTO comments (request_id, parent_id, content, author_empno, author_name, author_org, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (req_id, parent_id, body.content, empno, user_info["name"], user_info["org"], now),
             )
-            # 알림: 자기 글에 자기가 댓글 달면 알림 없음
-            req_author = req_row["author_empno"]
-            if req_author and req_author != empno:
-                preview = body.content[:40] + ('...' if len(body.content) > 40 else '')
-                _insert_notification(
-                    conn, req_author, 'comment',
-                    '내 요청에 댓글이 달렸습니다',
-                    f'"{req_row["title"]}" — {preview}',
-                    'request', req_id,
-                )
+
+            preview = body.content[:40] + ('...' if len(body.content) > 40 else '')
+            if parent_id is not None:
+                # 대댓글: 부모 댓글 작성자에게 알림 (본인 제외)
+                if parent_author and parent_author != empno:
+                    _insert_notification(
+                        conn, parent_author, 'comment',
+                        '내 댓글에 답글이 달렸습니다',
+                        f'"{req_row["title"]}" — {preview}',
+                        'request', req_id,
+                    )
+            else:
+                # 일반 댓글: 요청 작성자에게 알림 (본인 제외)
+                req_author = req_row["author_empno"]
+                if req_author and req_author != empno:
+                    _insert_notification(
+                        conn, req_author, 'comment',
+                        '내 요청에 댓글이 달렸습니다',
+                        f'"{req_row["title"]}" — {preview}',
+                        'request', req_id,
+                    )
             conn.commit()
             row = conn.execute("SELECT * FROM comments WHERE id = ?", (cur.lastrowid,)).fetchone()
             d = dict(row)

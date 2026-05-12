@@ -211,11 +211,14 @@ class CommunityService {
     return List<Map<String, dynamic>>.from(body['comments'] ?? []);
   }
 
-  Future<Map<String, dynamic>> createComment(int requestId, String content) async {
+  Future<Map<String, dynamic>> createComment(int requestId, String content, {int? parentId}) async {
     final resp = await http.post(
       Uri.parse('$_baseUrl/community/requests/$requestId/comments'),
       headers: _headers,
-      body: json.encode({'content': content}),
+      body: json.encode({
+        'content': content,
+        if (parentId != null) 'parent_id': parentId,
+      }),
     ).timeout(_apiTimeout);
     final body = json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
     if (resp.statusCode != 200) {

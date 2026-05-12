@@ -48,6 +48,9 @@ class _RequestBoardScreenState extends State<RequestBoardScreen> {
   final _commentController = TextEditingController();
   int? _editingCommentId;
   final _editCommentController = TextEditingController();
+  // 대댓글 대상 (null이면 일반 댓글, 값이 있으면 그 댓글에 답글 작성 중)
+  int? _replyingToCommentId;
+  String _replyingToAuthor = '';
 
   // 글쓰기/수정
   int? _editId;
@@ -302,13 +305,176 @@ class _RequestBoardScreenState extends State<RequestBoardScreen> {
     final text = _commentController.text.trim();
     if (text.isEmpty) return;
     try {
-      await _svc.createComment(requestId, text);
+      await _svc.createComment(requestId, text, parentId: _replyingToCommentId);
       _commentController.clear();
       final comments = await _svc.getComments(requestId);
-      setState(() => _comments = comments);
+      setState(() {
+        _comments = comments;
+        _replyingToCommentId = null;
+        _replyingToAuthor = '';
+      });
     } catch (e) {
       if (mounted) { final d = ProgressDialog(context); await d.error(message: '댓글 등록 실패: $e'); }
     }
+  }
+
+  void _startReply(int parentCommentId, String parentAuthor) {
+    setState(() {
+      _replyingToCommentId = parentCommentId;
+      _replyingToAuthor = parentAuthor;
+    });
+  }
+
+  void _cancelReply() {
+    setState(() {
+      _replyingToCommentId = null;
+      _replyingToAuthor = '';
+    });
+  }
+
+  /// 댓글 목록을 (부모 → 자식들 묶음) 평탄화 순서로 위젯 리스트 생성.
+  List<Widget> _buildCommentTree(int requestId, bool isSuperAdmin) {
+    final parents = _comments.where((c) => c['parent_id'] == null).toList();
+    // parent_id별 자식들 매핑
+    final childrenByParent = <int, List<Map<String, dynamic>>>{};
+    for (final c in _comments) {
+      final pid = c['parent_id'];
+      if (pid is int) {
+        childrenByParent.putIfAbsent(pid, () => []).add(c);
+      }
+    }
+    final widgets = <Widget>[];
+    for (final p in parents) {
+      widgets.add(_buildCommentCard(p, requestId, isSuperAdmin, isReply: false));
+      final pid = p['id'] as int? ?? 0;
+      final children = childrenByParent[pid] ?? [];
+      for (final ch in children) {
+        widgets.add(_buildCommentCard(ch, requestId, isSuperAdmin, isReply: true));
+      }
+    }
+    return widgets;
+  }
+
+  Widget _buildCommentCard(
+    Map<String, dynamic> c,
+    int requestId,
+    bool isSuperAdmin, {
+    required bool isReply,
+  }) {
+    final cIsMine = c['is_mine'] == true || c['is_mine'] == 1;
+    final cAuthor = c['author_name'] as String? ?? '';
+    final cOrg = c['author_org'] as String? ?? '';
+    final cDisplay = cOrg.isNotEmpty ? '$cAuthor($cOrg)' : cAuthor;
+    final cDate = _formatDate(c['created_at'] as String?);
+    final cUpdatedAt = c['updated_at'] as String? ?? '';
+    final cEdited = cUpdatedAt.isNotEmpty;
+    final cContent = c['content'] as String? ?? '';
+    final cId = c['id'] as int? ?? 0;
+    final isEditing = _editingCommentId == cId;
+    // X 버튼: 본인 댓글이거나 superAdmin(시스템 관리자)만 표시
+    final canDelete = cIsMine || isSuperAdmin;
+
+    return Container(
+      margin: EdgeInsets.only(left: isReply ? 32 : 0, bottom: 12),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: isEditing ? const Color(0xFFFFFBE6) : (isReply ? const Color(0xFFFAFAFB) : Colors.white),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(
+          color: isEditing ? const Color(0xFFE53935).withValues(alpha: 0.3) : Colors.grey.shade200,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              if (isReply) ...[
+                Icon(Icons.subdirectory_arrow_right, size: 14, color: Colors.grey.shade400),
+                const SizedBox(width: 6),
+              ],
+              Text(cDisplay, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF111827))),
+              const SizedBox(width: 8),
+              Text(cDate, style: TextStyle(fontSize: 12, color: Colors.grey.shade500)),
+              if (cEdited && !isEditing)
+                Padding(
+                  padding: const EdgeInsets.only(left: 6),
+                  child: Text('(수정됨)', style: TextStyle(fontSize: 11, color: Colors.grey.shade400)),
+                ),
+              const Spacer(),
+              // 부모 댓글에만 답글 버튼 (대댓글에는 답글 불가 — 2단계 제한)
+              if (!isEditing && !isReply)
+                InkWell(
+                  onTap: () => _startReply(cId, cAuthor),
+                  borderRadius: BorderRadius.circular(4),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    child: Text('답글', style: TextStyle(fontSize: 11, color: Colors.grey.shade600, fontWeight: FontWeight.w600)),
+                  ),
+                ),
+              if (!isEditing && cIsMine)
+                InkWell(
+                  onTap: () => _startEditComment(cId, cContent),
+                  borderRadius: BorderRadius.circular(4),
+                  child: Padding(
+                    padding: const EdgeInsets.all(4),
+                    child: Icon(Icons.edit_outlined, size: 14, color: Colors.grey.shade400),
+                  ),
+                ),
+              if (!isEditing && canDelete)
+                InkWell(
+                  onTap: () => _deleteComment(cId, requestId),
+                  borderRadius: BorderRadius.circular(4),
+                  child: Padding(
+                    padding: const EdgeInsets.all(4),
+                    child: Icon(Icons.close, size: 14, color: Colors.grey.shade400),
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          if (isEditing) ...[
+            TextField(
+              controller: _editCommentController,
+              maxLines: null,
+              autofocus: true,
+              style: const TextStyle(fontSize: 14, height: 1.5, color: Color(0xFF374151)),
+              decoration: InputDecoration(
+                isDense: true,
+                contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: BorderSide(color: Colors.grey.shade300)),
+                focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: const BorderSide(color: Color(0xFFE53935), width: 1.5)),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                TextButton(
+                  onPressed: _cancelEditComment,
+                  style: TextButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  ),
+                  child: Text('취소', style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+                ),
+                const SizedBox(width: 8),
+                ElevatedButton(
+                  onPressed: () => _submitEditComment(cId, requestId),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFFE53935),
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                  ),
+                  child: const Text('저장', style: TextStyle(fontSize: 12)),
+                ),
+              ],
+            ),
+          ] else
+            Text(cContent, style: const TextStyle(fontSize: 14, height: 1.5, color: Color(0xFF374151))),
+        ],
+      ),
+    );
   }
 
   void _startEditComment(int commentId, String currentContent) {
@@ -878,6 +1044,8 @@ class _RequestBoardScreenState extends State<RequestBoardScreen> {
     final views = (_detail!['view_count'] as int?) ?? 0;
     final isMine = _detail!['is_mine'] == true || _detail!['is_mine'] == 1;
     final isAdmin = auth.isAdmin;
+    // 다른 사람 댓글 삭제는 admin(시스템 관리자)만. manager는 본인 댓글만 삭제 가능.
+    final isSuperAdmin = auth.isSuperAdmin;
 
     return Padding(
       padding: const EdgeInsets.all(24),
@@ -1092,7 +1260,36 @@ class _RequestBoardScreenState extends State<RequestBoardScreen> {
                             ],
                           ),
                           const SizedBox(height: 16),
-                          
+
+                          // 답글 모드 안내 (대댓글 작성 중)
+                          if (_replyingToCommentId != null)
+                            Container(
+                              margin: const EdgeInsets.only(bottom: 8),
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFFFF7E6),
+                                borderRadius: BorderRadius.circular(6),
+                                border: Border.all(color: const Color(0xFFFFD591)),
+                              ),
+                              child: Row(children: [
+                                Icon(Icons.subdirectory_arrow_right, size: 14, color: Colors.orange.shade700),
+                                const SizedBox(width: 6),
+                                Expanded(
+                                  child: Text('$_replyingToAuthor 님의 댓글에 답글 작성 중',
+                                      style: TextStyle(fontSize: 12, color: Colors.orange.shade800,
+                                          fontWeight: FontWeight.w600)),
+                                ),
+                                InkWell(
+                                  onTap: _cancelReply,
+                                  borderRadius: BorderRadius.circular(4),
+                                  child: Padding(
+                                    padding: const EdgeInsets.all(2),
+                                    child: Icon(Icons.close, size: 14, color: Colors.orange.shade700),
+                                  ),
+                                ),
+                              ]),
+                            ),
+
                           // 댓글 입력 폼
                           Row(
                             crossAxisAlignment: CrossAxisAlignment.start,
@@ -1104,7 +1301,7 @@ class _RequestBoardScreenState extends State<RequestBoardScreen> {
                                   maxLines: 3,
                                   minLines: 1,
                                   decoration: InputDecoration(
-                                    hintText: '댓글을 남겨주세요',
+                                    hintText: _replyingToCommentId != null ? '답글을 남겨주세요' : '댓글을 남겨주세요',
                                     hintStyle: TextStyle(fontSize: 13, color: Colors.grey.shade400),
                                     contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
                                     filled: true,
@@ -1143,109 +1340,9 @@ class _RequestBoardScreenState extends State<RequestBoardScreen> {
                           ),
                           
                           if (_comments.isNotEmpty) const SizedBox(height: 24),
-                          
-                          // 댓글 목록
-                          ..._comments.map((c) {
-                            final cIsMine = c['is_mine'] == true || c['is_mine'] == 1;
-                            final cAuthor = c['author_name'] ?? '';
-                            final cOrg = c['author_org'] as String? ?? '';
-                            final cDisplay = cOrg.isNotEmpty ? '$cAuthor($cOrg)' : cAuthor;
-                            final cDate = _formatDate(c['created_at'] as String?);
-                            final cUpdatedAt = c['updated_at'] as String? ?? '';
-                            final cEdited = cUpdatedAt.isNotEmpty;
-                            final cContent = c['content'] ?? '';
-                            final cId = c['id'] as int? ?? 0;
 
-                            final isEditing = _editingCommentId == cId;
-
-                            return Container(
-                              margin: const EdgeInsets.only(bottom: 12),
-                              padding: const EdgeInsets.all(16),
-                              decoration: BoxDecoration(
-                                color: isEditing ? const Color(0xFFFFFBE6) : Colors.white,
-                                borderRadius: BorderRadius.circular(6),
-                                border: Border.all(
-                                  color: isEditing ? const Color(0xFFE53935).withValues(alpha: 0.3) : Colors.grey.shade200,
-                                ),
-                              ),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Row(
-                                    children: [
-                                      Text(cDisplay, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF111827))),
-                                      const SizedBox(width: 8),
-                                      Text(cDate, style: TextStyle(fontSize: 12, color: Colors.grey.shade500)),
-                                      if (cEdited && !isEditing)
-                                        Padding(
-                                          padding: const EdgeInsets.only(left: 6),
-                                          child: Text('(수정됨)', style: TextStyle(fontSize: 11, color: Colors.grey.shade400)),
-                                        ),
-                                      const Spacer(),
-                                      if (!isEditing && cIsMine)
-                                        InkWell(
-                                          onTap: () => _startEditComment(cId, cContent),
-                                          borderRadius: BorderRadius.circular(4),
-                                          child: Padding(
-                                            padding: const EdgeInsets.all(4),
-                                            child: Icon(Icons.edit_outlined, size: 14, color: Colors.grey.shade400),
-                                          ),
-                                        ),
-                                      if (!isEditing && (cIsMine || isAdmin))
-                                        InkWell(
-                                          onTap: () => _deleteComment(cId, id),
-                                          borderRadius: BorderRadius.circular(4),
-                                          child: Padding(
-                                            padding: const EdgeInsets.all(4),
-                                            child: Icon(Icons.close, size: 14, color: Colors.grey.shade400),
-                                          ),
-                                        ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 8),
-                                  if (isEditing) ...[
-                                    TextField(
-                                      controller: _editCommentController,
-                                      maxLines: null,
-                                      autofocus: true,
-                                      style: const TextStyle(fontSize: 14, height: 1.5, color: Color(0xFF374151)),
-                                      decoration: InputDecoration(
-                                        isDense: true,
-                                        contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-                                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: BorderSide(color: Colors.grey.shade300)),
-                                        focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: const BorderSide(color: Color(0xFFE53935), width: 1.5)),
-                                      ),
-                                    ),
-                                    const SizedBox(height: 8),
-                                    Row(
-                                      mainAxisAlignment: MainAxisAlignment.end,
-                                      children: [
-                                        TextButton(
-                                          onPressed: _cancelEditComment,
-                                          style: TextButton.styleFrom(
-                                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                                          ),
-                                          child: Text('취소', style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
-                                        ),
-                                        const SizedBox(width: 8),
-                                        ElevatedButton(
-                                          onPressed: () => _submitEditComment(cId, id),
-                                          style: ElevatedButton.styleFrom(
-                                            backgroundColor: const Color(0xFFE53935),
-                                            foregroundColor: Colors.white,
-                                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-                                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
-                                          ),
-                                          child: const Text('저장', style: TextStyle(fontSize: 12)),
-                                        ),
-                                      ],
-                                    ),
-                                  ] else
-                                    Text(cContent, style: const TextStyle(fontSize: 14, height: 1.5, color: Color(0xFF374151))),
-                                ],
-                              ),
-                            );
-                          }),
+                          // 댓글 목록 — 부모 → 자식(대댓글) 순으로 평탄화 정렬
+                          ..._buildCommentTree(id, isSuperAdmin),
                         ],
                       ),
                     ),
