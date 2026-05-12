@@ -19025,22 +19025,20 @@ async def create_request(body: RequestCreate, request: Request):
 
     result, request_id = await asyncio.to_thread(_do)
 
-    # admin에게 새 요청 알림 (비동기, 응답 블로킹 없음)
-    async def _notify_admins_new_request():
-        try:
-            all_users = await asyncio.to_thread(_list_all_users_sync)
-            logger.info(f"[req-notify] total_users={len(all_users)}, requester={empno}")
-            admins = [
-                u for u in all_users
-                if u.get("role") == "admin"
-                and not u.get("is_dormant")
-                and u.get("empno") != empno
-            ]
-            logger.info(f"[req-notify] admins_to_notify={len(admins)} "
-                       f"(after dormant/self filter)")
-            if not admins:
-                return
-
+    # admin에게 새 요청 알림 — 응답 반환 전 동기 실행 (누락 방지)
+    # _list_all_users_sync는 60초 캐시라 일반적으로 빠름. 첫 호출만 ~1초 추가.
+    try:
+        all_users = await asyncio.to_thread(_list_all_users_sync)
+        logger.info(f"[req-notify] request_id={request_id}, requester={empno}, total_users={len(all_users)}")
+        admins = [
+            u for u in all_users
+            if u.get("role") == "admin"
+            and not u.get("is_dormant")
+            and u.get("empno") != empno
+        ]
+        logger.info(f"[req-notify] admins_to_notify={len(admins)} "
+                   f"(after dormant/self filter)")
+        if admins:
             def _bulk():
                 conn2 = sqlite3.connect(_COMMUNITY_DB, timeout=30)
                 try:
@@ -19061,10 +19059,9 @@ async def create_request(body: RequestCreate, request: Request):
                     conn2.close()
 
             await asyncio.to_thread(_bulk)
-        except Exception as e:
-            logger.warning(f"요청 알림 발송 실패: {e}", exc_info=True)
-
-    asyncio.create_task(_notify_admins_new_request())
+    except Exception as e:
+        # 알림 실패는 요청 등록 자체에는 영향 없음
+        logger.warning(f"요청 알림 발송 실패 (request_id={request_id}): {e}", exc_info=True)
 
     return {"success": True, "request": result}
 
