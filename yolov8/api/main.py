@@ -7529,6 +7529,8 @@ def _cert_cache_load():
         conn.execute("CREATE INDEX IF NOT EXISTS idx_zpwino ON cert(zpwino)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_zpwina ON cert(zpwina)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_zpwiadr ON cert(zpwiadr)")
+        # Phase 5 성능: inspection_data가 IN (zpcode...)로 lookup
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_zpcode ON cert(zpcode)")
         conn.commit()
         conn.close()
 
@@ -13597,23 +13599,6 @@ async def inspection_data(request: Request, req: InspectionDataReq):
         req.schedule_yn, req.schedule_week,
         req.workflow_status, req.needs_recheck, req.overdue_only)
     def _read():
-        # cert_cache에서 zpcode → zpprac1 매핑 별도 로드
-        zpprac1_map: dict = {}
-        cert_db = _cert_cache_db_path
-        if cert_db and os.path.exists(cert_db):
-            try:
-                cc = sqlite3.connect(cert_db, timeout=10)
-                for row in cc.execute(
-                    "SELECT TRIM(zpcode), zpprac1 FROM cert "
-                    "WHERE zpcode IS NOT NULL AND zpcode != '' "
-                    "GROUP BY TRIM(zpcode)"
-                ):
-                    if row[0]:
-                        zpprac1_map[row[0]] = row[1] or ''
-                cc.close()
-            except Exception:
-                pass
-
         c = sqlite3.connect(_INSP_DB, timeout=60); c.row_factory = sqlite3.Row
         total = c.execute(f'SELECT COUNT(*) FROM inspection_targets WHERE {where_sql}', params).fetchone()[0]
         offset = (req.page - 1) * req.page_size
@@ -13633,12 +13618,29 @@ async def inspection_data(request: Request, req: InspectionDataReq):
         ).fetchall()
         c.close()
 
-        items = []
-        for r in rows:
-            d = dict(r)
-            tongsi = (d.get('통시') or '').strip()
-            d['zpprac1'] = zpprac1_map.get(tongsi, '')
-            items.append(d)
+        # Phase 5 성능: 현재 페이지의 통시(zpcode)만 IN 절로 lookup → 전체 GROUP BY 풀스캔 제거
+        items = [dict(r) for r in rows]
+        zpcodes = list({(it.get('통시') or '').strip() for it in items if (it.get('통시') or '').strip()})
+        zpprac1_map: dict = {}
+        if zpcodes:
+            cert_db = _cert_cache_db_path
+            if cert_db and os.path.exists(cert_db):
+                try:
+                    cc = sqlite3.connect(cert_db, timeout=10)
+                    ph = ','.join('?' * len(zpcodes))
+                    for row in cc.execute(
+                        f"SELECT TRIM(zpcode) AS zpcode, zpprac1 FROM cert "
+                        f"WHERE TRIM(zpcode) IN ({ph})",
+                        zpcodes
+                    ):
+                        if row['zpcode']:
+                            zpprac1_map[row['zpcode']] = row['zpprac1'] or ''
+                    cc.close()
+                except Exception:
+                    pass
+        for it in items:
+            tongsi = (it.get('통시') or '').strip()
+            it['zpprac1'] = zpprac1_map.get(tongsi, '')
         return total, items
     total, items = await asyncio.to_thread(_read)
     return {"items": items, "total": total, "page": req.page, "page_size": req.page_size}

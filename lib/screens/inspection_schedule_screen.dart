@@ -255,19 +255,16 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
 
   Future<void> _loadAll() async {
     setState(() { _loading = true; _error = null; });
-    final results = await Future.wait([
+
+    // Phase 5 성능: 메인 데이터 + 일정 매핑(state badge용)만 동기 대기.
+    // 나머지(매트릭스/미배정/진도율)는 백그라운드로 채워 메인 화면 즉시 노출.
+    final primary = await Future.wait([
       _fetchData(),
-      _fetchSummary(),
-      _fetchUnassigned(),
-      _fetchScheduledNos(),
-      _fetchProgressByResult(),
+      _fetchScheduledNos(),   // 상태 배지/접수번호/조 매핑 — 행 그리는데 필요
     ]);
     if (!mounted) return;
-    final dataRes    = results[0] as Map<String, dynamic>?;
-    final summRes    = results[1] as Map<String, dynamic>?;
-    final unassRes   = results[2] as Map<String, dynamic>?;
-    final schedResult = results[3] as ({Set<String> nos, Map<String, String> weekMap, List<Map<String, dynamic>> schedules, Map<String, String> statusMap, Map<String, String> pkMap, Map<String, String> submissionMap, Map<String, String> crewMap, Set<String> needsRecheck})?;
-    final progRes    = results[4] as Map<String, dynamic>?;
+    final dataRes = primary[0] as Map<String, dynamic>?;
+    final schedResult = primary[1] as ({Set<String> nos, Map<String, String> weekMap, List<Map<String, dynamic>> schedules, Map<String, String> statusMap, Map<String, String> pkMap, Map<String, String> submissionMap, Map<String, String> crewMap, Set<String> needsRecheck})?;
     setState(() {
       _loading = false;
       if (dataRes != null) {
@@ -275,17 +272,6 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
         _total = (dataRes['total'] as num?)?.toInt() ?? 0;
       } else {
         _error = '데이터 로드 실패';
-      }
-      if (summRes != null) {
-        _matrix = Map<String, dynamic>.from(summRes['matrix'] ?? {});
-        _quarters = List<String>.from(summRes['quarters'] ?? []);
-      }
-      if (unassRes != null) {
-        _unassignedTotal = (unassRes['total'] as num?)?.toInt() ?? 0;
-        _unassignedByRegion = Map<String, dynamic>.from(unassRes['by_region'] ?? {});
-        _unassignedByReason = Map<String, dynamic>.from(unassRes['by_reason'] ?? {});
-        _unassignedItems = List<Map<String, dynamic>>.from(unassRes['items'] ?? []);
-        _unassignedCapped = unassRes['items_capped'] == true;
       }
       if (schedResult != null) {
         _scheduledNos = schedResult.nos;
@@ -297,13 +283,35 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
         _scheduleCrewMap = schedResult.crewMap;
         _scheduleNeedsRecheck = schedResult.needsRecheck;
       }
-      if (progRes != null) {
+    });
+
+    // 후순위 API — 백그라운드로 채워짐 (도착 시마다 setState)
+    unawaited(_fetchSummary().then((summRes) {
+      if (!mounted || summRes == null) return;
+      setState(() {
+        _matrix = Map<String, dynamic>.from(summRes['matrix'] ?? {});
+        _quarters = List<String>.from(summRes['quarters'] ?? []);
+      });
+    }));
+    unawaited(_fetchUnassigned().then((unassRes) {
+      if (!mounted || unassRes == null) return;
+      setState(() {
+        _unassignedTotal = (unassRes['total'] as num?)?.toInt() ?? 0;
+        _unassignedByRegion = Map<String, dynamic>.from(unassRes['by_region'] ?? {});
+        _unassignedByReason = Map<String, dynamic>.from(unassRes['by_reason'] ?? {});
+        _unassignedItems = List<Map<String, dynamic>>.from(unassRes['items'] ?? []);
+        _unassignedCapped = unassRes['items_capped'] == true;
+      });
+    }));
+    unawaited(_fetchProgressByResult().then((progRes) {
+      if (!mounted || progRes == null) return;
+      setState(() {
         _progressTotal = (progRes['total'] as num?)?.toInt() ?? 0;
         _progressCompleted = (progRes['completed'] as num?)?.toInt() ?? 0;
         _progressPercent = (progRes['percent'] as num?)?.toDouble() ?? 0.0;
         _progressByHdqt = List<Map<String, dynamic>>.from(progRes['by_hdqt'] ?? []);
-      }
-    });
+      });
+    }));
   }
 
   Future<Map<String, dynamic>?> _fetchProgressByResult() async {
