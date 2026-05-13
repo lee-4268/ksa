@@ -1,5 +1,6 @@
 // ignore_for_file: avoid_web_libraries_in_flutter
 import 'dart:convert';
+import 'dart:html' as html;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
@@ -1267,6 +1268,16 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
                       child: Text(tag, style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
                     ),
                     title: Text(s.displayName, style: const TextStyle(fontSize: 13)),
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        _navChip('T', Colors.blue.shade700, Colors.blue.shade50, () => _navToStation(s, 'tmap')),
+                        const SizedBox(width: 4),
+                        _navChip('N', Colors.green.shade700, Colors.green.shade50, () => _navToStation(s, 'naver')),
+                        const SizedBox(width: 4),
+                        _navChip('K', Colors.yellow.shade800, Colors.yellow.shade50, () => _navToStation(s, 'kakao')),
+                      ],
+                    ),
                   );
                 },
               ),
@@ -1277,6 +1288,59 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
       ),
     );
   }
+
+  Widget _navChip(String label, Color fg, Color bg, VoidCallback onTap) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: 22, height: 22,
+        decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(5)),
+        alignment: Alignment.center,
+        child: Text(label, style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: fg)),
+      ),
+    );
+  }
+
+  void _navToStation(RadioStation s, String app) {
+    if (s.latitude == null || s.longitude == null) return;
+    final lat = s.latitude!;
+    final lng = s.longitude!;
+    final name = Uri.encodeComponent(s.displayName);
+    final isMobile = _isMobile();
+
+    if (!isMobile) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('모바일에서 접속하면 내비 앱으로 바로 연결됩니다.')),
+      );
+      return;
+    }
+
+    final ua = html.window.navigator.userAgent.toLowerCase();
+    final isAndroid = ua.contains('android');
+
+    switch (app) {
+      case 'tmap':
+        final q = 'goalX=$lng&goalY=$lat&goalName=$name&reqCoordType=WGS84GEO&resCoordType=WGS84GEO';
+        if (isAndroid) {
+          _openUrl('intent://route?$q'
+              '#Intent;scheme=tmap;package=com.skt.tmap.ku;'
+              'S.browser_fallback_url=https%3A%2F%2Fplay.google.com%2Fstore%2Fapps%2Fdetails%3Fid%3Dcom.skt.tmap.ku;end');
+        } else {
+          _openUrl('tmap://route?$q');
+        }
+      case 'naver':
+        _openUrl('nmap://route/car?dlat=$lat&dlng=$lng&dname=$name&appname=com.skons.kca');
+      case 'kakao':
+        _openUrl('kakaomap://route?ep=$lat,$lng&by=car');
+    }
+  }
+
+  bool _isMobile() {
+    final ua = html.window.navigator.userAgent.toLowerCase();
+    return ua.contains('android') || ua.contains('iphone') || ua.contains('ipad');
+  }
+
+  void _openUrl(String url) => html.window.open(url, '_blank');
 
   Future<void> _confirmDeleteBasket(RouteBasketEntry entry) async {
     final ok = await showDialog<bool>(
