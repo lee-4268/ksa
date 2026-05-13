@@ -1287,22 +1287,73 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
                   final isLast = i == stations.length - 1;
                   final color = isFirst ? Colors.green : (isLast ? Colors.red : const Color(0xFFE53935));
                   final tag = isFirst ? '출발' : (isLast ? '도착' : '${i + 1}');
-                  final item = _assignedItems.firstWhere(
-                    (it) => (it['허가번호'] as String? ?? '').trim() == s.licenseNumber.trim(),
-                    orElse: () => {'허가번호': s.licenseNumber, '호출명칭': s.stationName},
-                  );
+
+                  // 같은 좌표에 있는 모든 국소 (겹침 국소 포함)
+                  final lat5 = s.latitude?.toStringAsFixed(5);
+                  final lng5 = s.longitude?.toStringAsFixed(5);
+                  final coLocated = (lat5 != null && lng5 != null)
+                      ? _assignedItems.where((it) {
+                          final ilat = (it['위도'] as num?)?.toDouble().toStringAsFixed(5);
+                          final ilng = (it['경도'] as num?)?.toDouble().toStringAsFixed(5);
+                          return ilat == lat5 && ilng == lng5;
+                        }).toList()
+                      : <Map<String, dynamic>>[];
+
+                  final defaultItem = coLocated.isNotEmpty
+                      ? coLocated.firstWhere(
+                          (it) => (it['허가번호'] as String? ?? '').trim() == s.licenseNumber.trim(),
+                          orElse: () => coLocated.first,
+                        )
+                      : {'허가번호': s.licenseNumber, '호출명칭': s.stationName};
+
+                  void onRowTap() {
+                    if (coLocated.length <= 1) {
+                      Navigator.pop(sheetCtx);
+                      Future.microtask(() => _showInspectionSheet(defaultItem));
+                    } else {
+                      showDialog(
+                        context: context,
+                        builder: (dlgCtx) => SimpleDialog(
+                          title: const Text('국소 선택', style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
+                          children: coLocated.map((it) {
+                            final callname = it['호출명칭'] as String? ?? it['허가번호'] as String? ?? '';
+                            final licenseNo = it['허가번호'] as String? ?? '';
+                            return SimpleDialogOption(
+                              onPressed: () {
+                                Navigator.pop(dlgCtx);
+                                Navigator.pop(sheetCtx);
+                                Future.microtask(() => _showInspectionSheet(it));
+                              },
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(vertical: 4),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(callname, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                                    if (licenseNo.isNotEmpty)
+                                      Text(licenseNo, style: TextStyle(fontSize: 11, color: Colors.grey.shade500)),
+                                  ],
+                                ),
+                              ),
+                            );
+                          }).toList(),
+                        ),
+                      );
+                    }
+                  }
+
                   return ListTile(
                     dense: true,
-                    onTap: () {
-                      Navigator.pop(sheetCtx);
-                      Future.microtask(() => _showInspectionSheet(item));
-                    },
+                    onTap: onRowTap,
                     leading: CircleAvatar(
                       radius: 13,
                       backgroundColor: color,
                       child: Text(tag, style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
                     ),
                     title: Text(s.displayName, style: const TextStyle(fontSize: 13)),
+                    subtitle: coLocated.length > 1
+                        ? Text('외 ${coLocated.length - 1}개 겹침', style: const TextStyle(fontSize: 10, color: Color(0xFFE53935)))
+                        : null,
                     trailing: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
