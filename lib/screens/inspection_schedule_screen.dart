@@ -2256,41 +2256,49 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
               BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 8, offset: const Offset(0, 2)),
             ],
           ),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(12),
-            child: Column(
-              children: [
-                Container(
-                  height: 44,
-                  color: _primary.withValues(alpha: 0.12),
-                  child: SingleChildScrollView(
-                    controller: _hdrHorizCtrl,
-                    scrollDirection: Axis.horizontal,
-                    physics: const ClampingScrollPhysics(),
-                    child: _buildCustomHeader(),
-                  ),
-                ),
-                const Divider(height: 1, thickness: 1, color: Color(0xFFE5E7EB)),
-                Expanded(
-                  child: Scrollbar(
-                    controller: _horizontalScrollCtrl,
-                    thumbVisibility: true,
-                    child: SingleChildScrollView(
-                      controller: _horizontalScrollCtrl,
-                      scrollDirection: Axis.horizontal,
-                      physics: const ClampingScrollPhysics(),
-                      child: SizedBox(
-                        width: _totalColWidth,
-                        child: ListView.builder(
-                          itemCount: _filteredItems.length,
-                          itemBuilder: (ctx, i) => _buildCustomRow(_filteredItems[i], i),
+          child: LayoutBuilder(
+            builder: (ctx, constraints) {
+              final scale = _totalColWidth < constraints.maxWidth
+                  ? constraints.maxWidth / _totalColWidth
+                  : 1.0;
+              return ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: Column(
+                  children: [
+                    Container(
+                      height: 44,
+                      color: _primary.withValues(alpha: 0.12),
+                      child: SingleChildScrollView(
+                        controller: _hdrHorizCtrl,
+                        scrollDirection: Axis.horizontal,
+                        physics: const ClampingScrollPhysics(),
+                        child: _buildCustomHeader(scale),
+                      ),
+                    ),
+                    const Divider(height: 1, thickness: 1, color: Color(0xFFE5E7EB)),
+                    Expanded(
+                      child: Scrollbar(
+                        controller: _horizontalScrollCtrl,
+                        thumbVisibility: true,
+                        child: SingleChildScrollView(
+                          controller: _horizontalScrollCtrl,
+                          scrollDirection: Axis.horizontal,
+                          physics: const ClampingScrollPhysics(),
+                          child: SizedBox(
+                            width: _totalColWidth * scale,
+                            child: ListView.builder(
+                              itemCount: _filteredItems.length,
+                              itemBuilder: (ctx, i) =>
+                                  _buildCustomRow(_filteredItems[i], i, scale),
+                            ),
+                          ),
                         ),
                       ),
                     ),
-                  ),
+                  ],
                 ),
-              ],
-            ),
+              );
+            },
           ),
         ),
       ),
@@ -2577,44 +2585,133 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     showDialog(
       context: context,
       builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setLocal) => AlertDialog(
-          title: const Text('컬럼 표시 설정',
-              style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
-          content: SizedBox(
-            width: 260,
-            child: SingleChildScrollView(
+        builder: (ctx, setLocal) {
+          final hiddenCount = _hiddenCols.length;
+          return Dialog(
+            backgroundColor: Colors.white,
+            surfaceTintColor: Colors.white,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            child: SizedBox(
+              width: 280,
               child: Column(
                 mainAxisSize: MainAxisSize.min,
-                children: _kInspCols
-                    .where((c) => c.hideable)
-                    .map((col) => CheckboxListTile(
-                          dense: true,
-                          title: Text(col.label,
-                              style: const TextStyle(fontSize: 13)),
-                          value: !_hiddenCols.contains(col.key),
-                          activeColor: _primary,
-                          onChanged: (v) {
-                            setLocal(() {});
-                            setState(() {
-                              if (v == true) {
-                                _hiddenCols.remove(col.key);
-                              } else {
-                                _hiddenCols.add(col.key);
-                              }
-                            });
-                          },
-                        ))
-                    .toList(),
+                children: [
+                  // 헤더
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(18, 18, 14, 12),
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 32, height: 32,
+                          decoration: BoxDecoration(
+                            color: _primary.withValues(alpha: 0.10),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Icon(Icons.view_column_outlined, size: 17, color: _primary),
+                        ),
+                        const SizedBox(width: 10),
+                        const Expanded(
+                          child: Text('컬럼 표시 설정',
+                              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+                        ),
+                        if (hiddenCount > 0)
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFF3F4F6),
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: Text('$hiddenCount 숨김',
+                                style: TextStyle(
+                                    fontSize: 10,
+                                    color: Colors.grey.shade600,
+                                    fontWeight: FontWeight.w600)),
+                          ),
+                      ],
+                    ),
+                  ),
+                  const Divider(height: 1, color: Color(0xFFF3F4F6)),
+                  // 컬럼 목록
+                  ...(_kInspCols.where((c) => c.hideable).map((col) {
+                    final isVisible = !_hiddenCols.contains(col.key);
+                    return InkWell(
+                      onTap: () {
+                        setLocal(() {});
+                        setState(() {
+                          if (isVisible) {
+                            _hiddenCols.add(col.key);
+                          } else {
+                            _hiddenCols.remove(col.key);
+                          }
+                        });
+                      },
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 9),
+                        child: Row(
+                          children: [
+                            Icon(
+                              isVisible ? Icons.check_circle : Icons.radio_button_unchecked,
+                              size: 17,
+                              color: isVisible ? _primary : Colors.grey.shade400,
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Text(col.label,
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    color: isVisible ? Colors.black87 : Colors.grey.shade500,
+                                    fontWeight: isVisible ? FontWeight.w500 : FontWeight.w400,
+                                  )),
+                            ),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: isVisible
+                                    ? const Color(0xFFDCFCE7)
+                                    : const Color(0xFFF3F4F6),
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: Text(
+                                isVisible ? '표시' : '숨김',
+                                style: TextStyle(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w600,
+                                  color: isVisible
+                                      ? const Color(0xFF16A34A)
+                                      : Colors.grey.shade500,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  })),
+                  const Divider(height: 1, color: Color(0xFFF3F4F6)),
+                  // 닫기
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 10, 16, 14),
+                    child: SizedBox(
+                      width: double.infinity,
+                      child: TextButton(
+                        onPressed: () => Navigator.pop(ctx),
+                        style: TextButton.styleFrom(
+                          backgroundColor: const Color(0xFFF9FAFB),
+                          foregroundColor: Colors.black87,
+                          padding: const EdgeInsets.symmetric(vertical: 10),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8)),
+                        ),
+                        child: const Text('닫기',
+                            style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('닫기'),
-            ),
-          ],
-        ),
+          );
+        },
       ),
     );
   }
@@ -2656,7 +2753,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
   }
 
   // ── 커스텀 테이블 헤더 ────────────────────────────────────
-  Widget _buildCustomHeader() {
+  Widget _buildCustomHeader(double scale) {
     const hStyle = TextStyle(
         fontSize: 12, fontWeight: FontWeight.w700, color: Colors.black87);
     final visibleCols =
@@ -2665,7 +2762,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
       children: visibleCols.asMap().entries.map((e) {
         final isLast = e.key == visibleCols.length - 1;
         final col = e.value;
-        final w = _colWidths[col.key] ?? col.w;
+        final w = (_colWidths[col.key] ?? col.w) * scale;
         final isSorted = _sortColIdx == col.si && col.si > 0;
         return SizedBox(
           width: w,
@@ -2726,7 +2823,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                       onHorizontalDragUpdate: (d) {
                         setState(() {
                           _colWidths[col.key] =
-                              ((_colWidths[col.key] ?? col.w) + d.delta.dx)
+                              ((_colWidths[col.key] ?? col.w) + d.delta.dx / scale)
                                   .clamp(40.0, 480.0);
                         });
                       },
@@ -2787,7 +2884,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
   }
 
   // ── 커스텀 테이블 행 ─────────────────────────────────────
-  Widget _buildCustomRow(Map<String, dynamic> item, int idx) {
+  Widget _buildCustomRow(Map<String, dynamic> item, int idx, double scale) {
     final licenseNo = '${item['허가번호'] ?? ''}';
     final isSelected = _detailLicenseNo == licenseNo;
     final isChecked = _selectedLicenseNos.contains(licenseNo);
@@ -2808,7 +2905,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
           ),
           child: Row(
             children: visibleCols.map((col) {
-              final w = _colWidths[col.key] ?? col.w;
+              final w = (_colWidths[col.key] ?? col.w) * scale;
               return SizedBox(
                 width: w,
                 height: 44,
