@@ -11005,6 +11005,10 @@ def _erp_ds_compare_sync(
                 except Exception:
                     pass  # 장치상태 컬럼 미존재 시(구 DB) 무시
 
+            # 장치상태 데이터가 없지만 장치 데이터는 있으면 → 재빌드 필요 안내
+            if not ds_prac1 and ds_device:
+                warnings.append("DS_PRAC1_MISSING")
+
             conn.close()
         except Exception as e:
             logger.warning(f"ds_detail.db 비교 조회 실패: {e}")

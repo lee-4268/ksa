@@ -688,29 +688,28 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
-              children: r.warnings
-                  .map((w) => Padding(
-                        padding: const EdgeInsets.only(bottom: 4),
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Icon(Icons.warning_amber,
-                                size: 16, color: Colors.orange.shade700),
-                            const SizedBox(width: 8),
-                            Expanded(
-                                child: Text(w,
-                                    style: TextStyle(
-                                        fontSize: 13,
-                                        color: Colors.orange.shade800))),
-                          ],
-                        ),
-                      ))
-                  .toList(),
+              children: r.warnings.map((w) {
+                final msg = w == 'DS_PRAC1_MISSING'
+                    ? 'DS활용구분(장치상태) 데이터가 없습니다. DS 파일 재업로드 후 비교를 다시 실행해주세요.'
+                    : w;
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 4),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(Icons.warning_amber, size: 16, color: Colors.orange.shade700),
+                      const SizedBox(width: 8),
+                      Expanded(child: Text(msg,
+                          style: TextStyle(fontSize: 13, color: Colors.orange.shade800))),
+                    ],
+                  ),
+                );
+              }).toList(),
             ),
           ),
 
-        // 사전점검 회신 카드 (schedule_pks 자동 입력된 경우만)
-        if (widget.initialSchedulePks != null && widget.initialSchedulePks!.isNotEmpty) ...[
+        // 사전점검 회신 카드: 불일치가 있거나 일정과 연결된 경우 표시
+        if (_hasAnyMismatch(r) || (widget.initialSchedulePks?.isNotEmpty ?? false)) ...[
           _buildPreCheckReplyCard(r),
           const SizedBox(height: 16),
         ],
@@ -1188,6 +1187,12 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
 
   // ── Helpers ──
 
+  bool _hasAnyMismatch(ErpDsCompareResult r) {
+    final s = r.summary;
+    return (s['tower_mismatch'] ?? 0) > 0 || (s['serial_mismatch'] ?? 0) > 0 ||
+        (s['tower_ds_missing'] ?? 0) > 0 || (s['serial_ds_missing'] ?? 0) > 0;
+  }
+
   // schedMap 오버레이: 일정화면에서 넘어온 값 우선, 없으면 백엔드 값
   String _tongsi(CompareItem item) {
     final v = _schedMap?[item.zpwino]?['통시'] ?? '';
@@ -1248,26 +1253,32 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
     final dsMissing = (s['tower_ds_missing'] ?? 0) + (s['serial_ds_missing'] ?? 0);
     final check = (s['tower_check'] ?? 0) + (s['serial_check'] ?? 0);
     final blocked = mismatch > 0 || dsMissing > 0;
+    final hasPks = widget.initialSchedulePks?.isNotEmpty ?? false;
     final pkCount = widget.initialSchedulePks?.length ?? 0;
+
     return _buildCard(
       Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        // ── 헤더 (일정 연결된 경우만 사전점검 회신 뱃지 표시)
         Row(children: [
           const Icon(Icons.assignment_turned_in_outlined, color: Color(0xFF6B47DC), size: 22),
           const SizedBox(width: 8),
-          const Text('사전점검 회신',
+          const Text('사전점검',
               style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.black87)),
-          const Spacer(),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-            decoration: BoxDecoration(
-              color: const Color(0xFF6B47DC).withValues(alpha: 0.1),
-              borderRadius: BorderRadius.circular(10),
+          const SizedBox(width: 8),
+          if (hasPks)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(
+                color: const Color(0xFF6B47DC).withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Text('수검 건 $pkCount건',
+                  style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: Color(0xFF6B47DC))),
             ),
-            child: Text('수검 건 $pkCount건',
-                style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: Color(0xFF6B47DC))),
-          ),
         ]),
         const SizedBox(height: 12),
+
+        // ── 불일치 섹션 (schedulePks와 무관하게 표시)
         if (blocked) ...[
           Container(
             padding: const EdgeInsets.all(12),
@@ -1288,7 +1299,7 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
               ),
             ]),
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 10),
           Row(mainAxisAlignment: MainAxisAlignment.end, children: [
             ElevatedButton.icon(
               icon: const Icon(Icons.edit_note, size: 16),
@@ -1302,7 +1313,11 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
               onPressed: () => _openChangeRequestDialog(r),
             ),
           ]),
-        ] else ...[
+          if (hasPks) const SizedBox(height: 12),
+        ],
+
+        // ── 사전점검 회신 섹션 (일정 연결된 경우만)
+        if (hasPks && !blocked) ...[
           Text(
             check > 0
                 ? '확인필요 $check건은 ACTA/시설현황 등 외부 사이트에서 직접 확인 후 회신해주세요.'
@@ -1323,6 +1338,12 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
               onPressed: () => _submitPreCheckReply(r),
             ),
           ]),
+        ] else if (hasPks && blocked) ...[
+          // 불일치 있지만 schedulePks 있음 → 점검완료 회신 대신 안내
+          Text(
+            '불일치 항목 변경개설 신고 후 점검완료 회신이 가능합니다.',
+            style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+          ),
         ],
       ]),
     );
