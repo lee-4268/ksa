@@ -13708,7 +13708,7 @@ async def inspection_data(request: Request, req: InspectionDataReq):
         zpcodes = list({(it.get('통시') or '').strip() for it in items if (it.get('통시') or '').strip()})
         zpprac1_map: dict = {}
         if zpcodes:
-            cert_db = _cert_cache_db_path
+            cert_db = _cert_cache_db_path or os.path.join(_tempfile.gettempdir(), "cert_cache.db")
             if cert_db and os.path.exists(cert_db):
                 try:
                     cc = sqlite3.connect(cert_db, timeout=10)

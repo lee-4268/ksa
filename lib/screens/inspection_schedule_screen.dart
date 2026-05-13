@@ -13,6 +13,36 @@ import 'dart:html' as html;
 // 워크플로우 상태 전체 토큰 (대시보드 → 일정화면 상태칩과 동일 코드)
 // 'RECHECK' 토큰은 별도로 재점검 토글을 활성화하는 특수 값
 
+class _InspColSpec {
+  final String key, label;
+  final double w;
+  final int si; // sort index, -1 = not sortable
+  final bool hideable;
+  const _InspColSpec(this.key, this.label, this.w, this.si, {this.hideable = true});
+}
+
+const _kInspCols = <_InspColSpec>[
+  _InspColSpec('__chk',     '',             48,  -1, hideable: false),
+  _InspColSpec('__sched',   '수검일정',     110,   1, hideable: false),
+  _InspColSpec('허가번호',   '허가번호',     120,   2, hideable: false),
+  _InspColSpec('호출명칭',   '호출명칭',     180,   3, hideable: false),
+  _InspColSpec('국종군',     '국종군',        80,   4),
+  _InspColSpec('부서',       'KCA부서',      120,   5),
+  _InspColSpec('연도주기',   '연도주기',      70,   6),
+  _InspColSpec('설치장소',   '설치장소',     160,   7, hideable: false),
+  _InspColSpec('도로명주소', '도로명주소',   180,   8),
+  _InspColSpec('장치수',     '장치수',        60,   9),
+  _InspColSpec('통시',       '통시',          80,  10),
+  _InspColSpec('공대',       '공대',          80,  11),
+  _InspColSpec('zpprac1',   'ERP활용구분',   90,  12),
+  _InspColSpec('시기조정',   '시기조정',      80,  13),
+  _InspColSpec('기준연도',   '기준연도',      80,  14),
+  _InspColSpec('skt본부',   'SKT본부',      100,  15, hideable: false),
+  _InspColSpec('access담당','Access담당',   110,  16, hideable: false),
+  _InspColSpec('품질개선팀', '품질개선팀',   110,  17, hideable: false),
+  _InspColSpec('검사결과',   '검사결과',      80,  18, hideable: false),
+];
+
 class InspectionScheduleScreen extends StatefulWidget {
   final void Function(List<String> licenseNos, String? accessDivision, bool multiDivision,
       {List<String>? schedulePks})? onCompareNavigate;
@@ -37,6 +67,10 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
   late final TabController _tabCtrl;
   final _searchCtrl = TextEditingController();
   final _horizontalScrollCtrl = ScrollController();
+  final _hdrHorizCtrl = ScrollController();
+  bool _hScrollSyncing = false;
+  final Map<String, double> _colWidths = {for (final c in _kInspCols) c.key: c.w};
+  Set<String> _hiddenCols = {'부서', '연도주기', '도로명주소', '시기조정', '기준연도'};
 
   int _year = DateTime.now().year;
   String _sheet = 'all';
@@ -97,24 +131,16 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
   int? _sortColIdx;
   bool _sortAsc = true;
 
-  // 정렬 컬럼 인덱스 → 데이터 키 (체크박스 컬럼 제외, 1부터 시작)
-  static const _scheduleColKeys = [
-    null, // 0: 체크박스
-    '수검일정', '허가번호', '호출명칭', '국종군', '부서',
-    '연도주기', '설치장소', '도로명주소',
-    '장치수', '통시', '공대', 'zpprac1', '시기조정', '기준연도',
-    'SKT본부', 'Access담당', '품질개선팀', '검사결과',
-  ];
-
-  void _onScheduleSort(int colIdx, bool asc) {
-    final key = _scheduleColKeys[colIdx];
-    if (key == null) return;
+  void _onScheduleSort(int si, bool asc) {
+    final col = _kInspCols.firstWhere((c) => c.si == si,
+        orElse: () => const _InspColSpec('', '', 0, -1));
+    if (col.key.isEmpty) return;
     setState(() {
-      _sortColIdx = colIdx;
+      _sortColIdx = si;
       _sortAsc = asc;
       _items.sort((a, b) {
-        final av = (a[key] ?? '').toString();
-        final bv = (b[key] ?? '').toString();
+        final av = (a[col.key] ?? '').toString();
+        final bv = (b[col.key] ?? '').toString();
         final an = double.tryParse(av);
         final bn = double.tryParse(bv);
         if (an != null && bn != null) return asc ? an.compareTo(bn) : bn.compareTo(an);
@@ -223,6 +249,8 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
         _statusFilter = f;
       }
     }
+    _hdrHorizCtrl.addListener(_syncHdrScroll);
+    _horizontalScrollCtrl.addListener(_syncDataScroll);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _loadOrgMap();
       _loadAll();
@@ -250,6 +278,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     _tabCtrl.dispose();
     _searchCtrl.dispose();
     _horizontalScrollCtrl.dispose();
+    _hdrHorizCtrl.dispose();
     super.dispose();
   }
 
@@ -2204,38 +2233,21 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
       );
     }
 
-    // 체크 가능한 항목:
-    // - admin/manager: 본부 격리된 모든 항목 (배정 여부 무관)
-    // - member: 본부 격리 + 일정 등록된 항목만 (전산비교 대상 선택용)
-    final source = _filteredItems;
-    final checkableItems = _isAdmin
-        ? source.where((item) {
-            final no = '${item['허가번호'] ?? ''}';
-            return no.isNotEmpty && _canManageItem(item);
-          }).toList()
-        : source.where((item) {
-            final no = '${item['허가번호'] ?? ''}';
-            return no.isNotEmpty && _isScheduled(no) && _isMyDivision(item);
-          }).toList();
-
-    final allChecked = checkableItems.isNotEmpty &&
-        checkableItems.every((item) => _selectedLicenseNos.contains('${item['허가번호'] ?? ''}'));
-    final someChecked = !allChecked &&
-        checkableItems.any((item) => _selectedLicenseNos.contains('${item['허가번호'] ?? ''}'));
-
-    final headerStyle = TextStyle(
-      fontSize: 12, fontWeight: FontWeight.w700, color: Colors.black87,
-    );
-    const cellStyle = TextStyle(fontSize: 12, color: Color(0xFF374151));
-
     return Column(children: [
       Padding(
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
         child: _buildStatusFilterBar(),
       ),
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.end,
+          children: [_buildColumnToggleButton()],
+        ),
+      ),
       Expanded(
         child: Container(
-          margin: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+          margin: const EdgeInsets.fromLTRB(16, 4, 16, 0),
           decoration: BoxDecoration(
             color: Colors.white,
             borderRadius: BorderRadius.circular(12),
@@ -2246,108 +2258,38 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
           ),
           child: ClipRRect(
             borderRadius: BorderRadius.circular(12),
-            child: Scrollbar(
-              controller: _horizontalScrollCtrl,
-              thumbVisibility: true,
-              child: SingleChildScrollView(
-                controller: _horizontalScrollCtrl,
-                scrollDirection: Axis.horizontal,
-                child: SingleChildScrollView(
-                  child: DataTable(
-                    sortColumnIndex: _sortColIdx,
-                    sortAscending: _sortAsc,
-                    headingRowColor: WidgetStateProperty.all(_primary.withValues(alpha: 0.12)),
-                    headingRowHeight: 44,
-                    dataRowMinHeight: 42,
-                    dataRowMaxHeight: 46,
-                    columnSpacing: 20,
-                    horizontalMargin: 16,
-                    showCheckboxColumn: false,
-                    dividerThickness: 1,
-                    decoration: const BoxDecoration(
-                      border: Border(bottom: BorderSide(color: Color(0xFFE5E7EB))),
-                    ),
-                    columns: [
-                      DataColumn(label: Checkbox(
-                        value: someChecked ? null : allChecked,
-                        tristate: true,
-                        activeColor: _isAdmin ? _primary : _blue,
-                        onChanged: checkableItems.isEmpty ? null : (v) {
-                          setState(() {
-                            if (v == true) {
-                              for (final item in checkableItems) {
-                                final no = '${item['허가번호'] ?? ''}';
-                                if (no.isNotEmpty) _selectedLicenseNos.add(no);
-                              }
-                            } else {
-                              for (final item in checkableItems) {
-                                _selectedLicenseNos.remove('${item['허가번호'] ?? ''}');
-                              }
-                            }
-                          });
-                        },
-                      )),
-                      DataColumn(label: Text('수검일정', style: headerStyle), onSort: (i, a) => _onScheduleSort(1, a)),
-                      DataColumn(label: Text('허가번호', style: headerStyle), onSort: (i, a) => _onScheduleSort(2, a)),
-                      DataColumn(label: Text('호출명칭', style: headerStyle), onSort: (i, a) => _onScheduleSort(3, a)),
-                      DataColumn(label: Text('국종군', style: headerStyle), onSort: (i, a) => _onScheduleSort(4, a)),
-                      DataColumn(label: Text('KCA부서', style: headerStyle), onSort: (i, a) => _onScheduleSort(5, a)),
-                      DataColumn(label: Text('연도주기', style: headerStyle), onSort: (i, a) => _onScheduleSort(6, a)),
-                      DataColumn(label: Text('설치장소', style: headerStyle), onSort: (i, a) => _onScheduleSort(7, a)),
-                      DataColumn(label: Text('도로명주소', style: headerStyle), onSort: (i, a) => _onScheduleSort(8, a)),
-                      DataColumn(label: Text('장치수', style: headerStyle), onSort: (i, a) => _onScheduleSort(9, a)),
-                      DataColumn(label: Text('통시', style: headerStyle), onSort: (i, a) => _onScheduleSort(10, a)),
-                      DataColumn(label: Text('공대', style: headerStyle), onSort: (i, a) => _onScheduleSort(11, a)),
-                      DataColumn(label: Text('ERP활용구분', style: headerStyle), onSort: (i, a) => _onScheduleSort(12, a)),
-                      DataColumn(label: Text('시기조정', style: headerStyle), onSort: (i, a) => _onScheduleSort(13, a)),
-                      DataColumn(label: Text('기준연도', style: headerStyle), onSort: (i, a) => _onScheduleSort(14, a)),
-                      DataColumn(label: Text('SKT본부', style: headerStyle), onSort: (i, a) => _onScheduleSort(15, a)),
-                      DataColumn(label: Text('Access담당', style: headerStyle), onSort: (i, a) => _onScheduleSort(16, a)),
-                      DataColumn(label: Text('품질개선팀', style: headerStyle), onSort: (i, a) => _onScheduleSort(17, a)),
-                      DataColumn(label: Text('검사결과', style: headerStyle), onSort: (i, a) => _onScheduleSort(18, a)),
-                    ],
-                    rows: _filteredItems.asMap().entries.map((entry) {
-                      final idx = entry.key;
-                      final item = entry.value;
-                      final licenseNo = '${item['허가번호'] ?? ''}';
-                      final isSelected = _detailLicenseNo == licenseNo;
-                      final isChecked = _selectedLicenseNos.contains(licenseNo);
-                      return DataRow(
-                        selected: isSelected,
-                        color: WidgetStateProperty.resolveWith((states) {
-                          if (states.contains(WidgetState.selected)) return _primary.withValues(alpha: 0.06);
-                          if (idx.isEven) return const Color(0xFFFAFAFB);
-                          return Colors.white;
-                        }),
-                        onSelectChanged: (_) => _loadDetail(licenseNo),
-                        cells: [
-                          DataCell(_buildRowCheckbox(item, licenseNo, isChecked)),
-                          DataCell(_buildScheduleCell(licenseNo)),
-                          DataCell(Text(licenseNo, style: cellStyle)),
-                          DataCell(SizedBox(width: 180, child: Text('${item['호출명칭'] ?? ''}', style: cellStyle.copyWith(fontWeight: FontWeight.w600), overflow: TextOverflow.ellipsis))),
-                          DataCell(Text('${item['국종군'] ?? ''}', style: cellStyle)),
-                          DataCell(Text((item['부서'] as String? ?? '').replaceFirst(RegExp(r'^\d+\.\s*'), ''), style: cellStyle)),
-                          DataCell(Text('${item['연도주기'] ?? ''}', style: cellStyle)),
-                          DataCell(SizedBox(width: 160, child: Text('${item['설치장소'] ?? ''}', style: cellStyle, overflow: TextOverflow.ellipsis))),
-                          DataCell(SizedBox(width: 180, child: Text('${item['도로명주소'] ?? ''}', style: cellStyle, overflow: TextOverflow.ellipsis))),
-                          DataCell(Text('${item['장치수'] ?? ''}', style: cellStyle)),
-                          DataCell(Text('${item['통시'] ?? ''}', style: cellStyle)),
-                          DataCell(Text('${item['공대'] ?? ''}', style: cellStyle)),
-                          DataCell(Text('${item['zpprac1'] ?? ''}', style: cellStyle)),
-                          DataCell(Text('${item['시기조정'] ?? ''}', style: cellStyle)),
-                          DataCell(Text('${item['기준연도'] ?? ''}', style: cellStyle)),
-                          DataCell(Text('${item['skt본부'] ?? ''}', style: cellStyle)),
-                          DataCell(Text('${item['access담당'] ?? ''}', style: cellStyle)),
-                          DataCell(Text('${item['품질개선팀'] ?? ''}', style: cellStyle)),
-                          DataCell(_buildResultChip(
-                              '${item['검사결과'] ?? ''}',
-                              wfStatus: _scheduleStatusMap['${item['허가번호'] ?? ''}'])),
-                        ],
-                      );
-                    }).toList(),
+            child: Column(
+              children: [
+                Container(
+                  height: 44,
+                  color: _primary.withValues(alpha: 0.12),
+                  child: SingleChildScrollView(
+                    controller: _hdrHorizCtrl,
+                    scrollDirection: Axis.horizontal,
+                    physics: const ClampingScrollPhysics(),
+                    child: _buildCustomHeader(),
                   ),
                 ),
-              ),
+                const Divider(height: 1, thickness: 1, color: Color(0xFFE5E7EB)),
+                Expanded(
+                  child: Scrollbar(
+                    controller: _horizontalScrollCtrl,
+                    thumbVisibility: true,
+                    child: SingleChildScrollView(
+                      controller: _horizontalScrollCtrl,
+                      scrollDirection: Axis.horizontal,
+                      physics: const ClampingScrollPhysics(),
+                      child: SizedBox(
+                        width: _totalColWidth,
+                        child: ListView.builder(
+                          itemCount: _filteredItems.length,
+                          itemBuilder: (ctx, i) => _buildCustomRow(_filteredItems[i], i),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
         ),
@@ -2608,6 +2550,317 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
         });
       },
     );
+  }
+
+  // ── 수평 스크롤 동기화 ─────────────────────────────────────
+  void _syncHdrScroll() {
+    if (_hScrollSyncing || !_horizontalScrollCtrl.hasClients) return;
+    _hScrollSyncing = true;
+    _horizontalScrollCtrl.jumpTo(_hdrHorizCtrl.offset);
+    _hScrollSyncing = false;
+  }
+
+  void _syncDataScroll() {
+    if (_hScrollSyncing || !_hdrHorizCtrl.hasClients) return;
+    _hScrollSyncing = true;
+    _hdrHorizCtrl.jumpTo(_horizontalScrollCtrl.offset);
+    _hScrollSyncing = false;
+  }
+
+  // ── 컬럼 너비 합계 ────────────────────────────────────────
+  double get _totalColWidth => _kInspCols
+      .where((c) => !_hiddenCols.contains(c.key))
+      .fold(0.0, (sum, c) => sum + (_colWidths[c.key] ?? c.w));
+
+  // ── 컬럼 표시/숨김 다이얼로그 ────────────────────────────
+  void _showColumnDialog() {
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setLocal) => AlertDialog(
+          title: const Text('컬럼 표시 설정',
+              style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+          content: SizedBox(
+            width: 260,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: _kInspCols
+                    .where((c) => c.hideable)
+                    .map((col) => CheckboxListTile(
+                          dense: true,
+                          title: Text(col.label,
+                              style: const TextStyle(fontSize: 13)),
+                          value: !_hiddenCols.contains(col.key),
+                          activeColor: _primary,
+                          onChanged: (v) {
+                            setLocal(() {});
+                            setState(() {
+                              if (v == true) {
+                                _hiddenCols.remove(col.key);
+                              } else {
+                                _hiddenCols.add(col.key);
+                              }
+                            });
+                          },
+                        ))
+                    .toList(),
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('닫기'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildColumnToggleButton() {
+    final hiddenCount = _hiddenCols.length;
+    return InkWell(
+      onTap: _showColumnDialog,
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: const Color(0xFFE5E7EB)),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          const Icon(Icons.view_column_outlined, size: 15,
+              color: Color(0xFF6B7280)),
+          const SizedBox(width: 5),
+          Text('컬럼',
+              style: const TextStyle(fontSize: 12, color: Color(0xFF374151))),
+          if (hiddenCount > 0) ...[
+            const SizedBox(width: 4),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+              decoration: BoxDecoration(
+                color: _primary.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Text('$hiddenCount 숨김',
+                  style: TextStyle(fontSize: 10, color: _primary,
+                      fontWeight: FontWeight.w600)),
+            ),
+          ],
+        ]),
+      ),
+    );
+  }
+
+  // ── 커스텀 테이블 헤더 ────────────────────────────────────
+  Widget _buildCustomHeader() {
+    const hStyle = TextStyle(
+        fontSize: 12, fontWeight: FontWeight.w700, color: Colors.black87);
+    final visibleCols =
+        _kInspCols.where((c) => !_hiddenCols.contains(c.key)).toList();
+    return Row(
+      children: visibleCols.asMap().entries.map((e) {
+        final isLast = e.key == visibleCols.length - 1;
+        final col = e.value;
+        final w = _colWidths[col.key] ?? col.w;
+        final isSorted = _sortColIdx == col.si && col.si > 0;
+        return SizedBox(
+          width: w,
+          height: 44,
+          child: Stack(
+            children: [
+              if (col.key == '__chk')
+                _buildHeaderCheckbox()
+              else
+                GestureDetector(
+                  onTap: col.si > 0
+                      ? () => _onScheduleSort(
+                          col.si, _sortColIdx == col.si ? !_sortAsc : true)
+                      : null,
+                  child: Container(
+                    width: w,
+                    height: 44,
+                    padding: const EdgeInsets.only(left: 8, right: 16),
+                    alignment: Alignment.centerLeft,
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text(col.label, style: hStyle,
+                              overflow: TextOverflow.ellipsis),
+                        ),
+                        if (isSorted) ...[
+                          const SizedBox(width: 2),
+                          Icon(
+                            _sortAsc
+                                ? Icons.arrow_upward
+                                : Icons.arrow_downward,
+                            size: 11,
+                            color: _primary,
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ),
+              // 컬럼 구분선 (우측)
+              if (!isLast)
+                Positioned(
+                  right: 8,
+                  top: 10,
+                  bottom: 10,
+                  child: Container(
+                      width: 1, color: const Color(0xFFD1D5DB)),
+                ),
+              // 열 너비 조절 핸들
+              if (col.key != '__chk')
+                Positioned(
+                  right: 0,
+                  top: 0,
+                  bottom: 0,
+                  child: MouseRegion(
+                    cursor: SystemMouseCursors.resizeColumn,
+                    child: GestureDetector(
+                      onHorizontalDragUpdate: (d) {
+                        setState(() {
+                          _colWidths[col.key] =
+                              ((_colWidths[col.key] ?? col.w) + d.delta.dx)
+                                  .clamp(40.0, 480.0);
+                        });
+                      },
+                      child: Container(
+                          width: 8, color: Colors.transparent),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        );
+      }).toList(),
+    );
+  }
+
+  Widget _buildHeaderCheckbox() {
+    final source = _filteredItems;
+    final checkable = _isAdmin
+        ? source
+            .where((it) =>
+                '${it['허가번호'] ?? ''}'.isNotEmpty && _canManageItem(it))
+            .toList()
+        : source
+            .where((it) {
+              final no = '${it['허가번호'] ?? ''}';
+              return no.isNotEmpty && _isScheduled(no) && _isMyDivision(it);
+            })
+            .toList();
+    final allChk = checkable.isNotEmpty &&
+        checkable.every(
+            (it) => _selectedLicenseNos.contains('${it['허가번호'] ?? ''}'));
+    final someChk = !allChk &&
+        checkable.any(
+            (it) => _selectedLicenseNos.contains('${it['허가번호'] ?? ''}'));
+    return Center(
+      child: Checkbox(
+        value: someChk ? null : allChk,
+        tristate: true,
+        activeColor: _isAdmin ? _primary : _blue,
+        onChanged: checkable.isEmpty
+            ? null
+            : (v) {
+                setState(() {
+                  if (v == true) {
+                    for (final it in checkable) {
+                      final no = '${it['허가번호'] ?? ''}';
+                      if (no.isNotEmpty) _selectedLicenseNos.add(no);
+                    }
+                  } else {
+                    for (final it in checkable) {
+                      _selectedLicenseNos.remove('${it['허가번호'] ?? ''}');
+                    }
+                  }
+                });
+              },
+      ),
+    );
+  }
+
+  // ── 커스텀 테이블 행 ─────────────────────────────────────
+  Widget _buildCustomRow(Map<String, dynamic> item, int idx) {
+    final licenseNo = '${item['허가번호'] ?? ''}';
+    final isSelected = _detailLicenseNo == licenseNo;
+    final isChecked = _selectedLicenseNos.contains(licenseNo);
+    final visibleCols =
+        _kInspCols.where((c) => !_hiddenCols.contains(c.key)).toList();
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: () => _loadDetail(licenseNo),
+        child: Container(
+          height: 44,
+          decoration: BoxDecoration(
+            color: isSelected
+                ? _primary.withValues(alpha: 0.06)
+                : (idx.isEven ? const Color(0xFFFAFAFB) : Colors.white),
+            border: const Border(
+                bottom: BorderSide(color: Color(0xFFE5E7EB), width: 0.5)),
+          ),
+          child: Row(
+            children: visibleCols.map((col) {
+              final w = _colWidths[col.key] ?? col.w;
+              return SizedBox(
+                width: w,
+                height: 44,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: _buildCellContent(
+                        col.key, item, licenseNo, isChecked),
+                  ),
+                ),
+              );
+            }).toList(),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCellContent(String key, Map<String, dynamic> item,
+      String licenseNo, bool isChecked) {
+    const cs = TextStyle(fontSize: 12, color: Color(0xFF374151));
+    switch (key) {
+      case '__chk':
+        return _buildRowCheckbox(item, licenseNo, isChecked);
+      case '__sched':
+        return _buildScheduleCell(licenseNo);
+      case '허가번호':
+        return Text(licenseNo, style: cs);
+      case '호출명칭':
+        return Text('${item['호출명칭'] ?? ''}',
+            style: cs.copyWith(fontWeight: FontWeight.w600),
+            overflow: TextOverflow.ellipsis);
+      case '부서':
+        return Text(
+            (item['부서'] as String? ?? '')
+                .replaceFirst(RegExp(r'^\d+\.\s*'), ''),
+            style: cs,
+            overflow: TextOverflow.ellipsis);
+      case '설치장소':
+        return Text('${item['설치장소'] ?? ''}',
+            style: cs, overflow: TextOverflow.ellipsis);
+      case '도로명주소':
+        return Text('${item['도로명주소'] ?? ''}',
+            style: cs, overflow: TextOverflow.ellipsis);
+      case '검사결과':
+        return _buildResultChip('${item['검사결과'] ?? ''}',
+            wfStatus: _scheduleStatusMap[licenseNo]);
+      default:
+        return Text('${item[key] ?? ''}',
+            style: cs, overflow: TextOverflow.ellipsis);
+    }
   }
 
   Widget _buildStatusChip(String val) {
