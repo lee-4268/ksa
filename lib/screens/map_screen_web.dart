@@ -1369,6 +1369,7 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
         window['polygonTempMarkers_$_containerId'] = [];
         window['polygonTempLines_$_containerId'] = [];
         window['polygonVertexCount_$_containerId'] = 0;
+        window['polygonDrawing_$_containerId'] = true;
 
         // 기존 폴리곤 오버레이 제거
         if (window['polygonShape_$_containerId']) {
@@ -1376,6 +1377,9 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
           window['polygonShape_$_containerId'] = null;
         }
 
+        // 버튼 클릭 이벤트가 맵에 전파되지 않도록 지연 후 리스너 등록
+        setTimeout(function() {
+        if (!window['polygonDrawing_$_containerId']) return;
         var listener = kakao.maps.event.addListener(map, 'click', function(e) {
           var lat = e.latLng.getLat();
           var lng = e.latLng.getLng();
@@ -1408,6 +1412,7 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
           window.parent.postMessage({type: 'polygonVertexCount', count: verts.length}, '*');
         });
         window['polygonClickListener_$_containerId'] = listener;
+        }, 350);
       })();
     ''';
     html.document.body?.append(html.ScriptElement()..text = jsCode);
@@ -1418,6 +1423,7 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
     final jsCode = '''
       (function() {
         if (typeof kakao === 'undefined') return;
+        window['polygonDrawing_$_containerId'] = false;
         var listener = window['polygonClickListener_$_containerId'];
         if (listener) {
           kakao.maps.event.removeListener(listener);
@@ -1448,6 +1454,7 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
         var map = window['kakaoMapInstance_$_containerId'];
         if (!map) return;
 
+        window['polygonDrawing_$_containerId'] = false;
         var listener = window['polygonClickListener_$_containerId'];
         if (listener) {
           kakao.maps.event.removeListener(listener);

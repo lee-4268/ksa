@@ -1,6 +1,5 @@
 // ignore_for_file: avoid_web_libraries_in_flutter
 import 'dart:convert';
-import 'dart:html' as html;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
@@ -59,13 +58,6 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
   // Phase 4: 수검 가능 건만 보기 (전파관리소 접수 완료 이상)
   // SUBMITTED / REPORT_ISSUED(접수번호 스킵 케이스) / INSPECTED(완료·재방문)
   bool _readyOnly = true;
-
-  // 경로 계획 모드 (기존 — 마커 탭 방식)
-  bool _isRoutePlanMode = false;
-  final List<RadioStation> _routeSelectedStations = [];
-  bool _isCalculatingRoute = false;
-  List<RadioStation>? _routeResult;
-  bool _routeHasMyLocation = false;
 
   // 폴리곤 경로 담기
   _PolygonPhase _polygonPhase = _PolygonPhase.idle;
@@ -325,12 +317,6 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
   }
 
   void _onMarkerTap(RadioStation station) {
-    if (_isRoutePlanMode) {
-      _toggleRouteStation(station);
-      // 마커 클릭 시 JS에서 zoom/drag가 꺼지므로 즉시 복원
-      _mapKey.currentState?.setMapDraggable(true);
-      return;
-    }
     if (station.hasCoordinates) _mapKey.currentState?.moveToStation(station);
     final item = _assignedItems.firstWhere(
       (i) => (i['허가번호'] as String? ?? '').trim() == station.licenseNumber.trim(),
@@ -422,14 +408,16 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
                           child: _buildAzimuthControl(markerStations),
                         ),
                         Positioned(right: 16, bottom: 16, child: _buildMyLocationButton()),
-                        if (kIsWeb && _polygonPhase == _PolygonPhase.idle && !_isRoutePlanMode)
+                        if (kIsWeb && _polygonPhase == _PolygonPhase.idle)
                           Positioned(right: 12, top: 12, child: _buildPolygonEntryButton()),
                         if (_polygonPhase != _PolygonPhase.idle)
-                          Positioned(left: 0, right: 0, bottom: 0, child: _buildPolygonPanel()),
-                        if (_isRoutePlanMode)
                           Positioned(
                             left: 0, right: 0, bottom: 0,
-                            child: _buildRoutePlanPanel(),
+                            child: MouseRegion(
+                              onEnter: (_) => _mapKey.currentState?.setMapDraggable(false),
+                              onExit: (_) => _mapKey.currentState?.setMapDraggable(true),
+                              child: _buildPolygonPanel(),
+                            ),
                           ),
                       ],
                     ),
@@ -478,19 +466,17 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
                           bottom: _listHeightRatio * screenHeight + 16,
                           child: _buildMyLocationButton(),
                         ),
-                        if (kIsWeb && _polygonPhase == _PolygonPhase.idle && !_isRoutePlanMode)
+                        if (kIsWeb && _polygonPhase == _PolygonPhase.idle)
                           Positioned(right: 12, top: 12, child: _buildPolygonEntryButton()),
                         if (_polygonPhase != _PolygonPhase.idle)
                           Positioned(
                             left: 0, right: 0,
                             bottom: _listHeightRatio * screenHeight,
-                            child: _buildPolygonPanel(),
-                          ),
-                        if (_isRoutePlanMode)
-                          Positioned(
-                            left: 0, right: 0,
-                            bottom: _listHeightRatio * screenHeight,
-                            child: _buildRoutePlanPanel(),
+                            child: MouseRegion(
+                              onEnter: (_) => _mapKey.currentState?.setMapDraggable(false),
+                              onExit: (_) => _mapKey.currentState?.setMapDraggable(true),
+                              child: _buildPolygonPanel(),
+                            ),
                           ),
                       ],
                     ),
@@ -577,14 +563,6 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
                   padding: EdgeInsets.symmetric(horizontal: 4),
                   child: SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
                 ),
-              IconButton(
-                icon: Icon(Icons.alt_route,
-                    color: _isRoutePlanMode ? Colors.blue : Colors.black54, size: 22),
-                tooltip: '경로 계획',
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
-                onPressed: _toggleRoutePlanMode,
-              ),
               IconButton(
                 icon: const Icon(Icons.refresh_rounded, color: Colors.black54, size: 22),
                 tooltip: '새로고침',
@@ -1192,7 +1170,6 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
   Widget _buildBasketEntryTile(RouteBasketEntry entry) {
     return InkWell(
       onTap: () {
-        // 맵에 저장된 경로 표시
         final stations = entry.stations.map((bs) => RadioStation(
           id: bs.id,
           stationName: bs.name,
@@ -1204,6 +1181,7 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
         )).toList();
         _mapKey.currentState?.clearRouteOverlay();
         _mapKey.currentState?.drawRouteOverlay(orderedStations: stations);
+        _showBasketStationList(entry, stations);
       },
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 7),
@@ -1232,6 +1210,68 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
             ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showBasketStationList(RouteBasketEntry entry, List<RadioStation> stations) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      builder: (_) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              margin: const EdgeInsets.symmetric(vertical: 10),
+              width: 36, height: 4,
+              decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(2)),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
+              child: Row(
+                children: [
+                  const Icon(Icons.bookmark, size: 18, color: Color(0xFFE53935)),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(entry.title,
+                        style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
+                  ),
+                  Text('${stations.length}개 국소',
+                      style: TextStyle(fontSize: 12, color: Colors.grey.shade500)),
+                ],
+              ),
+            ),
+            const Divider(height: 1),
+            ConstrainedBox(
+              constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.45),
+              child: ListView.separated(
+                shrinkWrap: true,
+                padding: const EdgeInsets.symmetric(vertical: 6),
+                itemCount: stations.length,
+                separatorBuilder: (_, _) => const Divider(height: 1, indent: 20),
+                itemBuilder: (_, i) {
+                  final s = stations[i];
+                  final isFirst = i == 0;
+                  final isLast = i == stations.length - 1;
+                  final color = isFirst ? Colors.green : (isLast ? Colors.red : const Color(0xFFE53935));
+                  final tag = isFirst ? '출발' : (isLast ? '도착' : '${i + 1}');
+                  return ListTile(
+                    dense: true,
+                    leading: CircleAvatar(
+                      radius: 13,
+                      backgroundColor: color,
+                      child: Text(tag, style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
+                    ),
+                    title: Text(s.displayName, style: const TextStyle(fontSize: 13)),
+                  );
+                },
+              ),
+            ),
+            const SizedBox(height: 8),
           ],
         ),
       ),
@@ -1714,345 +1754,6 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
     _mapKey.currentState?.clearRouteOverlay();
   }
 
-  // ── 경로 계획 ─────────────────────────────────────────────────────────
-
-  void _toggleRoutePlanMode() {
-    setState(() {
-      _isRoutePlanMode = !_isRoutePlanMode;
-      if (!_isRoutePlanMode) {
-        _routeSelectedStations.clear();
-        _routeResult = null;
-        _routeHasMyLocation = false;
-        _mapKey.currentState?.clearRouteOverlay();
-      }
-    });
-    // 경로 모드 On/Off 관계없이 지도 조작 항상 활성화
-    _mapKey.currentState?.setMapDraggable(true);
-  }
-
-  void _toggleRouteStation(RadioStation station) {
-    setState(() {
-      final idx = _routeSelectedStations.indexWhere((s) => s.id == station.id);
-      if (idx >= 0) {
-        _routeSelectedStations.removeAt(idx);
-      } else {
-        _routeSelectedStations.add(station);
-      }
-      _routeResult = null;
-      _mapKey.currentState?.clearRouteOverlay();
-      _mapKey.currentState?.setRouteSelectedMarkers(
-        _routeSelectedStations.map((s) => s.id).toList(),
-      );
-    });
-  }
-
-  Future<void> _calculateOptimalRoute() async {
-    if (_routeSelectedStations.length < 2) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('최소 2개 이상의 국소를 선택하세요.')),
-      );
-      return;
-    }
-    setState(() => _isCalculatingRoute = true);
-    try {
-      final stations = List<RadioStation>.from(_routeSelectedStations);
-      final myLat = _mapKey.currentState?.currentLat;
-      final myLng = _mapKey.currentState?.currentLng;
-      final hasMyLocation = myLat != null && myLng != null;
-      if (!hasMyLocation) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('내 위치를 확인 중입니다. 위치 버튼을 눌러 위치를 활성화해 주세요.'),
-            duration: Duration(seconds: 3),
-          ),
-        );
-      }
-
-      // 내 위치를 포함한 전체 좌표 목록 (내 위치가 index 0)
-      final allCoords = <String>[];
-      if (hasMyLocation) allCoords.add('$myLng,$myLat');
-      allCoords.addAll(stations.map((s) => '${s.longitude},${s.latitude}'));
-
-      final coordsStr = allCoords.join(';');
-      final tableResp = await http
-          .get(Uri.parse(
-              'https://router.project-osrm.org/table/v1/driving/$coordsStr?annotations=duration'))
-          .timeout(const Duration(seconds: 30));
-      if (tableResp.statusCode != 200) throw Exception('OSRM 서버 오류');
-      final tableData = json.decode(tableResp.body) as Map<String, dynamic>;
-      final durations = (tableData['durations'] as List)
-          .map((row) => (row as List).map((v) => (v as num).toDouble()).toList())
-          .toList();
-
-      final offset = hasMyLocation ? 1 : 0; // 내 위치 offset
-      final n = stations.length;
-      final visited = List.filled(n + offset, false);
-      final order = <int>[];
-      // 출발: 내 위치(0) 또는 첫 번째 국소(0)
-      int current = 0;
-      visited[current] = true;
-      for (int step = 0; step < n; step++) {
-        double best = double.infinity;
-        int next = -1;
-        for (int j = offset; j < n + offset; j++) {
-          if (!visited[j] && durations[current][j] < best) {
-            best = durations[current][j];
-            next = j;
-          }
-        }
-        visited[next] = true;
-        order.add(next - offset); // stations 인덱스로 변환
-        current = next;
-      }
-      final orderedStations = order.map((i) => stations[i]).toList();
-
-      final routeCoords = orderedStations.map((s) => '${s.longitude},${s.latitude}').join(';');
-      final routeResp = await http
-          .get(Uri.parse(
-              'https://router.project-osrm.org/route/v1/driving/$routeCoords?overview=full&geometries=geojson'))
-          .timeout(const Duration(seconds: 30));
-
-      List<List<double>>? polylineCoords;
-      if (routeResp.statusCode == 200) {
-        final routeData = json.decode(routeResp.body) as Map<String, dynamic>;
-        final routes = routeData['routes'] as List?;
-        if (routes != null && routes.isNotEmpty) {
-          final coordsList =
-              ((routes[0] as Map)['geometry'] as Map?)?['coordinates'] as List?;
-          if (coordsList != null) {
-            polylineCoords = coordsList
-                .map((c) => [(c as List)[0] as double, c[1] as double])
-                .toList();
-          }
-        }
-      }
-
-      setState(() {
-        _routeResult = orderedStations;
-        _routeHasMyLocation = hasMyLocation;
-        _isCalculatingRoute = false;
-      });
-      _mapKey.currentState?.drawRouteOverlay(
-        orderedStations: orderedStations,
-        polylineCoords: polylineCoords,
-      );
-    } catch (e) {
-      setState(() => _isCalculatingRoute = false);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('경로 계산 실패: $e'), backgroundColor: Colors.red),
-        );
-      }
-    }
-  }
-
-  Widget _buildRoutePlanPanel() {
-    final hasResult = _routeResult != null;
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        boxShadow: [
-          BoxShadow(color: Colors.black.withValues(alpha: 0.15), blurRadius: 8, offset: const Offset(0, -2)),
-        ],
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-            color: Colors.blue,
-            child: Row(
-              children: [
-                const Icon(Icons.alt_route, color: Colors.white, size: 18),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    hasResult
-                        ? '최적 경로 (${_routeResult!.length}개 국소)'
-                        : '경로 계획 모드 — 방문할 국소를 선택하세요',
-                    style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
-                  ),
-                ),
-                TextButton(
-                  onPressed: _toggleRoutePlanMode,
-                  style: TextButton.styleFrom(
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(horizontal: 8),
-                    minimumSize: Size.zero,
-                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  ),
-                  child: const Text('종료', style: TextStyle(fontSize: 12)),
-                ),
-              ],
-            ),
-          ),
-          if (hasResult) _buildRouteResultList() else _buildRouteSelectionList(),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildRouteSelectionList() {
-    return Container(
-      constraints: const BoxConstraints(maxHeight: 200),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (_routeSelectedStations.isEmpty)
-            const Padding(
-              padding: EdgeInsets.all(16),
-              child: Text('지도에서 마커를 탭하여 국소를 선택하세요',
-                  style: TextStyle(color: Colors.grey, fontSize: 13)),
-            )
-          else
-            Flexible(
-              child: ListView.separated(
-                shrinkWrap: true,
-                padding: const EdgeInsets.symmetric(vertical: 4),
-                itemCount: _routeSelectedStations.length,
-                separatorBuilder: (_, __) => const Divider(height: 1),
-                itemBuilder: (context, index) {
-                  final s = _routeSelectedStations[index];
-                  return ListTile(
-                    dense: true,
-                    leading: CircleAvatar(
-                      radius: 12,
-                      backgroundColor: Colors.blue,
-                      child: Text('${index + 1}',
-                          style: const TextStyle(color: Colors.white, fontSize: 11)),
-                    ),
-                    title: Text(s.displayName, style: const TextStyle(fontSize: 13)),
-                    subtitle: Text(s.address,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontSize: 11)),
-                    trailing: IconButton(
-                      icon: const Icon(Icons.close, size: 16),
-                      onPressed: () => _toggleRouteStation(s),
-                    ),
-                  );
-                },
-              ),
-            ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-            child: SizedBox(
-              width: double.infinity,
-              child: ElevatedButton.icon(
-                onPressed: _routeSelectedStations.length < 2 || _isCalculatingRoute
-                    ? null
-                    : _calculateOptimalRoute,
-                icon: _isCalculatingRoute
-                    ? const SizedBox(
-                        width: 16, height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                    : const Icon(Icons.navigation, size: 18),
-                label: Text(_isCalculatingRoute
-                    ? '계산 중...'
-                    : '최적 경로 계산 (${_routeSelectedStations.length}개)'),
-                style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.blue, foregroundColor: Colors.white),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildRouteResultList() {
-    final stations = _routeResult!;
-    // 내 위치 출발 포함 시 총 아이템 수 = 1 + stations.length
-    final totalItems = _routeHasMyLocation ? stations.length + 1 : stations.length;
-    return Container(
-      constraints: const BoxConstraints(maxHeight: 220),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Flexible(
-            child: ListView.separated(
-              shrinkWrap: true,
-              padding: const EdgeInsets.symmetric(vertical: 4),
-              itemCount: totalItems,
-              separatorBuilder: (_, __) => const Divider(height: 1),
-              itemBuilder: (context, index) {
-                // 내 위치 출발 행
-                if (_routeHasMyLocation && index == 0) {
-                  return ListTile(
-                    dense: true,
-                    leading: const CircleAvatar(
-                      radius: 12,
-                      backgroundColor: Colors.green,
-                      child: Icon(Icons.my_location, color: Colors.white, size: 13),
-                    ),
-                    title: const Text('내 위치', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-                    trailing: const Text('출발', style: TextStyle(fontSize: 11, color: Colors.green)),
-                  );
-                }
-                final stationIndex = _routeHasMyLocation ? index - 1 : index;
-                final s = stations[stationIndex];
-                final isLast = stationIndex == stations.length - 1;
-                final displayIndex = _routeHasMyLocation ? index : index + 1;
-                return ListTile(
-                  dense: true,
-                  leading: CircleAvatar(
-                    radius: 12,
-                    backgroundColor: isLast ? Colors.red : Colors.blue,
-                    child: Text('$displayIndex',
-                        style: const TextStyle(color: Colors.white, fontSize: 11)),
-                  ),
-                  title: Text(s.displayName, style: const TextStyle(fontSize: 13)),
-                  subtitle: Text(s.address,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontSize: 11)),
-                  trailing: isLast
-                      ? const Text('도착', style: TextStyle(fontSize: 11, color: Colors.red))
-                      : null,
-                );
-              },
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-            child: Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: () {
-                      setState(() {
-                        _routeResult = null;
-                        _routeHasMyLocation = false;
-                        _mapKey.currentState?.clearRouteOverlay();
-                        _mapKey.currentState?.setRouteSelectedMarkers(
-                          _routeSelectedStations.map((s) => s.id).toList(),
-                        );
-                      });
-                    },
-                    icon: const Icon(Icons.refresh, size: 18),
-                    label: const Text('다시 선택'),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: ElevatedButton.icon(
-                    onPressed: _showNavigationAppPicker,
-                    icon: const Icon(Icons.navigation, size: 18),
-                    label: const Text('내비 시작'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.green,
-                      foregroundColor: Colors.white,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
   // ── 폴리곤 경로 UI ────────────────────────────────────────────────────
 
   Widget _buildPolygonEntryButton() {
@@ -2424,262 +2125,6 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('저장 실패: $e'), backgroundColor: Colors.red));
       }
     }
-  }
-
-  // ── 내비게이션 앱 연동 ────────────────────────────────────────────────
-
-  // 각 앱이 지원하는 최대 국소 수 (출발 + 경유 + 도착)
-  static const int _navMaxStations = 7; // 경유지 5개 + 출발 + 도착
-
-  void _showNavigationAppPicker() {
-    final stations = _routeResult!;
-    if (stations.isEmpty) return;
-
-    // 내 위치 포함 시 실제 경유지 수 = stations.length (내 위치가 출발)
-    // 아닐 경우 stations.length 자체가 출발+경유+도착
-    final totalStops = _routeHasMyLocation ? stations.length + 1 : stations.length;
-    final isOverLimit = totalStops > _navMaxStations;
-    // 초과 시 앞에서부터 _navMaxStations개만 사용
-    final usedStations = isOverLimit
-        ? stations.sublist(0, _routeHasMyLocation ? _navMaxStations - 1 : _navMaxStations)
-        : stations;
-
-    final isMobile = _isMobile();
-
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.white,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (_) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              margin: const EdgeInsets.symmetric(vertical: 12),
-              width: 40, height: 4,
-              decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(2)),
-            ),
-            const Padding(
-              padding: EdgeInsets.fromLTRB(16, 0, 16, 12),
-              child: Text('내비게이션 앱 선택',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-            ),
-            if (isOverLimit)
-              Container(
-                margin: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: Colors.orange.shade50,
-                  border: Border.all(color: Colors.orange.shade300),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Row(
-                  children: [
-                    Icon(Icons.warning_amber, color: Colors.orange.shade700, size: 18),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        '선택한 국소($totalStops개)가 앱 경유지 한도를 초과합니다.\n앞 $_navMaxStations개 국소만 내비에 전달됩니다.',
-                        style: TextStyle(fontSize: 12, color: Colors.orange.shade800),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            const Divider(height: 1),
-            if (!isMobile)
-              Container(
-                margin: const EdgeInsets.all(16),
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(
-                  color: Colors.grey.shade50,
-                  border: Border.all(color: Colors.grey.shade300),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Row(
-                  children: [
-                    Icon(Icons.smartphone, color: Colors.grey.shade500, size: 20),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Text(
-                        'PC에서는 내비 앱을 직접 실행할 수 없습니다.\n모바일에서 접속하면 Tmap, 네이버지도, 카카오맵으로 바로 연결됩니다.',
-                        style: TextStyle(fontSize: 12, color: Colors.grey.shade600, height: 1.5),
-                      ),
-                    ),
-                  ],
-                ),
-              )
-            else ...[
-              _navAppTile(
-                icon: 'T',
-                iconColor: Colors.blue.shade700,
-                bgColor: Colors.blue.shade50,
-                label: 'Tmap',
-                onTap: () { Navigator.pop(context); _launchTmap(usedStations); },
-              ),
-              _navAppTile(
-                icon: 'N',
-                iconColor: Colors.green.shade700,
-                bgColor: Colors.green.shade50,
-                label: '네이버지도',
-                onTap: () { Navigator.pop(context); _launchNaverMap(usedStations); },
-              ),
-              _navAppTile(
-                icon: 'K',
-                iconColor: Colors.yellow.shade800,
-                bgColor: Colors.yellow.shade50,
-                label: '카카오맵',
-                onTap: () { Navigator.pop(context); _launchKakaoMap(usedStations); },
-              ),
-            ],
-            const SizedBox(height: 8),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _navAppTile({
-    required String icon,
-    required Color iconColor,
-    required Color bgColor,
-    required String label,
-    required VoidCallback onTap,
-  }) {
-    return ListTile(
-      leading: Container(
-        width: 40, height: 40,
-        decoration: BoxDecoration(color: bgColor, borderRadius: BorderRadius.circular(10)),
-        alignment: Alignment.center,
-        child: Text(icon, style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: iconColor)),
-      ),
-      title: Text(label, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
-      trailing: const Icon(Icons.arrow_forward_ios, size: 14, color: Colors.black38),
-      onTap: onTap,
-    );
-  }
-
-  /// Tmap 딥링크
-  /// Android: intent:// 스킴으로 앱 실행 (웹브라우저에서 tmap:// 직접 호출 차단됨)
-  /// iOS: tmap:// 스킴
-  /// 경유지: viaX={경도}&viaY={위도}&viaName={이름} (1-indexed 없이 반복 — Tmap 실제 스펙)
-  void _launchTmap(List<RadioStation> stations) {
-    if (stations.isEmpty) return;
-
-    final List<RadioStation> vias;
-    final RadioStation dest;
-
-    if (_routeHasMyLocation) {
-      dest = stations.last;
-      vias = stations.length > 1 ? stations.sublist(0, stations.length - 1) : [];
-    } else {
-      dest = stations.last;
-      vias = stations.length > 2 ? stations.sublist(1, stations.length - 1) : [];
-    }
-
-    // 공통 쿼리 파라미터 (tmap:// 기준)
-    final qParams = StringBuffer();
-    if (!_routeHasMyLocation) {
-      final start = stations.first;
-      qParams.write('startX=${start.longitude}&startY=${start.latitude}');
-      qParams.write('&startName=${Uri.encodeComponent(start.displayName)}&');
-    }
-    qParams.write('goalX=${dest.longitude}&goalY=${dest.latitude}');
-    qParams.write('&goalName=${Uri.encodeComponent(dest.displayName)}');
-    qParams.write('&reqCoordType=WGS84GEO&resCoordType=WGS84GEO');
-    for (int i = 0; i < vias.length && i < 5; i++) {
-      final v = vias[i];
-      qParams.write('&via${i+1}X=${v.longitude}&via${i+1}Y=${v.latitude}');
-      qParams.write('&via${i+1}Name=${Uri.encodeComponent(v.displayName)}');
-    }
-
-    final ua = html.window.navigator.userAgent.toLowerCase();
-    final isAndroid = ua.contains('android');
-
-    if (isAndroid) {
-      // Android: intent URL로 감싸야 웹뷰/브라우저에서 앱 실행 가능
-      final intentUrl = 'intent://route?$qParams'
-          '#Intent;'
-          'scheme=tmap;'
-          'package=com.skt.tmap.ku;'
-          'S.browser_fallback_url=https%3A%2F%2Fplay.google.com%2Fstore%2Fapps%2Fdetails%3Fid%3Dcom.skt.tmap.ku;'
-          'end';
-      _openUrl(intentUrl);
-    } else {
-      // iOS: tmap:// 스킴 직접 사용
-      _openUrl('tmap://route?$qParams');
-    }
-  }
-
-  /// 네이버지도 딥링크
-  /// nmap://route/car?slat&slng&sname&v1lat~v5lat&dlat&dlng&dname&appname=...
-  void _launchNaverMap(List<RadioStation> stations) {
-    if (stations.isEmpty) return;
-    final dest = stations.last;
-    final params = StringBuffer();
-
-    if (_routeHasMyLocation) {
-      // 내 위치를 출발지로: 파라미터 생략 시 현재 위치 사용
-      // 첫 번째 국소가 경유지 v1, 마지막이 도착지
-      final vias = stations.sublist(0, stations.length - 1);
-      for (int i = 0; i < vias.length && i < 5; i++) {
-        final v = vias[i];
-        params.write('v${i+1}lat=${v.latitude}&v${i+1}lng=${v.longitude}&v${i+1}name=${Uri.encodeComponent(v.displayName)}&');
-      }
-    } else {
-      // 첫 번째 국소 출발
-      final start = stations.first;
-      params.write('slat=${start.latitude}&slng=${start.longitude}&sname=${Uri.encodeComponent(start.displayName)}&');
-      final vias = stations.length > 2 ? stations.sublist(1, stations.length - 1) : <RadioStation>[];
-      for (int i = 0; i < vias.length && i < 5; i++) {
-        final v = vias[i];
-        params.write('v${i+1}lat=${v.latitude}&v${i+1}lng=${v.longitude}&v${i+1}name=${Uri.encodeComponent(v.displayName)}&');
-      }
-    }
-
-    params.write('dlat=${dest.latitude}&dlng=${dest.longitude}&dname=${Uri.encodeComponent(dest.displayName)}');
-    params.write('&appname=com.skons.kca');
-
-    _openUrl('nmap://route/car?$params');
-  }
-
-  /// 카카오맵 딥링크
-  /// kakaomap://route?sp=lat,lng&vp=lat,lng&vp2=lat,lng&ep=lat,lng&by=car
-  void _launchKakaoMap(List<RadioStation> stations) {
-    if (stations.isEmpty) return;
-    final dest = stations.last;
-    final params = StringBuffer();
-
-    final List<RadioStation> vias;
-    if (_routeHasMyLocation) {
-      vias = stations.sublist(0, stations.length - 1);
-      // sp 생략 → 현재 위치
-    } else {
-      final start = stations.first;
-      params.write('sp=${start.latitude},${start.longitude}&');
-      vias = stations.length > 2 ? stations.sublist(1, stations.length - 1) : [];
-    }
-
-    // 경유지: vp, vp2, vp3, vp4, vp5 (최대 5개)
-    for (int i = 0; i < vias.length && i < 5; i++) {
-      final v = vias[i];
-      final key = i == 0 ? 'vp' : 'vp${i + 1}';
-      params.write('$key=${v.latitude},${v.longitude}&');
-    }
-
-    params.write('ep=${dest.latitude},${dest.longitude}&by=car');
-    _openUrl('kakaomap://route?$params');
-  }
-
-  bool _isMobile() {
-    final ua = html.window.navigator.userAgent.toLowerCase();
-    return ua.contains('android') || ua.contains('iphone') || ua.contains('ipad');
-  }
-
-  void _openUrl(String url) {
-    html.window.open(url, '_blank');
   }
 
   Widget _mapFloatingButton({required IconData icon, required Color color, required VoidCallback onTap}) {
