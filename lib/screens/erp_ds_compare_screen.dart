@@ -1926,78 +1926,141 @@ class _ChangeRequestDialogState extends State<_ChangeRequestDialog> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 
+  static const _orange = Color(0xFFE17055);
+  static const _orangeDark = Color(0xFFB85B3D);
+
   @override
   Widget build(BuildContext context) {
+    final addedNos = _entries.map((e) => e.licenseNo).toSet();
+    final remaining = widget.candidates.where((c) => !addedNos.contains(c.zpwino)).toList();
+
     return Dialog(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      backgroundColor: Colors.white,
+      surfaceTintColor: Colors.white,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 40),
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 800, maxHeight: 700),
+        constraints: const BoxConstraints(maxWidth: 660, maxHeight: 680),
         child: Column(mainAxisSize: MainAxisSize.min, children: [
+          // ── 헤더
           Padding(
-            padding: const EdgeInsets.fromLTRB(20, 18, 12, 12),
+            padding: const EdgeInsets.fromLTRB(20, 20, 16, 16),
             child: Row(children: [
-              const Icon(Icons.edit_note, color: Color(0xFFE17055)),
-              const SizedBox(width: 8),
-              const Text('변경개설 요청 작성',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                decoration: BoxDecoration(
+                  color: _orange.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  const Icon(Icons.edit_note, size: 15, color: _orange),
+                  const SizedBox(width: 5),
+                  const Text('변경개설 요청 작성',
+                      style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: _orange)),
+                ]),
+              ),
               const Spacer(),
-              IconButton(
-                icon: const Icon(Icons.close),
-                onPressed: _submitting ? null : () => Navigator.pop(context),
+              GestureDetector(
+                onTap: _submitting ? null : () => Navigator.pop(context),
+                child: Container(
+                  padding: const EdgeInsets.all(4),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF3F4F6),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: const Icon(Icons.close, size: 18, color: Color(0xFF6B7280)),
+                ),
               ),
             ]),
           ),
-          const Divider(height: 1),
-          Expanded(
+          // ── 안내 배너
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: _orange.withValues(alpha: 0.06),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: _orange.withValues(alpha: 0.2)),
+              ),
+              child: const Text(
+                '품개팀이 변경 필요한 항목을 명시 → 혁신팀이 신고서 다운로드 후 전파관리소 신고\n'
+                '국소 단위(설치장소/설치형태)는 장치번호 무관, 장치 단위(일련번호/형식검정번호)는 장치번호 필수',
+                style: TextStyle(fontSize: 12, color: _orangeDark, height: 1.5),
+              ),
+            ),
+          ),
+          // ── 항목 목록
+          Flexible(
             child: SingleChildScrollView(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 0),
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Container(
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFE17055).withValues(alpha: 0.07),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: const Text(
-                    '품개팀이 변경 필요한 항목을 명시 → 혁신팀이 신고서 다운로드 후 전파관리소 신고\n'
-                    '국소 단위(설치장소/설치형태)는 장치번호 무관, 장치 단위(일련번호/형식검정번호)는 장치번호 필수',
-                    style: TextStyle(fontSize: 12, color: Color(0xFF6E4C44)),
-                  ),
-                ),
-                const SizedBox(height: 12),
                 ..._entries.asMap().entries.map((e) => _buildEntryCard(e.key, e.value)),
-                const SizedBox(height: 8),
-                Wrap(spacing: 8, runSpacing: 8, children: [
-                  for (final c in widget.candidates)
-                    OutlinedButton.icon(
-                      icon: const Icon(Icons.add, size: 14),
-                      label: Text('${c.zpwino} 추가', style: const TextStyle(fontSize: 12)),
-                      onPressed: _submitting ? null : () => _addEntryFor(c),
-                    ),
-                ]),
+                if (remaining.isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Wrap(spacing: 8, runSpacing: 8, children: [
+                    for (final c in remaining)
+                      TextButton.icon(
+                        style: TextButton.styleFrom(
+                          foregroundColor: _orange,
+                          backgroundColor: _orange.withValues(alpha: 0.07),
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                          minimumSize: Size.zero,
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        ),
+                        icon: const Icon(Icons.add, size: 14),
+                        label: Text('${c.zpwino} 추가',
+                            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+                        onPressed: _submitting ? null : () => _addEntryFor(c),
+                      ),
+                  ]),
+                ],
+                const SizedBox(height: 12),
               ]),
             ),
           ),
-          const Divider(height: 1),
-          Padding(
-            padding: const EdgeInsets.all(12),
-            child: Row(mainAxisAlignment: MainAxisAlignment.end, children: [
-              TextButton(
-                onPressed: _submitting ? null : () => Navigator.pop(context),
-                child: const Text('취소'),
-              ),
-              const SizedBox(width: 8),
-              ElevatedButton.icon(
-                icon: _submitting
-                    ? const SizedBox(width: 14, height: 14,
-                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                    : const Icon(Icons.send, size: 16),
-                label: Text(_submitting ? '제출 중...' : '${_entries.length}건 신고 요청 등록'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFFE17055),
-                  foregroundColor: Colors.white,
+          // ── 하단 버튼
+          Container(
+            decoration: const BoxDecoration(
+              border: Border(top: BorderSide(color: Color(0xFFE5E7EB))),
+            ),
+            padding: const EdgeInsets.fromLTRB(20, 14, 20, 16),
+            child: Row(children: [
+              Expanded(
+                child: TextButton(
+                  onPressed: _submitting ? null : () => Navigator.pop(context),
+                  style: TextButton.styleFrom(
+                    foregroundColor: const Color(0xFF6B7280),
+                    backgroundColor: const Color(0xFFF3F4F6),
+                    padding: const EdgeInsets.symmetric(vertical: 13),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  ),
+                  child: const Text('취소', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
                 ),
-                onPressed: _submitting || _entries.isEmpty ? null : _submit,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                flex: 2,
+                child: ElevatedButton.icon(
+                  icon: _submitting
+                      ? const SizedBox(width: 14, height: 14,
+                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                      : const Icon(Icons.send_rounded, size: 16),
+                  label: Text(
+                    _submitting ? '제출 중...' : '${_entries.length}건 신고 요청 등록',
+                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
+                  ),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: _orange,
+                    foregroundColor: Colors.white,
+                    elevation: 0,
+                    padding: const EdgeInsets.symmetric(vertical: 13),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  ),
+                  onPressed: _submitting || _entries.isEmpty ? null : _submit,
+                ),
               ),
             ]),
           ),
@@ -2008,97 +2071,108 @@ class _ChangeRequestDialogState extends State<_ChangeRequestDialog> {
 
   Widget _buildEntryCard(int idx, _ChangeRequestEntry e) {
     final isDevice = _deviceFields.contains(e.field);
-    return Card(
-      margin: const EdgeInsets.only(bottom: 10),
-      shape: RoundedRectangleBorder(
+
+    final inputDeco = InputDecoration(
+      isDense: true,
+      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      border: OutlineInputBorder(
         borderRadius: BorderRadius.circular(8),
-        side: BorderSide(color: Colors.grey.shade300),
+        borderSide: const BorderSide(color: Color(0xFFD1D5DB)),
       ),
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Row(children: [
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(8),
+        borderSide: const BorderSide(color: Color(0xFFD1D5DB)),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(8),
+        borderSide: const BorderSide(color: _orange, width: 1.5),
+      ),
+    );
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFE5E7EB)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        // 허가번호 + 삭제
+        Row(children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+            decoration: BoxDecoration(
+              color: _orange.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Text(e.licenseNo,
+                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: _orangeDark)),
+          ),
+          const Spacer(),
+          GestureDetector(
+            onTap: () => _removeEntry(idx),
+            child: Container(
+              padding: const EdgeInsets.all(4),
               decoration: BoxDecoration(
-                color: const Color(0xFFE17055).withValues(alpha: 0.1),
+                color: const Color(0xFFF3F4F6),
                 borderRadius: BorderRadius.circular(6),
               ),
-              child: Text(e.licenseNo,
-                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFFB85B3D))),
+              child: const Icon(Icons.delete_outline, size: 16, color: Color(0xFF9CA3AF)),
             ),
-            const Spacer(),
-            IconButton(
-              icon: const Icon(Icons.delete_outline, size: 18, color: Colors.grey),
-              onPressed: () => _removeEntry(idx),
-            ),
-          ]),
-          const SizedBox(height: 8),
-          Row(children: [
-            Expanded(child: DropdownButtonFormField<String>(
-              initialValue: e.field,
-              decoration: const InputDecoration(
-                labelText: '변경 항목',
-                isDense: true,
-                border: OutlineInputBorder(),
-              ),
-              items: _fields.map((f) => DropdownMenuItem(value: f, child: Text(f))).toList(),
-              onChanged: (v) {
-                if (v == null) return;
-                setState(() {
-                  e.field = v;
-                  if (!_deviceFields.contains(v)) e.deviceNo = '';
-                });
-              },
-            )),
-            if (isDevice) ...[
-              const SizedBox(width: 10),
-              SizedBox(width: 110, child: TextFormField(
-                initialValue: e.deviceNo,
-                decoration: const InputDecoration(
-                  labelText: '장치번호',
-                  isDense: true,
-                  border: OutlineInputBorder(),
-                ),
-                onChanged: (v) => e.deviceNo = v,
-              )),
-            ],
-          ]),
-          const SizedBox(height: 10),
-          Row(children: [
-            Expanded(child: TextFormField(
-              initialValue: e.beforeValue,
-              decoration: const InputDecoration(
-                labelText: 'DS 현재값',
-                isDense: true,
-                border: OutlineInputBorder(),
-              ),
-              readOnly: true,
-              style: const TextStyle(color: Colors.grey),
-            )),
-            const SizedBox(width: 10),
-            Expanded(child: TextFormField(
-              initialValue: e.afterValue,
-              decoration: const InputDecoration(
-                labelText: '변경 후 값',
-                isDense: true,
-                border: OutlineInputBorder(),
-              ),
-              onChanged: (v) => e.afterValue = v,
-            )),
-          ]),
-          const SizedBox(height: 10),
-          TextFormField(
-            initialValue: e.memo,
-            decoration: const InputDecoration(
-              labelText: '메모 (선택)',
-              isDense: true,
-              border: OutlineInputBorder(),
-            ),
-            onChanged: (v) => e.memo = v,
           ),
         ]),
-      ),
+        const SizedBox(height: 10),
+        // 변경 항목 + 장치번호
+        Row(children: [
+          Expanded(child: DropdownButtonFormField<String>(
+            initialValue: e.field,
+            decoration: inputDeco.copyWith(labelText: '변경 항목'),
+            items: _fields.map((f) => DropdownMenuItem(value: f, child: Text(f, style: const TextStyle(fontSize: 13)))).toList(),
+            style: const TextStyle(fontSize: 13, color: Color(0xFF111827)),
+            onChanged: (v) {
+              if (v == null) return;
+              setState(() {
+                e.field = v;
+                if (!_deviceFields.contains(v)) e.deviceNo = '';
+              });
+            },
+          )),
+          if (isDevice) ...[
+            const SizedBox(width: 10),
+            SizedBox(width: 120, child: TextFormField(
+              initialValue: e.deviceNo,
+              decoration: inputDeco.copyWith(labelText: '장치번호'),
+              style: const TextStyle(fontSize: 13),
+              onChanged: (v) => e.deviceNo = v,
+            )),
+          ],
+        ]),
+        const SizedBox(height: 10),
+        // DS 현재값 + 변경 후 값
+        Row(children: [
+          Expanded(child: TextFormField(
+            initialValue: e.beforeValue,
+            decoration: inputDeco.copyWith(labelText: 'DS 현재값'),
+            readOnly: true,
+            style: const TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)),
+          )),
+          const SizedBox(width: 10),
+          Expanded(child: TextFormField(
+            initialValue: e.afterValue,
+            decoration: inputDeco.copyWith(labelText: '변경 후 값'),
+            style: const TextStyle(fontSize: 13),
+            onChanged: (v) => e.afterValue = v,
+          )),
+        ]),
+        const SizedBox(height: 10),
+        TextFormField(
+          initialValue: e.memo,
+          decoration: inputDeco.copyWith(labelText: '메모 (선택)'),
+          style: const TextStyle(fontSize: 13),
+          onChanged: (v) => e.memo = v,
+        ),
+      ]),
     );
   }
 }
