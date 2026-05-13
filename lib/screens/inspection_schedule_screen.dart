@@ -2912,7 +2912,8 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                 child: Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 8),
                   child: ClipRect(
-                    child: Align(
+                    child: OverflowBox(
+                      maxHeight: double.infinity,
                       alignment: Alignment.centerLeft,
                       child: _buildCellContent(
                           col.key, item, licenseNo, isChecked),
