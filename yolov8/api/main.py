@@ -13668,17 +13668,9 @@ async def inspection_data(request: Request, req: InspectionDataReq):
         items = [dict(r) for r in rows]
 
         # 통시/공대 보완: 새 Excel에 컬럼 없는 경우 cert_cache.db에서 허가번호+호출명칭으로 채움
-        try:
-            _cert_cache_load()
-        except Exception as _ce:
-            logger.warning(f"[통시/공대] cert_cache_load 실패 (무시): {_ce}")
-        _cert_db = _cert_cache_db_path
-        # 경로 미설정 시 tempdir 기본 경로 폴백 (서버 재시작 후 기존 파일 재사용)
-        if not _cert_db:
-            _fallback = os.path.join(_tempfile.gettempdir(), "cert_cache.db")
-            if os.path.exists(_fallback):
-                _cert_db = _fallback
-        logger.warning(f"[통시DEBUG] cert_db='{_cert_db}' exists={os.path.exists(_cert_db) if _cert_db else 'N/A'} items={len(items)}")
+        # _cert_cache_load() 호출 금지 — S3 재빌드가 블로킹되어 요청 실패 유발
+        _cert_db = _cert_cache_db_path or os.path.join(_tempfile.gettempdir(), "cert_cache.db")
+        logger.warning(f"[통시DEBUG] cert_db='{_cert_db}' exists={os.path.exists(_cert_db)} items={len(items)}")
         if _cert_db and os.path.exists(_cert_db):
             try:
                 _missing = [(i, str(it.get('허가번호') or '').strip(),
