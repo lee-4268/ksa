@@ -15593,8 +15593,13 @@ async def inspection_my_list_weeks(request: Request, year: int, team: str = ""):
             rows = c.execute(
                 'SELECT DISTINCT 수검예정주차 FROM inspection_schedules WHERE year=? AND access담당=? AND 수검예정주차 != "" ORDER BY 수검예정주차',
                 (year, access_team)).fetchall()
+        elif is_dev and access_team and 품질팀:
+            # 테스트 계정 + 팀 지정: 해당 팀 주차만
+            rows = c.execute(
+                'SELECT DISTINCT 수검예정주차 FROM inspection_schedules WHERE year=? AND access담당=? AND 품질개선팀=? AND 수검예정주차 != "" ORDER BY 수검예정주차',
+                (year, access_team, 품질팀)).fetchall()
         elif is_dev and access_team:
-            # 테스트 계정(member): 본부 전체
+            # 테스트 계정 + 팀 없음: 본부 전체
             rows = c.execute(
                 'SELECT DISTINCT 수검예정주차 FROM inspection_schedules WHERE year=? AND access담당=? AND 수검예정주차 != "" ORDER BY 수검예정주차',
                 (year, access_team)).fetchall()
