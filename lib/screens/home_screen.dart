@@ -937,6 +937,10 @@ final result = await showDialog<bool>(
       builder: (ctx) => _UnreadNotificationsListDialog(
         items: unread,
         notifSvc: notifSvc,
+        onNavigate: (relatedType, relatedId) {
+          Navigator.of(ctx).pop();
+          _navigateToCommunity(relatedType, relatedId);
+        },
       ),
     );
   }
@@ -1628,8 +1632,13 @@ class _NotificationPanel extends StatelessWidget {
 class _UnreadNotificationsListDialog extends StatefulWidget {
   final List<NotificationItem> items;
   final NotificationService notifSvc;
+  final void Function(String relatedType, int relatedId)? onNavigate;
 
-  const _UnreadNotificationsListDialog({required this.items, required this.notifSvc});
+  const _UnreadNotificationsListDialog({
+    required this.items,
+    required this.notifSvc,
+    this.onNavigate,
+  });
 
   @override
   State<_UnreadNotificationsListDialog> createState() => _UnreadNotificationsListDialogState();
@@ -1740,7 +1749,12 @@ class _UnreadNotificationsListDialogState extends State<_UnreadNotificationsList
                   final n = _items[i];
                   final color = _colorFor(n.type);
                   return InkWell(
-                    onTap: n.isRead ? null : () => _markOne(n.id),
+                    onTap: () {
+                      if (!n.isRead) _markOne(n.id);
+                      if (n.relatedId > 0 && widget.onNavigate != null) {
+                        widget.onNavigate!(n.relatedType, n.relatedId);
+                      }
+                    },
                     child: Container(
                       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
                       color: n.isRead ? Colors.white : const Color(0xFFFFF8F8),
