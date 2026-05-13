@@ -244,7 +244,7 @@ CALLNAME_CSV_PREFIX = "callname-db/"
 CALLNAME_CACHE_TTL = 86400  # 24시간
 CALLNAME_SESSION_TTL = 1800  # 30분
 CALLNAME_MAX_SESSIONS = 3
-CALLNAME_USE_COLS = ["zpwina", "zpwino", "zpwiadr", "zpcode", "zpcname", "area_hdofc_nm", "ons_team_nm", "zpirty3", "eqp_ser_no", "zpprac1", "eqp_type", "max_seqno", "zpannu1", "swing_list"]
+CALLNAME_USE_COLS = ["zpwina", "zpwino", "zpwiadr", "zpcode", "zpkcode", "zpcname", "area_hdofc_nm", "ons_team_nm", "zpirty3", "eqp_ser_no", "zpprac1", "eqp_type", "max_seqno", "zpannu1", "swing_list"]
 CALLNAME_POSSIBLE_CALLNAME_COLS = ["호출명칭", "callname", "CALLNAME", "호출명", "call_name"]
 CALLNAME_POSSIBLE_TONGSI_COLS = ["통시", "통합시설코드", "zpcode"]
 CALLNAME_POSSIBLE_ZPWINA_COLS = ["zpwina", "ZPWINA", "Zpwina", "호출명칭", "호출명"]
@@ -7543,7 +7543,7 @@ def _cert_cache_load():
         conn.execute("PRAGMA synchronous=OFF")
         conn.execute("""CREATE TABLE IF NOT EXISTS cert (
             zpwino TEXT, zpwina TEXT, zpwiadr TEXT,
-            zpcode TEXT, zpcname TEXT, area_hdofc_nm TEXT, ons_team_nm TEXT, zpirty3 TEXT,
+            zpcode TEXT, zpkcode TEXT, zpcname TEXT, area_hdofc_nm TEXT, ons_team_nm TEXT, zpirty3 TEXT,
             eqp_ser_no TEXT, zpprac1 TEXT, eqp_type TEXT, max_seqno TEXT,
             zpannu1 TEXT, swing_list TEXT
         )""")
@@ -7554,7 +7554,7 @@ def _cert_cache_load():
         for row in _stream_s3_csvs():
             batch.append((
                 row.get("zpwino", ""), row.get("zpwina", ""),
-                row.get("zpwiadr", ""), row.get("zpcode", ""),
+                row.get("zpwiadr", ""), row.get("zpcode", ""), row.get("zpkcode", ""),
                 row.get("zpcname", ""),
                 row.get("area_hdofc_nm", ""), row.get("ons_team_nm", ""),
                 row.get("zpirty3", ""), row.get("eqp_ser_no", ""),
@@ -7563,11 +7563,11 @@ def _cert_cache_load():
                 row.get("zpannu1", ""), row.get("swing_list", ""),
             ))
             if len(batch) >= 5000:
-                conn.executemany("INSERT INTO cert VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", batch)
+                conn.executemany("INSERT INTO cert VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", batch)
                 total += len(batch)
                 batch.clear()
         if batch:
-            conn.executemany("INSERT INTO cert VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", batch)
+            conn.executemany("INSERT INTO cert VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", batch)
             total += len(batch)
 
         conn.execute("CREATE INDEX IF NOT EXISTS idx_zpwino ON cert(zpwino)")
@@ -7575,6 +7575,8 @@ def _cert_cache_load():
         conn.execute("CREATE INDEX IF NOT EXISTS idx_zpwiadr ON cert(zpwiadr)")
         # Phase 5 성능: inspection_data가 IN (zpcode...)로 lookup
         conn.execute("CREATE INDEX IF NOT EXISTS idx_zpcode ON cert(zpcode)")
+        # 통시/공대 보완용 복합 키 인덱스 (허가번호+호출명칭)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_zpwino_zpwina ON cert(zpwino, zpwina)")
         conn.commit()
         conn.close()
 
@@ -13664,6 +13666,37 @@ async def inspection_data(request: Request, req: InspectionDataReq):
 
         # Phase 5 성능: 현재 페이지의 통시(zpcode)만 IN 절로 lookup → 전체 GROUP BY 풀스캔 제거
         items = [dict(r) for r in rows]
+
+        # 통시/공대 보완: 새 Excel에 컬럼 없는 경우 cert_cache.db에서 허가번호+호출명칭으로 채움
+        _cert_db = _cert_cache_db_path
+        if _cert_db and os.path.exists(_cert_db):
+            try:
+                _missing = [(i, str(it.get('허가번호') or '').strip(),
+                               str(it.get('호출명칭') or '').strip())
+                            for i, it in enumerate(items)
+                            if not (it.get('통시') or '').strip()]
+                if _missing:
+                    _pairs = list({(wino, wina) for _, wino, wina in _missing if wino or wina})
+                    _cc = sqlite3.connect(_cert_db, timeout=10)
+                    _cc.row_factory = sqlite3.Row
+                    _pair_map: dict = {}
+                    for _wino, _wina in _pairs:
+                        _row = _cc.execute(
+                            "SELECT zpcode, zpkcode FROM cert "
+                            "WHERE TRIM(zpwino)=? AND TRIM(zpwina)=? LIMIT 1",
+                            (_wino, _wina)
+                        ).fetchone()
+                        if _row:
+                            _pair_map[(_wino, _wina)] = (_row['zpcode'] or '', _row['zpkcode'] or '')
+                    _cc.close()
+                    for _i, _wino, _wina in _missing:
+                        _v = _pair_map.get((_wino, _wina))
+                        if _v:
+                            items[_i]['통시'] = _v[0]
+                            items[_i]['공대'] = _v[1]
+            except Exception:
+                pass
+
         zpcodes = list({(it.get('통시') or '').strip() for it in items if (it.get('통시') or '').strip()})
         zpprac1_map: dict = {}
         if zpcodes:
