@@ -212,6 +212,7 @@ DYNAMODB_TABLES = {
     "ds_jobs": os.getenv("DYNAMODB_DS_JOBS_TABLE", "kca-ds-jobs"),
     "audit_logs": os.getenv("DYNAMODB_AUDIT_TABLE", "kca-audit-logs"),
     "user_roles": os.getenv("DYNAMODB_USER_ROLES_TABLE", "kca-user-roles"),
+    "route_baskets": os.getenv("DYNAMODB_ROUTE_BASKETS_TABLE", "kca-route-baskets"),
 }
 
 # 수도권 본부명 한글 → S3 키용 영문 변환 (presigned URL 인코딩 문제 방지)
@@ -980,6 +981,28 @@ def _record_audit_log_sync(action: str, entity_type: str, entity_id: str,
         logger.error(f"audit log write failed: {e}")
 
 
+def _ensure_route_baskets_table():
+    """서버 시작 시 kca-route-baskets 테이블 자동 생성"""
+    try:
+        client = get_dynamodb_client()
+        client.create_table(
+            TableName=DYNAMODB_TABLES["route_baskets"],
+            KeySchema=[
+                {"AttributeName": "user_id", "KeyType": "HASH"},
+                {"AttributeName": "entry_id", "KeyType": "RANGE"},
+            ],
+            AttributeDefinitions=[
+                {"AttributeName": "user_id", "AttributeType": "S"},
+                {"AttributeName": "entry_id", "AttributeType": "S"},
+            ],
+            BillingMode="PAY_PER_REQUEST",
+        )
+        logger.info(f"DynamoDB table {DYNAMODB_TABLES['route_baskets']} created")
+    except ClientError as e:
+        if e.response["Error"]["Code"] != "ResourceInUseException":
+            logger.warning(f"route_baskets table creation error (non-fatal): {e}")
+
+
 def _ensure_audit_table():
     """서버 시작 시 kca-audit-logs 테이블 자동 생성"""
     try:
@@ -1350,6 +1373,7 @@ async def startup_event():
     asyncio.create_task(_ensure_ds_jobs_table())
     asyncio.create_task(asyncio.to_thread(_ensure_audit_table))
     asyncio.create_task(asyncio.to_thread(_ensure_user_roles_table))
+    asyncio.create_task(asyncio.to_thread(_ensure_route_baskets_table))
     asyncio.create_task(_recover_stuck_jobs())
     _ds_job_worker_task = asyncio.create_task(_job_worker_loop())
 
@@ -19873,6 +19897,57 @@ async def admin_menu_stats(request: Request, days: int = Query(30)):
         }
 
     return await asyncio.to_thread(_stats)
+
+
+# ============================================================
+# Route Basket (경로 담기)
+# ============================================================
+
+@app.get("/route-basket")
+async def get_route_baskets(request: Request):
+    """사용자 경로 담기 목록 조회."""
+    empno = await _verify_auth(request)
+    dynamodb = get_dynamodb_resource()
+    table = dynamodb.Table(DYNAMODB_TABLES["route_baskets"])
+    resp = await asyncio.to_thread(lambda: table.query(
+        KeyConditionExpression=Key("user_id").eq(empno),
+        ScanIndexForward=False,
+    ))
+    return {"entries": resp.get("Items", [])}
+
+
+@app.post("/route-basket")
+async def save_route_basket(request: Request):
+    """경로 담기 저장."""
+    empno = await _verify_auth(request)
+    body = await request.json()
+    entry_id = str(uuid.uuid4())
+    now = datetime.utcnow().isoformat()
+    item = {
+        "user_id": empno,
+        "entry_id": entry_id,
+        "title": body.get("title", ""),
+        "week_label": body.get("week_label", ""),
+        "jo_label": body.get("jo_label", ""),
+        "stations": body.get("stations", []),
+        "created_at": now,
+    }
+    dynamodb = get_dynamodb_resource()
+    table = dynamodb.Table(DYNAMODB_TABLES["route_baskets"])
+    await asyncio.to_thread(lambda: table.put_item(Item=item))
+    return {"entry": item}
+
+
+@app.delete("/route-basket/{entry_id}")
+async def delete_route_basket(request: Request, entry_id: str):
+    """경로 담기 삭제."""
+    empno = await _verify_auth(request)
+    dynamodb = get_dynamodb_resource()
+    table = dynamodb.Table(DYNAMODB_TABLES["route_baskets"])
+    await asyncio.to_thread(lambda: table.delete_item(
+        Key={"user_id": empno, "entry_id": entry_id}
+    ))
+    return {"success": True}
 
 
 # ============================================================

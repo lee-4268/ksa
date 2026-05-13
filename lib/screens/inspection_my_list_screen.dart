@@ -8,6 +8,8 @@ import 'package:provider/provider.dart';
 import '../models/radio_station.dart';
 import '../services/auth_service.dart';
 import '../services/inspection_service.dart';
+import '../models/route_basket.dart';
+import '../services/route_basket_service.dart';
 import '../widgets/progress_dialog.dart';
 import '../widgets/user_profile_button.dart';
 import 'inspection_result_screen.dart';
@@ -16,6 +18,8 @@ import 'inspection_result_screen.dart';
 import 'map_screen_web.dart' if (dart.library.io) 'map_screen_mobile.dart'
     as platform_map;
 import '../services/azimuth_service.dart';
+
+enum _PolygonPhase { idle, drawing, selectEndpoints, calculating, result }
 
 class InspectionMyListScreen extends StatefulWidget {
   const InspectionMyListScreen({super.key});
@@ -56,12 +60,26 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
   // SUBMITTED / REPORT_ISSUED(접수번호 스킵 케이스) / INSPECTED(완료·재방문)
   bool _readyOnly = true;
 
-  // 경로 계획 모드
+  // 경로 계획 모드 (기존 — 마커 탭 방식)
   bool _isRoutePlanMode = false;
   final List<RadioStation> _routeSelectedStations = [];
   bool _isCalculatingRoute = false;
   List<RadioStation>? _routeResult;
   bool _routeHasMyLocation = false;
+
+  // 폴리곤 경로 담기
+  _PolygonPhase _polygonPhase = _PolygonPhase.idle;
+  int _polygonVertexCount = 0;
+  List<RadioStation> _polygonStations = [];
+  int _polygonDupeCount = 0;
+  RadioStation? _polygonStart;
+  RadioStation? _polygonEnd;
+  List<RadioStation>? _polygonRouteResult;
+
+  // 경로 담기 바구니
+  late final RouteBasketService _basketSvc;
+  List<RouteBasketEntry> _routeBaskets = [];
+  bool _savingBasket = false;
 
   // 안테나 방위각 표시
   late final AzimuthService _azSvc;
@@ -82,22 +100,27 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
   @override
   void initState() {
     super.initState();
-    _svc = InspectionService()
-      ..setAuthToken(context.read<AuthService>().authToken);
-    _azSvc = AzimuthService()
-      ..setAuthToken(context.read<AuthService>().authToken);
+    final token = context.read<AuthService>().authToken;
+    _svc = InspectionService()..setAuthToken(token);
+    _azSvc = AzimuthService()..setAuthToken(token);
+    _basketSvc = RouteBasketService()..setAuthToken(token);
     final auth = context.read<AuthService>();
     _isDivisionAdmin = auth.isDivisionAdmin || auth.isSuperAdmin;
     if (_isDivisionAdmin) _loadTeams();
     _loadWeeks();
     _loadInspection();
-    // 진입 시 내 위치 자동 활성화
+    _loadBaskets();
+    // 진입 시 내 위치 자동 활성화 + 폴리곤 콜백 등록
     WidgetsBinding.instance.addPostFrameCallback((_) {
       Future.delayed(const Duration(milliseconds: 1500), () {
         if (!mounted) return;
         _mapKey.currentState?.startLocationTracking();
         setState(() => _isLocationActive = true);
       });
+      _mapKey.currentState?.setPolygonCallback(
+        onVertices: _onPolygonVerticesReceived,
+        onCount: (c) => setState(() => _polygonVertexCount = c),
+      );
     });
   }
 
@@ -399,6 +422,10 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
                           child: _buildAzimuthControl(markerStations),
                         ),
                         Positioned(right: 16, bottom: 16, child: _buildMyLocationButton()),
+                        if (kIsWeb && _polygonPhase == _PolygonPhase.idle && !_isRoutePlanMode)
+                          Positioned(right: 12, top: 12, child: _buildPolygonEntryButton()),
+                        if (_polygonPhase != _PolygonPhase.idle)
+                          Positioned(left: 0, right: 0, bottom: 0, child: _buildPolygonPanel()),
                         if (_isRoutePlanMode)
                           Positioned(
                             left: 0, right: 0, bottom: 0,
@@ -451,6 +478,14 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
                           bottom: _listHeightRatio * screenHeight + 16,
                           child: _buildMyLocationButton(),
                         ),
+                        if (kIsWeb && _polygonPhase == _PolygonPhase.idle && !_isRoutePlanMode)
+                          Positioned(right: 12, top: 12, child: _buildPolygonEntryButton()),
+                        if (_polygonPhase != _PolygonPhase.idle)
+                          Positioned(
+                            left: 0, right: 0,
+                            bottom: _listHeightRatio * screenHeight,
+                            child: _buildPolygonPanel(),
+                          ),
                         if (_isRoutePlanMode)
                           Positioned(
                             left: 0, right: 0,
@@ -1049,7 +1084,7 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
                                 ((it['status'] as String?) ?? '').startsWith('불합격') ||
                                 (it['status'] as String?) == '부적합').length;
                             final joLabel = jo.isEmpty ? '조 미지정' : jo;
-                            return _buildJoSection(joLabel, joItems, joDone);
+                            return _buildJoSection(week, joLabel, joItems, joDone);
                           })
                         else
                           ...weekItems.map(_buildInspectionItem),
@@ -1065,7 +1100,7 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
     );
   }
 
-  Widget _buildJoSection(String joLabel, List<Map<String, dynamic>> items, int done) {
+  Widget _buildJoSection(String weekLabel, String joLabel, List<Map<String, dynamic>> items, int done) {
     const primaryColor = Color(0xFFE53935);
     const blueColor = Color(0xFF1E88E5);
     final isUnassigned = joLabel == '조 미지정';
@@ -1123,9 +1158,103 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
             const Icon(Icons.expand_more, size: 18, color: Colors.black38),
           ],
         ),
-        children: items.map(_buildInspectionItem).toList(),
+        children: [
+          _buildBasketEntriesInJo(weekLabel, joLabel),
+          ...items.map(_buildInspectionItem),
+        ],
       ),
     );
+  }
+
+  Widget _buildBasketEntriesInJo(String weekLabel, String joLabel) {
+    final baskets = _routeBaskets.where((e) => e.weekLabel == weekLabel && e.joLabel == joLabel).toList();
+    if (baskets.isEmpty) return const SizedBox.shrink();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 8, 16, 4),
+          child: Row(
+            children: [
+              const Icon(Icons.route, size: 13, color: Color(0xFFE53935)),
+              const SizedBox(width: 4),
+              Text('경로 담기 (${baskets.length})',
+                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFFE53935))),
+            ],
+          ),
+        ),
+        ...baskets.map((entry) => _buildBasketEntryTile(entry)),
+        const Divider(height: 1, indent: 20),
+      ],
+    );
+  }
+
+  Widget _buildBasketEntryTile(RouteBasketEntry entry) {
+    return InkWell(
+      onTap: () {
+        // 맵에 저장된 경로 표시
+        final stations = entry.stations.map((bs) => RadioStation(
+          id: bs.id,
+          stationName: bs.name,
+          address: '',
+          licenseNumber: bs.id,
+          latitude: bs.lat,
+          longitude: bs.lng,
+          inspectionStatus: InspectionStatus.pending,
+        )).toList();
+        _mapKey.currentState?.clearRouteOverlay();
+        _mapKey.currentState?.drawRouteOverlay(orderedStations: stations);
+      },
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 7),
+        child: Row(
+          children: [
+            Container(
+              width: 28, height: 28,
+              decoration: BoxDecoration(color: const Color(0xFFE53935).withValues(alpha: 0.1), borderRadius: BorderRadius.circular(6)),
+              child: const Icon(Icons.bookmark, size: 16, color: Color(0xFFE53935)),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(entry.title,
+                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Colors.black87)),
+                  Text('${entry.stations.length}개 국소',
+                      style: TextStyle(fontSize: 11, color: Colors.grey.shade500)),
+                ],
+              ),
+            ),
+            IconButton(
+              icon: const Icon(Icons.close, size: 16, color: Colors.black38),
+              onPressed: () => _confirmDeleteBasket(entry),
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _confirmDeleteBasket(RouteBasketEntry entry) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('경로 삭제', style: TextStyle(fontSize: 15)),
+        content: Text('"${entry.title}" 경로를 삭제하시겠습니까?', style: const TextStyle(fontSize: 13)),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('취소')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: const Text('삭제'),
+          ),
+        ],
+      ),
+    );
+    if (ok == true) _deleteBasket(entry.entryId);
   }
 
   // ── 수검 아이템 카드 ───────────────────────────────────────────────────
@@ -1425,6 +1554,164 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
         ),
       ],
     );
+  }
+
+  // ── 경로 담기 바구니 ─────────────────────────────────────────────────
+
+  Future<void> _loadBaskets() async {
+    try {
+      final entries = await _basketSvc.getAll();
+      if (mounted) setState(() => _routeBaskets = entries);
+    } catch (_) {}
+  }
+
+  Future<void> _deleteBasket(String entryId) async {
+    try {
+      await _basketSvc.delete(entryId);
+      if (mounted) setState(() => _routeBaskets.removeWhere((e) => e.entryId == entryId));
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('삭제 실패: $e'), backgroundColor: Colors.red));
+    }
+  }
+
+  // ── 폴리곤 경로 계획 ──────────────────────────────────────────────────
+
+  bool _isPointInPolygon(double lat, double lng, List<List<double>> polygon) {
+    bool inside = false;
+    int n = polygon.length;
+    int j = n - 1;
+    for (int i = 0; i < n; j = i++) {
+      final yi = polygon[i][0], xi = polygon[i][1];
+      final yj = polygon[j][0], xj = polygon[j][1];
+      if ((yi > lat) != (yj > lat) && lng < (xj - xi) * (lat - yi) / (yj - yi) + xi) {
+        inside = !inside;
+      }
+    }
+    return inside;
+  }
+
+  void _onPolygonVerticesReceived(List<List<double>> vertices) {
+    if (vertices.length < 3) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('꼭짓점이 3개 이상 필요합니다.')));
+      return;
+    }
+    // 폴리곤 내 국소 필터 (좌표 없는 국소 제외)
+    final inside = _markerStations.where((s) {
+      final lat = s.latitude, lng = s.longitude;
+      if (lat == null || lng == null) return false;
+      return _isPointInPolygon(lat, lng, vertices);
+    }).toList();
+    // 같은 좌표(다른 밴드) 중복 제거: 첫 번째만 선택
+    final seen = <String>{};
+    final deduped = <RadioStation>[];
+    for (final s in inside) {
+      final key = '${s.latitude?.toStringAsFixed(5)},${s.longitude?.toStringAsFixed(5)}';
+      if (seen.add(key)) deduped.add(s);
+    }
+    final dupeCount = inside.length - deduped.length;
+    if (deduped.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('선택된 구역 내 국소가 없습니다.')));
+      setState(() => _polygonPhase = _PolygonPhase.idle);
+      _mapKey.currentState?.clearPolygonOverlay();
+      return;
+    }
+    setState(() {
+      _polygonStations = deduped;
+      _polygonDupeCount = dupeCount;
+      _polygonStart = null;
+      _polygonEnd = null;
+      _polygonRouteResult = null;
+      _polygonPhase = _PolygonPhase.selectEndpoints;
+    });
+  }
+
+  Future<void> _calculatePolygonRoute() async {
+    final start = _polygonStart!;
+    final end = _polygonEnd!;
+    final middles = _polygonStations.where((s) => s.id != start.id && s.id != end.id).toList();
+
+    setState(() => _polygonPhase = _PolygonPhase.calculating);
+    try {
+      final osrmStations = [start, ...middles];
+      final coordsStr = osrmStations.map((s) => '${s.longitude},${s.latitude}').join(';');
+
+      List<RadioStation> orderedStations;
+      if (middles.isEmpty) {
+        orderedStations = [start, end];
+      } else {
+        final tableResp = await http
+            .get(Uri.parse('https://router.project-osrm.org/table/v1/driving/$coordsStr?annotations=duration'))
+            .timeout(const Duration(seconds: 30));
+        if (tableResp.statusCode != 200) throw Exception('OSRM 서버 오류');
+        final tableData = json.decode(tableResp.body) as Map<String, dynamic>;
+        final durations = (tableData['durations'] as List)
+            .map((row) => (row as List).map((v) => (v as num).toDouble()).toList())
+            .toList();
+
+        // Nearest Neighbor: start 고정(index 0), middles 최적화, end는 마지막에 append
+        int current = 0;
+        final visited = List.filled(osrmStations.length, false);
+        visited[0] = true;
+        final order = <RadioStation>[start];
+        for (int step = 0; step < middles.length; step++) {
+          double best = double.infinity;
+          int next = -1;
+          for (int j = 1; j < osrmStations.length; j++) {
+            if (!visited[j] && durations[current][j] < best) {
+              best = durations[current][j];
+              next = j;
+            }
+          }
+          visited[next] = true;
+          order.add(osrmStations[next]);
+          current = next;
+        }
+        order.add(end);
+        orderedStations = order;
+      }
+
+      final routeCoords = orderedStations.map((s) => '${s.longitude},${s.latitude}').join(';');
+      final routeResp = await http
+          .get(Uri.parse('https://router.project-osrm.org/route/v1/driving/$routeCoords?overview=full&geometries=geojson'))
+          .timeout(const Duration(seconds: 30));
+
+      List<List<double>>? polylineCoords;
+      if (routeResp.statusCode == 200) {
+        final routeData = json.decode(routeResp.body) as Map<String, dynamic>;
+        final routes = routeData['routes'] as List?;
+        if (routes != null && routes.isNotEmpty) {
+          final coordsList = ((routes[0] as Map)['geometry'] as Map?)?['coordinates'] as List?;
+          if (coordsList != null) {
+            polylineCoords = coordsList
+                .map((c) => [(c as List)[0] as double, c[1] as double])
+                .toList();
+          }
+        }
+      }
+
+      setState(() {
+        _polygonRouteResult = orderedStations;
+        _polygonPhase = _PolygonPhase.result;
+      });
+      _mapKey.currentState?.drawRouteOverlay(orderedStations: orderedStations, polylineCoords: polylineCoords);
+    } catch (e) {
+      setState(() => _polygonPhase = _PolygonPhase.selectEndpoints);
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('경로 계산 실패: $e'), backgroundColor: Colors.red));
+    }
+  }
+
+  void _resetPolygonMode() {
+    setState(() {
+      _polygonPhase = _PolygonPhase.idle;
+      _polygonVertexCount = 0;
+      _polygonStations = [];
+      _polygonDupeCount = 0;
+      _polygonStart = null;
+      _polygonEnd = null;
+      _polygonRouteResult = null;
+    });
+    _mapKey.currentState?.clearPolygonOverlay();
+    _mapKey.currentState?.clearRouteOverlay();
   }
 
   // ── 경로 계획 ─────────────────────────────────────────────────────────
@@ -1764,6 +2051,379 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
         ],
       ),
     );
+  }
+
+  // ── 폴리곤 경로 UI ────────────────────────────────────────────────────
+
+  Widget _buildPolygonEntryButton() {
+    return _mapFloatingButton(
+      icon: Icons.polyline,
+      color: const Color(0xFFE53935),
+      onTap: () {
+        setState(() {
+          _polygonPhase = _PolygonPhase.drawing;
+          _polygonVertexCount = 0;
+        });
+        _mapKey.currentState?.startPolygonDraw();
+      },
+    );
+  }
+
+  Widget _buildPolygonPanel() {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.15), blurRadius: 8, offset: const Offset(0, -2))],
+      ),
+      child: switch (_polygonPhase) {
+        _PolygonPhase.drawing => _buildPolygonDrawingPanel(),
+        _PolygonPhase.selectEndpoints => _buildPolygonSelectPanel(),
+        _PolygonPhase.calculating => _buildPolygonCalculatingPanel(),
+        _PolygonPhase.result => _buildPolygonResultPanel(),
+        _ => const SizedBox.shrink(),
+      },
+    );
+  }
+
+  Widget _buildPolygonDrawingPanel() {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          color: const Color(0xFFE53935),
+          child: Row(
+            children: [
+              const Icon(Icons.polyline, color: Colors.white, size: 18),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  _polygonVertexCount == 0
+                      ? '지도를 클릭해 구역 꼭짓점 추가'
+                      : '꼭짓점 $_polygonVertexCount개 추가됨 (최소 3개)',
+                  style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
+                ),
+              ),
+              TextButton(
+                onPressed: () {
+                  _mapKey.currentState?.cancelPolygonDraw();
+                  _resetPolygonMode();
+                },
+                style: TextButton.styleFrom(foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(horizontal: 8), minimumSize: Size.zero, tapTargetSize: MaterialTapTargetSize.shrinkWrap),
+                child: const Text('취소', style: TextStyle(fontSize: 12)),
+              ),
+            ],
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
+          child: SizedBox(
+            width: double.infinity,
+            child: ElevatedButton.icon(
+              onPressed: _polygonVertexCount >= 3
+                  ? () => _mapKey.currentState?.finishPolygonDraw()
+                  : null,
+              icon: const Icon(Icons.check, size: 18),
+              label: const Text('구역 확정'),
+              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFE53935), foregroundColor: Colors.white),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildPolygonSelectPanel() {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          color: const Color(0xFFE53935),
+          child: Row(
+            children: [
+              const Icon(Icons.place, color: Colors.white, size: 18),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('출발·도착 선택 — ${_polygonStations.length}개 국소',
+                        style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold)),
+                    if (_polygonDupeCount > 0)
+                      Text('겹친 위치 $_polygonDupeCount건 자동처리',
+                          style: const TextStyle(color: Colors.white70, fontSize: 11)),
+                  ],
+                ),
+              ),
+              TextButton(
+                onPressed: _resetPolygonMode,
+                style: TextButton.styleFrom(foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(horizontal: 8), minimumSize: Size.zero, tapTargetSize: MaterialTapTargetSize.shrinkWrap),
+                child: const Text('닫기', style: TextStyle(fontSize: 12)),
+              ),
+            ],
+          ),
+        ),
+        Container(
+          constraints: const BoxConstraints(maxHeight: 220),
+          child: ListView.separated(
+            shrinkWrap: true,
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            itemCount: _polygonStations.length,
+            separatorBuilder: (_, _) => const Divider(height: 1),
+            itemBuilder: (context, i) {
+              final s = _polygonStations[i];
+              final isStart = _polygonStart?.id == s.id;
+              final isEnd = _polygonEnd?.id == s.id;
+              return ListTile(
+                dense: true,
+                title: Text(s.displayName, style: const TextStyle(fontSize: 13)),
+                subtitle: Text(s.address, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 11)),
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _endpointChip('출발', isStart, Colors.green, () {
+                      setState(() { _polygonStart = isStart ? null : s; if (_polygonEnd?.id == s.id) _polygonEnd = null; });
+                    }),
+                    const SizedBox(width: 4),
+                    _endpointChip('도착', isEnd, Colors.red, () {
+                      setState(() { _polygonEnd = isEnd ? null : s; if (_polygonStart?.id == s.id) _polygonStart = null; });
+                    }),
+                  ],
+                ),
+              );
+            },
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+          child: SizedBox(
+            width: double.infinity,
+            child: ElevatedButton.icon(
+              onPressed: _polygonStart != null && _polygonEnd != null ? _calculatePolygonRoute : null,
+              icon: const Icon(Icons.navigation, size: 18),
+              label: const Text('최적 경로 계산'),
+              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFE53935), foregroundColor: Colors.white),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _endpointChip(String label, bool selected, Color color, VoidCallback onTap) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: selected ? color : color.withValues(alpha: 0.1),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: color, width: 1),
+        ),
+        child: Text(label, style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: selected ? Colors.white : color)),
+      ),
+    );
+  }
+
+  Widget _buildPolygonCalculatingPanel() {
+    return const Padding(
+      padding: EdgeInsets.all(20),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)),
+          SizedBox(width: 12),
+          Text('최적 경로 계산 중...', style: TextStyle(fontSize: 13)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPolygonResultPanel() {
+    final stations = _polygonRouteResult!;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          color: const Color(0xFFE53935),
+          child: Row(
+            children: [
+              const Icon(Icons.alt_route, color: Colors.white, size: 18),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text('최적 경로 — ${stations.length}개 국소',
+                    style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold)),
+              ),
+              TextButton(
+                onPressed: _resetPolygonMode,
+                style: TextButton.styleFrom(foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(horizontal: 8), minimumSize: Size.zero, tapTargetSize: MaterialTapTargetSize.shrinkWrap),
+                child: const Text('닫기', style: TextStyle(fontSize: 12)),
+              ),
+            ],
+          ),
+        ),
+        Container(
+          constraints: const BoxConstraints(maxHeight: 180),
+          child: ListView.separated(
+            shrinkWrap: true,
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            itemCount: stations.length,
+            separatorBuilder: (_, _) => const Divider(height: 1),
+            itemBuilder: (context, i) {
+              final s = stations[i];
+              final isFirst = i == 0;
+              final isLast = i == stations.length - 1;
+              final color = isFirst ? Colors.green : (isLast ? Colors.red : const Color(0xFFE53935));
+              final tag = isFirst ? '출발' : (isLast ? '도착' : '${i + 1}');
+              return ListTile(
+                dense: true,
+                leading: CircleAvatar(radius: 12, backgroundColor: color, child: Text(tag, style: const TextStyle(color: Colors.white, fontSize: 10))),
+                title: Text(s.displayName, style: const TextStyle(fontSize: 13)),
+                subtitle: Text(s.address, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 11)),
+              );
+            },
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+          child: Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: () => setState(() {
+                    _polygonPhase = _PolygonPhase.selectEndpoints;
+                    _polygonRouteResult = null;
+                    _mapKey.currentState?.clearRouteOverlay();
+                  }),
+                  icon: const Icon(Icons.refresh, size: 16),
+                  label: const Text('다시 선택', style: TextStyle(fontSize: 13)),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed: _savingBasket ? null : () => _showSaveBasketDialog(stations),
+                  icon: _savingBasket
+                      ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                      : const Icon(Icons.bookmark_add, size: 16),
+                  label: const Text('담기', style: TextStyle(fontSize: 13)),
+                  style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFE53935), foregroundColor: Colors.white),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _showSaveBasketDialog(List<RadioStation> orderedStations) async {
+    // 주차/조 후보 추출 (국소들이 속한 주차·조 다수결)
+    final weekCounts = <String, int>{};
+    final joCounts = <String, int>{};
+    for (final s in orderedStations) {
+      final item = _assignedItems.firstWhere(
+        (i) => (i['허가번호'] as String? ?? '').trim() == s.licenseNumber.trim(),
+        orElse: () => {},
+      );
+      final w = (item['수검예정주차'] as String? ?? '').trim();
+      final j = (item['조'] as String? ?? '').trim();
+      if (w.isNotEmpty) weekCounts[w] = (weekCounts[w] ?? 0) + 1;
+      if (j.isNotEmpty) joCounts[j] = (joCounts[j] ?? 0) + 1;
+    }
+    String defaultWeek = weekCounts.isEmpty ? (_selectedWeek.isNotEmpty ? _selectedWeek : '') : (weekCounts.entries.reduce((a, b) => a.value >= b.value ? a : b).key);
+    String defaultJo = joCounts.isEmpty ? (_selectedJo.isNotEmpty ? _selectedJo : '') : (joCounts.entries.reduce((a, b) => a.value >= b.value ? a : b).key);
+
+    final now = DateTime.now();
+    final defaultTitle = '${now.month}/${now.day}';
+    final titleCtrl = TextEditingController(text: defaultTitle);
+
+    final weekOptions = _weekOptions.isNotEmpty ? _weekOptions : (defaultWeek.isNotEmpty ? [defaultWeek] : []);
+    final joSet = _assignedItems.map((i) => (i['조'] as String? ?? '').trim()).where((v) => v.isNotEmpty).toSet().toList()..sort();
+    final joOptions = joSet.isNotEmpty ? joSet : (defaultJo.isNotEmpty ? [defaultJo] : []);
+
+    String selWeek = weekOptions.contains(defaultWeek) ? defaultWeek : (weekOptions.isNotEmpty ? weekOptions.first : defaultWeek);
+    String selJo = joOptions.contains(defaultJo) ? defaultJo : (joOptions.isNotEmpty ? joOptions.first : defaultJo);
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDlg) => AlertDialog(
+          title: const Text('경로 담기', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('제목', style: TextStyle(fontSize: 12, color: Colors.grey)),
+              const SizedBox(height: 4),
+              TextField(
+                controller: titleCtrl,
+                decoration: const InputDecoration(isDense: true, border: OutlineInputBorder(), contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8)),
+                style: const TextStyle(fontSize: 14),
+              ),
+              const SizedBox(height: 12),
+              if (weekOptions.isNotEmpty) ...[
+                const Text('주차', style: TextStyle(fontSize: 12, color: Colors.grey)),
+                const SizedBox(height: 4),
+                DropdownButtonFormField<String>(
+                  initialValue: weekOptions.contains(selWeek) ? selWeek : weekOptions.first,
+                  decoration: const InputDecoration(isDense: true, border: OutlineInputBorder(), contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8)),
+                  items: weekOptions.map<DropdownMenuItem<String>>((w) => DropdownMenuItem<String>(value: w, child: Text(w, style: const TextStyle(fontSize: 13)))).toList(),
+                  onChanged: (v) => setDlg(() => selWeek = v ?? selWeek),
+                ),
+                const SizedBox(height: 12),
+              ],
+              if (joOptions.isNotEmpty) ...[
+                const Text('조', style: TextStyle(fontSize: 12, color: Colors.grey)),
+                const SizedBox(height: 4),
+                DropdownButtonFormField<String>(
+                  initialValue: joOptions.contains(selJo) ? selJo : joOptions.first,
+                  decoration: const InputDecoration(isDense: true, border: OutlineInputBorder(), contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8)),
+                  items: joOptions.map<DropdownMenuItem<String>>((j) => DropdownMenuItem<String>(value: j, child: Text(j, style: const TextStyle(fontSize: 13)))).toList(),
+                  onChanged: (v) => setDlg(() => selJo = v ?? selJo),
+                ),
+              ],
+              const SizedBox(height: 8),
+              Text('${orderedStations.length}개 국소 순서 저장', style: const TextStyle(fontSize: 12, color: Colors.grey)),
+            ],
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('취소')),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFE53935), foregroundColor: Colors.white),
+              child: const Text('저장'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _savingBasket = true);
+    try {
+      final entry = await _basketSvc.save(
+        title: titleCtrl.text.trim().isEmpty ? defaultTitle : titleCtrl.text.trim(),
+        weekLabel: selWeek,
+        joLabel: selJo,
+        stations: orderedStations.map((s) => BasketStation(id: s.id, name: s.displayName, lat: s.latitude ?? 0, lng: s.longitude ?? 0)).toList(),
+      );
+      if (mounted) {
+        setState(() {
+          _routeBaskets.insert(0, entry);
+          _savingBasket = false;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('경로가 "${entry.title}"으로 저장됐습니다.'), backgroundColor: Colors.green));
+        _resetPolygonMode();
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _savingBasket = false);
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('저장 실패: $e'), backgroundColor: Colors.red));
+      }
+    }
   }
 
   // ── 내비게이션 앱 연동 ────────────────────────────────────────────────

@@ -713,4 +713,16 @@ class PlatformMapWidgetState extends State<PlatformMapWidget>
   }) {}
 
   void clearAzimuthSectors() {}
+
+  // 폴리곤 드로잉 — 모바일 미지원 스텁
+  Function(List<List<double>> vertices)? onPolygonVertices;
+  Function(int count)? onPolygonVertexCount;
+  void setPolygonCallback({
+    required Function(List<List<double>>) onVertices,
+    required Function(int) onCount,
+  }) {}
+  void startPolygonDraw() {}
+  void cancelPolygonDraw() {}
+  void finishPolygonDraw() {}
+  void clearPolygonOverlay() {}
 }
