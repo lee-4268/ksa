@@ -1370,6 +1370,7 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
 
                       void onRowTap() {
                         if (isEditMode) return;
+                        _mapKey.currentState?.moveToStation(s);
                         if (coLocated.length <= 1) {
                           _showInspectionSheet(defaultItem);
                         } else {
@@ -1430,7 +1431,10 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
                                         ),
                                       ]),
                                       trailing: !isPending ? Icon(statusIcon, color: statusColor, size: 20) : null,
-                                      onTap: () => _showInspectionSheet(it),
+                                      onTap: () {
+                                        _mapKey.currentState?.moveToStation(s);
+                                        _showInspectionSheet(it);
+                                      },
                                     );
                                   },
                                 ),
