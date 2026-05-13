@@ -138,67 +138,123 @@ class _HomeScreenState extends State<HomeScreen> {
       if (notifSvc.unreadCount <= 0) return;
 
       // 팝업 다이얼로그
-      bool hideToday = false;
-      final result = await showDialog<bool>(
-        context: context,
-        barrierDismissible: false,
-        builder: (ctx) => StatefulBuilder(builder: (ctx, setLocalState) {
-          return AlertDialog(
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-            title: Row(children: [
-              const Icon(Icons.notifications_active, color: Color(0xFFE53935), size: 22),
-              const SizedBox(width: 8),
-              Text('새 알림 ${notifSvc.unreadCount}건',
-                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-            ]),
-            content: Column(mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start, children: [
-              const Text('확인하지 않은 알림이 있습니다.',
-                  style: TextStyle(fontSize: 13, color: Color(0xFF374151))),
-              const SizedBox(height: 4),
-              const Text('우상단 종 아이콘에서 자세한 내용을 확인할 수 있습니다.',
-                  style: TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
-              const SizedBox(height: 14),
+bool hideToday = false;
+final result = await showDialog<bool>(
+  context: context,
+  builder: (ctx) => StatefulBuilder(builder: (ctx, setLocalState) {
+    return Dialog(
+      insetPadding: const EdgeInsets.symmetric(horizontal: 40), // 화면 양옆 여백 확대
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 320), // 최대 너비 제한
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 32, 20, 20), // 상단 여백을 더 여유있게
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // 포인트 아이콘 (크기를 살짝 줄여 슬림하게)
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFEF2F2),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.notifications_active_rounded, 
+                  color: Color(0xFFEF4444), size: 24),
+              ),
+              const SizedBox(height: 16),
+              
+              // 타이틀 (가운데 정렬)
+              Text(
+                '읽지 않은 알림 ${notifSvc.unreadCount}건',
+                style: const TextStyle(
+                  fontSize: 17, 
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: -0.5,
+                  color: Color(0xFF111827),
+                ),
+              ),
+              const SizedBox(height: 8),
+              
+              // 설명문 (글자 크기 축소 및 자간 조절)
+              const Text(
+                '새로운 소식이 도착했습니다.\n지금 확인해 보시겠어요?',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 13, 
+                  height: 1.4,
+                  color: Color(0xFF6B7280),
+                ),
+              ),
+              const SizedBox(height: 20),
+
+              // 체크박스 (배경색을 살짝 넣어 영역 구분)
               InkWell(
                 onTap: () => setLocalState(() => hideToday = !hideToday),
-                borderRadius: BorderRadius.circular(6),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 2),
-                  child: Row(children: [
-                    SizedBox(
-                      width: 20, height: 20,
-                      child: Checkbox(
-                        value: hideToday,
-                        onChanged: (v) => setLocalState(() => hideToday = v ?? false),
-                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                        activeColor: const Color(0xFF1565C0),
-                        side: BorderSide(color: Colors.grey.shade400),
+                borderRadius: BorderRadius.circular(10),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+                  decoration: BoxDecoration(
+                    color: Colors.grey[50],
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        hideToday ? Icons.check_box_rounded : Icons.check_box_outline_blank_rounded,
+                        size: 18,
+                        color: hideToday ? const Color(0xFF2563EB) : Colors.grey[400],
                       ),
+                      const SizedBox(width: 6),
+                      const Text(
+                        '오늘 다시 보지 않기',
+                        style: TextStyle(fontSize: 12, color: Color(0xFF4B5563)),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 24),
+
+              // 버튼 (수직 배치하여 너비를 슬림하게 유지)
+              Column(
+                children: [
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      onPressed: () => Navigator.pop(ctx, true),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF2563EB),
+                        foregroundColor: Colors.white,
+                        elevation: 0,
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      ),
+                      child: const Text('알림 확인', style: TextStyle(fontWeight: FontWeight.bold)),
                     ),
-                    const SizedBox(width: 8),
-                    const Text('오늘은 더이상 보지 않기',
-                        style: TextStyle(fontSize: 12, color: Color(0xFF374151))),
-                  ]),
-                ),
-              ),
-            ]),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(ctx, false),
-                child: const Text('닫기'),
-              ),
-              ElevatedButton(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF1565C0),
-                  foregroundColor: Colors.white,
-                ),
-                onPressed: () => Navigator.pop(ctx, true),
-                child: const Text('알림 보기'),
+                  ),
+                  const SizedBox(height: 8),
+                  SizedBox(
+                    width: double.infinity,
+                    child: TextButton(
+                      onPressed: () => Navigator.pop(ctx, false),
+                      style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                      ),
+                      child: const Text('닫기', 
+                        style: TextStyle(color: Color(0xFF9CA3AF), fontSize: 13)),
+                    ),
+                  ),
+                ],
               ),
             ],
-          );
-        }),
-      );
+          ),
+        ),
+      ),
+    );
+  }),
+);
 
       // '오늘 보지 않기' 저장
       if (hideToday) {
