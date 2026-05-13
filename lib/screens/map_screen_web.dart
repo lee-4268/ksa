@@ -1239,7 +1239,9 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
   }) {
     // 순서 번호 오버레이 좌표
     final stationPoints = orderedStations.map((s) {
-      return '{"lat":${s.latitude},"lng":${s.longitude},"name":"${s.displayName.replaceAll("'", "\\'")}"}';
+      final escapedId = _escapeJs(s.id);
+      final escapedName = _escapeJs(s.displayName);
+      return '{"lat":${s.latitude},"lng":${s.longitude},"name":"$escapedName","id":"$escapedId"}';
     }).join(',');
 
     // 폴리라인 좌표 (OSRM GeoJSON: [lng, lat] 순서)
@@ -1259,7 +1261,10 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
         var labelsMap = window['kakaoMapLabelsMap_$_containerId'] || {};
         var prevOriginals = window['kakaoRouteLabelOriginals_$_containerId'] || {};
         for (var id in prevOriginals) {
-          if (labelsMap[id]) labelsMap[id].setContent(prevOriginals[id]);
+          if (labelsMap[id]) {
+            labelsMap[id].setContent(prevOriginals[id]);
+            labelsMap[id].setZIndex(1);
+          }
         }
         window['kakaoRouteLabelOriginals_$_containerId'] = {};
 
@@ -1328,6 +1333,7 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
               '<span style="color:#111827;font-weight:600;font-size:12px;letter-spacing:-0.2px;">' + s.name + '</span>' +
             '</div>';
           labelOverlay.setContent(newContent);
+          labelOverlay.setZIndex(20); // 겹친 라벨 위로 올림
         }
         window['kakaoRouteLabelOriginals_$_containerId'] = routeLabelOriginals;
 
@@ -1348,7 +1354,10 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
         var labelsMap = window['kakaoMapLabelsMap_$_containerId'] || {};
         var originals = window['kakaoRouteLabelOriginals_$_containerId'] || {};
         for (var id in originals) {
-          if (labelsMap[id]) labelsMap[id].setContent(originals[id]);
+          if (labelsMap[id]) {
+            labelsMap[id].setContent(originals[id]);
+            labelsMap[id].setZIndex(1);
+          }
         }
         window['kakaoRouteLabelOriginals_$_containerId'] = {};
 
