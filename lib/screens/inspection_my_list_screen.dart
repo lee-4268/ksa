@@ -2136,22 +2136,45 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
   }
 
   Widget _buildPolygonDrawingPanel() {
+    final hasEnough = _polygonVertexCount >= 3;
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
         Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-          color: const Color(0xFFE53935),
+          margin: const EdgeInsets.symmetric(vertical: 10),
+          width: 36, height: 4,
+          decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(2)),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 0, 12, 12),
           child: Row(
             children: [
-              const Icon(Icons.polyline, color: Colors.white, size: 18),
-              const SizedBox(width: 8),
+              Container(
+                width: 40, height: 40,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFE53935).withValues(alpha: 0.10),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Icon(Icons.polyline, color: Color(0xFFE53935), size: 20),
+              ),
+              const SizedBox(width: 12),
               Expanded(
-                child: Text(
-                  _polygonVertexCount == 0
-                      ? '지도를 클릭해 구역 꼭짓점 추가'
-                      : '꼭짓점 $_polygonVertexCount개 추가됨 (최소 3개)',
-                  style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('구역 그리기',
+                        style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: Color(0xFF111827))),
+                    Text(
+                      _polygonVertexCount == 0
+                          ? '지도를 클릭해 꼭짓점을 추가하세요'
+                          : '꼭짓점 $_polygonVertexCount개'
+                            '${hasEnough ? ' — 확정 가능' : ' (최소 3개)'}',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: hasEnough ? const Color(0xFF10B981) : const Color(0xFF6B7280),
+                      ),
+                    ),
+                  ],
                 ),
               ),
               TextButton(
@@ -2159,23 +2182,34 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
                   _mapKey.currentState?.cancelPolygonDraw();
                   _resetPolygonMode();
                 },
-                style: TextButton.styleFrom(foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(horizontal: 8), minimumSize: Size.zero, tapTargetSize: MaterialTapTargetSize.shrinkWrap),
-                child: const Text('취소', style: TextStyle(fontSize: 12)),
+                style: TextButton.styleFrom(
+                  foregroundColor: const Color(0xFF9CA3AF),
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                child: const Text('취소', style: TextStyle(fontSize: 13)),
               ),
             ],
           ),
         ),
         Padding(
-          padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
           child: SizedBox(
             width: double.infinity,
             child: ElevatedButton.icon(
-              onPressed: _polygonVertexCount >= 3
-                  ? () => _mapKey.currentState?.finishPolygonDraw()
-                  : null,
-              icon: const Icon(Icons.check, size: 18),
-              label: const Text('구역 확정'),
-              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFE53935), foregroundColor: Colors.white),
+              onPressed: hasEnough ? () => _mapKey.currentState?.finishPolygonDraw() : null,
+              icon: const Icon(Icons.check_rounded, size: 18),
+              label: const Text('구역 확정', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF2563EB),
+                foregroundColor: Colors.white,
+                disabledBackgroundColor: const Color(0xFFE5E7EB),
+                disabledForegroundColor: const Color(0xFF9CA3AF),
+                elevation: 0,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                padding: const EdgeInsets.symmetric(vertical: 13),
+              ),
             ),
           ),
         ),
@@ -2184,59 +2218,83 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
   }
 
   Widget _buildPolygonSelectPanel() {
+    final canCalculate = _polygonStart != null && _polygonEnd != null;
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
         Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-          color: const Color(0xFFE53935),
+          margin: const EdgeInsets.symmetric(vertical: 10),
+          width: 36, height: 4,
+          decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(2)),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 0, 12, 12),
           child: Row(
             children: [
-              const Icon(Icons.place, color: Colors.white, size: 18),
-              const SizedBox(width: 8),
+              Container(
+                width: 40, height: 40,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF2563EB).withValues(alpha: 0.10),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Icon(Icons.place_rounded, color: Color(0xFF2563EB), size: 20),
+              ),
+              const SizedBox(width: 12),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('출발·도착 선택 — ${_polygonStations.length}개 국소',
-                        style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold)),
-                    if (_polygonDupeCount > 0)
-                      Text('겹친 위치 $_polygonDupeCount건 자동처리',
-                          style: const TextStyle(color: Colors.white70, fontSize: 11)),
+                    Text('출발·도착 선택',
+                        style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: Color(0xFF111827))),
+                    Text(
+                      '${_polygonStations.length}개 국소'
+                      '${_polygonDupeCount > 0 ? ' · 겹침 $_polygonDupeCount건 자동처리' : ''}',
+                      style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
+                    ),
                   ],
                 ),
               ),
               TextButton(
                 onPressed: _resetPolygonMode,
-                style: TextButton.styleFrom(foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(horizontal: 8), minimumSize: Size.zero, tapTargetSize: MaterialTapTargetSize.shrinkWrap),
-                child: const Text('닫기', style: TextStyle(fontSize: 12)),
+                style: TextButton.styleFrom(
+                  foregroundColor: const Color(0xFF9CA3AF),
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                child: const Text('닫기', style: TextStyle(fontSize: 13)),
               ),
             ],
           ),
         ),
+        const Divider(height: 1, color: Color(0xFFF3F4F6)),
         Container(
           constraints: const BoxConstraints(maxHeight: 220),
           child: ListView.separated(
             shrinkWrap: true,
-            padding: const EdgeInsets.symmetric(vertical: 4),
+            padding: const EdgeInsets.symmetric(vertical: 8),
             itemCount: _polygonStations.length,
-            separatorBuilder: (_, _) => const Divider(height: 1),
+            separatorBuilder: (_, _) => const Divider(height: 1, indent: 20, color: Color(0xFFF3F4F6)),
             itemBuilder: (context, i) {
               final s = _polygonStations[i];
               final isStart = _polygonStart?.id == s.id;
               final isEnd = _polygonEnd?.id == s.id;
               return ListTile(
                 dense: true,
-                title: Text(s.displayName, style: const TextStyle(fontSize: 13)),
-                subtitle: Text(s.address, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 11)),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 20),
+                title: Text(s.displayName,
+                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF111827))),
+                subtitle: Text(s.address,
+                    maxLines: 1, overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280))),
                 trailing: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    _endpointChip('출발', isStart, Colors.green, () {
+                    _endpointChip('출발', isStart, const Color(0xFF10B981), () {
                       setState(() { _polygonStart = isStart ? null : s; if (_polygonEnd?.id == s.id) _polygonEnd = null; });
                     }),
-                    const SizedBox(width: 4),
-                    _endpointChip('도착', isEnd, Colors.red, () {
+                    const SizedBox(width: 6),
+                    _endpointChip('도착', isEnd, const Color(0xFFEF4444), () {
                       setState(() { _polygonEnd = isEnd ? null : s; if (_polygonStart?.id == s.id) _polygonStart = null; });
                     }),
                   ],
@@ -2246,14 +2304,22 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
           ),
         ),
         Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
           child: SizedBox(
             width: double.infinity,
             child: ElevatedButton.icon(
-              onPressed: _polygonStart != null && _polygonEnd != null ? _calculatePolygonRoute : null,
-              icon: const Icon(Icons.navigation, size: 18),
-              label: const Text('최적 경로 계산'),
-              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFE53935), foregroundColor: Colors.white),
+              onPressed: canCalculate ? _calculatePolygonRoute : null,
+              icon: const Icon(Icons.navigation_rounded, size: 18),
+              label: const Text('최적 경로 계산', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF2563EB),
+                foregroundColor: Colors.white,
+                disabledBackgroundColor: const Color(0xFFE5E7EB),
+                disabledForegroundColor: const Color(0xFF9CA3AF),
+                elevation: 0,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                padding: const EdgeInsets.symmetric(vertical: 13),
+              ),
             ),
           ),
         ),
@@ -2277,14 +2343,18 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
   }
 
   Widget _buildPolygonCalculatingPanel() {
-    return const Padding(
-      padding: EdgeInsets.all(20),
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 20),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)),
-          SizedBox(width: 12),
-          Text('최적 경로 계산 중...', style: TextStyle(fontSize: 13)),
+          const SizedBox(
+            width: 20, height: 20,
+            child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF2563EB)),
+          ),
+          const SizedBox(width: 12),
+          const Text('최적 경로 계산 중...',
+              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: Color(0xFF374151))),
         ],
       ),
     );
