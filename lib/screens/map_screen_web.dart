@@ -1255,7 +1255,15 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
         var map = window['kakaoMapInstance_$_containerId'];
         if (!map) return;
 
-        // 기존 경로 오버레이 제거
+        // 기존 경로 라벨 원본 복원 후 초기화
+        var labelsMap = window['kakaoMapLabelsMap_$_containerId'] || {};
+        var prevOriginals = window['kakaoRouteLabelOriginals_$_containerId'] || {};
+        for (var id in prevOriginals) {
+          if (labelsMap[id]) labelsMap[id].setContent(prevOriginals[id]);
+        }
+        window['kakaoRouteLabelOriginals_$_containerId'] = {};
+
+        // (이전 방식 별도 오버레이 잔여분 제거)
         var existing = window['kakaoRouteOverlays_$_containerId'] || [];
         for (var i = 0; i < existing.length; i++) existing[i].setMap(null);
         window['kakaoRouteOverlays_$_containerId'] = [];
@@ -1266,7 +1274,6 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
 
         var stations = [$stationPoints];
         var polyCoordsRaw = $polyCoordsJs;
-        var overlays = [];
 
         // 폴리라인 그리기
         if (polyCoordsRaw) {
@@ -1298,17 +1305,21 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
           window['kakaoRoutePolyline_$_containerId'] = polyline;
         }
 
-        // 순서 번호 오버레이
+        // 마커 아래 기존 라벨을 경로 라벨로 교체 (setContent)
+        var routeLabelOriginals = {};
         for (var i = 0; i < stations.length; i++) {
           var s = stations[i];
+          var labelOverlay = labelsMap[s.id];
+          if (!labelOverlay) continue;
+          routeLabelOriginals[s.id] = labelOverlay.getContent();
           var color = i === 0 ? '#10B981' : (i === stations.length - 1 ? '#EF4444' : '#2563EB');
           var label = i === 0 ? '출발' : (i === stations.length - 1 ? '도착' : (i + 1).toString());
-          var content =
+          var newContent =
             '<div style="display:flex;align-items:center;gap:6px;' +
               'background:white;border-radius:20px;' +
               'padding:4px 12px 4px 5px;' +
               'box-shadow:0 4px 16px rgba(0,0,0,0.16);' +
-              'border:1px solid rgba(0,0,0,0.07);white-space:nowrap;">' +
+              'border:1px solid rgba(0,0,0,0.07);white-space:nowrap;margin-top:2px;">' +
               '<div style="min-width:22px;height:22px;border-radius:11px;padding:0 5px;' +
                 'background:' + color + ';' +
                 'display:flex;align-items:center;justify-content:center;flex-shrink:0;">' +
@@ -1316,17 +1327,9 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
               '</div>' +
               '<span style="color:#111827;font-weight:600;font-size:12px;letter-spacing:-0.2px;">' + s.name + '</span>' +
             '</div>';
-          var overlay = new kakao.maps.CustomOverlay({
-            position: new kakao.maps.LatLng(s.lat, s.lng),
-            content: content,
-            yAnchor: 2.5,
-            xAnchor: 0.5,
-            zIndex: 8
-          });
-          overlay.setMap(map);
-          overlays.push(overlay);
+          labelOverlay.setContent(newContent);
         }
-        window['kakaoRouteOverlays_$_containerId'] = overlays;
+        window['kakaoRouteLabelOriginals_$_containerId'] = routeLabelOriginals;
 
         // 기존 선택 강조 제거
         var selOverlays = window['kakaoRouteSelectOverlays_$_containerId'] || [];
@@ -1341,6 +1344,15 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
   void clearRouteOverlay() {
     final jsCode = '''
       (function() {
+        // 마커 라벨 원본 복원
+        var labelsMap = window['kakaoMapLabelsMap_$_containerId'] || {};
+        var originals = window['kakaoRouteLabelOriginals_$_containerId'] || {};
+        for (var id in originals) {
+          if (labelsMap[id]) labelsMap[id].setContent(originals[id]);
+        }
+        window['kakaoRouteLabelOriginals_$_containerId'] = {};
+
+        // 이전 방식 별도 오버레이 잔여분 제거
         var existing = window['kakaoRouteOverlays_$_containerId'] || [];
         for (var i = 0; i < existing.length; i++) existing[i].setMap(null);
         window['kakaoRouteOverlays_$_containerId'] = [];

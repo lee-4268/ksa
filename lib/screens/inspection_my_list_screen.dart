@@ -1248,7 +1248,7 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.white,
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
       builder: (sheetCtx) => StatefulBuilder(
         builder: (_, setSheetState) {
           final hasChanges = editableStations.isNotEmpty && stations.isNotEmpty &&
@@ -1316,27 +1316,38 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
                   ),
                 ),
                 if (isEditMode)
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-                    color: const Color(0xFFE53935).withValues(alpha: 0.05),
-                    child: const Text('행을 클릭해 출발/도착을 변경하세요',
-                        style: TextStyle(fontSize: 11, color: Color(0xFFE53935))),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFEF2F2),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: const Row(
+                        children: [
+                          Icon(Icons.info_outline, size: 13, color: Color(0xFFEF4444)),
+                          SizedBox(width: 6),
+                          Text('행을 클릭해 출발/도착을 변경하세요',
+                              style: TextStyle(fontSize: 11, color: Color(0xFFEF4444))),
+                        ],
+                      ),
+                    ),
                   ),
-                const Divider(height: 1),
+                const Divider(height: 1, color: Color(0xFFF3F4F6)),
                 // 국소 리스트
                 ConstrainedBox(
                   constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.45),
                   child: ListView.separated(
                     shrinkWrap: true,
-                    padding: const EdgeInsets.symmetric(vertical: 6),
+                    padding: const EdgeInsets.symmetric(vertical: 4),
                     itemCount: editableStations.length,
-                    separatorBuilder: (_, _) => const Divider(height: 1, indent: 20),
+                    separatorBuilder: (_, _) => const Divider(height: 1, color: Color(0xFFF3F4F6), indent: 58),
                     itemBuilder: (_, i) {
                       final s = editableStations[i];
                       final isFirst = i == 0;
                       final isLast = i == editableStations.length - 1;
-                      final color = isFirst ? Colors.green : (isLast ? Colors.red : const Color(0xFFE53935));
+                      final color = isFirst ? const Color(0xFF10B981) : (isLast ? const Color(0xFFEF4444) : const Color(0xFF2563EB));
                       final tag = isFirst ? '출발' : (isLast ? '도착' : '${i + 1}');
 
                       // 겹침 국소 조회
@@ -1432,50 +1443,76 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
                         }
                       }
 
-                      return ListTile(
-                        dense: true,
+                      return InkWell(
                         onTap: onRowTap,
-                        leading: CircleAvatar(
-                          radius: 13,
-                          backgroundColor: color,
-                          child: Text(tag, style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
-                        ),
-                        title: Text(s.displayName, style: const TextStyle(fontSize: 13)),
-                        subtitle: coLocated.length > 1
-                            ? Text('외 ${coLocated.length - 1}개 겹침',
-                                style: const TextStyle(fontSize: 10, color: Color(0xFFE53935)))
-                            : null,
-                        trailing: isEditMode
-                            ? Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  if (!isFirst)
-                                    _endpointChip('출발', false, Colors.green, () {
-                                      setSheetState(() {
-                                        editableStations.removeAt(i);
-                                        editableStations.insert(0, s);
-                                      });
-                                    }),
-                                  if (!isFirst && !isLast) const SizedBox(width: 4),
-                                  if (!isLast)
-                                    _endpointChip('도착', false, Colors.red, () {
-                                      setSheetState(() {
-                                        editableStations.removeAt(i);
-                                        editableStations.add(s);
-                                      });
-                                    }),
-                                ],
-                              )
-                            : Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  _naviButton('Tmap', const Color(0xFF005BAC), () => _navToStation(s, 'tmap')),
-                                  const SizedBox(width: 4),
-                                  _naviButton('카카오', const Color(0xFFFEE500), () => _navToStation(s, 'kakao'), textColor: Colors.black87),
-                                  const SizedBox(width: 4),
-                                  _naviButton('네이버', const Color(0xFF03C75A), () => _navToStation(s, 'naver')),
-                                ],
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                          child: Row(
+                            children: [
+                              Container(
+                                width: 30, height: 30,
+                                padding: const EdgeInsets.symmetric(horizontal: 3),
+                                decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(15)),
+                                alignment: Alignment.center,
+                                child: Text(tag,
+                                    style: const TextStyle(
+                                        color: Colors.white, fontSize: 10,
+                                        fontWeight: FontWeight.w700, letterSpacing: -0.3)),
                               ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Text(s.displayName,
+                                        style: const TextStyle(
+                                            fontSize: 13, fontWeight: FontWeight.w600,
+                                            color: Color(0xFF111827))),
+                                    if (coLocated.length > 1)
+                                      Padding(
+                                        padding: const EdgeInsets.only(top: 2),
+                                        child: Text('외 ${coLocated.length - 1}개 겹침',
+                                            style: const TextStyle(fontSize: 10, color: Color(0xFFEF4444))),
+                                      ),
+                                  ],
+                                ),
+                              ),
+                              if (isEditMode)
+                                Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    if (!isFirst)
+                                      _endpointChip('출발', false, const Color(0xFF10B981), () {
+                                        setSheetState(() {
+                                          editableStations.removeAt(i);
+                                          editableStations.insert(0, s);
+                                        });
+                                      }),
+                                    if (!isFirst && !isLast) const SizedBox(width: 4),
+                                    if (!isLast)
+                                      _endpointChip('도착', false, const Color(0xFFEF4444), () {
+                                        setSheetState(() {
+                                          editableStations.removeAt(i);
+                                          editableStations.add(s);
+                                        });
+                                      }),
+                                  ],
+                                )
+                              else
+                                Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    _naviButton('Tmap', const Color(0xFF005BAC), () => _navToStation(s, 'tmap')),
+                                    const SizedBox(width: 4),
+                                    _naviButton('카카오', const Color(0xFFFEE500), () => _navToStation(s, 'kakao'), textColor: Colors.black87),
+                                    const SizedBox(width: 4),
+                                    _naviButton('네이버', const Color(0xFF03C75A), () => _navToStation(s, 'naver')),
+                                  ],
+                                ),
+                            ],
+                          ),
+                        ),
                       );
                     },
                   ),
