@@ -1271,11 +1271,11 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
                     trailing: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        _navChip('T', Colors.blue.shade700, Colors.blue.shade50, () => _navToStation(s, 'tmap')),
+                        _naviButton('Tmap', const Color(0xFF005BAC), () => _navToStation(s, 'tmap')),
                         const SizedBox(width: 4),
-                        _navChip('N', Colors.green.shade700, Colors.green.shade50, () => _navToStation(s, 'naver')),
+                        _naviButton('카카오', const Color(0xFFFEE500), () => _navToStation(s, 'kakao'), textColor: Colors.black87),
                         const SizedBox(width: 4),
-                        _navChip('K', Colors.yellow.shade800, Colors.yellow.shade50, () => _navToStation(s, 'kakao')),
+                        _naviButton('네이버', const Color(0xFF03C75A), () => _navToStation(s, 'naver')),
                       ],
                     ),
                   );
@@ -1289,14 +1289,14 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
     );
   }
 
-  Widget _navChip(String label, Color fg, Color bg, VoidCallback onTap) {
-    return GestureDetector(
+  Widget _naviButton(String label, Color bgColor, VoidCallback onTap, {Color textColor = Colors.white}) {
+    return InkWell(
       onTap: onTap,
+      borderRadius: BorderRadius.circular(6),
       child: Container(
-        width: 22, height: 22,
-        decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(5)),
-        alignment: Alignment.center,
-        child: Text(label, style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: fg)),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(color: bgColor, borderRadius: BorderRadius.circular(6)),
+        child: Text(label, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: textColor)),
       ),
     );
   }
@@ -1309,9 +1309,7 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
     final isMobile = _isMobile();
 
     if (!isMobile) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('모바일에서 접속하면 내비 앱으로 바로 연결됩니다.')),
-      );
+      ProgressDialog(context).error(message: 'PC에서는 지원되지 않습니다.\n모바일에서 접속해 주세요.');
       return;
     }
 
