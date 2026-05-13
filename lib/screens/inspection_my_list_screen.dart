@@ -1313,30 +1313,94 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
                     } else {
                       showDialog(
                         context: context,
-                        builder: (dlgCtx) => SimpleDialog(
-                          title: const Text('국소 선택', style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
-                          children: coLocated.map((it) {
-                            final callname = it['호출명칭'] as String? ?? it['허가번호'] as String? ?? '';
-                            final licenseNo = it['허가번호'] as String? ?? '';
-                            return SimpleDialogOption(
-                              onPressed: () {
-                                Navigator.pop(dlgCtx);
-                                Navigator.pop(sheetCtx);
-                                Future.microtask(() => _showInspectionSheet(it));
+                        builder: (dlgCtx) => AlertDialog(
+                          backgroundColor: Colors.white,
+                          surfaceTintColor: Colors.white,
+                          title: Row(
+                            children: [
+                              const Icon(Icons.layers, color: Colors.blue),
+                              const SizedBox(width: 8),
+                              Text('${coLocated.length}개 장소가 겹쳐있습니다'),
+                            ],
+                          ),
+                          content: SizedBox(
+                            width: 320,
+                            child: ListView.separated(
+                              shrinkWrap: true,
+                              itemCount: coLocated.length,
+                              separatorBuilder: (_, _) => const Divider(height: 1),
+                              itemBuilder: (_, idx) {
+                                final it = coLocated[idx];
+                                final callname = it['호출명칭'] as String? ?? it['허가번호'] as String? ?? '';
+                                final address = it['도로명주소'] as String?
+                                    ?? it['설치장소'] as String?
+                                    ?? it['t_설치장소'] as String? ?? '';
+                                final status = it['status'] as String? ?? '';
+                                final Color statusColor;
+                                final IconData statusIcon;
+                                final bool isPending;
+                                if (status == '합격') {
+                                  statusColor = Colors.green;
+                                  statusIcon = Icons.check_circle;
+                                  isPending = false;
+                                } else if (status.startsWith('불합격')) {
+                                  statusColor = Colors.red;
+                                  statusIcon = Icons.cancel;
+                                  isPending = false;
+                                } else if (status.startsWith('부적합')) {
+                                  statusColor = Colors.orange;
+                                  statusIcon = Icons.warning_amber;
+                                  isPending = false;
+                                } else {
+                                  statusColor = Colors.blue;
+                                  statusIcon = Icons.hourglass_empty;
+                                  isPending = true;
+                                }
+                                return ListTile(
+                                  leading: Icon(Icons.location_on, color: statusColor),
+                                  title: Text(callname, style: const TextStyle(fontWeight: FontWeight.w600)),
+                                  subtitle: Row(
+                                    children: [
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                                        decoration: BoxDecoration(
+                                          color: statusColor.withValues(alpha: 0.15),
+                                          borderRadius: BorderRadius.circular(3),
+                                        ),
+                                        child: Text(
+                                          status.isEmpty ? '검사대기' : status,
+                                          style: TextStyle(fontSize: 10, color: statusColor, fontWeight: FontWeight.bold),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 6),
+                                      Expanded(
+                                        child: Text(
+                                          address,
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  trailing: !isPending
+                                      ? Icon(statusIcon, color: statusColor, size: 20)
+                                      : null,
+                                  onTap: () {
+                                    Navigator.pop(dlgCtx);
+                                    Navigator.pop(sheetCtx);
+                                    Future.microtask(() => _showInspectionSheet(it));
+                                  },
+                                );
                               },
-                              child: Padding(
-                                padding: const EdgeInsets.symmetric(vertical: 4),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(callname, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-                                    if (licenseNo.isNotEmpty)
-                                      Text(licenseNo, style: TextStyle(fontSize: 11, color: Colors.grey.shade500)),
-                                  ],
-                                ),
-                              ),
-                            );
-                          }).toList(),
+                            ),
+                          ),
+                          actions: [
+                            TextButton(
+                              onPressed: () => Navigator.pop(dlgCtx),
+                              child: const Text('닫기'),
+                            ),
+                          ],
                         ),
                       );
                     }
