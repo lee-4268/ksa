@@ -13668,6 +13668,7 @@ async def inspection_data(request: Request, req: InspectionDataReq):
         items = [dict(r) for r in rows]
 
         # 통시/공대 보완: 새 Excel에 컬럼 없는 경우 cert_cache.db에서 허가번호+호출명칭으로 채움
+        _cert_cache_load()  # 경로 미설정 시 로드 (캐시 유효하면 즉시 반환)
         _cert_db = _cert_cache_db_path
         if _cert_db and os.path.exists(_cert_db):
             try:
