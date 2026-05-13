@@ -73,6 +73,7 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
   late final RouteBasketService _basketSvc;
   List<RouteBasketEntry> _routeBaskets = [];
   bool _savingBasket = false;
+  String? _activeBasketId;
 
   // 안테나 방위각 표시
   late final AzimuthService _azSvc;
@@ -1169,6 +1170,7 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
   }
 
   Widget _buildBasketEntryTile(RouteBasketEntry entry) {
+    final isActive = _activeBasketId == entry.entryId;
     return InkWell(
       onTap: () {
         final stations = entry.stations.map((bs) => RadioStation(
@@ -1180,8 +1182,6 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
           longitude: bs.lng,
           inspectionStatus: InspectionStatus.pending,
         )).toList();
-        _mapKey.currentState?.clearRouteOverlay();
-        _mapKey.currentState?.drawRouteOverlay(orderedStations: stations);
         _showBasketStationList(entry, stations);
       },
       child: Padding(
@@ -1205,6 +1205,33 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
                 ],
               ),
             ),
+            Transform.scale(
+              scale: 0.75,
+              child: Switch(
+                value: isActive,
+                activeThumbColor: const Color(0xFFE53935),
+                activeTrackColor: const Color(0xFFE53935).withValues(alpha: 0.4),
+                onChanged: (on) {
+                  final stations = entry.stations.map((bs) => RadioStation(
+                    id: bs.id,
+                    stationName: bs.name,
+                    address: '',
+                    licenseNumber: bs.id,
+                    latitude: bs.lat,
+                    longitude: bs.lng,
+                    inspectionStatus: InspectionStatus.pending,
+                  )).toList();
+                  if (on) {
+                    setState(() => _activeBasketId = entry.entryId);
+                    _mapKey.currentState?.clearRouteOverlay();
+                    _mapKey.currentState?.drawRouteOverlay(orderedStations: stations);
+                  } else {
+                    setState(() => _activeBasketId = null);
+                    _mapKey.currentState?.clearRouteOverlay();
+                  }
+                },
+              ),
+            ),
             IconButton(
               icon: const Icon(Icons.close, size: 16, color: Colors.black38),
               onPressed: () => _confirmDeleteBasket(entry),
@@ -1222,7 +1249,7 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
       context: context,
       backgroundColor: Colors.white,
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
-      builder: (_) => SafeArea(
+      builder: (sheetCtx) => SafeArea(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -1260,8 +1287,16 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
                   final isLast = i == stations.length - 1;
                   final color = isFirst ? Colors.green : (isLast ? Colors.red : const Color(0xFFE53935));
                   final tag = isFirst ? '출발' : (isLast ? '도착' : '${i + 1}');
+                  final item = _assignedItems.firstWhere(
+                    (it) => (it['허가번호'] as String? ?? '').trim() == s.licenseNumber.trim(),
+                    orElse: () => {'허가번호': s.licenseNumber, '호출명칭': s.stationName},
+                  );
                   return ListTile(
                     dense: true,
+                    onTap: () {
+                      Navigator.pop(sheetCtx);
+                      Future.microtask(() => _showInspectionSheet(item));
+                    },
                     leading: CircleAvatar(
                       radius: 13,
                       backgroundColor: color,
@@ -1539,7 +1574,8 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
                     child: Switch(
                       value: _showAzimuth,
                       onChanged: (v) => _toggleAzimuth(v, markerStations),
-                      activeColor: const Color(0xFF1565C0),
+                      activeThumbColor: const Color(0xFF1565C0),
+                      activeTrackColor: const Color(0xFF1565C0).withValues(alpha: 0.4),
                     ),
                   ),
                 if (_showAzimuth)
@@ -1670,7 +1706,13 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
   Future<void> _deleteBasket(String entryId) async {
     try {
       await _basketSvc.delete(entryId);
-      if (mounted) setState(() => _routeBaskets.removeWhere((e) => e.entryId == entryId));
+      if (mounted) {
+        setState(() {
+          _routeBaskets.removeWhere((e) => e.entryId == entryId);
+          if (_activeBasketId == entryId) _activeBasketId = null;
+        });
+        if (_activeBasketId == null) _mapKey.currentState?.clearRouteOverlay();
+      }
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('삭제 실패: $e'), backgroundColor: Colors.red));
     }
@@ -1811,6 +1853,7 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
       _polygonStart = null;
       _polygonEnd = null;
       _polygonRouteResult = null;
+      _activeBasketId = null;
     });
     _mapKey.currentState?.clearPolygonOverlay();
     _mapKey.currentState?.clearRouteOverlay();
@@ -1826,7 +1869,9 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
         setState(() {
           _polygonPhase = _PolygonPhase.drawing;
           _polygonVertexCount = 0;
+          _activeBasketId = null;
         });
+        _mapKey.currentState?.clearRouteOverlay();
         _mapKey.currentState?.startPolygonDraw();
       },
     );
