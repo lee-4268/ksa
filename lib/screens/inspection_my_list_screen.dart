@@ -1386,8 +1386,7 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
                                       ? Icon(statusIcon, color: statusColor, size: 20)
                                       : null,
                                   onTap: () {
-                                    Navigator.pop(dlgCtx);
-                                    Future.microtask(() => _showInspectionSheet(it));
+                                    _showInspectionSheet(it);
                                   },
                                 );
                               },
