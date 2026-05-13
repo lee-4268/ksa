@@ -1299,20 +1299,23 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
         }
 
         // 순서 번호 오버레이
-        var colors = ['#43A047', '#1E88E5', '#1E88E5', '#1E88E5', '#1E88E5',
-                      '#1E88E5', '#1E88E5', '#1E88E5', '#1E88E5', '#E53935'];
         for (var i = 0; i < stations.length; i++) {
           var s = stations[i];
-          var color = i === 0 ? '#43A047' : (i === stations.length - 1 ? '#E53935' : '#1E88E5');
+          var color = i === 0 ? '#10B981' : (i === stations.length - 1 ? '#EF4444' : '#2563EB');
           var label = i === 0 ? '출발' : (i === stations.length - 1 ? '도착' : (i + 1).toString());
-          var content = '<div style="' +
-            'background:' + color + ';' +
-            'color:white;font-weight:bold;font-size:12px;' +
-            'padding:4px 8px;border-radius:12px;' +
-            'white-space:nowrap;' +
-            'box-shadow:0 2px 6px rgba(0,0,0,0.4);' +
-            'border:2px solid white;' +
-            '">' + label + ' ' + s.name + '</div>';
+          var content =
+            '<div style="display:flex;align-items:center;gap:6px;' +
+              'background:white;border-radius:20px;' +
+              'padding:4px 12px 4px 5px;' +
+              'box-shadow:0 4px 16px rgba(0,0,0,0.16);' +
+              'border:1px solid rgba(0,0,0,0.07);white-space:nowrap;">' +
+              '<div style="min-width:22px;height:22px;border-radius:11px;padding:0 5px;' +
+                'background:' + color + ';' +
+                'display:flex;align-items:center;justify-content:center;flex-shrink:0;">' +
+                '<span style="color:white;font-weight:700;font-size:10px;letter-spacing:-0.3px;">' + label + '</span>' +
+              '</div>' +
+              '<span style="color:#111827;font-weight:600;font-size:12px;letter-spacing:-0.2px;">' + s.name + '</span>' +
+            '</div>';
           var overlay = new kakao.maps.CustomOverlay({
             position: new kakao.maps.LatLng(s.lat, s.lng),
             content: content,
