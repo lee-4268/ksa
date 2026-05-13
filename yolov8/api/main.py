@@ -19906,6 +19906,7 @@ async def admin_menu_stats(request: Request, days: int = Query(30)):
 @app.get("/route-basket")
 async def get_route_baskets(request: Request):
     """사용자 경로 담기 목록 조회."""
+    from decimal import Decimal
     empno = await _verify_auth(request)
     dynamodb = get_dynamodb_resource()
     table = dynamodb.Table(DYNAMODB_TABLES["route_baskets"])
@@ -19913,29 +19914,51 @@ async def get_route_baskets(request: Request):
         KeyConditionExpression=Key("user_id").eq(empno),
         ScanIndexForward=False,
     ))
-    return {"entries": resp.get("Items", [])}
+    # DynamoDB Decimal → float 변환
+    def _fix(item):
+        stations = item.get("stations", [])
+        return {**item, "stations": [
+            {**s, "lat": float(s["lat"]), "lng": float(s["lng"])} for s in stations
+        ]}
+    return {"entries": [_fix(i) for i in resp.get("Items", [])]}
 
 
 @app.post("/route-basket")
 async def save_route_basket(request: Request):
     """경로 담기 저장."""
+    from decimal import Decimal
     empno = await _verify_auth(request)
     body = await request.json()
     entry_id = str(uuid.uuid4())
     now = datetime.utcnow().isoformat()
+    # DynamoDB는 float 미지원 → Decimal 변환
+    stations_raw = body.get("stations", [])
+    stations = [
+        {
+            "id": s.get("id", ""),
+            "name": s.get("name", ""),
+            "lat": Decimal(str(s.get("lat", 0))),
+            "lng": Decimal(str(s.get("lng", 0))),
+        }
+        for s in stations_raw
+    ]
     item = {
         "user_id": empno,
         "entry_id": entry_id,
         "title": body.get("title", ""),
         "week_label": body.get("week_label", ""),
         "jo_label": body.get("jo_label", ""),
-        "stations": body.get("stations", []),
+        "stations": stations,
         "created_at": now,
     }
     dynamodb = get_dynamodb_resource()
     table = dynamodb.Table(DYNAMODB_TABLES["route_baskets"])
     await asyncio.to_thread(lambda: table.put_item(Item=item))
-    return {"entry": item}
+    # 응답은 float으로 직렬화 (Decimal은 JSON 직렬화 불가)
+    item_resp = {**item, "stations": [
+        {**s, "lat": float(s["lat"]), "lng": float(s["lng"])} for s in stations
+    ]}
+    return {"entry": item_resp}
 
 
 @app.delete("/route-basket/{entry_id}")
