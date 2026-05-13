@@ -13670,12 +13670,14 @@ async def inspection_data(request: Request, req: InspectionDataReq):
         # 통시/공대 보완: 새 Excel에 컬럼 없는 경우 cert_cache.db에서 허가번호+호출명칭으로 채움
         _cert_cache_load()  # 경로 미설정 시 로드 (캐시 유효하면 즉시 반환)
         _cert_db = _cert_cache_db_path
+        logger.warning(f"[통시DEBUG] cert_db='{_cert_db}' exists={os.path.exists(_cert_db) if _cert_db else 'N/A'} items={len(items)}")
         if _cert_db and os.path.exists(_cert_db):
             try:
                 _missing = [(i, str(it.get('허가번호') or '').strip(),
                                str(it.get('호출명칭') or '').strip())
                             for i, it in enumerate(items)
                             if not (it.get('통시') or '').strip()]
+                logger.warning(f"[통시DEBUG] missing={len(_missing)} / {len(items)}")
                 if _missing:
                     _pairs = list({(wino, wina) for _, wino, wina in _missing if wino or wina})
                     _cc = sqlite3.connect(_cert_db, timeout=10)
