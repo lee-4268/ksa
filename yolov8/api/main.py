@@ -10961,6 +10961,22 @@ def _erp_ds_compare_sync(
                     if ki_int > ds_antenna_ki.get(z, 0):
                         ds_antenna_ki[z] = ki_int
 
+            # DS 장치상태 (활용구분): 허가번호별 첫 번째 비어있지 않은 값
+            ds_prac1 = {}
+            for i in range(0, len(all_nos), BATCH):
+                batch = all_nos[i:i + BATCH]
+                ph = ','.join('?' * len(batch))
+                try:
+                    for row in conn.execute(
+                        f"SELECT 허가번호, 장치상태 FROM ds_장치 WHERE 허가번호 IN ({ph}) AND TRIM(COALESCE(장치상태,'')) != ''",
+                        batch
+                    ):
+                        z2 = str(row['허가번호'] or '').replace('-', '')
+                        if z2 and z2 not in ds_prac1:
+                            ds_prac1[z2] = str(row['장치상태'] or '').strip()
+                except Exception:
+                    pass  # 장치상태 컬럼 미존재 시(구 DB) 무시
+
             conn.close()
         except Exception as e:
             logger.warning(f"ds_detail.db 비교 조회 실패: {e}")
@@ -11017,6 +11033,27 @@ def _erp_ds_compare_sync(
     except Exception as e:
         logger.warning(f"inspection_targets 조회 실패: {e}")
 
+    # ERP 활용구분(zpprac1): cert_cache.db에서 허가번호 기준 조회
+    erp_prac1_map = {}
+    _cert_db_cmp = _cert_cache_db_path or os.path.join(_tempfile.gettempdir(), "cert_cache.db")
+    if _cert_db_cmp and os.path.exists(_cert_db_cmp):
+        try:
+            _norm_nos = list({z.replace('-', '') for z in zpwino_list})
+            _cc2 = sqlite3.connect(_cert_db_cmp, timeout=10)
+            _cc2.row_factory = sqlite3.Row
+            _ph3 = ','.join('?' * len(_norm_nos))
+            for _row in _cc2.execute(
+                f"SELECT REPLACE(TRIM(zpwino),'-','') AS wino_n, zpprac1 FROM cert "
+                f"WHERE REPLACE(TRIM(zpwino),'-','') IN ({_ph3}) AND TRIM(COALESCE(zpprac1,'')) != ''",
+                _norm_nos
+            ):
+                wn = _row['wino_n']
+                if wn and wn not in erp_prac1_map:
+                    erp_prac1_map[wn] = _row['zpprac1'] or ''
+            _cc2.close()
+        except Exception as _e2:
+            logger.warning(f"[erp_prac1 compare] lookup 실패: {_e2}")
+
     # 5) 비교 결과 생성
     items = []
     summary = {
@@ -11065,6 +11102,17 @@ def _erp_ds_compare_sync(
             except (ValueError, TypeError):
                 pass
 
+        erp_prac = erp_prac1_map.get(z_clean, '')
+        ds_prac = ds_prac1.get(z_clean, '') or ds_prac1.get(z, '')
+        if erp_prac and ds_prac:
+            prac_match = '일치' if erp_prac == ds_prac else '불일치'
+        elif not ds_prac and erp_prac:
+            prac_match = 'DS누락'
+        elif not erp_prac and ds_prac:
+            prac_match = 'ERP누락'
+        else:
+            prac_match = ''
+
         items.append({
             "zpwino": z,
             "zpwina": erp.get("zpwina", "") if erp else "",
@@ -11081,6 +11129,9 @@ def _erp_ds_compare_sync(
             "serial_match": serial_result,
             "통시": insp.get("통시", ""),
             "공대": insp.get("공대", ""),
+            "erp_prac1": erp_prac,
+            "ds_prac1": ds_prac,
+            "prac1_match": prac_match,
         })
 
     return {
@@ -11858,6 +11909,9 @@ def _init_ds_detail_db():
     # 마이그레이션: 형식검정번호 컬럼 추가
     try: conn.execute('ALTER TABLE ds_장치 ADD COLUMN 형식검정번호 TEXT'); conn.commit()
     except Exception: pass
+    # 마이그레이션: 장치상태 컬럼 추가
+    try: conn.execute('ALTER TABLE ds_장치 ADD COLUMN 장치상태 TEXT'); conn.commit()
+    except Exception: pass
     conn.execute('''CREATE TABLE IF NOT EXISTS ds_안테나 (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         허가번호 TEXT, 장치번호 TEXT,
@@ -11954,12 +12008,13 @@ def _build_ds_detail_from_zip_sync(zip_path: str):
                         ws = wb.sheet_by_name('장치')
                         hi = _col_idx(ws, '허가번호'); ji = _col_idx(ws, '장치번호')
                         si = _col_idx(ws, '기기일련번호'); fi = _col_idx(ws, '형식검정번호')
+                        vi = _col_idx(ws, '장치상태')
                         if hi >= 0:
                             for r in range(1, ws.nrows):
                                 h = _hn(ws, r, hi)
                                 if h:
                                     _seen_licenses.add(h)
-                                    batches['장치'].append((h, _sv(ws, r, ji), _sv(ws, r, si), _sv(ws, r, fi)))
+                                    batches['장치'].append((h, _sv(ws, r, ji), _sv(ws, r, si), _sv(ws, r, fi), _sv(ws, r, vi) if vi >= 0 else ''))
 
                     # 안테나
                     if '안테나' in sheet_names:
@@ -12016,7 +12071,7 @@ def _build_ds_detail_from_zip_sync(zip_path: str):
                     ph = ','.join('?' * len(chunk))
                     conn.execute(f'DELETE FROM {tbl} WHERE 허가번호 IN ({ph})', chunk)
             conn.executemany('INSERT OR REPLACE INTO ds_일반사항(허가번호,무선국명,호출명칭,통합시설명칭,공용화구분코드명) VALUES(?,?,?,?,?)', batches['일반사항'])
-            conn.executemany('INSERT INTO ds_장치(허가번호,장치번호,기기일련번호,형식검정번호) VALUES(?,?,?,?)', batches['장치'])
+            conn.executemany('INSERT INTO ds_장치(허가번호,장치번호,기기일련번호,형식검정번호,장치상태) VALUES(?,?,?,?,?)', batches['장치'])
             conn.executemany('INSERT INTO ds_안테나(허가번호,장치번호,기,이득,공중선주설치형태명,공중선일련번호,공중선형식명) VALUES(?,?,?,?,?,?,?)', batches['안테나'])
             conn.executemany('INSERT INTO ds_전파형식(허가번호,장치번호,공중선전력) VALUES(?,?,?)', batches['전파형식'])
             conn.executemany('INSERT INTO ds_주파수(허가번호,장치번호,주파수,송수신구분) VALUES(?,?,?,?)', batches['주파수'])

@@ -21,6 +21,7 @@ class ErpDsCompareScreen extends StatefulWidget {
   final String? initialAccessDivision;
   final bool initialMultiDivision;
   final List<String>? initialSchedulePks;
+  final Map<String, Map<String, String>>? initialSchedMap;
   final void Function(List<String> licenseNos)? onScheduleNavigate;
 
   const ErpDsCompareScreen({
@@ -29,6 +30,7 @@ class ErpDsCompareScreen extends StatefulWidget {
     this.initialAccessDivision,
     this.initialMultiDivision = false,
     this.initialSchedulePks,
+    this.initialSchedMap,
     this.onScheduleNavigate,
   });
 
@@ -74,6 +76,8 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
   final _inspectionService = InspectionService();
   final _inputCtrl = TextEditingController();
 
+  Map<String, Map<String, String>>? _schedMap;
+
   int _step = 0;
   String? _selectedDivisionId;
   List<DsUploadInfo> _dsUploads = [];
@@ -85,24 +89,21 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
   String _filter = '전체';
 
   // 결과 테이블: 컬럼 정의 (가용 폭에 비례 분배)
-  // 컬럼 순서: 허가번호, 호출명칭, 본부, 통시, 공대,
-  //           ERP 설치대, DS 설치대, 설치대 비교,
-  //           ERP 일련번호, DS 일련번호, 일련번호 비교
   static const List<String> _colTitles = [
     '허가번호', '호출명칭', '본부', '통시', '공대',
     'ERP 설치대', 'DS 설치대', '설치대 비교',
     'ERP 일련번호', 'DS 일련번호', '일련번호 비교',
+    'ERP활용구분', 'DS활용구분', '활용구분비교',
   ];
-  // 가중치: 텍스트 분량/중요도에 따라
   static const List<double> _colFlex = [
     13, 16, 8, 9, 9,
     14, 14, 11,
     18, 18, 13,
+    12, 12, 11,
   ];
 
   // 그룹 경계: 이 인덱스 컬럼 오른쪽에 진한 구분선 그림
-  // 7 = 설치대 비교 / 10 = 일련번호 비교(끝)
-  static const Set<int> _groupBoundaryRight = {7};
+  static const Set<int> _groupBoundaryRight = {7, 10};
 
   // 사용자가 드래그로 조정한 컬럼 너비. null이면 가용폭에 비례 분배.
   List<double>? _colWidths;
@@ -121,6 +122,7 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
       // 일정화면에서 넘어온 경우 허가번호 자동 입력
       if (widget.initialLicenseNos != null && widget.initialLicenseNos!.isNotEmpty) {
         _inputCtrl.text = widget.initialLicenseNos!.join('\n');
+        _schedMap = widget.initialSchedMap;
         setState(() {});
       }
 
@@ -886,6 +888,7 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
         '허가번호', '호출명칭', '본부', '통시', '공대',
         'ERP 설치대', 'DS 설치대', '설치대 비교',
         'ERP 일련번호', 'DS 일련번호', '일련번호 비교',
+        'ERP활용구분', 'DS활용구분', '활용구분비교',
       ];
       for (var i = 0; i < headers.length; i++) {
         final cell = sheet.cell(
@@ -904,9 +907,10 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
 
         final values = [
           item.zpwino, item.zpwina, item.areaHdofcNm,
-          item.tongsi, item.gongdae,
+          _tongsi(item), _gongdae(item),
           item.erpZpirty3, item.dsTowerType, item.towerMatch,
           item.erpSerial, item.dsSerial, item.serialMatch,
+          _erpPrac1(item), item.dsPrac1, item.prac1Match,
         ];
         for (var colIdx = 0; colIdx < values.length; colIdx++) {
           sheet
@@ -1102,12 +1106,12 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
           overflow: TextOverflow.ellipsis,
           textAlign: TextAlign.center),
       // 3 통시
-      Text(item.tongsi,
+      Text(_tongsi(item),
           style: _cellStyle,
           overflow: TextOverflow.ellipsis,
           textAlign: TextAlign.center),
       // 4 공대
-      Text(item.gongdae,
+      Text(_gongdae(item),
           style: _cellStyle,
           overflow: TextOverflow.ellipsis,
           textAlign: TextAlign.center),
@@ -1139,6 +1143,18 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
               textAlign: TextAlign.center)),
       // 10 일련번호 비교
       _buildMatchChip(item.serialMatch),
+      // 11 ERP활용구분
+      Text(_erpPrac1(item),
+          style: _cellStyle,
+          overflow: TextOverflow.ellipsis,
+          textAlign: TextAlign.center),
+      // 12 DS활용구분
+      Text(item.dsPrac1,
+          style: _cellStyle,
+          overflow: TextOverflow.ellipsis,
+          textAlign: TextAlign.center),
+      // 13 활용구분비교
+      _buildMatchChip(item.prac1Match),
     ];
 
     return Container(
@@ -1172,11 +1188,25 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
 
   // ── Helpers ──
 
+  // schedMap 오버레이: 일정화면에서 넘어온 값 우선, 없으면 백엔드 값
+  String _tongsi(CompareItem item) {
+    final v = _schedMap?[item.zpwino]?['통시'] ?? '';
+    return v.isNotEmpty ? v : item.tongsi;
+  }
+  String _gongdae(CompareItem item) {
+    final v = _schedMap?[item.zpwino]?['공대'] ?? '';
+    return v.isNotEmpty ? v : item.gongdae;
+  }
+  String _erpPrac1(CompareItem item) {
+    final v = _schedMap?[item.zpwino]?['zpprac1'] ?? '';
+    return v.isNotEmpty ? v : item.erpPrac1;
+  }
+
   List<CompareItem> _getFilteredItems() {
     if (_result == null) return [];
     if (_filter == '전체') return _result!.items;
     return _result!.items.where((it) {
-      return it.towerMatch == _filter || it.serialMatch == _filter;
+      return it.towerMatch == _filter || it.serialMatch == _filter || it.prac1Match == _filter;
     }).toList();
   }
 

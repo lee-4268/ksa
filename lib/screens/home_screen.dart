@@ -49,7 +49,7 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _sidebarCollapsed = false;
 
   // 일정화면 → 전산비교 이동 시 전달할 데이터
-  ({List<String> nos, String? div, bool multi, List<String>? schedulePks})? _pendingCompare;
+  ({List<String> nos, String? div, bool multi, List<String>? schedulePks, Map<String, Map<String, String>>? schedMap})? _pendingCompare;
   // 전산비교 → 일정화면 이동 시 전달할 허가번호
   List<String>? _pendingSchedule;
   // 홈 대시보드 → 일정화면 이동 시 전달할 초기 워크플로우 상태 필터
@@ -345,11 +345,11 @@ final result = await showDialog<bool>(
         return InspectionScheduleScreen(
           initialLicenseNos: schedNos,
           initialStatusFilter: statusFilter,
-          onCompareNavigate: (nos, div, multi, {schedulePks}) {
+          onCompareNavigate: (nos, div, multi, {schedulePks, schedMap}) {
             final compareIdx = items.indexWhere((m) => m.title == '전산비교');
             if (compareIdx >= 0) {
               setState(() {
-                _pendingCompare = (nos: nos, div: div, multi: multi, schedulePks: schedulePks);
+                _pendingCompare = (nos: nos, div: div, multi: multi, schedulePks: schedulePks, schedMap: schedMap);
                 _selectedIndex = compareIdx;
               });
             }
@@ -369,6 +369,7 @@ final result = await showDialog<bool>(
           initialAccessDivision: data?.div,
           initialMultiDivision: data?.multi ?? false,
           initialSchedulePks: data?.schedulePks,
+          initialSchedMap: data?.schedMap,
           onScheduleNavigate: (nos) {
             final schedIdx = items.indexWhere((m) => m.title == '일정 및 통계');
             if (schedIdx >= 0) {

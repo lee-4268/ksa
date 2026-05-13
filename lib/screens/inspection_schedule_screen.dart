@@ -45,7 +45,7 @@ const _kInspCols = <_InspColSpec>[
 
 class InspectionScheduleScreen extends StatefulWidget {
   final void Function(List<String> licenseNos, String? accessDivision, bool multiDivision,
-      {List<String>? schedulePks})? onCompareNavigate;
+      {List<String>? schedulePks, Map<String, Map<String, String>>? schedMap})? onCompareNavigate;
   final List<String>? initialLicenseNos;
   /// 초기 워크플로우 상태 필터 (홈 대시보드 카드에서 점프 시).
   /// 'RECHECK' 토큰이면 _recheckOnly 토글을 켜고 statusFilter는 비움.
@@ -912,10 +912,24 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
         .where((p) => p.isNotEmpty)
         .toList();
 
+    // 통시/공대/zpprac1 맵 (일정화면에서 이미 로드된 값 전달)
+    final schedMap = <String, Map<String, String>>{};
+    for (final item in _items) {
+      final no = '${item['허가번호'] ?? ''}';
+      if (_selectedLicenseNos.contains(no)) {
+        schedMap[no] = {
+          '통시': '${item['통시'] ?? ''}',
+          '공대': '${item['공대'] ?? ''}',
+          'zpprac1': '${item['zpprac1'] ?? ''}',
+        };
+      }
+    }
+
     setState(() => _selectedLicenseNos.clear());
     widget.onCompareNavigate?.call(
       licenseNos, dominantAccess, multiDivision,
       schedulePks: schedulePks.isEmpty ? null : schedulePks,
+      schedMap: schedMap.isEmpty ? null : schedMap,
     );
   }
 

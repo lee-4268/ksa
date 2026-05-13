@@ -115,6 +115,9 @@ class CompareItem {
   final String antennaMatch;
   final String tongsi;
   final String gongdae;
+  final String erpPrac1;
+  final String dsPrac1;
+  final String prac1Match;
 
   CompareItem({
     required this.zpwino,
@@ -135,6 +138,9 @@ class CompareItem {
     required this.antennaMatch,
     required this.tongsi,
     required this.gongdae,
+    required this.erpPrac1,
+    required this.dsPrac1,
+    required this.prac1Match,
   });
 
   factory CompareItem.fromJson(Map<String, dynamic> json) {
@@ -157,6 +163,9 @@ class CompareItem {
       antennaMatch: json['antenna_match'] ?? '',
       tongsi: json['통시'] ?? '',
       gongdae: json['공대'] ?? '',
+      erpPrac1: json['erp_prac1'] ?? '',
+      dsPrac1: json['ds_prac1'] ?? '',
+      prac1Match: json['prac1_match'] ?? '',
     );
   }
 }
