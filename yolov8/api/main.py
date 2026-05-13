@@ -8080,27 +8080,55 @@ def _cert_lookup_cached(query: str) -> dict:
 
 
 def _cert_batch_lookup_cached(zpwino_list: list) -> dict:
-    """설치확인서 일괄 조회 — SQLite 인덱스 O(1) 조회."""
+    """설치확인서 일괄 조회 — IN 쿼리 2-pass (zpwino→zpwina 순서)."""
     import sqlite3
     if not zpwino_list:
         return {}
     _cert_cache_load()
-    cols = ["zpwino", "zpwina", "zpwiadr", "zpcode", "area_hdofc_nm", "ons_team_nm", "zpirty3", "eqp_ser_no", "zpwilat", "zpwilon", "max_seqno"]
+    cols = ["zpwino", "zpwina", "zpwiadr", "zpcode", "area_hdofc_nm", "ons_team_nm", "zpirty3", "eqp_ser_no", "zpwilat", "zpwilon", "max_seqno", "zpprac1"]
+    col_str = ', '.join(cols)
     results = {}
+    BATCH = 900
     try:
         conn = sqlite3.connect(_cert_cache_db_path, timeout=30)
         conn.row_factory = sqlite3.Row
-        for q in zpwino_list:
-            if q in results:
+
+        # pass1: zpwino IN — 원본 & 하이픈 제거본 둘 다 시도 (인덱스 활용)
+        norms = list({q.replace('-', '').strip() for q in zpwino_list})
+        originals = list(dict.fromkeys(zpwino_list))  # 순서 보존 중복 제거
+        norm_map = {q.replace('-', '').strip(): q for q in originals}  # norm→original
+        for batch in (originals, norms):
+            remaining_batch = [q for q in batch if norm_map.get(q.replace('-','').strip(), q) not in results]
+            if not remaining_batch:
                 continue
-            for col in ("zpwino", "zpwina"):
-                cur = conn.execute(f"SELECT * FROM cert WHERE {col}=? LIMIT 1", (q,))
-                row = cur.fetchone()
-                if row:
-                    row_dict = dict(row)
-                    results[q] = {c: (row_dict.get(c) or "") for c in cols}
-                    break
+            for i in range(0, len(remaining_batch), BATCH):
+                sub = remaining_batch[i:i+BATCH]
+                ph = ','.join('?' * len(sub))
+                for row in conn.execute(
+                    f"SELECT {col_str} FROM cert WHERE zpwino IN ({ph})", sub
+                ):
+                    rd = dict(row)
+                    wino = (rd.get('zpwino') or '').strip()
+                    orig_q = norm_map.get(wino.replace('-', ''), wino)
+                    if orig_q not in results:
+                        results[orig_q] = {c: (rd.get(c) or '') for c in cols}
+
+        # pass2: zpwina IN — 아직 못 찾은 항목
+        missing = [q for q in originals if q not in results]
+        if missing:
+            for i in range(0, len(missing), BATCH):
+                sub = missing[i:i+BATCH]
+                ph = ','.join('?' * len(sub))
+                for row in conn.execute(
+                    f"SELECT {col_str} FROM cert WHERE zpwina IN ({ph})", sub
+                ):
+                    rd = dict(row)
+                    zpwina_val = (rd.get('zpwina') or '').strip()
+                    if zpwina_val in sub and zpwina_val not in results:
+                        results[zpwina_val] = {c: (rd.get(c) or '') for c in cols}
+
         conn.close()
+        logger.info(f"[cert_batch] 요청={len(originals)} 조회={len(results)}")
     except Exception as e:
         logger.warning(f"설치확인서 배치 캐시 조회 실패: {e}")
     return results
@@ -11033,26 +11061,11 @@ def _erp_ds_compare_sync(
     except Exception as e:
         logger.warning(f"inspection_targets 조회 실패: {e}")
 
-    # ERP 활용구분(zpprac1): cert_cache.db에서 허가번호 기준 조회
-    erp_prac1_map = {}
-    _cert_db_cmp = _cert_cache_db_path or os.path.join(_tempfile.gettempdir(), "cert_cache.db")
-    if _cert_db_cmp and os.path.exists(_cert_db_cmp):
-        try:
-            _norm_nos = list({z.replace('-', '') for z in zpwino_list})
-            _cc2 = sqlite3.connect(_cert_db_cmp, timeout=10)
-            _cc2.row_factory = sqlite3.Row
-            _ph3 = ','.join('?' * len(_norm_nos))
-            for _row in _cc2.execute(
-                f"SELECT REPLACE(TRIM(zpwino),'-','') AS wino_n, zpprac1 FROM cert "
-                f"WHERE REPLACE(TRIM(zpwino),'-','') IN ({_ph3}) AND TRIM(COALESCE(zpprac1,'')) != ''",
-                _norm_nos
-            ):
-                wn = _row['wino_n']
-                if wn and wn not in erp_prac1_map:
-                    erp_prac1_map[wn] = _row['zpprac1'] or ''
-            _cc2.close()
-        except Exception as _e2:
-            logger.warning(f"[erp_prac1 compare] lookup 실패: {_e2}")
+    # ERP 활용구분(zpprac1): _cert_batch_lookup_cached 결과(erp_data)에서 직접 추출
+    erp_prac1_map = {
+        z.replace('-', ''): (erp_data.get(z, {}).get('zpprac1', '') or '')
+        for z in zpwino_list
+    }
 
     # 5) 비교 결과 생성
     items = []
