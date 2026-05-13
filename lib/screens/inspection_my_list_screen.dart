@@ -1308,8 +1308,7 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
 
                   void onRowTap() {
                     if (coLocated.length <= 1) {
-                      Navigator.pop(sheetCtx);
-                      Future.microtask(() => _showInspectionSheet(defaultItem));
+                      _showInspectionSheet(defaultItem);
                     } else {
                       showDialog(
                         context: context,
@@ -1388,7 +1387,6 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
                                       : null,
                                   onTap: () {
                                     Navigator.pop(dlgCtx);
-                                    Navigator.pop(sheetCtx);
                                     Future.microtask(() => _showInspectionSheet(it));
                                   },
                                 );
