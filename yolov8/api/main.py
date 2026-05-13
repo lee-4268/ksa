@@ -13670,35 +13670,35 @@ async def inspection_data(request: Request, req: InspectionDataReq):
         # 통시/공대 보완: 새 Excel에 컬럼 없는 경우 cert_cache.db에서 허가번호+호출명칭으로 채움
         # _cert_cache_load() 호출 금지 — S3 재빌드가 블로킹되어 요청 실패 유발
         _cert_db = _cert_cache_db_path or os.path.join(_tempfile.gettempdir(), "cert_cache.db")
-        logger.warning(f"[통시DEBUG] cert_db='{_cert_db}' exists={os.path.exists(_cert_db)} items={len(items)}")
         if _cert_db and os.path.exists(_cert_db):
             try:
                 _missing = [(i, str(it.get('허가번호') or '').strip(),
                                str(it.get('호출명칭') or '').strip())
                             for i, it in enumerate(items)
                             if not (it.get('통시') or '').strip()]
-                logger.warning(f"[통시DEBUG] missing={len(_missing)} / {len(items)}")
                 if _missing:
                     _pairs = list({(wino, wina) for _, wino, wina in _missing if wino or wina})
-                    _cc = sqlite3.connect(_cert_db, timeout=10)
-                    _cc.row_factory = sqlite3.Row
-                    _pair_map: dict = {}
+                    # 허가번호 대시 제거 후 정규화 → 단일 IN 쿼리 (100개 개별 쿼리 → 1개 일괄 쿼리)
+                    _wino_norms = list({w.replace('-', '').strip() for w, _ in _pairs if w})
+                    _norm_result: dict = {}  # (wino_norm, wina_norm) → (zpcode, zpkcode)
                     _hit = 0
-                    for _wino, _wina in _pairs:
-                        # 허가번호 대시 유무 모두 허용 (REPLACE로 정규화)
-                        _row = _cc.execute(
-                            "SELECT zpcode, zpkcode FROM cert "
-                            "WHERE REPLACE(TRIM(zpwino),'-','')=REPLACE(?,'-','') "
-                            "AND TRIM(zpwina)=? LIMIT 1",
-                            (_wino, _wina)
-                        ).fetchone()
-                        if _row:
-                            _pair_map[(_wino, _wina)] = (_row['zpcode'] or '', _row['zpkcode'] or '')
-                            _hit += 1
-                    _cc.close()
+                    if _wino_norms:
+                        _cc = sqlite3.connect(_cert_db, timeout=10)
+                        _cc.row_factory = sqlite3.Row
+                        _ph = ','.join('?' * len(_wino_norms))
+                        for _row in _cc.execute(
+                            f"SELECT REPLACE(TRIM(zpwino),'-','') AS wino_n, TRIM(zpwina) AS wina_n, zpcode, zpkcode "
+                            f"FROM cert WHERE REPLACE(TRIM(zpwino),'-','') IN ({_ph})",
+                            _wino_norms
+                        ):
+                            _nk = (_row['wino_n'], _row['wina_n'])
+                            if _nk not in _norm_result:
+                                _norm_result[_nk] = (_row['zpcode'] or '', _row['zpkcode'] or '')
+                                _hit += 1
+                        _cc.close()
                     logger.info(f"[통시/공대 보완] missing={len(_missing)} pairs={len(_pairs)} hit={_hit}")
                     for _i, _wino, _wina in _missing:
-                        _v = _pair_map.get((_wino, _wina))
+                        _v = _norm_result.get((_wino.replace('-', '').strip(), _wina.strip()))
                         if _v:
                             items[_i]['통시'] = _v[0]
                             items[_i]['공대'] = _v[1]
