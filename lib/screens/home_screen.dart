@@ -934,7 +934,7 @@ final result = await showDialog<bool>(
     if (unread.isEmpty) return;
     showDialog(
       context: context,
-      builder: (ctx) => _SequentialNotificationDialog(
+      builder: (ctx) => _UnreadNotificationsListDialog(
         items: unread,
         notifSvc: notifSvc,
       ),
@@ -1623,52 +1623,49 @@ class _NotificationPanel extends StatelessWidget {
   }
 }
 
-// ── 순번형 알림 뷰어 ─────────────────────────────────────────
+// ── 미확인 알림 리스트 팝업 (로그인 직후) ────────────────────
 
-class _SequentialNotificationDialog extends StatefulWidget {
+class _UnreadNotificationsListDialog extends StatefulWidget {
   final List<NotificationItem> items;
   final NotificationService notifSvc;
 
-  const _SequentialNotificationDialog({required this.items, required this.notifSvc});
+  const _UnreadNotificationsListDialog({required this.items, required this.notifSvc});
 
   @override
-  State<_SequentialNotificationDialog> createState() => _SequentialNotificationDialogState();
+  State<_UnreadNotificationsListDialog> createState() => _UnreadNotificationsListDialogState();
 }
 
-class _SequentialNotificationDialogState extends State<_SequentialNotificationDialog> {
-  int _index = 0;
-  final Set<int> _markedRead = {};
+class _UnreadNotificationsListDialogState extends State<_UnreadNotificationsListDialog> {
+  late final List<NotificationItem> _items;
 
-  NotificationItem get _current => widget.items[_index];
-  bool get _isFirst => _index == 0;
-  bool get _isLast => _index == widget.items.length - 1;
-
-  void _markCurrentRead() {
-    if (!_markedRead.contains(_current.id)) {
-      _markedRead.add(_current.id);
-      widget.notifSvc.readOne(_current.id);
-    }
+  @override
+  void initState() {
+    super.initState();
+    _items = List.of(widget.items);
   }
 
-  void _next() {
-    _markCurrentRead();
-    if (_isLast) {
-      Navigator.pop(context);
-    } else {
-      setState(() => _index++);
-    }
+  Future<void> _markOne(int id) async {
+    await widget.notifSvc.readOne(id);
+    if (!mounted) return;
+    setState(() {
+      final i = _items.indexWhere((e) => e.id == id);
+      if (i >= 0) {
+        final e = _items[i];
+        _items[i] = NotificationItem(
+          id: e.id, type: e.type, title: e.title, body: e.body,
+          relatedType: e.relatedType, relatedId: e.relatedId,
+          isRead: true, createdAt: e.createdAt,
+        );
+      }
+    });
   }
 
-  void _prev() {
-    if (!_isFirst) setState(() => _index--);
-  }
-
-  Future<void> _markAllRead() async {
+  Future<void> _markAll() async {
     await widget.notifSvc.readAll();
     if (mounted) Navigator.pop(context);
   }
 
-  IconData _iconFor(String type) => switch (type) {
+  static IconData _iconFor(String type) => switch (type) {
     'comment'  => Icons.chat_bubble_outline_rounded,
     'status'   => Icons.check_circle_outline_rounded,
     'notice'   => Icons.campaign_outlined,
@@ -1676,7 +1673,7 @@ class _SequentialNotificationDialogState extends State<_SequentialNotificationDi
     _          => Icons.notifications_none_rounded,
   };
 
-  Color _colorFor(String type) => switch (type) {
+  static Color _colorFor(String type) => switch (type) {
     'comment'  => const Color(0xFF3B82F6),
     'status'   => const Color(0xFF10B981),
     'notice'   => const Color(0xFFE53935),
@@ -1686,154 +1683,170 @@ class _SequentialNotificationDialogState extends State<_SequentialNotificationDi
 
   @override
   Widget build(BuildContext context) {
-    final item = _current;
-    final color = _colorFor(item.type);
-    final total = widget.items.length;
+    final screenH = MediaQuery.of(context).size.height;
+    final unreadLeft = _items.where((e) => !e.isRead).length;
 
     return Dialog(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-      insetPadding: const EdgeInsets.symmetric(horizontal: 32, vertical: 80),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 60),
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 360),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // 헤더: 진행 카운터 + 모두읽음 + 닫기
-              Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFF3F4F6),
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: Text(
-                      '${_index + 1} / $total',
-                      style: const TextStyle(
-                        fontSize: 12, fontWeight: FontWeight.w700, color: Color(0xFF374151)),
-                    ),
-                  ),
-                  const Spacer(),
+        constraints: BoxConstraints(maxWidth: 400, maxHeight: screenH * 0.72),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // 헤더
+            Container(
+              padding: const EdgeInsets.fromLTRB(16, 14, 12, 12),
+              decoration: const BoxDecoration(
+                color: Color(0xFFF8F9FA),
+                borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+                border: Border(bottom: BorderSide(color: Color(0xFFE5E7EB))),
+              ),
+              child: Row(children: [
+                const Icon(Icons.notifications_active_rounded,
+                    color: Color(0xFFE53935), size: 18),
+                const SizedBox(width: 8),
+                Text(
+                  unreadLeft > 0 ? '읽지 않은 알림 $unreadLeft건' : '알림 확인 완료',
+                  style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
+                ),
+                const Spacer(),
+                if (unreadLeft > 0)
                   TextButton(
-                    onPressed: _markAllRead,
+                    onPressed: _markAll,
                     style: TextButton.styleFrom(
                       padding: const EdgeInsets.symmetric(horizontal: 8),
                       minimumSize: Size.zero,
+                      foregroundColor: const Color(0xFF6B7280),
                     ),
-                    child: const Text('모두 읽음',
-                        style: TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+                    child: const Text('모두 읽음', style: TextStyle(fontSize: 12)),
                   ),
-                  IconButton(
-                    icon: const Icon(Icons.close, size: 18),
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
-                    onPressed: () => Navigator.pop(context),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 14),
-
-              // 진행 바
-              ClipRRect(
-                borderRadius: BorderRadius.circular(4),
-                child: LinearProgressIndicator(
-                  value: ((_index + 1) / total),
-                  minHeight: 4,
-                  backgroundColor: const Color(0xFFE5E7EB),
-                  valueColor: AlwaysStoppedAnimation<Color>(const Color(0xFF2563EB)),
+                IconButton(
+                  icon: const Icon(Icons.close, size: 18),
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                  onPressed: () => Navigator.pop(context),
                 ),
+              ]),
+            ),
+            // 리스트
+            Flexible(
+              child: ListView.separated(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                itemCount: _items.length,
+                separatorBuilder: (_, _) =>
+                    const Divider(height: 1, color: Color(0xFFEEEEEE)),
+                itemBuilder: (_, i) {
+                  final n = _items[i];
+                  final color = _colorFor(n.type);
+                  return InkWell(
+                    onTap: n.isRead ? null : () => _markOne(n.id),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                      color: n.isRead ? Colors.white : const Color(0xFFFFF8F8),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          // 좌측 컬러 바
+                          Container(
+                            width: 3,
+                            height: 42,
+                            margin: const EdgeInsets.only(right: 10, top: 2),
+                            decoration: BoxDecoration(
+                              color: n.isRead ? Colors.transparent : color,
+                              borderRadius: BorderRadius.circular(2),
+                            ),
+                          ),
+                          // 아이콘
+                          Container(
+                            padding: const EdgeInsets.all(6),
+                            decoration: BoxDecoration(
+                              color: color.withValues(alpha: 0.1),
+                              shape: BoxShape.circle,
+                            ),
+                            child: Icon(_iconFor(n.type), size: 16, color: color),
+                          ),
+                          const SizedBox(width: 10),
+                          // 내용
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  n.title,
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: n.isRead ? FontWeight.w500 : FontWeight.w700,
+                                    color: const Color(0xFF111827),
+                                  ),
+                                ),
+                                if (n.body.isNotEmpty) ...[
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    n.body,
+                                    style: const TextStyle(
+                                        fontSize: 12, color: Color(0xFF6B7280), height: 1.4),
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ],
+                                const SizedBox(height: 3),
+                                Text(
+                                  NotificationService.relativeTime(n.createdAt),
+                                  style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF)),
+                                ),
+                              ],
+                            ),
+                          ),
+                          // 읽음 버튼
+                          if (!n.isRead)
+                            Padding(
+                              padding: const EdgeInsets.only(left: 6, top: 2),
+                              child: InkWell(
+                                onTap: () => _markOne(n.id),
+                                borderRadius: BorderRadius.circular(6),
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                  decoration: BoxDecoration(
+                                    border: Border.all(color: const Color(0xFFD1D5DB)),
+                                    borderRadius: BorderRadius.circular(6),
+                                  ),
+                                  child: const Text('읽음',
+                                      style: TextStyle(fontSize: 11, color: Color(0xFF374151))),
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                  );
+                },
               ),
-              const SizedBox(height: 16),
-
-              // 알림 카드
-              Container(
+            ),
+            // 하단 닫기
+            Container(
+              padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
+              decoration: const BoxDecoration(
+                border: Border(top: BorderSide(color: Color(0xFFE5E7EB))),
+                color: Color(0xFFF8F9FA),
+                borderRadius: BorderRadius.vertical(bottom: Radius.circular(16)),
+              ),
+              child: SizedBox(
                 width: double.infinity,
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFF8FAFF),
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: const Color(0xFFDBEAFE)),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.all(8),
-                          decoration: BoxDecoration(
-                            color: color.withValues(alpha: 0.12),
-                            shape: BoxShape.circle,
-                          ),
-                          child: Icon(_iconFor(item.type), size: 18, color: color),
-                        ),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Text(
-                            item.title,
-                            style: const TextStyle(
-                              fontSize: 14, fontWeight: FontWeight.w700, color: Color(0xFF111827)),
-                          ),
-                        ),
-                      ],
-                    ),
-                    if (item.body.isNotEmpty) ...[
-                      const SizedBox(height: 10),
-                      Text(
-                        item.body,
-                        style: const TextStyle(
-                          fontSize: 13, color: Color(0xFF4B5563), height: 1.5),
-                      ),
-                    ],
-                    const SizedBox(height: 10),
-                    Text(
-                      NotificationService.relativeTime(item.createdAt),
-                      style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF)),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 20),
-
-              // 이전 / 다음(완료) 버튼
-              Row(
-                children: [
-                  if (!_isFirst) ...[
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        onPressed: _prev,
-                        icon: const Icon(Icons.chevron_left, size: 16),
-                        label: const Text('이전'),
-                        style: OutlinedButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(vertical: 12),
-                          side: const BorderSide(color: Color(0xFFD1D5DB)),
-                          foregroundColor: const Color(0xFF374151),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                  ],
-                  Expanded(
-                    child: ElevatedButton.icon(
-                      onPressed: _next,
-                      icon: Icon(_isLast ? Icons.check : Icons.chevron_right, size: 16),
-                      label: Text(_isLast ? '완료' : '다음'),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF2563EB),
-                        foregroundColor: Colors.white,
-                        elevation: 0,
-                        padding: const EdgeInsets.symmetric(vertical: 12),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                      ),
-                    ),
+                child: ElevatedButton(
+                  onPressed: () => Navigator.pop(context),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF2563EB),
+                    foregroundColor: Colors.white,
+                    elevation: 0,
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                   ),
-                ],
+                  child: const Text('닫기', style: TextStyle(fontWeight: FontWeight.bold)),
+                ),
               ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );
