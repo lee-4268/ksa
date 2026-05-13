@@ -2911,10 +2911,12 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                 height: 44,
                 child: Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 8),
-                  child: Align(
-                    alignment: Alignment.centerLeft,
-                    child: _buildCellContent(
-                        col.key, item, licenseNo, isChecked),
+                  child: ClipRect(
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: _buildCellContent(
+                          col.key, item, licenseNo, isChecked),
+                    ),
                   ),
                 ),
               );
