@@ -1379,39 +1379,42 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
 
         // 버튼 클릭 이벤트가 맵에 전파되지 않도록 지연 후 리스너 등록
         setTimeout(function() {
-        if (!window['polygonDrawing_$_containerId']) return;
-        var listener = kakao.maps.event.addListener(map, 'click', function(e) {
-          var lat = e.latLng.getLat();
-          var lng = e.latLng.getLng();
-          var verts = window['polygonVertices_$_containerId'];
-          verts.push([lat, lng]);
-          window['polygonVertexCount_$_containerId'] = verts.length;
+          if (!window['polygonDrawing_$_containerId']) return;
+          var fn = function(e) {
+            // 확정/취소 후 발생하는 잔여 이벤트 무시
+            if (!window['polygonDrawing_$_containerId']) return;
+            var lat = e.latLng.getLat();
+            var lng = e.latLng.getLng();
+            var verts = window['polygonVertices_$_containerId'];
+            verts.push([lat, lng]);
+            window['polygonVertexCount_$_containerId'] = verts.length;
 
-          // 꼭짓점 마커
-          var dot = new kakao.maps.CustomOverlay({
-            position: e.latLng,
-            content: '<div style="width:10px;height:10px;border-radius:50%;background:#E53935;border:2px solid white;box-shadow:0 1px 3px rgba(0,0,0,0.5);"></div>',
-            yAnchor: 0.5, xAnchor: 0.5, zIndex: 10
-          });
-          dot.setMap(map);
-          window['polygonTempMarkers_$_containerId'].push(dot);
-
-          // 꼭짓점 간 선
-          if (verts.length >= 2) {
-            var prev = verts[verts.length - 2];
-            var cur = verts[verts.length - 1];
-            var line = new kakao.maps.Polyline({
-              path: [new kakao.maps.LatLng(prev[0], prev[1]), new kakao.maps.LatLng(cur[0], cur[1])],
-              strokeWeight: 2, strokeColor: '#E53935', strokeOpacity: 0.85, strokeStyle: 'solid'
+            // 꼭짓점 마커
+            var dot = new kakao.maps.CustomOverlay({
+              position: e.latLng,
+              content: '<div style="width:10px;height:10px;border-radius:50%;background:#E53935;border:2px solid white;box-shadow:0 1px 3px rgba(0,0,0,0.5);"></div>',
+              yAnchor: 0.5, xAnchor: 0.5, zIndex: 10
             });
-            line.setMap(map);
-            window['polygonTempLines_$_containerId'].push(line);
-          }
+            dot.setMap(map);
+            window['polygonTempMarkers_$_containerId'].push(dot);
 
-          // Flutter로 꼭짓점 수 전송 (UI 업데이트용)
-          window.parent.postMessage({type: 'polygonVertexCount', count: verts.length}, '*');
-        });
-        window['polygonClickListener_$_containerId'] = listener;
+            // 꼭짓점 간 선
+            if (verts.length >= 2) {
+              var prev = verts[verts.length - 2];
+              var cur = verts[verts.length - 1];
+              var line = new kakao.maps.Polyline({
+                path: [new kakao.maps.LatLng(prev[0], prev[1]), new kakao.maps.LatLng(cur[0], cur[1])],
+                strokeWeight: 2, strokeColor: '#E53935', strokeOpacity: 0.85, strokeStyle: 'solid'
+              });
+              line.setMap(map);
+              window['polygonTempLines_$_containerId'].push(line);
+            }
+
+            // Flutter로 꼭짓점 수 전송 (UI 업데이트용)
+            window.parent.postMessage({type: 'polygonVertexCount', count: verts.length}, '*');
+          };
+          window['polygonClickHandler_$_containerId'] = fn;
+          kakao.maps.event.addListener(map, 'click', fn);
         }, 350);
       })();
     ''';
@@ -1424,10 +1427,11 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
       (function() {
         if (typeof kakao === 'undefined') return;
         window['polygonDrawing_$_containerId'] = false;
-        var listener = window['polygonClickListener_$_containerId'];
-        if (listener) {
-          kakao.maps.event.removeListener(listener);
-          window['polygonClickListener_$_containerId'] = null;
+        var map = window['kakaoMapInstance_$_containerId'];
+        var fn = window['polygonClickHandler_$_containerId'];
+        if (fn && map) {
+          kakao.maps.event.removeListener(map, 'click', fn);
+          window['polygonClickHandler_$_containerId'] = null;
         }
         var markers = window['polygonTempMarkers_$_containerId'] || [];
         for (var i = 0; i < markers.length; i++) markers[i].setMap(null);
@@ -1455,10 +1459,10 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
         if (!map) return;
 
         window['polygonDrawing_$_containerId'] = false;
-        var listener = window['polygonClickListener_$_containerId'];
-        if (listener) {
-          kakao.maps.event.removeListener(listener);
-          window['polygonClickListener_$_containerId'] = null;
+        var fn = window['polygonClickHandler_$_containerId'];
+        if (fn) {
+          kakao.maps.event.removeListener(map, 'click', fn);
+          window['polygonClickHandler_$_containerId'] = null;
         }
 
         var markers = window['polygonTempMarkers_$_containerId'] || [];
