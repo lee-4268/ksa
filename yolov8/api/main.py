@@ -13712,6 +13712,7 @@ async def inspection_data(request: Request, req: InspectionDataReq):
             if cert_db and os.path.exists(cert_db):
                 try:
                     cc = sqlite3.connect(cert_db, timeout=10)
+                    cc.row_factory = sqlite3.Row
                     ph = ','.join('?' * len(zpcodes))
                     for row in cc.execute(
                         f"SELECT TRIM(zpcode) AS zpcode, zpprac1 FROM cert "
@@ -13721,8 +13722,9 @@ async def inspection_data(request: Request, req: InspectionDataReq):
                         if row['zpcode']:
                             zpprac1_map[row['zpcode']] = row['zpprac1'] or ''
                     cc.close()
-                except Exception:
-                    pass
+                    logger.info(f"[zpprac1] zpcodes={len(zpcodes)} hit={len(zpprac1_map)}")
+                except Exception as _ze:
+                    logger.warning(f"[zpprac1] lookup 실패: {_ze}")
         for it in items:
             tongsi = (it.get('통시') or '').strip()
             it['zpprac1'] = zpprac1_map.get(tongsi, '')
