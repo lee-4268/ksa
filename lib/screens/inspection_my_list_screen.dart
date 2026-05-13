@@ -2121,8 +2121,10 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
     return Container(
       decoration: BoxDecoration(
         color: Colors.white,
-        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.15), blurRadius: 8, offset: const Offset(0, -2))],
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.12), blurRadius: 16, offset: const Offset(0, -4))],
       ),
+      clipBehavior: Clip.antiAlias,
       child: switch (_polygonPhase) {
         _PolygonPhase.drawing => _buildPolygonDrawingPanel(),
         _PolygonPhase.selectEndpoints => _buildPolygonSelectPanel(),
@@ -2293,49 +2295,91 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
+        // 핸들바
         Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-          color: const Color(0xFFE53935),
+          margin: const EdgeInsets.symmetric(vertical: 10),
+          width: 36, height: 4,
+          decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(2)),
+        ),
+        // 헤더
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 0, 12, 12),
           child: Row(
             children: [
-              const Icon(Icons.alt_route, color: Colors.white, size: 18),
-              const SizedBox(width: 8),
+              Container(
+                width: 40, height: 40,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF2563EB).withValues(alpha: 0.10),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Icon(Icons.alt_route, color: Color(0xFF2563EB), size: 20),
+              ),
+              const SizedBox(width: 12),
               Expanded(
-                child: Text('최적 경로 — ${stations.length}개 국소',
-                    style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold)),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('최적 경로',
+                        style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: Color(0xFF111827))),
+                    Text('${stations.length}개 국소',
+                        style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+                  ],
+                ),
               ),
               TextButton(
                 onPressed: _resetPolygonMode,
-                style: TextButton.styleFrom(foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(horizontal: 8), minimumSize: Size.zero, tapTargetSize: MaterialTapTargetSize.shrinkWrap),
-                child: const Text('닫기', style: TextStyle(fontSize: 12)),
+                style: TextButton.styleFrom(
+                  foregroundColor: const Color(0xFF9CA3AF),
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                child: const Text('닫기', style: TextStyle(fontSize: 13)),
               ),
             ],
           ),
         ),
+        const Divider(height: 1, color: Color(0xFFF3F4F6)),
+        // 국소 리스트
         Container(
-          constraints: const BoxConstraints(maxHeight: 180),
+          constraints: const BoxConstraints(maxHeight: 200),
           child: ListView.separated(
             shrinkWrap: true,
-            padding: const EdgeInsets.symmetric(vertical: 4),
+            padding: const EdgeInsets.symmetric(vertical: 8),
             itemCount: stations.length,
-            separatorBuilder: (_, _) => const Divider(height: 1),
-            itemBuilder: (context, i) {
+            separatorBuilder: (_, _) => const Divider(height: 1, indent: 60, color: Color(0xFFF3F4F6)),
+            itemBuilder: (_, i) {
               final s = stations[i];
               final isFirst = i == 0;
               final isLast = i == stations.length - 1;
-              final color = isFirst ? Colors.green : (isLast ? Colors.red : const Color(0xFFE53935));
+              final color = isFirst
+                  ? const Color(0xFF10B981)
+                  : (isLast ? const Color(0xFFEF4444) : const Color(0xFF6B7280));
               final tag = isFirst ? '출발' : (isLast ? '도착' : '${i + 1}');
               return ListTile(
                 dense: true,
-                leading: CircleAvatar(radius: 12, backgroundColor: color, child: Text(tag, style: const TextStyle(color: Colors.white, fontSize: 10))),
-                title: Text(s.displayName, style: const TextStyle(fontSize: 13)),
-                subtitle: Text(s.address, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 11)),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 20),
+                leading: CircleAvatar(
+                  radius: 14,
+                  backgroundColor: color.withValues(alpha: 0.12),
+                  child: Text(tag,
+                      style: TextStyle(color: color, fontSize: 9, fontWeight: FontWeight.w800)),
+                ),
+                title: Text(s.displayName,
+                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF111827))),
+                subtitle: s.address.isNotEmpty
+                    ? Text(s.address,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280)))
+                    : null,
               );
             },
           ),
         ),
+        // 액션 버튼
         Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
           child: Row(
             children: [
               Expanded(
@@ -2345,19 +2389,33 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
                     _polygonRouteResult = null;
                     _mapKey.currentState?.clearRouteOverlay();
                   }),
-                  icon: const Icon(Icons.refresh, size: 16),
-                  label: const Text('다시 선택', style: TextStyle(fontSize: 13)),
+                  icon: const Icon(Icons.refresh_rounded, size: 15),
+                  label: const Text('다시 선택',
+                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500)),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: const Color(0xFF6B7280),
+                    side: const BorderSide(color: Color(0xFFE5E7EB)),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                  ),
                 ),
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: 10),
               Expanded(
                 child: ElevatedButton.icon(
                   onPressed: _savingBasket ? null : () => _showSaveBasketDialog(stations),
                   icon: _savingBasket
                       ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                      : const Icon(Icons.bookmark_add, size: 16),
-                  label: const Text('담기', style: TextStyle(fontSize: 13)),
-                  style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFE53935), foregroundColor: Colors.white),
+                      : const Icon(Icons.bookmark_add_rounded, size: 16),
+                  label: const Text('담기',
+                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF2563EB),
+                    foregroundColor: Colors.white,
+                    elevation: 0,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                  ),
                 ),
               ),
             ],
@@ -2398,53 +2456,140 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setDlg) => AlertDialog(
-          title: const Text('경로 담기', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text('제목', style: TextStyle(fontSize: 12, color: Colors.grey)),
-              const SizedBox(height: 4),
-              TextField(
-                controller: titleCtrl,
-                decoration: const InputDecoration(isDense: true, border: OutlineInputBorder(), contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8)),
-                style: const TextStyle(fontSize: 14),
+        builder: (ctx, setDlg) => Dialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+          insetPadding: const EdgeInsets.symmetric(horizontal: 40, vertical: 24),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 320),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(24, 28, 24, 20),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // 헤더 아이콘
+                  Container(
+                    width: 60, height: 60,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFE53935).withValues(alpha: 0.08),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(Icons.bookmark_add_rounded, color: Color(0xFFE53935), size: 30),
+                  ),
+                  const SizedBox(height: 14),
+                  const Text('경로 담기',
+                      style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: Color(0xFF111827))),
+                  const SizedBox(height: 6),
+                  Text('${orderedStations.length}개 국소 순서를 저장합니다',
+                      style: const TextStyle(fontSize: 13, color: Color(0xFF6B7280), height: 1.4),
+                      textAlign: TextAlign.center),
+                  const SizedBox(height: 20),
+                  // 제목 입력
+                  const Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text('제목',
+                        style: TextStyle(fontSize: 12, color: Color(0xFF6B7280), fontWeight: FontWeight.w500)),
+                  ),
+                  const SizedBox(height: 6),
+                  TextField(
+                    controller: titleCtrl,
+                    decoration: InputDecoration(
+                      isDense: true,
+                      border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
+                      enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
+                      focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: const BorderSide(color: Color(0xFF2563EB))),
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                      filled: true,
+                      fillColor: const Color(0xFFF9FAFB),
+                    ),
+                    style: const TextStyle(fontSize: 14, color: Color(0xFF111827)),
+                  ),
+                  if (weekOptions.isNotEmpty) ...[
+                    const SizedBox(height: 12),
+                    const Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text('주차',
+                          style: TextStyle(fontSize: 12, color: Color(0xFF6B7280), fontWeight: FontWeight.w500)),
+                    ),
+                    const SizedBox(height: 6),
+                    DropdownButtonFormField<String>(
+                      initialValue: weekOptions.contains(selWeek) ? selWeek : weekOptions.first,
+                      decoration: InputDecoration(
+                        isDense: true,
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
+                        enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                        filled: true, fillColor: const Color(0xFFF9FAFB),
+                      ),
+                      dropdownColor: Colors.white,
+                      borderRadius: BorderRadius.circular(12),
+                      style: const TextStyle(fontSize: 13, color: Color(0xFF111827)),
+                      items: weekOptions.map<DropdownMenuItem<String>>((w) =>
+                          DropdownMenuItem<String>(value: w, child: Text(w))).toList(),
+                      onChanged: (v) => setDlg(() => selWeek = v ?? selWeek),
+                    ),
+                  ],
+                  if (joOptions.isNotEmpty) ...[
+                    const SizedBox(height: 12),
+                    const Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text('조',
+                          style: TextStyle(fontSize: 12, color: Color(0xFF6B7280), fontWeight: FontWeight.w500)),
+                    ),
+                    const SizedBox(height: 6),
+                    DropdownButtonFormField<String>(
+                      initialValue: joOptions.contains(selJo) ? selJo : joOptions.first,
+                      decoration: InputDecoration(
+                        isDense: true,
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
+                        enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                        filled: true, fillColor: const Color(0xFFF9FAFB),
+                      ),
+                      dropdownColor: Colors.white,
+                      borderRadius: BorderRadius.circular(12),
+                      style: const TextStyle(fontSize: 13, color: Color(0xFF111827)),
+                      items: joOptions.map<DropdownMenuItem<String>>((j) =>
+                          DropdownMenuItem<String>(value: j, child: Text(j))).toList(),
+                      onChanged: (v) => setDlg(() => selJo = v ?? selJo),
+                    ),
+                  ],
+                  const SizedBox(height: 20),
+                  // 저장 버튼
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      onPressed: () => Navigator.pop(ctx, true),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF2563EB),
+                        foregroundColor: Colors.white,
+                        elevation: 0,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                      ),
+                      child: const Text('저장',
+                          style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  // 취소 버튼
+                  SizedBox(
+                    width: double.infinity,
+                    child: TextButton(
+                      onPressed: () => Navigator.pop(ctx, false),
+                      child: const Text('취소',
+                          style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
+                    ),
+                  ),
+                ],
               ),
-              const SizedBox(height: 12),
-              if (weekOptions.isNotEmpty) ...[
-                const Text('주차', style: TextStyle(fontSize: 12, color: Colors.grey)),
-                const SizedBox(height: 4),
-                DropdownButtonFormField<String>(
-                  initialValue: weekOptions.contains(selWeek) ? selWeek : weekOptions.first,
-                  decoration: const InputDecoration(isDense: true, border: OutlineInputBorder(), contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8)),
-                  items: weekOptions.map<DropdownMenuItem<String>>((w) => DropdownMenuItem<String>(value: w, child: Text(w, style: const TextStyle(fontSize: 13)))).toList(),
-                  onChanged: (v) => setDlg(() => selWeek = v ?? selWeek),
-                ),
-                const SizedBox(height: 12),
-              ],
-              if (joOptions.isNotEmpty) ...[
-                const Text('조', style: TextStyle(fontSize: 12, color: Colors.grey)),
-                const SizedBox(height: 4),
-                DropdownButtonFormField<String>(
-                  initialValue: joOptions.contains(selJo) ? selJo : joOptions.first,
-                  decoration: const InputDecoration(isDense: true, border: OutlineInputBorder(), contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8)),
-                  items: joOptions.map<DropdownMenuItem<String>>((j) => DropdownMenuItem<String>(value: j, child: Text(j, style: const TextStyle(fontSize: 13)))).toList(),
-                  onChanged: (v) => setDlg(() => selJo = v ?? selJo),
-                ),
-              ],
-              const SizedBox(height: 8),
-              Text('${orderedStations.length}개 국소 순서 저장', style: const TextStyle(fontSize: 12, color: Colors.grey)),
-            ],
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('취소')),
-            ElevatedButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFE53935), foregroundColor: Colors.white),
-              child: const Text('저장'),
             ),
-          ],
+          ),
         ),
       ),
     );
