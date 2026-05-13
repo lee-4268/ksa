@@ -205,3 +205,27 @@ Row(mainAxisSize: MainAxisSize.min, children: [
 - 좌(인덱스 0): 수검 대상 현황 (기본 진입)
 - 우(인덱스 1): 매트릭스
 - 매트릭스 셀 클릭 시 → `_tabCtrl.animateTo(0)`으로 수검대상 탭 이동
+
+## 알림 팝업 다이얼로그 명세 (Modern Minimal) widgets/notification_dialog.dart의 NotificationDialog:
+
+- 구조 및 레이아웃:
+- 위젯: AlertDialog 대신 커스텀 Dialog 사용 (기본 패딩 제거 목적)
+- 너비 제한: ConstrainedBox를 통한 maxWidth: 320 고정 (슬림한 카드 형태)
+- 외부 여백: insetPadding: horizontal 40 (화면 양끝에서 충분히 이격)
+- 곡률: BorderRadius.circular(24) 적용
+- 상단 비주얼 (Header):
+- 아이콘: Icons.notifications_active_rounded (Red 톤)
+- 배경: 아이콘을 감싸는 연한 레드 컬러의 원형 컨테이너 (시각적 포인트)
+- 정렬: 모든 요소 중앙 정렬 (Center Alignment)
+- 텍스트 스타일 (Content):
+- 타이틀: unreadCount 포함, fontSize: 17, fontWeight: 800, Color: 0xFF111827
+- 설명문: fontSize: 13, lineHeight: 1.4, Color: 0xFF6B7280 (최대 2줄 권장)
+- 옵션 선택 (Toggle Area):
+- 형태: 배경색(0xFFF9FAFB)이 포함된 둥근 칩(Chip) 스타일 컨테이너
+- 구성: Icons.check_box_rounded + '오늘은 더이상 보지 않기' 텍스트
+- 인터랙션: StatefulBuilder를 통한 내부 hideToday 상태 토글 및 시각적 피드백(색상 변경)
+- 액션 버튼 (Actions):
+- 배치: 수직(Vertical) 스택 배치 (너비 꽉 차게)
+- 메인 버튼 (알림 보기): ElevatedButton, Blue(0xFF2563EB), elevation: 0, borderRadius: 12
+- 보조 버튼 (닫기): TextButton, Color: 0xFF9CA3AF, fontSize: 13
+- 클릭 이벤트: Navigator.pop(context, true/false) 반환
