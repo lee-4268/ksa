@@ -1205,32 +1205,27 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
                 ],
               ),
             ),
-            Transform.scale(
-              scale: 0.75,
-              child: Switch(
-                value: isActive,
-                activeThumbColor: const Color(0xFFE53935),
-                activeTrackColor: const Color(0xFFE53935).withValues(alpha: 0.4),
-                onChanged: (on) {
-                  final stations = entry.stations.map((bs) => RadioStation(
-                    id: bs.id,
-                    stationName: bs.name,
-                    address: '',
-                    licenseNumber: bs.id,
-                    latitude: bs.lat,
-                    longitude: bs.lng,
-                    inspectionStatus: InspectionStatus.pending,
-                  )).toList();
-                  if (on) {
-                    setState(() => _activeBasketId = entry.entryId);
-                    _mapKey.currentState?.clearRouteOverlay();
-                    _mapKey.currentState?.drawRouteOverlay(orderedStations: stations);
-                  } else {
-                    setState(() => _activeBasketId = null);
-                    _mapKey.currentState?.clearRouteOverlay();
-                  }
-                },
-              ),
+            _buildMiniToggle(
+              value: isActive,
+              onChanged: (on) {
+                final stations = entry.stations.map((bs) => RadioStation(
+                  id: bs.id,
+                  stationName: bs.name,
+                  address: '',
+                  licenseNumber: bs.id,
+                  latitude: bs.lat,
+                  longitude: bs.lng,
+                  inspectionStatus: InspectionStatus.pending,
+                )).toList();
+                if (on) {
+                  setState(() => _activeBasketId = entry.entryId);
+                  _mapKey.currentState?.clearRouteOverlay();
+                  _mapKey.currentState?.drawRouteOverlay(orderedStations: stations);
+                } else {
+                  setState(() => _activeBasketId = null);
+                  _mapKey.currentState?.clearRouteOverlay();
+                }
+              },
             ),
             IconButton(
               icon: const Icon(Icons.close, size: 16, color: Colors.black38),
@@ -1564,6 +1559,33 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
     );
   }
 
+  Widget _buildMiniToggle({required bool value, required ValueChanged<bool> onChanged}) {
+    return GestureDetector(
+      onTap: () => onChanged(!value),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        width: 36, height: 20,
+        padding: const EdgeInsets.all(2),
+        decoration: BoxDecoration(
+          color: value ? const Color(0xFF2563EB) : const Color(0xFFE5E7EB),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: AnimatedAlign(
+          duration: const Duration(milliseconds: 200),
+          alignment: value ? Alignment.centerRight : Alignment.centerLeft,
+          child: Container(
+            width: 16, height: 16,
+            decoration: const BoxDecoration(
+              color: Colors.white,
+              shape: BoxShape.circle,
+              boxShadow: [BoxShadow(color: Color(0x1A000000), blurRadius: 2, offset: Offset(0, 1))],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _naviButton(String label, Color bgColor, VoidCallback onTap, {Color textColor = Colors.white}) {
     return InkWell(
       onTap: onTap,
@@ -1809,14 +1831,9 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
                     child: CircularProgressIndicator(strokeWidth: 2),
                   )
                 else
-                  Transform.scale(
-                    scale: 0.8,
-                    child: Switch(
-                      value: _showAzimuth,
-                      onChanged: (v) => _toggleAzimuth(v, markerStations),
-                      activeThumbColor: const Color(0xFF1565C0),
-                      activeTrackColor: const Color(0xFF1565C0).withValues(alpha: 0.4),
-                    ),
+                  _buildMiniToggle(
+                    value: _showAzimuth,
+                    onChanged: (v) => _toggleAzimuth(v, markerStations),
                   ),
                 if (_showAzimuth)
                   InkWell(
