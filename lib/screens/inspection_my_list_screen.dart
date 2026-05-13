@@ -1245,193 +1245,321 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
   }
 
   void _showBasketStationList(RouteBasketEntry entry, List<RadioStation> stations) {
+    // StatefulBuilder용 로컬 상태
+    var editableStations = List<RadioStation>.from(stations);
+    var isEditMode = false;
+    var isSaving = false;
+
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.white,
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
-      builder: (sheetCtx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              margin: const EdgeInsets.symmetric(vertical: 10),
-              width: 36, height: 4,
-              decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(2)),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
-              child: Row(
-                children: [
-                  const Icon(Icons.bookmark, size: 18, color: Color(0xFFE53935)),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(entry.title,
-                        style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
-                  ),
-                  Text('${stations.length}개 국소',
-                      style: TextStyle(fontSize: 12, color: Colors.grey.shade500)),
-                ],
-              ),
-            ),
-            const Divider(height: 1),
-            ConstrainedBox(
-              constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.45),
-              child: ListView.separated(
-                shrinkWrap: true,
-                padding: const EdgeInsets.symmetric(vertical: 6),
-                itemCount: stations.length,
-                separatorBuilder: (_, _) => const Divider(height: 1, indent: 20),
-                itemBuilder: (_, i) {
-                  final s = stations[i];
-                  final isFirst = i == 0;
-                  final isLast = i == stations.length - 1;
-                  final color = isFirst ? Colors.green : (isLast ? Colors.red : const Color(0xFFE53935));
-                  final tag = isFirst ? '출발' : (isLast ? '도착' : '${i + 1}');
+      builder: (sheetCtx) => StatefulBuilder(
+        builder: (_, setSheetState) {
+          final hasChanges = editableStations.isNotEmpty && stations.isNotEmpty &&
+              (editableStations.first.id != stations.first.id ||
+               editableStations.last.id != stations.last.id);
 
-                  // 같은 좌표에 있는 모든 국소 (겹침 국소 포함)
-                  final lat5 = s.latitude?.toStringAsFixed(5);
-                  final lng5 = s.longitude?.toStringAsFixed(5);
-                  final coLocated = (lat5 != null && lng5 != null)
-                      ? _assignedItems.where((it) {
-                          final ilat = (it['위도'] as num?)?.toDouble().toStringAsFixed(5);
-                          final ilng = (it['경도'] as num?)?.toDouble().toStringAsFixed(5);
-                          return ilat == lat5 && ilng == lng5;
-                        }).toList()
-                      : <Map<String, dynamic>>[];
-
-                  final defaultItem = coLocated.isNotEmpty
-                      ? coLocated.firstWhere(
-                          (it) => (it['허가번호'] as String? ?? '').trim() == s.licenseNumber.trim(),
-                          orElse: () => coLocated.first,
-                        )
-                      : {'허가번호': s.licenseNumber, '호출명칭': s.stationName};
-
-                  void onRowTap() {
-                    if (coLocated.length <= 1) {
-                      _showInspectionSheet(defaultItem);
-                    } else {
-                      showDialog(
-                        context: context,
-                        builder: (dlgCtx) => AlertDialog(
-                          backgroundColor: Colors.white,
-                          surfaceTintColor: Colors.white,
-                          title: Row(
+          return SafeArea(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  margin: const EdgeInsets.symmetric(vertical: 10),
+                  width: 36, height: 4,
+                  decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(2)),
+                ),
+                // 헤더
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 0, 12, 10),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.bookmark, size: 18, color: Color(0xFFE53935)),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(entry.title,
+                            style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
+                      ),
+                      Text('${editableStations.length}개 국소',
+                          style: TextStyle(fontSize: 12, color: Colors.grey.shade500)),
+                      const SizedBox(width: 8),
+                      // 편집 토글
+                      InkWell(
+                        onTap: () => setSheetState(() {
+                          isEditMode = !isEditMode;
+                          if (!isEditMode) editableStations = List.from(stations); // 취소 시 원복
+                        }),
+                        borderRadius: BorderRadius.circular(6),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: isEditMode
+                                ? const Color(0xFFE53935).withValues(alpha: 0.08)
+                                : Colors.grey.shade100,
+                            border: Border.all(
+                              color: isEditMode ? const Color(0xFFE53935) : Colors.grey.shade300,
+                            ),
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
                             children: [
-                              const Icon(Icons.layers, color: Colors.blue),
-                              const SizedBox(width: 8),
-                              Text('${coLocated.length}개 장소가 겹쳐있습니다'),
+                              Icon(Icons.edit, size: 12,
+                                  color: isEditMode ? const Color(0xFFE53935) : Colors.grey.shade500),
+                              const SizedBox(width: 3),
+                              Text('편집',
+                                  style: TextStyle(
+                                    fontSize: 11, fontWeight: FontWeight.w600,
+                                    color: isEditMode ? const Color(0xFFE53935) : Colors.grey.shade500,
+                                  )),
                             ],
                           ),
-                          content: SizedBox(
-                            width: 320,
-                            child: ListView.separated(
-                              shrinkWrap: true,
-                              itemCount: coLocated.length,
-                              separatorBuilder: (_, _) => const Divider(height: 1),
-                              itemBuilder: (_, idx) {
-                                final it = coLocated[idx];
-                                final callname = it['호출명칭'] as String? ?? it['허가번호'] as String? ?? '';
-                                final address = it['도로명주소'] as String?
-                                    ?? it['설치장소'] as String?
-                                    ?? it['t_설치장소'] as String? ?? '';
-                                final status = it['status'] as String? ?? '';
-                                final Color statusColor;
-                                final IconData statusIcon;
-                                final bool isPending;
-                                if (status == '합격') {
-                                  statusColor = Colors.green;
-                                  statusIcon = Icons.check_circle;
-                                  isPending = false;
-                                } else if (status.startsWith('불합격')) {
-                                  statusColor = Colors.red;
-                                  statusIcon = Icons.cancel;
-                                  isPending = false;
-                                } else if (status.startsWith('부적합')) {
-                                  statusColor = Colors.orange;
-                                  statusIcon = Icons.warning_amber;
-                                  isPending = false;
-                                } else {
-                                  statusColor = Colors.blue;
-                                  statusIcon = Icons.hourglass_empty;
-                                  isPending = true;
-                                }
-                                return ListTile(
-                                  leading: Icon(Icons.location_on, color: statusColor),
-                                  title: Text(callname, style: const TextStyle(fontWeight: FontWeight.w600)),
-                                  subtitle: Row(
-                                    children: [
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-                                        decoration: BoxDecoration(
-                                          color: statusColor.withValues(alpha: 0.15),
-                                          borderRadius: BorderRadius.circular(3),
-                                        ),
-                                        child: Text(
-                                          status.isEmpty ? '검사대기' : status,
-                                          style: TextStyle(fontSize: 10, color: statusColor, fontWeight: FontWeight.bold),
-                                        ),
-                                      ),
-                                      const SizedBox(width: 6),
-                                      Expanded(
-                                        child: Text(
-                                          address,
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: TextStyle(fontSize: 11, color: Colors.grey[600]),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                  trailing: !isPending
-                                      ? Icon(statusIcon, color: statusColor, size: 20)
-                                      : null,
-                                  onTap: () {
-                                    _showInspectionSheet(it);
-                                  },
-                                );
-                              },
-                            ),
-                          ),
-                          actions: [
-                            TextButton(
-                              onPressed: () => Navigator.pop(dlgCtx),
-                              child: const Text('닫기'),
-                            ),
-                          ],
                         ),
-                      );
-                    }
-                  }
+                      ),
+                      const SizedBox(width: 8),
+                    ],
+                  ),
+                ),
+                if (isEditMode)
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                    color: const Color(0xFFE53935).withValues(alpha: 0.05),
+                    child: const Text('행을 클릭해 출발/도착을 변경하세요',
+                        style: TextStyle(fontSize: 11, color: Color(0xFFE53935))),
+                  ),
+                const Divider(height: 1),
+                // 국소 리스트
+                ConstrainedBox(
+                  constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.45),
+                  child: ListView.separated(
+                    shrinkWrap: true,
+                    padding: const EdgeInsets.symmetric(vertical: 6),
+                    itemCount: editableStations.length,
+                    separatorBuilder: (_, _) => const Divider(height: 1, indent: 20),
+                    itemBuilder: (_, i) {
+                      final s = editableStations[i];
+                      final isFirst = i == 0;
+                      final isLast = i == editableStations.length - 1;
+                      final color = isFirst ? Colors.green : (isLast ? Colors.red : const Color(0xFFE53935));
+                      final tag = isFirst ? '출발' : (isLast ? '도착' : '${i + 1}');
 
-                  return ListTile(
-                    dense: true,
-                    onTap: onRowTap,
-                    leading: CircleAvatar(
-                      radius: 13,
-                      backgroundColor: color,
-                      child: Text(tag, style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
-                    ),
-                    title: Text(s.displayName, style: const TextStyle(fontSize: 13)),
-                    subtitle: coLocated.length > 1
-                        ? Text('외 ${coLocated.length - 1}개 겹침', style: const TextStyle(fontSize: 10, color: Color(0xFFE53935)))
-                        : null,
-                    trailing: Row(
-                      mainAxisSize: MainAxisSize.min,
+                      // 겹침 국소 조회
+                      final lat5 = s.latitude?.toStringAsFixed(5);
+                      final lng5 = s.longitude?.toStringAsFixed(5);
+                      final coLocated = (lat5 != null && lng5 != null)
+                          ? _assignedItems.where((it) {
+                              final ilat = (it['위도'] as num?)?.toDouble().toStringAsFixed(5);
+                              final ilng = (it['경도'] as num?)?.toDouble().toStringAsFixed(5);
+                              return ilat == lat5 && ilng == lng5;
+                            }).toList()
+                          : <Map<String, dynamic>>[];
+
+                      final defaultItem = coLocated.isNotEmpty
+                          ? coLocated.firstWhere(
+                              (it) => (it['허가번호'] as String? ?? '').trim() == s.licenseNumber.trim(),
+                              orElse: () => coLocated.first,
+                            )
+                          : {'허가번호': s.licenseNumber, '호출명칭': s.stationName};
+
+                      void onRowTap() {
+                        if (isEditMode) return;
+                        if (coLocated.length <= 1) {
+                          _showInspectionSheet(defaultItem);
+                        } else {
+                          showDialog(
+                            context: context,
+                            builder: (dlgCtx) => AlertDialog(
+                              backgroundColor: Colors.white,
+                              surfaceTintColor: Colors.white,
+                              title: Row(
+                                children: [
+                                  const Icon(Icons.layers, color: Colors.blue),
+                                  const SizedBox(width: 8),
+                                  Text('${coLocated.length}개 장소가 겹쳐있습니다'),
+                                ],
+                              ),
+                              content: SizedBox(
+                                width: 320,
+                                child: ListView.separated(
+                                  shrinkWrap: true,
+                                  itemCount: coLocated.length,
+                                  separatorBuilder: (_, _) => const Divider(height: 1),
+                                  itemBuilder: (_, idx) {
+                                    final it = coLocated[idx];
+                                    final callname = it['호출명칭'] as String? ?? it['허가번호'] as String? ?? '';
+                                    final address = it['도로명주소'] as String?
+                                        ?? it['설치장소'] as String?
+                                        ?? it['t_설치장소'] as String? ?? '';
+                                    final status = it['status'] as String? ?? '';
+                                    final Color statusColor;
+                                    final IconData statusIcon;
+                                    final bool isPending;
+                                    if (status == '합격') {
+                                      statusColor = Colors.green; statusIcon = Icons.check_circle; isPending = false;
+                                    } else if (status.startsWith('불합격')) {
+                                      statusColor = Colors.red; statusIcon = Icons.cancel; isPending = false;
+                                    } else if (status.startsWith('부적합')) {
+                                      statusColor = Colors.orange; statusIcon = Icons.warning_amber; isPending = false;
+                                    } else {
+                                      statusColor = Colors.blue; statusIcon = Icons.hourglass_empty; isPending = true;
+                                    }
+                                    return ListTile(
+                                      leading: Icon(Icons.location_on, color: statusColor),
+                                      title: Text(callname, style: const TextStyle(fontWeight: FontWeight.w600)),
+                                      subtitle: Row(children: [
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                                          decoration: BoxDecoration(
+                                            color: statusColor.withValues(alpha: 0.15),
+                                            borderRadius: BorderRadius.circular(3),
+                                          ),
+                                          child: Text(status.isEmpty ? '검사대기' : status,
+                                              style: TextStyle(fontSize: 10, color: statusColor, fontWeight: FontWeight.bold)),
+                                        ),
+                                        const SizedBox(width: 6),
+                                        Expanded(
+                                          child: Text(address, maxLines: 1, overflow: TextOverflow.ellipsis,
+                                              style: TextStyle(fontSize: 11, color: Colors.grey[600])),
+                                        ),
+                                      ]),
+                                      trailing: !isPending ? Icon(statusIcon, color: statusColor, size: 20) : null,
+                                      onTap: () => _showInspectionSheet(it),
+                                    );
+                                  },
+                                ),
+                              ),
+                              actions: [
+                                TextButton(onPressed: () => Navigator.pop(dlgCtx), child: const Text('닫기')),
+                              ],
+                            ),
+                          );
+                        }
+                      }
+
+                      return ListTile(
+                        dense: true,
+                        onTap: onRowTap,
+                        leading: CircleAvatar(
+                          radius: 13,
+                          backgroundColor: color,
+                          child: Text(tag, style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
+                        ),
+                        title: Text(s.displayName, style: const TextStyle(fontSize: 13)),
+                        subtitle: coLocated.length > 1
+                            ? Text('외 ${coLocated.length - 1}개 겹침',
+                                style: const TextStyle(fontSize: 10, color: Color(0xFFE53935)))
+                            : null,
+                        trailing: isEditMode
+                            ? Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  if (!isFirst)
+                                    _endpointChip('출발', false, Colors.green, () {
+                                      setSheetState(() {
+                                        editableStations.removeAt(i);
+                                        editableStations.insert(0, s);
+                                      });
+                                    }),
+                                  if (!isFirst && !isLast) const SizedBox(width: 4),
+                                  if (!isLast)
+                                    _endpointChip('도착', false, Colors.red, () {
+                                      setSheetState(() {
+                                        editableStations.removeAt(i);
+                                        editableStations.add(s);
+                                      });
+                                    }),
+                                ],
+                              )
+                            : Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  _naviButton('Tmap', const Color(0xFF005BAC), () => _navToStation(s, 'tmap')),
+                                  const SizedBox(width: 4),
+                                  _naviButton('카카오', const Color(0xFFFEE500), () => _navToStation(s, 'kakao'), textColor: Colors.black87),
+                                  const SizedBox(width: 4),
+                                  _naviButton('네이버', const Color(0xFF03C75A), () => _navToStation(s, 'naver')),
+                                ],
+                              ),
+                      );
+                    },
+                  ),
+                ),
+                // 편집 모드 하단 버튼
+                if (isEditMode)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+                    child: Row(
                       children: [
-                        _naviButton('Tmap', const Color(0xFF005BAC), () => _navToStation(s, 'tmap')),
-                        const SizedBox(width: 4),
-                        _naviButton('카카오', const Color(0xFFFEE500), () => _navToStation(s, 'kakao'), textColor: Colors.black87),
-                        const SizedBox(width: 4),
-                        _naviButton('네이버', const Color(0xFF03C75A), () => _navToStation(s, 'naver')),
+                        Expanded(
+                          child: OutlinedButton(
+                            onPressed: isSaving ? null : () => setSheetState(() {
+                              editableStations = List.from(stations);
+                              isEditMode = false;
+                            }),
+                            child: const Text('취소'),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: ElevatedButton(
+                            onPressed: hasChanges && !isSaving ? () async {
+                              setSheetState(() => isSaving = true);
+                              try {
+                                final newBasketStations = editableStations.map((s) => BasketStation(
+                                  id: s.id,
+                                  name: s.displayName,
+                                  lat: s.latitude ?? 0,
+                                  lng: s.longitude ?? 0,
+                                )).toList();
+                                await _basketSvc.updateStations(entry.entryId, newBasketStations);
+                                if (mounted) {
+                                  setState(() {
+                                    final idx = _routeBaskets.indexWhere((e) => e.entryId == entry.entryId);
+                                    if (idx >= 0) {
+                                      _routeBaskets[idx] = RouteBasketEntry(
+                                        entryId: entry.entryId,
+                                        title: entry.title,
+                                        weekLabel: entry.weekLabel,
+                                        joLabel: entry.joLabel,
+                                        stations: newBasketStations,
+                                        createdAt: entry.createdAt,
+                                      );
+                                    }
+                                    if (_activeBasketId == entry.entryId) {
+                                      _mapKey.currentState?.clearRouteOverlay();
+                                      _mapKey.currentState?.drawRouteOverlay(orderedStations: editableStations);
+                                    }
+                                  });
+                                }
+                                setSheetState(() { isEditMode = false; isSaving = false; });
+                              } catch (e) {
+                                setSheetState(() => isSaving = false);
+                                if (mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(content: Text('저장 실패: $e'), backgroundColor: Colors.red),
+                                  );
+                                }
+                              }
+                            } : null,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFFE53935),
+                              foregroundColor: Colors.white,
+                            ),
+                            child: isSaving
+                                ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                                : const Text('저장'),
+                          ),
+                        ),
                       ],
                     ),
-                  );
-                },
-              ),
+                  )
+                else
+                  const SizedBox(height: 8),
+              ],
             ),
-            const SizedBox(height: 8),
-          ],
-        ),
+          );
+        },
       ),
     );
   }

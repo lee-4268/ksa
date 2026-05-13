@@ -52,6 +52,17 @@ class RouteBasketService {
     return RouteBasketEntry.fromJson(body['entry'] as Map<String, dynamic>);
   }
 
+  Future<void> updateStations(String entryId, List<BasketStation> stations) async {
+    final resp = await http
+        .patch(
+          Uri.parse('$_baseUrl/route-basket/$entryId'),
+          headers: _headers,
+          body: json.encode({'stations': stations.map((s) => s.toJson()).toList()}),
+        )
+        .timeout(_timeout);
+    if (resp.statusCode != 200) throw Exception('경로 수정 실패');
+  }
+
   Future<void> delete(String entryId) async {
     final resp = await http
         .delete(Uri.parse('$_baseUrl/route-basket/$entryId'), headers: _headers)

@@ -19961,6 +19961,32 @@ async def save_route_basket(request: Request):
     return {"entry": item_resp}
 
 
+@app.patch("/route-basket/{entry_id}")
+async def update_route_basket(request: Request, entry_id: str):
+    """경로 담기 국소 순서 수정."""
+    from decimal import Decimal
+    empno = await _verify_auth(request)
+    body = await request.json()
+    stations_raw = body.get("stations", [])
+    stations = [
+        {
+            "id": s.get("id", ""),
+            "name": s.get("name", ""),
+            "lat": Decimal(str(s.get("lat", 0))),
+            "lng": Decimal(str(s.get("lng", 0))),
+        }
+        for s in stations_raw
+    ]
+    dynamodb = get_dynamodb_resource()
+    table = dynamodb.Table(DYNAMODB_TABLES["route_baskets"])
+    await asyncio.to_thread(lambda: table.update_item(
+        Key={"user_id": empno, "entry_id": entry_id},
+        UpdateExpression="SET stations = :s",
+        ExpressionAttributeValues={":s": stations},
+    ))
+    return {"success": True}
+
+
 @app.delete("/route-basket/{entry_id}")
 async def delete_route_basket(request: Request, entry_id: str):
     """경로 담기 삭제."""
