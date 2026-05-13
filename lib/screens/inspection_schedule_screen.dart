@@ -2913,6 +2913,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                   padding: const EdgeInsets.symmetric(horizontal: 8),
                   child: ClipRect(
                     child: OverflowBox(
+                      minHeight: 0,
                       maxHeight: double.infinity,
                       alignment: Alignment.centerLeft,
                       child: _buildCellContent(
