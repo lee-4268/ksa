@@ -13681,22 +13681,27 @@ async def inspection_data(request: Request, req: InspectionDataReq):
                     _cc = sqlite3.connect(_cert_db, timeout=10)
                     _cc.row_factory = sqlite3.Row
                     _pair_map: dict = {}
+                    _hit = 0
                     for _wino, _wina in _pairs:
+                        # 허가번호 대시 유무 모두 허용 (REPLACE로 정규화)
                         _row = _cc.execute(
                             "SELECT zpcode, zpkcode FROM cert "
-                            "WHERE TRIM(zpwino)=? AND TRIM(zpwina)=? LIMIT 1",
+                            "WHERE REPLACE(TRIM(zpwino),'-','')=REPLACE(?,'-','') "
+                            "AND TRIM(zpwina)=? LIMIT 1",
                             (_wino, _wina)
                         ).fetchone()
                         if _row:
                             _pair_map[(_wino, _wina)] = (_row['zpcode'] or '', _row['zpkcode'] or '')
+                            _hit += 1
                     _cc.close()
+                    logger.info(f"[통시/공대 보완] missing={len(_missing)} pairs={len(_pairs)} hit={_hit}")
                     for _i, _wino, _wina in _missing:
                         _v = _pair_map.get((_wino, _wina))
                         if _v:
                             items[_i]['통시'] = _v[0]
                             items[_i]['공대'] = _v[1]
-            except Exception:
-                pass
+            except Exception as _e:
+                logger.warning(f"[통시/공대 보완] cert lookup 실패: {_e}")
 
         zpcodes = list({(it.get('통시') or '').strip() for it in items if (it.get('통시') or '').strip()})
         zpprac1_map: dict = {}
