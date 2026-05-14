@@ -58,6 +58,9 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
   // 자동 갱신 (uploading 레코드 존재 시 10초마다)
   Timer? _autoRefreshTimer;
 
+  // DS 변경이력
+  int _changeHistoryCount = 0;
+
   bool _initialized = false;
 
   @override
@@ -80,6 +83,7 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
     if (!_initialized) {
       _initialized = true;
       _loadStats();
+      _loadChangeHistoryCount();
     }
   }
 
@@ -122,6 +126,15 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
         });
       }
     }
+  }
+
+  Future<void> _loadChangeHistoryCount() async {
+    try {
+      final svc = InspectionService()
+        ..setAuthToken(context.read<AuthService>().authToken);
+      final count = await svc.getDsChangeHistoryCount();
+      if (mounted) setState(() => _changeHistoryCount = count);
+    } catch (_) {}
   }
 
   List<DsUploadInfo> get _filteredUploads {
@@ -947,6 +960,21 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
                   label: Text('데이터 변경요청',
                       style: TextStyle(color: Colors.deepOrange.shade600, fontSize: 13)),
                 ),
+                if (_changeHistoryCount > 0) ...[
+                  const SizedBox(width: 2),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF1E88E5).withValues(alpha: 0.10),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: const Color(0xFF1E88E5).withValues(alpha: 0.30)),
+                    ),
+                    child: Text(
+                      '변경내역 $_changeHistoryCount건',
+                      style: const TextStyle(fontSize: 11, color: Color(0xFF1565C0), fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                ],
                 const SizedBox(width: 4),
                 FilledButton.icon(
                   onPressed: () => _navigateToData(upload),
@@ -987,44 +1015,184 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
     final bytes = f.bytes;
     if (bytes == null) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('파일을 읽을 수 없습니다.'),
-      ));
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('파일을 읽을 수 없습니다.')));
       return;
     }
 
     if (!mounted) return;
+
+    // 1. 미리보기 로딩
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const Center(child: CircularProgressIndicator()),
+    );
+
+    final svc = InspectionService()
+      ..setAuthToken(context.read<AuthService>().authToken);
+
+    Map<String, dynamic> preview;
+    try {
+      preview = await svc.previewPartialDsUpdate(Uint8List.fromList(bytes), f.name);
+    } catch (e) {
+      if (!mounted) return;
+      Navigator.pop(context);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('미리보기 실패: $e'), backgroundColor: Colors.red));
+      return;
+    }
+    if (!mounted) return;
+    Navigator.pop(context);
+
+    final diffs = List<Map<String, dynamic>>.from(preview['diffs'] ?? []);
+    final licCount = preview['license_count'] ?? 0;
+
+    // 2. Modern Minimal 확인 다이얼로그
     final ok = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        title: const Text('부분 DS 적용', style: TextStyle(fontSize: 16)),
-        content: Column(mainAxisSize: MainAxisSize.min, children: [
-          Text('파일: ${f.name}', style: const TextStyle(fontSize: 13)),
-          const SizedBox(height: 8),
-          const Text(
-            '전파관리소가 회신한 부분 DS 파일로 DB를 패치합니다.\n\n'
-            '대상: 변경개설 신고 완료(FILED) 상태인 항목만\n'
-            '결과: 모든 항목 반영 시 [재점검 대기] → [점검 완료] 자동 전환',
-            style: TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
+      builder: (ctx) => Dialog(
+        insetPadding: const EdgeInsets.symmetric(horizontal: 32),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 480),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(24, 28, 24, 20),
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              Container(
+                width: 52, height: 52,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFE17055).withValues(alpha: 0.10),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.compare_arrows_rounded,
+                    color: Color(0xFFE17055), size: 26),
+              ),
+              const SizedBox(height: 14),
+              const Text('DS 데이터 변경 확인',
+                  style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800,
+                      color: Color(0xFF111827))),
+              const SizedBox(height: 4),
+              Text('허가번호 $licCount국소 · 변경항목 ${diffs.length}건',
+                  style: const TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
+              const SizedBox(height: 16),
+              if (diffs.isEmpty)
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF9FAFB),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: const Text('변경되는 항목이 없습니다.',
+                      style: TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
+                )
+              else
+                Container(
+                  constraints: const BoxConstraints(maxHeight: 300),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF9FAFB),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(12),
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.all(12),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: diffs.map((d) {
+                          final hn = d['허가번호'] ?? '';
+                          final jn = (d['장치번호'] as String? ?? '').isNotEmpty
+                              ? ' #${d['장치번호']}' : '';
+                          final field = d['필드명'] ?? '';
+                          final before = d['변경전'] ?? '';
+                          final after = d['변경후'] ?? '';
+                          return Padding(
+                            padding: const EdgeInsets.only(bottom: 10),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text('$hn$jn · $field',
+                                    style: const TextStyle(
+                                        fontSize: 12, fontWeight: FontWeight.w600,
+                                        color: Color(0xFF374151))),
+                                const SizedBox(height: 4),
+                                Row(children: [
+                                  Expanded(
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 8, vertical: 4),
+                                      decoration: BoxDecoration(
+                                        color: const Color(0xFFFFEDED),
+                                        borderRadius: BorderRadius.circular(6),
+                                      ),
+                                      child: Text(
+                                        before.isEmpty ? '(없음)' : before,
+                                        style: const TextStyle(
+                                            fontSize: 11, color: Color(0xFFB91C1C)),
+                                      ),
+                                    ),
+                                  ),
+                                  const Padding(
+                                    padding: EdgeInsets.symmetric(horizontal: 6),
+                                    child: Icon(Icons.arrow_forward,
+                                        size: 14, color: Color(0xFF9CA3AF)),
+                                  ),
+                                  Expanded(
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 8, vertical: 4),
+                                      decoration: BoxDecoration(
+                                        color: const Color(0xFFECFDF5),
+                                        borderRadius: BorderRadius.circular(6),
+                                      ),
+                                      child: Text(
+                                        after.isEmpty ? '(없음)' : after,
+                                        style: const TextStyle(
+                                            fontSize: 11, color: Color(0xFF065F46)),
+                                      ),
+                                    ),
+                                  ),
+                                ]),
+                              ],
+                            ),
+                          );
+                        }).toList(),
+                      ),
+                    ),
+                  ),
+                ),
+              const SizedBox(height: 20),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF2563EB),
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12)),
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    elevation: 0,
+                  ),
+                  onPressed: () => Navigator.pop(ctx, true),
+                  child: const Text('적용',
+                      style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+                ),
+              ),
+              const SizedBox(height: 8),
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('취소',
+                    style: TextStyle(fontSize: 14, color: Color(0xFF9CA3AF))),
+              ),
+            ]),
           ),
-        ]),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('취소')),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFFE17055), foregroundColor: Colors.white),
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('적용'),
-          ),
-        ],
+        ),
       ),
     );
     if (ok != true || !mounted) return;
 
-    final svc = InspectionService();
-    svc.setAuthToken(context.read<AuthService>().authToken);
-
+    // 3. 적용
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -1033,7 +1201,7 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
     try {
       final result = await svc.applyPartialDsUpdate(Uint8List.fromList(bytes), f.name);
       if (!mounted) return;
-      Navigator.pop(context); // close progress
+      Navigator.pop(context);
       final applied = result['applied'] ?? 0;
       final matched = result['matched_changes'] ?? 0;
       final done = (result['schedule_done'] as List?)?.length ?? 0;
@@ -1042,12 +1210,12 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
         backgroundColor: const Color(0xFF1A8754),
         duration: const Duration(seconds: 5),
       ));
+      _loadChangeHistoryCount();
     } catch (e) {
       if (!mounted) return;
-      Navigator.pop(context); // close progress
+      Navigator.pop(context);
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('적용 실패: $e'),
-        backgroundColor: Colors.red,
+        content: Text('적용 실패: $e'), backgroundColor: Colors.red,
       ));
     }
   }

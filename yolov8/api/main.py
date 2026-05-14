@@ -15347,6 +15347,137 @@ async def change_request_generate_form(
     )
 
 
+@app.post("/ds/preview-partial-update")
+async def ds_preview_partial_update(request: Request, file: UploadFile = File(...)):
+    """부분 DS 파일을 파싱하여 변경 전/후 diff를 반환 (DB 미적용)."""
+    await _verify_auth(request)
+    file_bytes = await file.read()
+    if not file_bytes:
+        raise HTTPException(400, "빈 파일")
+
+    def _preview():
+        import xlrd as _xlrd
+        try:
+            wb = _xlrd.open_workbook(file_contents=file_bytes)
+        except Exception as e:
+            raise HTTPException(400, f"xls 파싱 실패: {e}")
+
+        def _norm_hn(val):
+            if isinstance(val, float) and val == int(val):
+                return str(int(val))
+            return str(val).strip().replace('-', '')
+
+        def _find_col(ws, keyword):
+            for c in range(ws.ncols):
+                if keyword in str(ws.cell_value(0, c)).strip():
+                    return c
+            return -1
+
+        def _find_sheet(keyword):
+            for sn in wb.sheet_names():
+                if keyword in sn:
+                    return wb.sheet_names().index(sn)
+            return -1
+
+        장치_si = _find_sheet('장치')
+        안테나_si = _find_sheet('안테나')
+
+        device_data: dict[tuple, dict] = {}
+        license_set: set[str] = set()
+
+        if 장치_si >= 0:
+            ws = wb.sheet_by_index(장치_si)
+            jn_col  = _find_col(ws, '장치번호'); jn_col  = jn_col  if jn_col  >= 0 else 3
+            sn_col  = _find_col(ws, '일련번호'); sn_col  = sn_col  if sn_col  >= 0 else 8
+            형식_col = _find_col(ws, '형식검정번호'); 형식_col = 형식_col if 형식_col >= 0 else 11
+            상태_col = _find_col(ws, '장치상태')
+            for ri in range(1, ws.nrows):
+                hn = _norm_hn(ws.cell_value(ri, 0))
+                if not hn: continue
+                license_set.add(hn)
+                jn = _norm_hn(ws.cell_value(ri, jn_col)) if ws.ncols > jn_col else ''
+                d = {}
+                if sn_col >= 0 and ws.ncols > sn_col:
+                    v = str(ws.cell_value(ri, sn_col) or '').strip()
+                    if v: d['기기일련번호'] = v
+                if 형식_col >= 0 and ws.ncols > 형식_col:
+                    v = str(ws.cell_value(ri, 형식_col) or '').strip()
+                    if v: d['형식검정번호'] = v
+                if 상태_col >= 0 and ws.ncols > 상태_col:
+                    v = str(ws.cell_value(ri, 상태_col) or '').strip()
+                    if v: d['장치상태'] = v
+                if d: device_data[(hn, jn)] = d
+
+        antenna_data: dict[str, str] = {}
+        if 안테나_si >= 0:
+            ws = wb.sheet_by_index(안테나_si)
+            설치형태_col = _find_col(ws, '설치형태명')
+            if 설치형태_col < 0: 설치형태_col = _find_col(ws, '설치형태')
+            if 설치형태_col < 0: 설치형태_col = 28
+            for ri in range(1, ws.nrows):
+                hn = _norm_hn(ws.cell_value(ri, 0))
+                if not hn: continue
+                license_set.add(hn)
+                if ws.ncols > 설치형태_col:
+                    v = str(ws.cell_value(ri, 설치형태_col) or '').strip()
+                    if v and hn not in antenna_data: antenna_data[hn] = v
+
+        if not license_set:
+            raise HTTPException(400, "허가번호 없음")
+
+        if not os.path.exists(_DS_DETAIL_DB):
+            return {"diffs": [], "license_count": len(license_set)}
+
+        dc = sqlite3.connect(_DS_DETAIL_DB, timeout=30)
+        dc.row_factory = sqlite3.Row
+        diffs = []
+
+        for (hn, jn), fields in device_data.items():
+            existing = dc.execute(
+                'SELECT 기기일련번호, 형식검정번호, 장치상태 FROM ds_장치 WHERE 허가번호=? AND 장치번호=?',
+                (hn, jn)
+            ).fetchone()
+            if not existing: continue
+            for col, new_val in fields.items():
+                old_val = str(existing[col] or '') if existing[col] is not None else ''
+                if old_val != new_val:
+                    diffs.append({"허가번호": hn, "장치번호": jn, "시트": "장치", "필드명": col, "변경전": old_val, "변경후": new_val})
+
+        for hn, 설치형태 in antenna_data.items():
+            existing = dc.execute(
+                'SELECT 공중선주설치형태명 FROM ds_안테나 WHERE 허가번호=? LIMIT 1', (hn,)
+            ).fetchone()
+            old_val = str(existing['공중선주설치형태명'] or '') if existing else ''
+            if old_val != 설치형태:
+                diffs.append({"허가번호": hn, "장치번호": "", "시트": "안테나", "필드명": "설치형태", "변경전": old_val, "변경후": 설치형태})
+
+        dc.close()
+        return {"diffs": diffs, "license_count": len(license_set)}
+
+    return await asyncio.to_thread(_preview)
+
+
+@app.get("/ds/변경이력-count")
+async def ds_change_history_count(request: Request):
+    """ds_변경이력 전체 건수 조회."""
+    await _verify_auth(request)
+    if not os.path.exists(_DS_DETAIL_DB):
+        return {"count": 0}
+
+    def _count():
+        dc = sqlite3.connect(_DS_DETAIL_DB, timeout=10)
+        try:
+            row = dc.execute('SELECT COUNT(*) FROM ds_변경이력').fetchone()
+            return row[0] if row else 0
+        except Exception:
+            return 0
+        finally:
+            dc.close()
+
+    count = await asyncio.to_thread(_count)
+    return {"count": count}
+
+
 @app.post("/ds/apply-partial-update")
 async def ds_apply_partial_update(request: Request, file: UploadFile = File(...)):
     """변경개설 신고 후 전파관리소 회신 부분 DS 파일 업로드 → ds_detail.db 갱신 + 자동 재비교 + 워크플로우 전환.

@@ -436,6 +436,31 @@ class InspectionService {
     return resp.bodyBytes;
   }
 
+  /// 부분 DS 파일 파싱 → 변경 전/후 diff 반환 (DB 미적용)
+  Future<Map<String, dynamic>> previewPartialDsUpdate(Uint8List bytes, String filename) async {
+    final uri = Uri.parse('$_baseUrl/ds/preview-partial-update');
+    final req = http.MultipartRequest('POST', uri)
+      ..headers['Authorization'] = 'Bearer ${_authToken ?? ''}'
+      ..files.add(http.MultipartFile.fromBytes('file', bytes, filename: filename));
+    final streamed = await req.send().timeout(_uploadTimeout);
+    final body = json.decode(utf8.decode(await streamed.stream.toBytes())) as Map<String, dynamic>;
+    if (streamed.statusCode != 200) {
+      throw Exception(body['detail'] ?? 'DS 미리보기 실패');
+    }
+    return body;
+  }
+
+  /// ds_변경이력 전체 건수
+  Future<int> getDsChangeHistoryCount() async {
+    final resp = await http.get(
+      Uri.parse('$_baseUrl/ds/변경이력-count'),
+      headers: _headers,
+    ).timeout(_apiTimeout);
+    if (resp.statusCode != 200) return 0;
+    final body = json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+    return (body['count'] as num?)?.toInt() ?? 0;
+  }
+
   /// 부분 DS 업로드 → DB 패치 + 자동 재비교
   Future<Map<String, dynamic>> applyPartialDsUpdate(Uint8List bytes, String filename) async {
     final uri = Uri.parse('$_baseUrl/ds/apply-partial-update');

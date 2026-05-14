@@ -3911,6 +3911,72 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
             _infoRow('국종군', target?['국종군'] ?? ''),
             _infoRow('KCA검토결과', target?['kca검토결과'] ?? ''),
 
+            ...() {
+              final dsChanges = List<Map<String, dynamic>>.from(d['ds_changes'] ?? []);
+              if (dsChanges.isEmpty) return <Widget>[];
+              return [
+                const SizedBox(height: 16),
+                _sectionHeader('DS 변경이력', Icons.compare_arrows_rounded, const Color(0xFF1E88E5)),
+                ...dsChanges.map((c) {
+                  final field = c['필드명'] as String? ?? '';
+                  final before = c['변경전값'] as String? ?? '';
+                  final after = c['변경후값'] as String? ?? '';
+                  final date = c['변경일자'] as String? ?? '';
+                  final jn = c['장치번호'] as String? ?? '';
+                  final label = jn.isNotEmpty ? '$field (장치$jn)' : field;
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Row(children: [
+                        Expanded(
+                          child: Text(label,
+                              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
+                                  color: Color(0xFF374151))),
+                        ),
+                        if (date.isNotEmpty)
+                          Text(() {
+                            if (date.length == 6 && RegExp(r'^\d{6}$').hasMatch(date)) {
+                              return '${date.substring(0, 2)}.${date.substring(2, 4)}.${date.substring(4, 6)}';
+                            }
+                            return date;
+                          }(),
+                          style: const TextStyle(fontSize: 10, color: Color(0xFF9CA3AF))),
+                      ]),
+                      const SizedBox(height: 4),
+                      Row(children: [
+                        Expanded(
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFFFEDED),
+                              borderRadius: BorderRadius.circular(5),
+                            ),
+                            child: Text(before.isEmpty ? '(없음)' : before,
+                                style: const TextStyle(fontSize: 10, color: Color(0xFFB91C1C))),
+                          ),
+                        ),
+                        const Padding(
+                          padding: EdgeInsets.symmetric(horizontal: 4),
+                          child: Icon(Icons.arrow_forward, size: 12, color: Color(0xFF9CA3AF)),
+                        ),
+                        Expanded(
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFECFDF5),
+                              borderRadius: BorderRadius.circular(5),
+                            ),
+                            child: Text(after.isEmpty ? '(없음)' : after,
+                                style: const TextStyle(fontSize: 10, color: Color(0xFF065F46))),
+                          ),
+                        ),
+                      ]),
+                    ]),
+                  );
+                }),
+              ];
+            }(),
+
             const SizedBox(height: 16),
             _sectionHeader('수검 일정', Icons.calendar_month, _blue),
             if (schedule != null) ...[

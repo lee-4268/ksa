@@ -338,6 +338,10 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
             _buildHeader(target, ds, schedule),
             const SizedBox(height: 16),
             _buildBasicInfoCard(target, ds),
+            if (_dsChanges.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              _buildDsChangesCard(),
+            ],
             const SizedBox(height: 12),
             _buildTowerTypeCard(),
             const SizedBox(height: 12),
@@ -1347,6 +1351,78 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
   List<Map<String, dynamic>> get _dsChanges =>
       (_data?['ds_changes'] as List<dynamic>? ?? [])
           .cast<Map<String, dynamic>>();
+
+  Widget _buildDsChangesCard() {
+    return _card(
+      title: 'DS 변경이력',
+      icon: Icons.compare_arrows_rounded,
+      iconColor: const Color(0xFF1E88E5),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: _dsChanges.map((c) {
+          final field = c['필드명'] as String? ?? '';
+          final before = c['변경전값'] as String? ?? '';
+          final after = c['변경후값'] as String? ?? '';
+          final date = c['변경일자'] as String? ?? '';
+          final jn = (c['장치번호'] as String? ?? '');
+          final label = jn.isNotEmpty ? '$field (장치$jn)' : field;
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 10),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [
+                Expanded(
+                  child: Text(label,
+                      style: const TextStyle(
+                          fontSize: 12, fontWeight: FontWeight.w600,
+                          color: Color(0xFF374151))),
+                ),
+                if (date.isNotEmpty)
+                  Text(_fmtChangeDate(date),
+                      style: const TextStyle(fontSize: 10, color: Color(0xFF9CA3AF))),
+              ]),
+              const SizedBox(height: 4),
+              Row(children: [
+                Expanded(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFFEDED),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Text(before.isEmpty ? '(없음)' : before,
+                        style: const TextStyle(fontSize: 11, color: Color(0xFFB91C1C))),
+                  ),
+                ),
+                const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 6),
+                  child: Icon(Icons.arrow_forward, size: 14, color: Color(0xFF9CA3AF)),
+                ),
+                Expanded(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFECFDF5),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Text(after.isEmpty ? '(없음)' : after,
+                        style: const TextStyle(fontSize: 11, color: Color(0xFF065F46))),
+                  ),
+                ),
+              ]),
+            ]),
+          );
+        }).toList(),
+      ),
+    );
+  }
+
+  String _fmtChangeDate(String raw) {
+    // YYMMDD → YY.MM.DD
+    if (raw.length == 6 && RegExp(r'^\d{6}$').hasMatch(raw)) {
+      return '${raw.substring(0, 2)}.${raw.substring(2, 4)}.${raw.substring(4, 6)}';
+    }
+    return raw;
+  }
 
   Widget? _changeBadge(String fieldType) {
     try {
