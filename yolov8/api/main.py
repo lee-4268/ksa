@@ -13781,7 +13781,8 @@ async def inspection_data(request: Request, req: InspectionDataReq):
                     _pairs = list({(wino, wina) for _, wino, wina in _missing if wino or wina})
                     # 허가번호 대시 제거 후 정규화 → 단일 IN 쿼리 (100개 개별 쿼리 → 1개 일괄 쿼리)
                     _wino_norms = list({w.replace('-', '').strip() for w, _ in _pairs if w})
-                    _norm_result: dict = {}  # (wino_norm, wina_norm) → (zpcode, zpkcode)
+                    _norm_result: dict = {}       # (wino_norm, wina_norm) → (zpcode, zpkcode)
+                    _wino_only_result: dict = {}  # wino_norm → (zpcode, zpkcode) — 호출명칭 불일치 fallback
                     _hit = 0
                     if _wino_norms:
                         _cc = sqlite3.connect(_cert_db, timeout=10)
@@ -13793,13 +13794,19 @@ async def inspection_data(request: Request, req: InspectionDataReq):
                             _wino_norms
                         ):
                             _nk = (_row['wino_n'], _row['wina_n'])
+                            _val = (_row['zpcode'] or '', _row['zpkcode'] or '')
                             if _nk not in _norm_result:
-                                _norm_result[_nk] = (_row['zpcode'] or '', _row['zpkcode'] or '')
+                                _norm_result[_nk] = _val
                                 _hit += 1
+                            # 허가번호 단독 fallback (첫 번째 행만)
+                            if _row['wino_n'] not in _wino_only_result:
+                                _wino_only_result[_row['wino_n']] = _val
                         _cc.close()
                     logger.info(f"[통시/공대 보완] missing={len(_missing)} pairs={len(_pairs)} hit={_hit}")
                     for _i, _wino, _wina in _missing:
-                        _v = _norm_result.get((_wino.replace('-', '').strip(), _wina.strip()))
+                        _wino_n = _wino.replace('-', '').strip()
+                        _v = (_norm_result.get((_wino_n, _wina.strip()))
+                              or _wino_only_result.get(_wino_n))  # 호출명칭 불일치 시 허가번호만으로 fallback
                         if _v:
                             items[_i]['통시'] = _v[0]
                             items[_i]['공대'] = _v[1]
