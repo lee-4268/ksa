@@ -10989,25 +10989,8 @@ def _erp_ds_compare_sync(
                     if ki_int > ds_antenna_ki.get(z, 0):
                         ds_antenna_ki[z] = ki_int
 
-            # DS 장치상태 (활용구분): 허가번호별 첫 번째 비어있지 않은 값
-            ds_prac1 = {}
-            for i in range(0, len(all_nos), BATCH):
-                batch = all_nos[i:i + BATCH]
-                ph = ','.join('?' * len(batch))
-                try:
-                    for row in conn.execute(
-                        f"SELECT 허가번호, 장치상태 FROM ds_장치 WHERE 허가번호 IN ({ph}) AND TRIM(COALESCE(장치상태,'')) != ''",
-                        batch
-                    ):
-                        z2 = str(row['허가번호'] or '').replace('-', '')
-                        if z2 and z2 not in ds_prac1:
-                            ds_prac1[z2] = str(row['장치상태'] or '').strip()
-                except Exception:
-                    pass  # 장치상태 컬럼 미존재 시(구 DB) 무시
-
-            # 장치상태 데이터가 없지만 장치 데이터는 있으면 → 재빌드 필요 안내
-            if not ds_prac1 and ds_device:
-                warnings.append("DS_PRAC1_MISSING")
+            # DS 활용구분: DS 파일에 허가번호가 존재하면 = '운용' (전파관리소 신고 = 운용 의미)
+            ds_prac1 = {z: '운용' for z in ds_device}
 
             conn.close()
         except Exception as e:

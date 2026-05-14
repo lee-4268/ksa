@@ -688,23 +688,18 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
-              children: r.warnings.map((w) {
-                final msg = w == 'DS_PRAC1_MISSING'
-                    ? 'DS활용구분(장치상태) 데이터가 없습니다. DS 파일 재업로드 후 비교를 다시 실행해주세요.'
-                    : w;
-                return Padding(
-                  padding: const EdgeInsets.only(bottom: 4),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Icon(Icons.warning_amber, size: 16, color: Colors.orange.shade700),
-                      const SizedBox(width: 8),
-                      Expanded(child: Text(msg,
-                          style: TextStyle(fontSize: 13, color: Colors.orange.shade800))),
-                    ],
-                  ),
-                );
-              }).toList(),
+              children: r.warnings.map((w) => Padding(
+                    padding: const EdgeInsets.only(bottom: 4),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Icon(Icons.warning_amber, size: 16, color: Colors.orange.shade700),
+                        const SizedBox(width: 8),
+                        Expanded(child: Text(w,
+                            style: TextStyle(fontSize: 13, color: Colors.orange.shade800))),
+                      ],
+                    ),
+                  )).toList(),
             ),
           ),
 
