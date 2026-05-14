@@ -1839,16 +1839,8 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                 return _filterDropdown('조', _pCrew, crewOptions,
                     (v) => setState(() => _pCrew = v ?? ''));
               }),
-              Builder(builder: (_) {
-                final bands = <String>{};
-                for (final it in _items) {
-                  final b = (it['국종군'] as String? ?? '').trim();
-                  if (b.isNotEmpty) bands.add(b);
-                }
-                final bandOptions = <String>['', ...bands.toList()..sort()];
-                return _filterDropdown('밴드선택', _pNationGroup, bandOptions,
-                    (v) => setState(() => _pNationGroup = v ?? ''));
-              }),
+              _filterDropdown('밴드선택', _pNationGroup, ['', ..._allNationGroups],
+                  (v) => setState(() => _pNationGroup = v ?? '')),
               _filterDropdown(
                 '상태', _pStatusFilter,
                 const ['', '미배정', 'REGISTERED', 'PRE_CHECKED', 'PRE_CHECK',
@@ -2405,10 +2397,16 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
         return (_scheduleCrewMap[no] ?? '') == _aCrew;
       });
     }
-    // 워크플로우 상태 필터 (상단 칩)
+    // 워크플로우 상태 필터 (서버 필터와 동일 조건 — 페이지 내 멱등 재적용)
     if (_statusFilter.isNotEmpty) {
       if (_statusFilter == '미배정') {
         rows = rows.where((it) => !_isScheduled('${it['허가번호'] ?? ''}'));
+      } else if (_statusFilter == 'PRE_CHECKED') {
+        // inspection_targets.pre_check_status 기반 (일정 미등록 상태에서 사전점검완료 표시된 건)
+        rows = rows.where((it) {
+          final no = '${it['허가번호'] ?? ''}';
+          return !_isScheduled(no) && (_targetPreCheckMap[no] ?? '').isNotEmpty;
+        });
       } else {
         rows = rows.where((it) {
           final no = '${it['허가번호'] ?? ''}';
