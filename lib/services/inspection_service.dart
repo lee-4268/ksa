@@ -357,7 +357,7 @@ class InspectionService {
     return (body['count'] as num?)?.toInt() ?? 0;
   }
 
-  Future<int> markPreChecked(List<String> licenseNos, {int year = 0, String status = 'PRE_CHECKED'}) async {
+  Future<Map<String, int>> markPreChecked(List<String> licenseNos, {int year = 0, String status = 'PRE_CHECKED'}) async {
     final resp = await http.patch(
       Uri.parse('$_baseUrl/inspection/targets/pre-check-status'),
       headers: _headers,
@@ -368,7 +368,11 @@ class InspectionService {
       throw Exception(b['detail'] ?? '사전점검완료 표시 실패');
     }
     final body = json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
-    return (body['updated'] as num?)?.toInt() ?? 0;
+    return {
+      'updated': (body['updated'] as num?)?.toInt() ?? 0,
+      'updated_targets': (body['updated_targets'] as num?)?.toInt() ?? 0,
+      'updated_schedules': (body['updated_schedules'] as num?)?.toInt() ?? 0,
+    };
   }
 
   Future<List<Map<String, dynamic>>> listChangeRequests({

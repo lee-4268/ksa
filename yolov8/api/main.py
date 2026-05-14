@@ -13397,22 +13397,55 @@ async def update_pre_check_status(request: Request, req: PreCheckStatusReq):
 
     def _update():
         c = sqlite3.connect(_INSP_DB, timeout=60)
-        updated = 0
-        for no in req.license_nos:
-            if req.year:
-                cur = c.execute(
-                    "UPDATE inspection_targets SET pre_check_status=? WHERE 허가번호=? AND year=?",
-                    (req.status, no, req.year))
-            else:
-                cur = c.execute(
-                    "UPDATE inspection_targets SET pre_check_status=? WHERE 허가번호=?",
-                    (req.status, no))
-            updated += cur.rowcount
-        c.commit(); c.close()
-        return updated
+        try:
+            updated_targets = 0
+            updated_schedules = 0
+            now = datetime.now(timezone.utc).isoformat()
+            # PRE_CHECK_DONE 전환이 의미 있는 상태 집합 (이미 지난 단계는 건너뜀)
+            ok_from = {WF_REGISTERED, WF_PRE_CHECK, WF_RE_CHECK}
+            for no in req.license_nos:
+                # 일정 등록 여부 확인
+                if req.year:
+                    row = c.execute(
+                        "SELECT pk, workflow_status FROM inspection_schedules "
+                        "WHERE REPLACE(허가번호,'-','')=REPLACE(?,'-','') AND year=?",
+                        (no, req.year)).fetchone()
+                else:
+                    row = c.execute(
+                        "SELECT pk, workflow_status FROM inspection_schedules "
+                        "WHERE REPLACE(허가번호,'-','')=REPLACE(?,'-','')",
+                        (no,)).fetchone()
+                if row:
+                    pk, cur_st = row[0], (row[1] or WF_REGISTERED)
+                    if cur_st not in ok_from:
+                        continue  # 이미 점검완료 이후 단계 → 건너뜀
+                    c.execute(
+                        'UPDATE inspection_schedules SET workflow_status=?, '
+                        'status_updated_at=?, status_updated_by=? WHERE pk=?',
+                        (WF_PRE_CHECK_DONE, now, empno, pk))
+                    _wf_record_log_sync(c, pk, cur_st, WF_PRE_CHECK_DONE, empno,
+                                        "ERP-DS 전산비교 완료 후 사전점검완료 처리")
+                    updated_schedules += 1
+                else:
+                    # 일정 없음 → inspection_targets.pre_check_status
+                    if req.year:
+                        cur = c.execute(
+                            "UPDATE inspection_targets SET pre_check_status=? WHERE 허가번호=? AND year=?",
+                            (req.status, no, req.year))
+                    else:
+                        cur = c.execute(
+                            "UPDATE inspection_targets SET pre_check_status=? WHERE 허가번호=?",
+                            (req.status, no))
+                    updated_targets += cur.rowcount
+            c.commit()
+            return updated_targets, updated_schedules
+        finally:
+            c.close()
 
-    updated = await asyncio.to_thread(_update)
-    return {"success": True, "updated": updated}
+    updated_targets, updated_schedules = await asyncio.to_thread(_update)
+    total = updated_targets + updated_schedules
+    return {"success": True, "updated": total,
+            "updated_targets": updated_targets, "updated_schedules": updated_schedules}
 
 
 @app.post("/inspection/geocode-targets")

@@ -1698,11 +1698,18 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
     try {
       final auth = context.read<AuthService>();
       _inspectionService.setAuthToken(auth.authToken);
-      final updated = await _inspectionService.markPreChecked(licenseNos);
+      final result = await _inspectionService.markPreChecked(licenseNos);
       if (!mounted) return;
       setState(() => _selectedForPreCheck.clear());
+      final schedules = result['updated_schedules'] ?? 0;
+      final targets = result['updated_targets'] ?? 0;
+      final msg = schedules > 0 && targets > 0
+          ? '사전점검완료 처리: 일정있음 $schedules건(점검완료↑), 일정없음 $targets건'
+          : schedules > 0
+              ? '사전점검완료 처리: $schedules건 → 점검완료(PRE_CHECK_DONE) 전환'
+              : '사전점검완료 표시: $targets건';
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('사전점검완료 표시 완료: $updated건'),
+        content: Text(msg),
         backgroundColor: const Color(0xFF00897B),
       ));
     } catch (e) {
