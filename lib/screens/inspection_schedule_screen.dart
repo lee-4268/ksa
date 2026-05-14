@@ -921,6 +921,8 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
           '통시': '${item['통시'] ?? ''}',
           '공대': '${item['공대'] ?? ''}',
           'zpprac1': '${item['zpprac1'] ?? ''}',
+          '호출명칭': '${item['호출명칭'] ?? ''}',
+          '본부': '${item['skt본부'] ?? ''}',
         };
       }
     }

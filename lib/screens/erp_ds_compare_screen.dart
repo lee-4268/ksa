@@ -905,7 +905,7 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
         final item = items[rowIdx];
 
         final values = [
-          item.zpwino, item.zpwina, item.areaHdofcNm,
+          item.zpwino, _zpwina(item), _areaHdofcNm(item),
           _tongsi(item), _gongdae(item),
           item.erpZpirty3, item.dsTowerType, item.towerMatch,
           item.erpSerial, item.dsSerial, item.serialMatch,
@@ -1095,12 +1095,12 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
           overflow: TextOverflow.ellipsis,
           textAlign: TextAlign.center),
       // 1 호출명칭
-      Text(item.zpwina,
+      Text(_zpwina(item),
           style: _cellStyle,
           overflow: TextOverflow.ellipsis,
           textAlign: TextAlign.center),
       // 2 본부
-      Text(item.areaHdofcNm,
+      Text(_areaHdofcNm(item),
           style: _cellStyle,
           overflow: TextOverflow.ellipsis,
           textAlign: TextAlign.center),
@@ -1205,6 +1205,14 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
   String _erpPrac1(CompareItem item) {
     final v = _schedMap?[item.zpwino]?['zpprac1'] ?? '';
     return v.isNotEmpty ? v : item.erpPrac1;
+  }
+  String _zpwina(CompareItem item) {
+    final v = _schedMap?[item.zpwino]?['호출명칭'] ?? '';
+    return v.isNotEmpty ? v : item.zpwina;
+  }
+  String _areaHdofcNm(CompareItem item) {
+    final v = _schedMap?[item.zpwino]?['본부'] ?? '';
+    return v.isNotEmpty ? v : item.areaHdofcNm;
   }
 
   List<CompareItem> _getFilteredItems() {
