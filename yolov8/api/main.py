@@ -10950,6 +10950,7 @@ def _erp_ds_compare_sync(
 
     # 2) DS 데이터: ds_detail.db에서 직접 조회 (ZIP 파싱 불필요)
     ds_device = {}      # {zpwino: [serial, ...]}
+    ds_form_no = {}     # {zpwino: [형식검정번호, ...]}
     ds_antenna = {}     # {zpwino: tower_type}
     ds_antenna_ki = {}  # {zpwino: max 기수 (int)}
     warnings = []
@@ -10966,13 +10967,18 @@ def _erp_ds_compare_sync(
             for i in range(0, len(all_nos), BATCH):
                 batch = all_nos[i:i + BATCH]
                 ph = ','.join('?' * len(batch))
-                for row in conn.execute(f"SELECT 허가번호, 기기일련번호 FROM ds_장치 WHERE 허가번호 IN ({ph})", batch):
+                for row in conn.execute(f"SELECT 허가번호, 기기일련번호, 형식검정번호 FROM ds_장치 WHERE 허가번호 IN ({ph})", batch):
                     z = row['허가번호'].replace('-', '')
                     sn = str(row['기기일련번호'] or '').strip()
+                    fn = str(row['형식검정번호'] or '').strip()
                     if z not in ds_device:
                         ds_device[z] = []
                     if sn and sn not in ds_device[z]:
                         ds_device[z].append(sn)
+                    if z not in ds_form_no:
+                        ds_form_no[z] = []
+                    if fn and fn not in ds_form_no[z]:
+                        ds_form_no[z].append(fn)
 
             # 안테나: 허가번호별 설치형태 + 기수
             for i in range(0, len(all_nos), BATCH):
@@ -11125,6 +11131,7 @@ def _erp_ds_compare_sync(
             "erp_serial": erp_serial,
             "ds_tower_type": ds_tower,
             "ds_serial": ds_serial_str,
+            "ds_form_no": ", ".join(ds_form_no.get(z_clean, []) or ds_form_no.get(z, [])),
             "tower_match": tower_result,
             "serial_match": serial_result,
             "통시": insp.get("통시", ""),

@@ -109,6 +109,7 @@ class CompareItem {
   final String erpMaxSeqno;
   final String dsTowerType;
   final String dsSerial;
+  final String dsFormNo;
   final String dsAntennaKiMax;
   final String towerMatch;
   final String serialMatch;
@@ -132,6 +133,7 @@ class CompareItem {
     required this.erpMaxSeqno,
     required this.dsTowerType,
     required this.dsSerial,
+    required this.dsFormNo,
     required this.dsAntennaKiMax,
     required this.towerMatch,
     required this.serialMatch,
@@ -157,6 +159,7 @@ class CompareItem {
       erpMaxSeqno: json['erp_max_seqno'] ?? '',
       dsTowerType: json['ds_tower_type'] ?? '',
       dsSerial: json['ds_serial'] ?? '',
+      dsFormNo: json['ds_form_no'] ?? '',
       dsAntennaKiMax: json['ds_antenna_ki_max'] ?? '',
       towerMatch: json['tower_match'] ?? '',
       serialMatch: json['serial_match'] ?? '',

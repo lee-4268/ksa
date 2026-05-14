@@ -1898,7 +1898,7 @@ class _ChangeRequestDialogState extends State<_ChangeRequestDialog> {
   String _dsValueFor(CompareItem item, String field) {
     switch (field) {
       case '일련번호': return item.dsSerial;
-      case '형식검정번호': return item.dsAntennaKiMax;
+      case '형식검정번호': return item.dsFormNo;
       case '설치형태': return item.dsTowerType;
       case '설치장소': return item.address;
       default: return '';
