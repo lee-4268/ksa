@@ -10314,7 +10314,7 @@ _TOWER_TYPE_NORMALIZE = {
 _설치형태_CODE_TO_NAME: dict[str, str] = {
     '1': '철탑(지면)', '2': '강관주', '3': '통신주', '4': '원폴(건물)',
     '6': '옥내, 터널, 지하, 차량', '8': '쌍통신주', '9': '기설물',
-    '11': '옥내외 혼합형', '12': '간이폴 및 비기준 설치대',
+    '11': '옥내외 혼합형', '12': '간이폴, 분산폴 및 비기준 설치대',
     '13': '한전주(KT통신주)', '14': '철탑(건물)', '15': '프레임',
     '21': '복합형(원폴,분산프레임 등)', '25': '모노폴',
 }
@@ -12759,16 +12759,21 @@ async def inspection_build_ds_detail(request: Request, division_id: str, import_
     role = await asyncio.to_thread(_get_user_role_sync, empno)
     if role not in {"admin", "manager"}: raise HTTPException(403, "권한 없음")
 
-    # DynamoDB에서 s3Key 조회
-    dynamodb = get_dynamodb_resource()
-    table = dynamodb.Table(DYNAMODB_TABLES["ds_uploads"])
-    resp = await asyncio.to_thread(lambda: table.query(
-        KeyConditionExpression=Key("divisionId").eq(division_id) & Key("importDate").begins_with(import_date),
-        ProjectionExpression="s3Key", Limit=1))
-    items = resp.get("Items", [])
-    if not items: raise HTTPException(404, "DS 업로드 없음")
-    s3_key = items[0].get("s3Key", "")
-    if not s3_key: raise HTTPException(404, "S3 키 없음")
+    # SK = "{division_code}#{date}" 형태에서 S3 키 재조립
+    # permanent_zip_key = f"ds-raw/{division_id}/{division_code}_{date}.zip"
+    sk_parts = import_date.split('#', 1)
+    if len(sk_parts) == 2:
+        division_code_part, date_part = sk_parts
+    else:
+        division_code_part, date_part = "", import_date
+    s3_key = f"ds-raw/{division_id}/{division_code_part}_{date_part}.zip"
+
+    # S3 존재 여부 확인
+    try:
+        s3_check = get_s3_client()
+        s3_check.head_object(Bucket=S3_BUCKET_NAME, Key=s3_key)
+    except Exception:
+        raise HTTPException(404, f"S3에 파일 없음: {s3_key}")
 
     job_id = str(uuid.uuid4())
     _inspection_jobs[job_id] = {"status": "processing", "stage": "ds_detail 빌드 중...", "percent": 0}
@@ -14839,10 +14844,10 @@ async def inspection_dashboard(request: Request, year: int):
                'LEFT JOIN inspection_results r ON r.pk = s.pk '
                'WHERE ' + ' AND '.join(wheres))
         rows = c.execute(sel, params).fetchall()
-        c.close()
 
         # 상태별 카운트
         counts = {
+            'PRE_CHECKED': 0,
             'REGISTERED': 0, 'PRE_CHECK': 0, 'PRE_CHECK_DONE': 0,
             'CHANGE_FILING': 0, 'RE_CHECK': 0,
             'REPORT_ISSUED': 0, 'SUBMITTED': 0, 'INSPECTED': 0,
@@ -14875,6 +14880,53 @@ async def inspection_dashboard(request: Request, year: int):
                         })
                 except Exception:
                     pass
+
+        # PRE_CHECKED: inspection_targets.pre_check_status='PRE_CHECKED'이면서
+        # 해당 연도 inspection_schedules에 없는 건 (일정 등록 전 사전점검완료)
+        t_wheres = ["t.pre_check_status='PRE_CHECKED'",
+                    "REPLACE(t.허가번호,'-','') NOT IN "
+                    "(SELECT REPLACE(허가번호,'-','') FROM inspection_schedules WHERE year=?)"]
+        t_params: list = [year]
+        if role != "admin" and access_team:
+            t_wheres.append('t.access담당=?')
+            t_params.append(access_team)
+        if role == "member" and 품질팀:
+            t_wheres.append('t.품질개선팀=?')
+            t_params.append(품질팀)
+        t_sel = ('SELECT COUNT(*) as cnt FROM inspection_targets t WHERE '
+                 + ' AND '.join(t_wheres))
+        counts['PRE_CHECKED'] = c.execute(t_sel, t_params).fetchone()['cnt']
+
+        # 시정기한 도래 건 (inadequate_management, D+60 이내 미완료)
+        from datetime import date as _date
+        today_str = now.strftime('%Y-%m-%d')
+        cutoff_str = (now + timedelta(days=60)).strftime('%Y-%m-%d')
+        d_wheres = ["status != '완료'", "시정기한 IS NOT NULL", "시정기한 != ''",
+                    "시정기한 <= ?", "시정기한 >= ?"]
+        d_params: list = [cutoff_str, today_str]
+        if role != "admin" and access_team:
+            d_wheres.append("(region LIKE ? OR skt본부 LIKE ?)")
+            d_params.extend([f'%{access_team}%', f'%{access_team}%'])
+        d_sel = ('SELECT 허가번호, 호출명칭, 시정기한, region, skt본부 '
+                 'FROM inadequate_management WHERE ' + ' AND '.join(d_wheres)
+                 + ' ORDER BY 시정기한 ASC LIMIT 10')
+        d_rows = c.execute(d_sel, d_params).fetchall()
+        deadline_items = []
+        for dr in d_rows:
+            try:
+                dl = (_date.fromisoformat(dr['시정기한']) - now.date()).days
+            except Exception:
+                dl = 999
+            deadline_items.append({
+                '허가번호': dr['허가번호'] or '',
+                '호출명칭': dr['호출명칭'] or '',
+                '시정기한': dr['시정기한'],
+                'd_left': dl,
+                'region': dr['region'] or dr['skt본부'] or '',
+            })
+
+        c.close()
+
         # 지연 큰 순으로 정렬, 상위 20건만
         overdue.sort(key=lambda x: x['days_overdue'], reverse=True)
         return {
@@ -14884,6 +14936,7 @@ async def inspection_dashboard(request: Request, year: int):
             'recheck': recheck,
             'overdue': overdue[:20],
             'overdue_total': len(overdue),
+            'deadline_items': deadline_items,
         }
 
     result = await asyncio.to_thread(_aggregate)

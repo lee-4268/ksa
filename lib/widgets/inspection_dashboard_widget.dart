@@ -55,6 +55,7 @@ class _InspectionDashboardWidgetState extends State<InspectionDashboardWidget> {
   }
 
   static const _statusOrder = [
+    ('PRE_CHECKED', '사전점검완료', Color(0xFF00897B)),
     ('REGISTERED', '등록됨', Color(0xFF6E7780)),
     ('PRE_CHECK', '사전점검중', Color(0xFF6B47DC)),
     ('PRE_CHECK_DONE', '점검완료', Color(0xFF1A8754)),
@@ -99,8 +100,8 @@ class _InspectionDashboardWidgetState extends State<InspectionDashboardWidget> {
     final scope = d['scope'] as String? ?? '';
     final counts = Map<String, dynamic>.from(d['counts'] ?? {});
     final recheck = (d['recheck'] as num?)?.toInt() ?? 0;
-    final overdue = List<Map<String, dynamic>>.from(d['overdue'] ?? []);
     final overdueTotal = (d['overdue_total'] as num?)?.toInt() ?? 0;
+    final deadlineItems = List<Map<String, dynamic>>.from(d['deadline_items'] ?? []);
 
     final roleLabel = switch (role) {
       'admin' => '관리자',
@@ -136,34 +137,26 @@ class _InspectionDashboardWidgetState extends State<InspectionDashboardWidget> {
         ),
       ]),
       const SizedBox(height: 10),
-      // 상태별 카운트 카드 그리드 (반응형)
+      // 상태별 카운트 카드 + 알림 카드 통합 그리드 (반응형)
       LayoutBuilder(builder: (_, cst) {
         final perRow = cst.maxWidth > 720 ? 4 : cst.maxWidth > 480 ? 3 : 2;
-        return Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: _statusOrder.map((entry) {
+        final w = (cst.maxWidth - 8 * (perRow - 1)) / perRow;
+        final cards = <Widget>[
+          ..._statusOrder.map((entry) {
             final (code, label, color) = entry;
             final n = (counts[code] as num?)?.toInt() ?? 0;
             return SizedBox(
-              width: (cst.maxWidth - 8 * (perRow - 1)) / perRow,
+              width: w,
               child: _StatusCard(
-                label: label,
-                count: n,
-                color: color,
+                label: label, count: n, color: color,
                 onTap: n == 0 ? null : () => widget.onStatusTap?.call(code),
               ),
             );
-          }).toList(),
-        );
-      }),
-      // 재점검 / 지연 알림
-      if (recheck > 0 || overdueTotal > 0) ...[
-        const SizedBox(height: 12),
-        Row(children: [
-          if (recheck > 0) ...[
-            Expanded(
-              child: _AlertCard(
+          }),
+          if (recheck > 0)
+            SizedBox(
+              width: w,
+              child: _GridAlertCard(
                 icon: Icons.warning_amber_rounded,
                 color: const Color(0xFFE17055),
                 label: '재점검 필요',
@@ -171,37 +164,28 @@ class _InspectionDashboardWidgetState extends State<InspectionDashboardWidget> {
                 onTap: widget.onRecheckTap,
               ),
             ),
-            if (overdueTotal > 0) const SizedBox(width: 8),
-          ],
           if (overdueTotal > 0)
-            Expanded(
-              child: _AlertCard(
-                icon: Icons.schedule,
+            SizedBox(
+              width: w,
+              child: _GridAlertCard(
+                icon: Icons.schedule_outlined,
                 color: const Color(0xFFE53935),
                 label: 'SLA 지연',
                 count: overdueTotal,
                 onTap: widget.onOverdueTap,
               ),
             ),
-        ]),
-      ],
-      // 지연 건 상위 5개 미니 리스트
-      if (overdue.isNotEmpty) ...[
+        ];
+        return Wrap(spacing: 8, runSpacing: 8, children: cards);
+      }),
+      // 시정기한 도래 국소
+      if (deadlineItems.isNotEmpty) ...[
         const SizedBox(height: 10),
-        const Text('지연 건 (상위 5)',
+        const Text('시정기한 도래',
             style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
                 color: Color(0xFF6B7280))),
         const SizedBox(height: 4),
-        ...overdue.take(5).map((it) => _OverdueRow(
-              item: it,
-              onTap: () => widget.onScheduleTap?.call('${it['pk'] ?? ''}'),
-            )),
-        if (overdueTotal > 5)
-          Padding(
-            padding: const EdgeInsets.only(top: 4),
-            child: Text('… 외 ${overdueTotal - 5}건',
-                style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF))),
-          ),
+        ...deadlineItems.map((it) => _DeadlineRow(item: it)),
       ],
     ]);
   }
@@ -242,13 +226,13 @@ class _StatusCard extends StatelessWidget {
   }
 }
 
-class _AlertCard extends StatelessWidget {
+class _GridAlertCard extends StatelessWidget {
   final IconData icon;
   final Color color;
   final String label;
   final int count;
   final VoidCallback? onTap;
-  const _AlertCard({
+  const _GridAlertCard({
     required this.icon, required this.color,
     required this.label, required this.count, this.onTap,
   });
@@ -259,76 +243,69 @@ class _AlertCard extends StatelessWidget {
       onTap: onTap,
       borderRadius: BorderRadius.circular(8),
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
         decoration: BoxDecoration(
           color: color.withValues(alpha: 0.08),
           borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: color.withValues(alpha: 0.5)),
+          border: Border.all(color: color.withValues(alpha: 0.6), width: 1.5),
         ),
-        child: Row(children: [
-          Icon(icon, size: 18, color: color),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(label,
-                style: TextStyle(fontSize: 12, color: color, fontWeight: FontWeight.w600)),
-          ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Expanded(
+              child: Text(label,
+                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: color)),
+            ),
+            Icon(icon, size: 13, color: color),
+          ]),
+          const SizedBox(height: 2),
           Text('$count',
-              style: TextStyle(fontSize: 16, color: color, fontWeight: FontWeight.w700)),
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: color)),
         ]),
       ),
     );
   }
 }
 
-class _OverdueRow extends StatelessWidget {
+class _DeadlineRow extends StatelessWidget {
   final Map<String, dynamic> item;
-  final VoidCallback? onTap;
-  const _OverdueRow({required this.item, this.onTap});
-
-  static const _statusLabels = {
-    'REGISTERED': '등록됨',
-    'PRE_CHECK': '사전점검중',
-    'PRE_CHECK_DONE': '점검완료',
-    'CHANGE_FILING': '변경개설중',
-    'RE_CHECK': '재점검대기',
-    'REPORT_ISSUED': '내역서발급',
-    'SUBMITTED': '접수완료',
-    'INSPECTED': '수검완료',
-  };
+  const _DeadlineRow({required this.item});
 
   @override
   Widget build(BuildContext context) {
     final name = '${item['호출명칭'] ?? ''}';
     final lic = '${item['허가번호'] ?? ''}';
-    final st = '${item['status'] ?? ''}';
-    final days = (item['days_overdue'] as num?)?.toInt() ?? 0;
-    return InkWell(
-      onTap: onTap,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 4),
-        child: Row(children: [
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-            decoration: BoxDecoration(
-              color: const Color(0xFFE53935).withValues(alpha: 0.1),
-              borderRadius: BorderRadius.circular(4),
-            ),
-            child: Text('+${days}일',
-                style: const TextStyle(fontSize: 10, color: Color(0xFFE53935),
-                    fontWeight: FontWeight.w700)),
+    final deadline = '${item['시정기한'] ?? ''}';
+    final dLeft = (item['d_left'] as num?)?.toInt() ?? 0;
+    final isUrgent = dLeft <= 14;
+    final color = dLeft <= 7
+        ? const Color(0xFFE53935)
+        : dLeft <= 14
+            ? const Color(0xFFE17055)
+            : const Color(0xFF6B7280);
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+          decoration: BoxDecoration(
+            color: color.withValues(alpha: isUrgent ? 0.12 : 0.06),
+            borderRadius: BorderRadius.circular(4),
           ),
-          const SizedBox(width: 6),
-          Text(_statusLabels[st] ?? st,
-              style: const TextStyle(fontSize: 10, color: Color(0xFF6B7280),
-                  fontWeight: FontWeight.w500)),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(name.isNotEmpty ? name : lic,
-                style: const TextStyle(fontSize: 12, color: Color(0xFF111827)),
-                maxLines: 1, overflow: TextOverflow.ellipsis),
-          ),
-        ]),
-      ),
+          child: Text('D-$dLeft',
+              style: TextStyle(fontSize: 10, color: color,
+                  fontWeight: FontWeight.w700)),
+        ),
+        const SizedBox(width: 6),
+        Text(deadline,
+            style: const TextStyle(fontSize: 10, color: Color(0xFF6B7280),
+                fontWeight: FontWeight.w500)),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(name.isNotEmpty ? name : lic,
+              style: const TextStyle(fontSize: 12, color: Color(0xFF111827)),
+              maxLines: 1, overflow: TextOverflow.ellipsis),
+        ),
+      ]),
     );
   }
 }
