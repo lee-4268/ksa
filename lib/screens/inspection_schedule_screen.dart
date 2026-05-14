@@ -4391,67 +4391,107 @@ class _MultiSelectDialogState extends State<_MultiSelectDialog> {
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
+    final allSelected = widget.options.isNotEmpty && _selected.length == widget.options.length;
+    final noneSelected = _selected.isEmpty;
+    return Dialog(
       backgroundColor: Colors.white,
       surfaceTintColor: Colors.white,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      title: Text(widget.title,
-          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
-      contentPadding: const EdgeInsets.fromLTRB(8, 12, 8, 0),
-      content: SizedBox(
-        width: 260,
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          // 전체 선택/해제
-          CheckboxListTile(
-            dense: true,
-            title: const Text('전체', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-            value: _selected.length == widget.options.length && widget.options.isNotEmpty
-                ? true
-                : _selected.isEmpty ? false : null,
-            tristate: true,
-            activeColor: const Color(0xFFE53935),
-            onChanged: (v) => setState(() {
-              if (v == true) { _selected
-                ..clear()
-                ..addAll(widget.options); }
-              else { _selected.clear(); }
-            }),
-          ),
-          const Divider(height: 1),
-          ConstrainedBox(
-            constraints: const BoxConstraints(maxHeight: 300),
-            child: ListView(
-              shrinkWrap: true,
-              children: widget.options.map((opt) => CheckboxListTile(
-                dense: true,
-                title: Text(widget.displayMap?[opt] ?? opt,
-                    style: const TextStyle(fontSize: 13)),
-                value: _selected.contains(opt),
-                activeColor: const Color(0xFFE53935),
-                onChanged: (v) => setState(() {
-                  if (v == true) { _selected.add(opt); }
-                  else { _selected.remove(opt); }
-                }),
-              )).toList(),
+      insetPadding: const EdgeInsets.symmetric(horizontal: 40),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 320),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(24, 28, 24, 20),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            // 아이콘 헤더
+            Container(
+              width: 52, height: 52,
+              decoration: BoxDecoration(
+                color: const Color(0xFFE53935).withValues(alpha: 0.10),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(Icons.filter_list_rounded,
+                  color: Color(0xFFE53935), size: 26),
             ),
-          ),
-        ]),
+            const SizedBox(height: 12),
+            Text(widget.title,
+                style: const TextStyle(
+                    fontSize: 17, fontWeight: FontWeight.w800,
+                    color: Color(0xFF111827))),
+            const SizedBox(height: 16),
+            // 옵션 리스트 (F9FAFB 배경 컨테이너)
+            Container(
+              decoration: BoxDecoration(
+                color: const Color(0xFFF9FAFB),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+                // 전체 선택/해제
+                CheckboxListTile(
+                  dense: true,
+                  title: const Text('전체',
+                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
+                          color: Color(0xFF374151))),
+                  value: allSelected ? true : noneSelected ? false : null,
+                  tristate: true,
+                  activeColor: const Color(0xFF2563EB),
+                  checkColor: Colors.white,
+                  side: const BorderSide(color: Color(0xFFD1D5DB)),
+                  onChanged: (v) => setState(() {
+                    if (v == true) { _selected..clear()..addAll(widget.options); }
+                    else { _selected.clear(); }
+                  }),
+                ),
+                Divider(height: 1, color: Colors.grey.shade200),
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxHeight: 280),
+                  child: ListView(
+                    shrinkWrap: true,
+                    children: widget.options.map((opt) => CheckboxListTile(
+                      dense: true,
+                      title: Text(widget.displayMap?[opt] ?? opt,
+                          style: const TextStyle(fontSize: 13,
+                              color: Color(0xFF374151))),
+                      value: _selected.contains(opt),
+                      activeColor: const Color(0xFF2563EB),
+                      checkColor: Colors.white,
+                      side: const BorderSide(color: Color(0xFFD1D5DB)),
+                      onChanged: (v) => setState(() {
+                        if (v == true) { _selected.add(opt); }
+                        else { _selected.remove(opt); }
+                      }),
+                    )).toList(),
+                  ),
+                ),
+              ]),
+            ),
+            const SizedBox(height: 20),
+            // 적용 버튼 (전폭)
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF2563EB),
+                  foregroundColor: Colors.white,
+                  elevation: 0,
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12)),
+                  padding: const EdgeInsets.symmetric(vertical: 13),
+                ),
+                onPressed: () => Navigator.pop(context, _selected),
+                child: const Text('적용',
+                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+              ),
+            ),
+            // 취소 버튼
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('취소',
+                  style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
+            ),
+          ]),
+        ),
       ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('취소'),
-        ),
-        ElevatedButton(
-          style: ElevatedButton.styleFrom(
-            backgroundColor: const Color(0xFFE53935),
-            foregroundColor: Colors.white,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-          ),
-          onPressed: () => Navigator.pop(context, _selected),
-          child: const Text('적용'),
-        ),
-      ],
     );
   }
 }
