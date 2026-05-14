@@ -1450,6 +1450,7 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
   // 변경개설 요청 작성 다이얼로그 (Phase 2)
   Future<void> _openChangeRequestDialog(ErpDsCompareResult r) async {
     final pks = widget.initialSchedulePks ?? const [];
+
     final isAdmin = context.read<AuthService>().isAdmin;
     if (pks.isEmpty && !isAdmin) {
       await ProgressDialog(context).error(message: '수검 건 미연결\n요청 작성 불가');
