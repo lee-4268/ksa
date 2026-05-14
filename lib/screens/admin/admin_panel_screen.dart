@@ -120,27 +120,55 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
                     style: TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
                 const SizedBox(height: 16),
                 Container(
+                  constraints: const BoxConstraints(maxHeight: 260),
                   decoration: BoxDecoration(
                     color: const Color(0xFFF9FAFB),
                     borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: const Color(0xFFE5E7EB)),
                   ),
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
-                  child: DropdownButton<DsUploadInfo>(
-                    value: selected,
-                    isExpanded: true,
-                    underline: const SizedBox(),
-                    style: const TextStyle(fontSize: 13, color: Color(0xFF111827)),
-                    items: _dsUploads.map((u) {
-                      final date = u.actualDate.length == 8
-                          ? '${u.actualDate.substring(0, 4)}-${u.actualDate.substring(4, 6)}-${u.actualDate.substring(6, 8)}'
-                          : u.actualDate;
-                      return DropdownMenuItem(
-                        value: u,
-                        child: Text('${u.divisionName} · $date'),
-                      );
-                    }).toList(),
-                    onChanged: (v) { if (v != null) setS(() => selected = v); },
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(12),
+                    child: SingleChildScrollView(
+                      child: Column(
+                        children: _dsUploads.asMap().entries.map((e) {
+                          final idx = e.key;
+                          final u = e.value;
+                          final isSelected = selected == u;
+                          final date = u.actualDate.length == 8
+                              ? '${u.actualDate.substring(0, 4)}-${u.actualDate.substring(4, 6)}-${u.actualDate.substring(6, 8)}'
+                              : u.actualDate;
+                          return GestureDetector(
+                            onTap: () => setS(() => selected = u),
+                            child: Container(
+                              decoration: BoxDecoration(
+                                color: isSelected
+                                    ? const Color(0xFF2563EB).withValues(alpha: 0.06)
+                                    : Colors.transparent,
+                                border: idx > 0
+                                    ? const Border(top: BorderSide(color: Color(0xFFE5E7EB)))
+                                    : null,
+                              ),
+                              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                              child: Row(children: [
+                                Expanded(
+                                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                                    Text(u.divisionName,
+                                        style: TextStyle(
+                                            fontSize: 13,
+                                            fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+                                            color: isSelected ? const Color(0xFF2563EB) : const Color(0xFF111827))),
+                                    const SizedBox(height: 2),
+                                    Text(date,
+                                        style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF))),
+                                  ]),
+                                ),
+                                if (isSelected)
+                                  const Icon(Icons.check_rounded, size: 18, color: Color(0xFF2563EB)),
+                              ]),
+                            ),
+                          );
+                        }).toList(),
+                      ),
+                    ),
                   ),
                 ),
                 const SizedBox(height: 20),
