@@ -10956,13 +10956,15 @@ def _erp_ds_compare_sync(
             import sqlite3 as _sq
             _cc = _sq.connect(_cert_db, timeout=15)
             _cc.row_factory = _sq.Row
-            all_nos_erp = list({n for raw in zpwino_list for n in (raw, raw.replace('-', ''))})
-            for i in range(0, len(all_nos_erp), BATCH if 'BATCH' in dir() else 900):
-                _ph = ','.join('?' * len(all_nos_erp[i:i+900]))
+            _erp_norms = list({raw.replace('-', '') for raw in zpwino_list})
+            _B = 900
+            for i in range(0, len(_erp_norms), _B):
+                _batch = _erp_norms[i:i+_B]
+                _ph = ','.join('?' * len(_batch))
                 for _r in _cc.execute(
                     f"SELECT REPLACE(TRIM(zpwino),'-','') AS wn, zpcode, zpkcode, eqp_ser_no, zpirty3 "
                     f"FROM cert WHERE REPLACE(TRIM(zpwino),'-','') IN ({_ph})",
-                    all_nos_erp[i:i+900]
+                    _batch
                 ):
                     z = _r['wn'] or ''
                     if z not in erp_multi:
