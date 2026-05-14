@@ -103,63 +103,94 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
       // 2. 확인 다이얼로그
       final confirmed = await showDialog<bool>(
         context: context,
-        builder: (ctx) => AlertDialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          title: const Text('본부/팀 재매핑', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
-          content: SizedBox(
-            width: 480,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('$year년 전체 $total건 중 $changedCount건 변경 예정',
-                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-                const SizedBox(height: 8),
-                Text('주소 기반으로 access담당/품질개선팀을 재계산합니다. 수검일정도 함께 동기화됩니다. (수검결과/사진/메모는 영향 없음)',
-                    style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+        builder: (ctx) => Dialog(
+          backgroundColor: Colors.white,
+          surfaceTintColor: Colors.white,
+          insetPadding: const EdgeInsets.symmetric(horizontal: 24),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 480),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(24, 28, 24, 20),
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+                Container(
+                  width: 52, height: 52,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF7B1FA2).withValues(alpha: 0.10),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(Icons.swap_horiz_rounded,
+                      color: Color(0xFF7B1FA2), size: 26),
+                ),
                 const SizedBox(height: 12),
+                const Text('본부/팀 재매핑',
+                    style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800,
+                        color: Color(0xFF111827))),
+                const SizedBox(height: 6),
+                Text('$year년 · $total건 중 $changedCount건 변경 예정',
+                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
+                        color: Color(0xFF374151))),
+                const SizedBox(height: 4),
+                const Text(
+                  '주소 기반으로 access담당/품질개선팀을 재계산합니다.\n수검일정도 함께 동기화됩니다.',
+                  style: TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
+                  textAlign: TextAlign.center,
+                ),
                 if (samples.isNotEmpty) ...[
-                  const Text('변경 예시 (최대 20건):',
-                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+                  const SizedBox(height: 14),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text('변경 예시 (최대 20건)',
+                        style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600,
+                            color: Colors.grey.shade500)),
+                  ),
                   const SizedBox(height: 6),
                   Container(
-                    constraints: const BoxConstraints(maxHeight: 260),
-                    padding: const EdgeInsets.all(8),
+                    constraints: const BoxConstraints(maxHeight: 220),
+                    padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
-                      color: Colors.grey.shade50,
-                      borderRadius: BorderRadius.circular(6),
-                      border: Border.all(color: Colors.grey.shade300),
+                      color: const Color(0xFFF9FAFB),
+                      borderRadius: BorderRadius.circular(12),
                     ),
                     child: SingleChildScrollView(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
-                        children: samples.map((s) {
-                          return Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 2),
-                            child: Text(
-                              '${s['허가번호']}: ${s['before_access']}/${s['before_team']} → ${s['after_access']}/${s['after_team']}',
-                              style: const TextStyle(fontSize: 11, fontFamily: 'monospace'),
-                            ),
-                          );
-                        }).toList(),
+                        children: samples.map((s) => Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 2),
+                          child: Text(
+                            '${s['허가번호']}: ${s['before_access']}/${s['before_team']} → ${s['after_access']}/${s['after_team']}',
+                            style: const TextStyle(fontSize: 11, fontFamily: 'monospace',
+                                color: Color(0xFF374151)),
+                          ),
+                        )).toList(),
                       ),
                     ),
                   ),
                 ],
-              ],
+                const SizedBox(height: 20),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF7B1FA2),
+                      foregroundColor: Colors.white,
+                      elevation: 0,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      padding: const EdgeInsets.symmetric(vertical: 13),
+                    ),
+                    onPressed: () => Navigator.pop(ctx, true),
+                    child: const Text('적용',
+                        style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                  ),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx, false),
+                  child: const Text('취소',
+                      style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
+                ),
+              ]),
             ),
           ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('취소')),
-            ElevatedButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFFE53935),
-                foregroundColor: Colors.white,
-              ),
-              child: const Text('적용'),
-            ),
-          ],
         ),
       );
 
@@ -220,38 +251,100 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
     final yearCtrl = TextEditingController(text: '${DateTime.now().year}');
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => Dialog(
         backgroundColor: Colors.white,
         surfaceTintColor: Colors.white,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('KCA 수검대상 파일 Import',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
-        content: Column(mainAxisSize: MainAxisSize.min, children: [
-          Text('선택된 파일: $fileName',
-              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-          Text('${(fileBytes.length / 1024 / 1024).toStringAsFixed(1)} MB',
-              style: const TextStyle(fontSize: 12, color: Colors.black45)),
-          const SizedBox(height: 16),
-          TextField(
-            controller: yearCtrl,
-            keyboardType: TextInputType.number,
-            decoration: InputDecoration(
-              labelText: '검사 연도',
-              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-              isDense: true,
-            ),
+        insetPadding: const EdgeInsets.symmetric(horizontal: 40),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 320),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(24, 28, 24, 20),
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              Container(
+                width: 52, height: 52,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFE53935).withValues(alpha: 0.10),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.upload_file_rounded,
+                    color: Color(0xFFE53935), size: 26),
+              ),
+              const SizedBox(height: 12),
+              const Text('수검대상 파일 Import',
+                  style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800,
+                      color: Color(0xFF111827))),
+              const SizedBox(height: 14),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF9FAFB),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Column(children: [
+                  Text(fileName,
+                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
+                          color: Color(0xFF374151)),
+                      textAlign: TextAlign.center,
+                      maxLines: 2, overflow: TextOverflow.ellipsis),
+                  const SizedBox(height: 2),
+                  Text('${(fileBytes.length / 1024 / 1024).toStringAsFixed(1)} MB',
+                      style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF))),
+                ]),
+              ),
+              const SizedBox(height: 14),
+              TextField(
+                controller: yearCtrl,
+                keyboardType: TextInputType.number,
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600,
+                    color: Color(0xFF111827)),
+                decoration: InputDecoration(
+                  labelText: '검사 연도',
+                  labelStyle: const TextStyle(color: Color(0xFF6B7280)),
+                  filled: true,
+                  fillColor: const Color(0xFFF9FAFB),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: const BorderSide(color: Color(0xFFE5E7EB)),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: const BorderSide(color: Color(0xFFE5E7EB)),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: const BorderSide(color: Color(0xFF2563EB), width: 1.5),
+                  ),
+                  isDense: true,
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                ),
+              ),
+              const SizedBox(height: 20),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF2563EB),
+                    foregroundColor: Colors.white,
+                    elevation: 0,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    padding: const EdgeInsets.symmetric(vertical: 13),
+                  ),
+                  onPressed: () => Navigator.pop(ctx, true),
+                  child: const Text('업로드 시작',
+                      style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                ),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('취소',
+                    style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
+              ),
+            ]),
           ),
-        ]),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('취소')),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFFE53935), foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('업로드 시작'),
-          ),
-        ],
+        ),
       ),
     );
     if (confirmed != true || !mounted) return;
@@ -465,14 +558,12 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
           const SizedBox(height: 24),
 
           // 메뉴 섹션
-          const Text(
-            '관리 메뉴',
-            style: TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.bold,
-            ),
+          const Padding(
+            padding: EdgeInsets.only(left: 4, bottom: 10),
+            child: Text('관리 메뉴',
+                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700,
+                    color: Color(0xFF6B7280), letterSpacing: 0.6)),
           ),
-          const SizedBox(height: 12),
 
           // 사용자 관리 (권한 설정)
           _buildMenuCard(
@@ -537,21 +628,25 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
   }
 
   Widget _buildKcaImportCard() {
-    return Card(
-      margin: const EdgeInsets.only(bottom: 12),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(children: [
-              Container(
-                width: 48, height: 48,
-                decoration: BoxDecoration(
-                  color: const Color(0xFFE53935).withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: const Icon(Icons.upload_file, color: Color(0xFFE53935)),
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 8, offset: const Offset(0, 2))],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            Container(
+              width: 48, height: 48,
+              decoration: BoxDecoration(
+                color: const Color(0xFFE53935).withValues(alpha: 0.10),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: const Icon(Icons.upload_file_rounded, color: Color(0xFFE53935)),
               ),
               const SizedBox(width: 12),
               const Expanded(
@@ -671,29 +766,32 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
               ],
           ],
         ),
-      ),
     );
   }
 
   Widget _buildCallnameDbCard() {
-    return Card(
-      margin: const EdgeInsets.only(bottom: 12),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Container(
-                  width: 48,
-                  height: 48,
-                  decoration: BoxDecoration(
-                    color: Colors.orange.withValues(alpha: 0.1),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: const Icon(Icons.storage, color: Colors.orange),
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 8, offset: const Offset(0, 2))],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 48,
+                height: 48,
+                decoration: BoxDecoration(
+                  color: Colors.orange.withValues(alpha: 0.10),
+                  borderRadius: BorderRadius.circular(12),
                 ),
+                child: const Icon(Icons.storage_rounded, color: Colors.orange),
+              ),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Column(
@@ -810,61 +908,51 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
               ),
           ],
         ),
-      ),
     );
   }
 
   Widget _buildAdminInfoCard(AuthService authService) {
-    return Card(
-      elevation: 2,
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Row(
-          children: [
-            CircleAvatar(
-              radius: 30,
-              backgroundColor: const Color(0xFFE53935).withValues(alpha: 0.1),
-              child: const Icon(
-                Icons.admin_panel_settings,
-                size: 32,
-                color: Color(0xFFE53935),
-              ),
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.06), blurRadius: 12, offset: const Offset(0, 2))],
+      ),
+      child: Row(children: [
+        Container(
+          width: 56, height: 56,
+          decoration: BoxDecoration(
+            color: const Color(0xFFE53935).withValues(alpha: 0.10),
+            shape: BoxShape.circle,
+          ),
+          child: const Icon(Icons.admin_panel_settings_rounded, size: 28, color: Color(0xFFE53935)),
+        ),
+        const SizedBox(width: 16),
+        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(
+            authService.userName ?? authService.userEmail ?? '관리자',
+            style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: Color(0xFF111827)),
+          ),
+          const SizedBox(height: 3),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+            decoration: BoxDecoration(
+              color: const Color(0xFFE53935).withValues(alpha: 0.08),
+              borderRadius: BorderRadius.circular(6),
             ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    authService.userName ?? authService.userEmail ?? '관리자',
-                    style: const TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    _getRoleName(authService.userRole),
-                    style: TextStyle(
-                      color: Colors.grey[600],
-                    ),
-                  ),
-                  if (authService.currentTeamName != null) ...[
-                    const SizedBox(height: 2),
-                    Text(
-                      '${authService.currentDivisionName ?? ''} - ${authService.currentTeamName}',
-                      style: TextStyle(
-                        color: Colors.grey[500],
-                        fontSize: 13,
-                      ),
-                    ),
-                  ],
-                ],
-              ),
+            child: Text(_getRoleName(authService.userRole),
+                style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFFE53935))),
+          ),
+          if (authService.currentTeamName != null) ...[
+            const SizedBox(height: 4),
+            Text(
+              '${authService.currentDivisionName ?? ''} · ${authService.currentTeamName}',
+              style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
             ),
           ],
-        ),
-      ),
+        ])),
+      ]),
     );
   }
 
@@ -875,26 +963,33 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
     required String subtitle,
     required VoidCallback onTap,
   }) {
-    return Card(
-      margin: const EdgeInsets.only(bottom: 12),
-      child: ListTile(
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        leading: Container(
-          width: 48,
-          height: 48,
-          decoration: BoxDecoration(
-            color: iconColor.withValues(alpha: 0.1),
-            borderRadius: BorderRadius.circular(12),
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 10),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 8, offset: const Offset(0, 2))],
+        ),
+        child: Row(children: [
+          Container(
+            width: 46, height: 46,
+            decoration: BoxDecoration(
+              color: iconColor.withValues(alpha: 0.10),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Icon(icon, color: iconColor, size: 22),
           ),
-          child: Icon(icon, color: iconColor),
-        ),
-        title: Text(
-          title,
-          style: const TextStyle(fontWeight: FontWeight.w600),
-        ),
-        subtitle: Text(subtitle),
-        trailing: const Icon(Icons.chevron_right),
-        onTap: onTap,
+          const SizedBox(width: 14),
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(title, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+            const SizedBox(height: 2),
+            Text(subtitle, style: const TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
+          ])),
+          Icon(Icons.chevron_right_rounded, color: Colors.grey.shade300, size: 20),
+        ]),
       ),
     );
   }
