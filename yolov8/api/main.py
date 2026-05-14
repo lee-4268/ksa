@@ -15595,7 +15595,8 @@ async def ds_change_history_count(request: Request):
 
 
 @app.post("/ds/apply-partial-update")
-async def ds_apply_partial_update(request: Request, file: UploadFile = File(...)):
+async def ds_apply_partial_update(request: Request, file: UploadFile = File(...),
+                                   excluded: str = Form("")):
     """변경개설 신고 후 전파관리소 회신 부분 DS 파일 업로드 → ds_detail.db 갱신 + 자동 재비교 + 워크플로우 전환.
 
     - 파일은 변경개설 신고한 허가번호들만 포함된 DS 파일 (전파관리소 회신본)
@@ -15608,6 +15609,8 @@ async def ds_apply_partial_update(request: Request, file: UploadFile = File(...)
     file_bytes = await file.read()
     if not file_bytes:
         raise HTTPException(400, "빈 파일")
+
+    excluded_set: set[str] = set(json.loads(excluded)) if excluded.strip() else set()
 
     def _process():
         import xlrd as _xlrd
@@ -15713,19 +15716,22 @@ async def ds_apply_partial_update(request: Request, file: UploadFile = File(...)
         updated_count = 0
 
         for (hn, jn), fields in device_data.items():
+            included = {col: val for col, val in fields.items()
+                        if f"{hn}#{col}#{jn}" not in excluded_set}
+            if not included: continue
             existing = dc.execute(
                 'SELECT 기기일련번호, 형식검정번호 FROM ds_장치 WHERE 허가번호=? AND 장치번호=?',
                 (hn, jn)
             ).fetchone()
             if not existing: continue
-            set_parts = [f'{col}=?' for col in fields]
+            set_parts = [f'{col}=?' for col in included]
             cur = dc.execute(
                 f'UPDATE ds_장치 SET {", ".join(set_parts)} WHERE 허가번호=? AND 장치번호=?',
-                list(fields.values()) + [hn, jn]
+                list(included.values()) + [hn, jn]
             )
             if cur.rowcount > 0:
                 updated_count += 1
-                for col, new_val in fields.items():
+                for col, new_val in included.items():
                     old_val = str(existing[col] or '') if existing[col] is not None else ''
                     dc.execute(
                         'INSERT INTO ds_변경이력(허가번호,변경일자,시트,필드명,변경전값,변경후값,장치번호) VALUES(?,?,?,?,?,?,?)',
@@ -15733,6 +15739,7 @@ async def ds_apply_partial_update(request: Request, file: UploadFile = File(...)
                     )
 
         for hn, 설치형태 in antenna_data.items():
+            if f"{hn}#설치형태#" in excluded_set: continue
             existing = dc.execute(
                 'SELECT 공중선주설치형태명 FROM ds_안테나 WHERE 허가번호=? LIMIT 1', (hn,)
             ).fetchone()
@@ -15747,6 +15754,7 @@ async def ds_apply_partial_update(request: Request, file: UploadFile = File(...)
                 )
 
         for hn, new_addr in location_data.items():
+            if f"{hn}#설치장소#" in excluded_set: continue
             existing = dc.execute(
                 'SELECT 설치장소 FROM ds_일반사항 WHERE 허가번호=?', (hn,)
             ).fetchone()

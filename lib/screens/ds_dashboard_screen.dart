@@ -1048,149 +1048,189 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
     final diffs = List<Map<String, dynamic>>.from(preview['diffs'] ?? []);
     final licCount = preview['license_count'] ?? 0;
 
-    // 2. Modern Minimal 확인 다이얼로그
-    final ok = await showDialog<bool>(
+    // 2. Modern Minimal 확인 다이얼로그 (체크박스)
+    // checked[i] = true → 적용, false → 제외
+    final checked = List<bool>.filled(diffs.length, true);
+
+    String diffKey(Map<String, dynamic> d) =>
+        '${d['허가번호']}#${d['필드명']}#${d['장치번호'] ?? ''}';
+
+    final excludedKeys = await showDialog<List<String>>(
       context: context,
-      builder: (ctx) => Dialog(
-        insetPadding: const EdgeInsets.symmetric(horizontal: 32),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 480),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(24, 28, 24, 20),
-            child: Column(mainAxisSize: MainAxisSize.min, children: [
-              Container(
-                width: 52, height: 52,
-                decoration: BoxDecoration(
-                  color: const Color(0xFFE17055).withValues(alpha: 0.10),
-                  shape: BoxShape.circle,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setS) => Dialog(
+          insetPadding: const EdgeInsets.symmetric(horizontal: 32),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 480),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(24, 28, 24, 20),
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+                Container(
+                  width: 52, height: 52,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFE17055).withValues(alpha: 0.10),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(Icons.compare_arrows_rounded,
+                      color: Color(0xFFE17055), size: 26),
                 ),
-                child: const Icon(Icons.compare_arrows_rounded,
-                    color: Color(0xFFE17055), size: 26),
-              ),
-              const SizedBox(height: 14),
-              const Text('DS 데이터 변경 확인',
-                  style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800,
-                      color: Color(0xFF111827))),
-              const SizedBox(height: 4),
-              Text('허가번호 $licCount국소 · 변경항목 ${diffs.length}건',
-                  style: const TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
-              const SizedBox(height: 16),
-              if (diffs.isEmpty)
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFF9FAFB),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: const Text('변경되는 항목이 없습니다.',
-                      style: TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
-                )
-              else
-                Container(
-                  constraints: const BoxConstraints(maxHeight: 300),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFF9FAFB),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(12),
-                    child: SingleChildScrollView(
-                      padding: const EdgeInsets.all(12),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: diffs.map((d) {
-                          final hn = d['허가번호'] ?? '';
-                          final jn = (d['장치번호'] as String? ?? '').isNotEmpty
-                              ? ' #${d['장치번호']}' : '';
-                          final field = d['필드명'] ?? '';
-                          final before = d['변경전'] ?? '';
-                          final after = d['변경후'] ?? '';
-                          return Padding(
-                            padding: const EdgeInsets.only(bottom: 10),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text('$hn$jn · $field',
-                                    style: const TextStyle(
-                                        fontSize: 12, fontWeight: FontWeight.w600,
-                                        color: Color(0xFF374151))),
-                                const SizedBox(height: 4),
-                                Row(children: [
+                const SizedBox(height: 14),
+                const Text('DS 데이터 변경 확인',
+                    style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800,
+                        color: Color(0xFF111827))),
+                const SizedBox(height: 4),
+                Text('허가번호 $licCount국소 · 변경항목 ${diffs.length}건',
+                    style: const TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
+                const SizedBox(height: 16),
+                if (diffs.isEmpty)
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF9FAFB),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Text('변경되는 항목이 없습니다.',
+                        style: TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
+                  )
+                else
+                  Container(
+                    constraints: const BoxConstraints(maxHeight: 320),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF9FAFB),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(12),
+                      child: SingleChildScrollView(
+                        padding: const EdgeInsets.all(12),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: List.generate(diffs.length, (i) {
+                            final d = diffs[i];
+                            final hn = d['허가번호'] ?? '';
+                            final jn = (d['장치번호'] as String? ?? '').isNotEmpty
+                                ? ' #${d['장치번호']}' : '';
+                            final field = d['필드명'] ?? '';
+                            final before = d['변경전'] ?? '';
+                            final after = d['변경후'] ?? '';
+                            return Padding(
+                              padding: const EdgeInsets.only(bottom: 10),
+                              child: Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Checkbox(
+                                    value: checked[i],
+                                    activeColor: const Color(0xFF2563EB),
+                                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                    visualDensity: VisualDensity.compact,
+                                    onChanged: (v) => setS(() => checked[i] = v ?? true),
+                                  ),
+                                  const SizedBox(width: 4),
                                   Expanded(
-                                    child: Container(
-                                      padding: const EdgeInsets.symmetric(
-                                          horizontal: 8, vertical: 4),
-                                      decoration: BoxDecoration(
-                                        color: const Color(0xFFFFEDED),
-                                        borderRadius: BorderRadius.circular(6),
-                                      ),
-                                      child: Text(
-                                        before.isEmpty ? '(없음)' : before,
-                                        style: const TextStyle(
-                                            fontSize: 11, color: Color(0xFFB91C1C)),
+                                    child: Opacity(
+                                      opacity: checked[i] ? 1.0 : 0.4,
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Text('$hn$jn · $field',
+                                              style: const TextStyle(
+                                                  fontSize: 12, fontWeight: FontWeight.w600,
+                                                  color: Color(0xFF374151))),
+                                          const SizedBox(height: 4),
+                                          Row(children: [
+                                            Expanded(
+                                              child: Container(
+                                                padding: const EdgeInsets.symmetric(
+                                                    horizontal: 8, vertical: 4),
+                                                decoration: BoxDecoration(
+                                                  color: const Color(0xFFFFEDED),
+                                                  borderRadius: BorderRadius.circular(6),
+                                                ),
+                                                child: Text(
+                                                  before.isEmpty ? '(없음)' : before,
+                                                  style: const TextStyle(
+                                                      fontSize: 11, color: Color(0xFFB91C1C)),
+                                                ),
+                                              ),
+                                            ),
+                                            const Padding(
+                                              padding: EdgeInsets.symmetric(horizontal: 6),
+                                              child: Icon(Icons.arrow_forward,
+                                                  size: 14, color: Color(0xFF9CA3AF)),
+                                            ),
+                                            Expanded(
+                                              child: Container(
+                                                padding: const EdgeInsets.symmetric(
+                                                    horizontal: 8, vertical: 4),
+                                                decoration: BoxDecoration(
+                                                  color: const Color(0xFFECFDF5),
+                                                  borderRadius: BorderRadius.circular(6),
+                                                ),
+                                                child: Text(
+                                                  after.isEmpty ? '(없음)' : after,
+                                                  style: const TextStyle(
+                                                      fontSize: 11, color: Color(0xFF065F46)),
+                                                ),
+                                              ),
+                                            ),
+                                          ]),
+                                        ],
                                       ),
                                     ),
                                   ),
-                                  const Padding(
-                                    padding: EdgeInsets.symmetric(horizontal: 6),
-                                    child: Icon(Icons.arrow_forward,
-                                        size: 14, color: Color(0xFF9CA3AF)),
-                                  ),
-                                  Expanded(
-                                    child: Container(
-                                      padding: const EdgeInsets.symmetric(
-                                          horizontal: 8, vertical: 4),
-                                      decoration: BoxDecoration(
-                                        color: const Color(0xFFECFDF5),
-                                        borderRadius: BorderRadius.circular(6),
-                                      ),
-                                      child: Text(
-                                        after.isEmpty ? '(없음)' : after,
-                                        style: const TextStyle(
-                                            fontSize: 11, color: Color(0xFF065F46)),
-                                      ),
-                                    ),
-                                  ),
-                                ]),
-                              ],
-                            ),
-                          );
-                        }).toList(),
+                                ],
+                              ),
+                            );
+                          }),
+                        ),
                       ),
                     ),
                   ),
-                ),
-              const SizedBox(height: 20),
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF2563EB),
-                    foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12)),
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                    elevation: 0,
+                const SizedBox(height: 20),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF2563EB),
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12)),
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      elevation: 0,
+                    ),
+                    onPressed: diffs.isEmpty || checked.every((c) => !c)
+                        ? null
+                        : () {
+                            final excluded = [
+                              for (int i = 0; i < diffs.length; i++)
+                                if (!checked[i]) diffKey(diffs[i]),
+                            ];
+                            Navigator.pop(ctx, excluded);
+                          },
+                    child: Text(
+                      checked.every((c) => !c)
+                          ? '선택 없음'
+                          : '적용 (${checked.where((c) => c).length}건)',
+                      style: const TextStyle(
+                          fontSize: 15, fontWeight: FontWeight.w700),
+                    ),
                   ),
-                  onPressed: () => Navigator.pop(ctx, true),
-                  child: const Text('적용',
-                      style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
                 ),
-              ),
-              const SizedBox(height: 8),
-              TextButton(
-                onPressed: () => Navigator.pop(ctx, false),
-                child: const Text('취소',
-                    style: TextStyle(fontSize: 14, color: Color(0xFF9CA3AF))),
-              ),
-            ]),
+                const SizedBox(height: 8),
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx, null),
+                  child: const Text('취소',
+                      style: TextStyle(fontSize: 14, color: Color(0xFF9CA3AF))),
+                ),
+              ]),
+            ),
           ),
         ),
       ),
     );
-    if (ok != true || !mounted) return;
+    if (excludedKeys == null || !mounted) return;
 
     // 3. 적용
     showDialog(
@@ -1199,7 +1239,8 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
       builder: (_) => const Center(child: CircularProgressIndicator()),
     );
     try {
-      final result = await svc.applyPartialDsUpdate(Uint8List.fromList(bytes), f.name);
+      final result = await svc.applyPartialDsUpdate(Uint8List.fromList(bytes), f.name,
+          excludedKeys: excludedKeys);
       if (!mounted) return;
       Navigator.pop(context);
       final applied = result['applied'] ?? 0;
