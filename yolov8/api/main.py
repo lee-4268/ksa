@@ -15189,14 +15189,14 @@ async def change_request_generate_form(
 
 @app.post("/ds/apply-partial-update")
 async def ds_apply_partial_update(request: Request, file: UploadFile = File(...)):
-    """부분 DS 파일 업로드 → ds_detail.db 패치 + 자동 재비교 + 워크플로우 전환.
+    """변경개설 신고 후 전파관리소 회신 부분 DS 파일 업로드 → ds_detail.db 갱신 + 자동 재비교 + 워크플로우 전환.
 
-    - 파일은 전체 DS 파일과 동일 시트/컬럼 구조의 부분 파일
-    - change_request에 등록된 (허가번호, 장치번호, field) 만 패치
-    - 모든 change_request 항목이 일치하면 RE_CHECK → PRE_CHECK_DONE 자동 전환
+    - 파일은 변경개설 신고한 허가번호들만 포함된 DS 파일 (전파관리소 회신본)
+    - 해당 허가번호의 ds_장치/ds_안테나를 파일 실제 값으로 갱신 (change_request 값 아님)
+    - FILED/REQUESTED 상태 change_request → APPLIED 전환
+    - 모든 change_request 항목이 APPLIED 이상이면 RE_CHECK → PRE_CHECK_DONE 자동 전환
     """
     empno = await _verify_auth(request)
-    role = await asyncio.to_thread(_get_user_role_sync, empno)
 
     file_bytes = await file.read()
     if not file_bytes:
@@ -15209,107 +15209,86 @@ async def ds_apply_partial_update(request: Request, file: UploadFile = File(...)
         except Exception as e:
             raise HTTPException(400, f"xls 파싱 실패: {e}")
 
-        # 부분 DS에서 (허가번호 정규화) 추출
-        license_set: set[str] = set()
-        for si in range(len(wb.sheet_names())):
-            ws = wb.sheet_by_index(si)
-            for ri in range(1, ws.nrows):
-                v = ws.cell_value(ri, 0)
-                if isinstance(v, float) and v == int(v):
-                    license_set.add(str(int(v)))
-                elif v:
-                    license_set.add(str(v).strip().replace('-', ''))
-
-        if not license_set:
-            raise HTTPException(400, "허가번호 없음")
-
-        # change_request에서 FILED/REQUESTED 상태 + 부분 DS에 포함된 허가번호 항목들 조회
-        ic = sqlite3.connect(_INSP_DB, timeout=60); ic.row_factory = sqlite3.Row
-        placeholders = ','.join('?' * len(license_set))
-        crs = ic.execute(
-            f"SELECT * FROM change_request WHERE status IN ('REQUESTED','FILED') "
-            f"AND REPLACE(허가번호, '-', '') IN ({placeholders})",
-            list(license_set)).fetchall()
-        crs = [dict(r) for r in crs]
-
-        if not crs:
-            ic.close()
-            return {"matched_changes": 0, "applied": 0, "schedule_done": [], "skipped_licenses": list(license_set)}
-
-        # 시트 구조 파싱: 일반사항(0), 위치(1), 송신장치(2), 안테나(4), 설치장소(5)
-        # 각 sheet에서 (허가번호 normalized) → row 인덱스 맵
-        sheet_idx_map = {}  # {sheet_name: idx}
-        for si, sn in enumerate(wb.sheet_names()):
-            sheet_idx_map[sn] = si
-
-        # 시트 이름 매칭 (포함 검색)
-        def _find_sheet(keyword: str) -> int:
-            for sn, idx in sheet_idx_map.items():
-                if keyword in sn:
-                    return idx
-            return -1
-
-        장치_si = _find_sheet('장치')
-        안테나_si = _find_sheet('안테나')
-        설치장소_si = _find_sheet('설치장소')
-
-        # 장치 시트: col 8 = 일련번호, col 11 = 형식검정번호
-        # 안테나 시트: col 28 = 공중선주설치형태명
-        # 설치장소 시트: col 6 = 설치소재주소
-        # 모두 col 0 = 허가번호, col 3 = 장치번호 (장치/안테나)
-
         def _norm_hn(val):
             if isinstance(val, float) and val == int(val):
                 return str(int(val))
             return str(val).strip().replace('-', '')
 
-        # (license_norm, 장치번호) → {field: new_value}
-        device_patches: dict[tuple[str, str], dict[str, str]] = {}
-        # license_norm → {field: new_value}
-        license_patches: dict[str, dict[str, str]] = {}
+        def _find_col(ws, keyword):
+            for c in range(ws.ncols):
+                if keyword in str(ws.cell_value(0, c)).strip():
+                    return c
+            return -1
+
+        def _find_sheet(keyword):
+            for sn in wb.sheet_names():
+                if keyword in sn:
+                    return wb.sheet_names().index(sn)
+            return -1
+
+        장치_si = _find_sheet('장치')
+        안테나_si = _find_sheet('안테나')
+
+        # ── 장치 시트: (허가번호, 장치번호) → {기기일련번호, 형식검정번호, 장치상태}
+        device_data: dict[tuple, dict] = {}
+        license_set: set[str] = set()
 
         if 장치_si >= 0:
             ws = wb.sheet_by_index(장치_si)
+            jn_col  = _find_col(ws, '장치번호');  jn_col  = jn_col  if jn_col  >= 0 else 3
+            sn_col  = _find_col(ws, '일련번호');  sn_col  = sn_col  if sn_col  >= 0 else 8
+            형식_col = _find_col(ws, '형식검정번호'); 형식_col = 형식_col if 형식_col >= 0 else 11
+            상태_col = _find_col(ws, '장치상태')
+
             for ri in range(1, ws.nrows):
                 hn = _norm_hn(ws.cell_value(ri, 0))
-                jn = _norm_hn(ws.cell_value(ri, 3)) if ws.ncols > 3 else ''
-                if not hn or not jn:
+                if not hn:
                     continue
-                key = (hn, jn)
-                d = device_patches.setdefault(key, {})
-                if ws.ncols > 8:
-                    v = str(ws.cell_value(ri, 8) or '').strip()
+                license_set.add(hn)
+                jn = _norm_hn(ws.cell_value(ri, jn_col)) if ws.ncols > jn_col else ''
+                d = {}
+                if sn_col >= 0 and ws.ncols > sn_col:
+                    v = str(ws.cell_value(ri, sn_col) or '').strip()
                     if v:
-                        d['일련번호'] = v
-                if ws.ncols > 11:
-                    v = str(ws.cell_value(ri, 11) or '').strip()
+                        d['기기일련번호'] = v
+                if 형식_col >= 0 and ws.ncols > 형식_col:
+                    v = str(ws.cell_value(ri, 형식_col) or '').strip()
                     if v:
                         d['형식검정번호'] = v
+                if 상태_col >= 0 and ws.ncols > 상태_col:
+                    v = str(ws.cell_value(ri, 상태_col) or '').strip()
+                    if v:
+                        d['장치상태'] = v
+                if d:
+                    device_data[(hn, jn)] = d
+
+        # ── 안테나 시트: 허가번호 → 공중선주설치형태명
+        antenna_data: dict[str, str] = {}
 
         if 안테나_si >= 0:
             ws = wb.sheet_by_index(안테나_si)
+            설치형태_col = _find_col(ws, '설치형태명')
+            if 설치형태_col < 0:
+                설치형태_col = _find_col(ws, '설치형태')
+            if 설치형태_col < 0:
+                설치형태_col = 28  # fallback
+
             for ri in range(1, ws.nrows):
                 hn = _norm_hn(ws.cell_value(ri, 0))
                 if not hn:
                     continue
-                if ws.ncols > 28:
-                    v = str(ws.cell_value(ri, 28) or '').strip()
-                    if v:
-                        license_patches.setdefault(hn, {})['설치형태'] = v
+                license_set.add(hn)
+                if ws.ncols > 설치형태_col:
+                    v = str(ws.cell_value(ri, 설치형태_col) or '').strip()
+                    if v and hn not in antenna_data:
+                        antenna_data[hn] = v
 
-        if 설치장소_si >= 0:
-            ws = wb.sheet_by_index(설치장소_si)
-            for ri in range(1, ws.nrows):
-                hn = _norm_hn(ws.cell_value(ri, 0))
-                if not hn:
-                    continue
-                if ws.ncols > 6:
-                    v = str(ws.cell_value(ri, 6) or '').strip()
-                    if v:
-                        license_patches.setdefault(hn, {})['설치장소'] = v
+        if not license_set:
+            raise HTTPException(400, "허가번호 없음")
 
-        # change_request 매칭 + DS DB 패치
+        # ── DS DB 갱신 (파일 실제 값 기준)
         dc = sqlite3.connect(_DS_DETAIL_DB, timeout=60)
+        dc.row_factory = sqlite3.Row
         dc.execute('PRAGMA journal_mode=WAL')
         dc.execute('''CREATE TABLE IF NOT EXISTS ds_변경이력 (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -15319,118 +15298,108 @@ async def ds_apply_partial_update(request: Request, file: UploadFile = File(...)
         )''')
 
         applied_date = datetime.now().strftime('%y%m%d')
-        applied_count = 0
-        applied_cr_ids: list[int] = []
+        updated_count = 0
 
-        for cr in crs:
-            hn_norm = (cr['허가번호'] or '').replace('-', '').strip()
-            field = cr['field']
-            jn = (cr['장치번호'] or '').strip()
-            expected = (cr['after_value'] or '').strip()
-
-            patched_value = None
-            if field in WF_CHANGE_DEVICE_FIELDS:
-                if not jn:
-                    continue
-                patches = device_patches.get((hn_norm, jn), {})
-                patched_value = patches.get(field)
-            else:
-                patches = license_patches.get(hn_norm, {})
-                patched_value = patches.get(field)
-
-            if not patched_value:
+        for (hn, jn), fields in device_data.items():
+            existing = dc.execute(
+                'SELECT 기기일련번호, 형식검정번호, 장치상태 FROM ds_장치 WHERE 허가번호=? AND 장치번호=?',
+                (hn, jn)
+            ).fetchone()
+            if not existing:
                 continue
-            # change_request 의 expected 값과 일치하는지 (선택적 검증)
-            # 부분 DS의 값이 신고된 값과 다르면 일단 신고된 값(expected)으로 패치 (의심스러우면 patched_value 사용)
-            new_value = expected  # 신고서 기준이 진실
-
-            # DS DB 패치
-            try:
-                if field == '일련번호':
-                    cur = dc.execute(
-                        'UPDATE ds_장치 SET 기기일련번호=? WHERE 허가번호=? AND 장치번호=?',
-                        (new_value, hn_norm, jn))
-                elif field == '형식검정번호':
-                    cur = dc.execute(
-                        'UPDATE ds_장치 SET 형식검정번호=? WHERE 허가번호=? AND 장치번호=?',
-                        (new_value, hn_norm, jn))
-                elif field == '설치형태':
-                    cur = dc.execute(
-                        'UPDATE ds_안테나 SET 공중선주설치형태명=? WHERE 허가번호=?',
-                        (new_value, hn_norm))
-                elif field == '설치장소':
-                    cur = ic.execute(
-                        "UPDATE inspection_targets SET 설치장소=? WHERE REPLACE(허가번호,'-','')=?",
-                        (new_value, hn_norm))
-                else:
-                    continue
-                if cur.rowcount > 0:
+            set_parts = [f'{col}=?' for col in fields]
+            cur = dc.execute(
+                f'UPDATE ds_장치 SET {", ".join(set_parts)} WHERE 허가번호=? AND 장치번호=?',
+                list(fields.values()) + [hn, jn]
+            )
+            if cur.rowcount > 0:
+                updated_count += 1
+                for col, new_val in fields.items():
+                    old_val = str(existing[col] or '') if existing[col] is not None else ''
                     dc.execute(
                         'INSERT INTO ds_변경이력(허가번호,변경일자,시트,필드명,변경전값,변경후값,장치번호) '
                         'VALUES(?,?,?,?,?,?,?)',
-                        (hn_norm, applied_date, '부분DS', field,
-                         cr['before_value'] or '', new_value, jn))
-                    applied_count += 1
-                    applied_cr_ids.append(cr['id'])
-            except Exception as e:
-                logger.warning(f"부분 DS 패치 실패 ({hn_norm}/{jn}/{field}): {e}")
+                        (hn, applied_date, '부분DS장치', col, old_val, new_val, jn)
+                    )
+
+        for hn, 설치형태 in antenna_data.items():
+            existing = dc.execute(
+                'SELECT 공중선주설치형태명 FROM ds_안테나 WHERE 허가번호=? LIMIT 1', (hn,)
+            ).fetchone()
+            cur = dc.execute(
+                'UPDATE ds_안테나 SET 공중선주설치형태명=? WHERE 허가번호=?', (설치형태, hn)
+            )
+            if cur.rowcount > 0:
+                updated_count += 1
+                old_val = str(existing['공중선주설치형태명'] or '') if existing else ''
+                dc.execute(
+                    'INSERT INTO ds_변경이력(허가번호,변경일자,시트,필드명,변경전값,변경후값,장치번호) '
+                    'VALUES(?,?,?,?,?,?,?)',
+                    (hn, applied_date, '부분DS안테나', '설치형태', old_val, 설치형태, '')
+                )
 
         dc.commit(); dc.close()
 
-        # 패치된 change_request 들을 APPLIED 로
+        # ── change_request FILED/REQUESTED → APPLIED
+        ic = sqlite3.connect(_INSP_DB, timeout=60)
+        ic.row_factory = sqlite3.Row
+        ph = ','.join('?' * len(license_set))
+        crs = ic.execute(
+            f"SELECT * FROM change_request WHERE status IN ('REQUESTED','FILED') "
+            f"AND REPLACE(허가번호, '-', '') IN ({ph})",
+            list(license_set)
+        ).fetchall()
+        crs = [dict(r) for r in crs]
+
         now = datetime.now(timezone.utc).isoformat()
+        applied_cr_ids = [cr['id'] for cr in crs]
         if applied_cr_ids:
-            ph = ','.join('?' * len(applied_cr_ids))
+            ph2 = ','.join('?' * len(applied_cr_ids))
             ic.execute(
-                f"UPDATE change_request SET status='APPLIED', applied_at=? WHERE id IN ({ph})",
-                [now] + applied_cr_ids)
+                f"UPDATE change_request SET status='APPLIED', applied_at=? WHERE id IN ({ph2})",
+                [now] + applied_cr_ids
+            )
 
-        # 자동 재비교: schedule별로 모든 change_request가 APPLIED 이상이면 PRE_CHECK_DONE 전환
-        sched_pks = set()
-        for cr in crs:
-            if cr['id'] in applied_cr_ids:
-                sched_pks.add(cr['schedule_pk'])
-
+        # ── 자동 재비교: 모든 CR APPLIED 이상이면 RE_CHECK → PRE_CHECK_DONE
+        sched_pks = {cr['schedule_pk'] for cr in crs}
         schedule_done: list[str] = []
         for spk in sched_pks:
             row = ic.execute(
-                'SELECT workflow_status FROM inspection_schedules WHERE pk=?',
-                (spk,)).fetchone()
+                'SELECT workflow_status FROM inspection_schedules WHERE pk=?', (spk,)
+            ).fetchone()
             if not row:
                 continue
             cur_status = row['workflow_status'] or WF_REGISTERED
             if cur_status != WF_RE_CHECK:
                 continue
-            # 해당 schedule의 모든 cr이 APPLIED/VERIFIED 인지
             unfinished = ic.execute(
                 "SELECT COUNT(*) FROM change_request WHERE schedule_pk=? AND status NOT IN ('APPLIED','VERIFIED')",
-                (spk,)).fetchone()[0]
+                (spk,)
+            ).fetchone()[0]
             if unfinished > 0:
                 continue
-            # 전환
             ic.execute(
-                'UPDATE inspection_schedules SET workflow_status=?, '
-                'status_updated_at=?, status_updated_by=? WHERE pk=?',
-                (WF_PRE_CHECK_DONE, now, 'system', spk))
-            _wf_record_log_sync(ic, spk, cur_status, WF_PRE_CHECK_DONE, 'system',
-                              "부분 DS 적용 후 자동 재비교 통과")
+                'UPDATE inspection_schedules SET workflow_status=?, status_updated_at=?, status_updated_by=? WHERE pk=?',
+                (WF_PRE_CHECK_DONE, now, 'system', spk)
+            )
+            _wf_record_log_sync(ic, spk, cur_status, WF_PRE_CHECK_DONE, 'system', "부분 DS 적용 후 자동 재비교 통과")
             ic.execute(
-                "UPDATE change_request SET status='VERIFIED' WHERE schedule_pk=? AND status='APPLIED'",
-                (spk,))
+                "UPDATE change_request SET status='VERIFIED' WHERE schedule_pk=? AND status='APPLIED'", (spk,)
+            )
             schedule_done.append(spk)
 
         ic.commit(); ic.close()
 
         return {
             "matched_changes": len(crs),
-            "applied": applied_count,
+            "applied": updated_count,
             "schedule_done": schedule_done,
         }
 
     result = await asyncio.to_thread(_process)
     await asyncio.to_thread(_record_audit_log_sync,
                            "ds_partial_update", "ds_detail",
-                           f"applied={result['applied']},done={len(result['schedule_done'])}",
+                           f"updated={result['applied']},cr_applied={result['matched_changes']},done={len(result['schedule_done'])}",
                            empno)
     return {"success": True, **result}
 
