@@ -1435,7 +1435,7 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
   Future<void> _openChangeRequestDialog(ErpDsCompareResult r) async {
     final pks = widget.initialSchedulePks ?? const [];
     if (pks.isEmpty) {
-      await ProgressDialog(context).error(message: '수검 건과 연결되어 있지 않아\n요청 작성이 불가합니다.');
+      await ProgressDialog(context).error(message: '수검 건 미연결\n요청 작성 불가');
       return;
     }
 
