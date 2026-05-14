@@ -2052,9 +2052,9 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
     }
     final dupeCount = inside.length - deduped.length;
     if (deduped.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('선택된 구역 내 국소가 없습니다.')));
       setState(() => _polygonPhase = _PolygonPhase.idle);
       _mapKey.currentState?.clearPolygonOverlay();
+      ProgressDialog(context).error(message: '선택된 구역 내\n국소가 없습니다.');
       return;
     }
     setState(() {
