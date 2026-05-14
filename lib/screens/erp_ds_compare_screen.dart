@@ -1857,7 +1857,7 @@ class _ChangeRequestDialogState extends State<_ChangeRequestDialog> {
     '철탑(지면)', '철탑(건물)', '강관주', '통신주', '원폴(건물)',
     '모노폴', '프레임', '복합형(원폴,분산프레임 등)',
     '쌍통신주', '한전주(KT통신주)', '기설물',
-    '간이폴 및 비기준 설치대', '옥내, 터널, 지하, 차량', '옥내외 혼합형',
+    '간이폴, 분산폴 및 비기준 설치대', '옥내, 터널, 지하, 차량', '옥내외 혼합형',
   ];
   static const _orange = Color(0xFFE17055);
   static const _orangeDark = Color(0xFFB85B3D);
