@@ -14939,7 +14939,7 @@ async def change_request_direct(request: Request, req: ChangeRequestDirectReq):
                 'INSERT INTO change_request(schedule_pk, 허가번호, field, before_value, '
                 'after_value, 장치번호, memo, status, requested_by, requested_at) '
                 'VALUES (?,?,?,?,?,?,?,?,?,?)',
-                (None, req.허가번호, it.field, it.before_value, it.after_value,
+                ('', req.허가번호, it.field, it.before_value, it.after_value,
                  it.장치번호, it.memo, 'REQUESTED', empno, now))
         c.commit(); c.close()
         return len(req.items)
