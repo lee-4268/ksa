@@ -2486,7 +2486,14 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     final submission = _scheduleSubmissionMap[licenseNo] ?? '';
     if (week.isEmpty && status == null) {
       final preCheck = _targetPreCheckMap[licenseNo] ?? '';
-      if (preCheck.isNotEmpty) return _buildStatusBadge(preCheck);
+      if (preCheck.isNotEmpty) {
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [_buildStatusBadge(preCheck)],
+        );
+      }
       return const SizedBox.shrink();
     }
     final showSubmission = status == 'SUBMITTED' && submission.isNotEmpty;
