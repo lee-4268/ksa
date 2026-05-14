@@ -1057,6 +1057,13 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
               textAlign: TextAlign.center,
             ),
           ),
+          if (!isLast && !isGroupBoundary)
+            Positioned(
+              right: 8,
+              top: 10,
+              bottom: 10,
+              child: Container(width: 1, color: const Color(0xFFD1D5DB)),
+            ),
           if (!isLast)
             Positioned(
               right: -4,
@@ -1888,7 +1895,24 @@ class _ChangeRequestDialogState extends State<_ChangeRequestDialog> {
 
   void _removeEntry(int ei) => setState(() => _entries.removeAt(ei));
 
-  void _addRow(int ei) => setState(() => _entries[ei].rows.add(_FieldRow()));
+  String _dsValueFor(CompareItem item, String field) {
+    switch (field) {
+      case '일련번호': return item.dsSerial;
+      case '형식검정번호': return item.dsAntennaKiMax;
+      case '설치형태': return item.dsTowerType;
+      case '설치장소': return item.address;
+      default: return '';
+    }
+  }
+
+  void _addRow(int ei) {
+    final licenseNo = _entries[ei].licenseNo;
+    final item = widget.candidates.firstWhere(
+      (c) => c.zpwino == licenseNo,
+      orElse: () => widget.candidates.first,
+    );
+    setState(() => _entries[ei].rows.add(_FieldRow(beforeValue: _dsValueFor(item, '일련번호'))));
+  }
 
   void _removeRow(int ei, int ri) {
     setState(() {
@@ -2194,7 +2218,16 @@ class _ChangeRequestDialogState extends State<_ChangeRequestDialog> {
               child: Text(f, style: const TextStyle(fontSize: 13)))).toList(),
           onChanged: (v) {
             if (v == null) return;
-            setState(() { r.field = v; if (!_deviceFields.contains(v)) r.deviceNo = ''; });
+            final licenseNo = _entries[ei].licenseNo;
+            final item = widget.candidates.firstWhere(
+              (c) => c.zpwino == licenseNo,
+              orElse: () => widget.candidates.first,
+            );
+            setState(() {
+              r.field = v;
+              r.beforeValue = _dsValueFor(item, v);
+              if (!_deviceFields.contains(v)) r.deviceNo = '';
+            });
           },
         ),
         if (isDevice) ...[
@@ -2221,6 +2254,7 @@ class _ChangeRequestDialogState extends State<_ChangeRequestDialog> {
       const SizedBox(height: 8),
       Row(children: [
         Expanded(child: TextFormField(
+          key: ValueKey('before_${ei}_${ri}_${r.beforeValue}'),
           initialValue: r.beforeValue,
           decoration: _inputDeco('DS 현재값'),
           readOnly: true,
