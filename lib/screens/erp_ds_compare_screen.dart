@@ -1832,21 +1832,22 @@ class _ChangeRequestDialog extends StatefulWidget {
   State<_ChangeRequestDialog> createState() => _ChangeRequestDialogState();
 }
 
-class _ChangeRequestEntry {
-  String licenseNo;
+// 카드 내 개별 변경 행
+class _FieldRow {
   String field;
   String deviceNo;
   String beforeValue;
   String afterValue;
+  _FieldRow({this.field = '일련번호', this.deviceNo = '', this.beforeValue = '', this.afterValue = ''});
+}
+
+// 허가번호 단위 카드 (여러 행 포함)
+class _ChangeRequestEntry {
+  String licenseNo;
   String memo;
-  _ChangeRequestEntry({
-    required this.licenseNo,
-    this.field = '일련번호',
-    this.deviceNo = '',
-    this.beforeValue = '',
-    this.afterValue = '',
-    this.memo = '',
-  });
+  List<_FieldRow> rows;
+  _ChangeRequestEntry({required this.licenseNo, this.memo = '', List<_FieldRow>? rows})
+      : rows = rows ?? [_FieldRow()];
 }
 
 class _ChangeRequestDialogState extends State<_ChangeRequestDialog> {
@@ -1864,6 +1865,8 @@ class _ChangeRequestDialogState extends State<_ChangeRequestDialog> {
   final List<_ChangeRequestEntry> _entries = [];
   bool _submitting = false;
 
+  int get _totalRows => _entries.fold(0, (s, e) => s + e.rows.length);
+
   @override
   void initState() {
     super.initState();
@@ -1878,14 +1881,23 @@ class _ChangeRequestDialogState extends State<_ChangeRequestDialog> {
       before = it.dsTowerType;
     }
     setState(() => _entries.add(_ChangeRequestEntry(
-      licenseNo: it.zpwino, field: field, beforeValue: before,
+      licenseNo: it.zpwino,
+      rows: [_FieldRow(field: field, beforeValue: before)],
     )));
   }
 
-  void _removeEntry(int idx) => setState(() => _entries.removeAt(idx));
+  void _removeEntry(int ei) => setState(() => _entries.removeAt(ei));
 
-  void _addFieldFor(int idx, String licenseNo) {
-    setState(() => _entries.insert(idx + 1, _ChangeRequestEntry(licenseNo: licenseNo)));
+  void _addRow(int ei) => setState(() => _entries[ei].rows.add(_FieldRow()));
+
+  void _removeRow(int ei, int ri) {
+    setState(() {
+      if (_entries[ei].rows.length == 1) {
+        _entries.removeAt(ei);
+      } else {
+        _entries[ei].rows.removeAt(ri);
+      }
+    });
   }
 
   String _schedulePkFor(String licenseNo) {
@@ -1899,35 +1911,38 @@ class _ChangeRequestDialogState extends State<_ChangeRequestDialog> {
   Future<void> _submit() async {
     if (_entries.isEmpty) return;
     for (final e in _entries) {
-      if (e.afterValue.trim().isEmpty) {
-        await ProgressDialog(context).error(message: '변경 후 값을\n입력해주세요');
-        return;
-      }
-      if (_deviceFields.contains(e.field) && e.deviceNo.trim().isEmpty) {
-        await ProgressDialog(context).error(message: '장치번호를\n입력해주세요');
-        return;
+      for (final r in e.rows) {
+        if (r.afterValue.trim().isEmpty) {
+          await ProgressDialog(context).error(message: '변경 후 값을\n입력해주세요');
+          return;
+        }
+        if (_deviceFields.contains(r.field) && r.deviceNo.trim().isEmpty) {
+          await ProgressDialog(context).error(message: '장치번호를\n입력해주세요');
+          return;
+        }
       }
     }
-    final byPk = <String, List<_ChangeRequestEntry>>{};
+    final byPk = <String, List<Map<String, String>>>{};
     for (final e in _entries) {
       final pk = _schedulePkFor(e.licenseNo);
       if (pk.isEmpty) {
         await ProgressDialog(context).error(message: '연결된 일정을\n찾을 수 없습니다');
         return;
       }
-      byPk.putIfAbsent(pk, () => []).add(e);
+      for (final r in e.rows) {
+        byPk.putIfAbsent(pk, () => []).add({
+          'field': r.field, 'before_value': r.beforeValue,
+          'after_value': r.afterValue, '장치번호': r.deviceNo, 'memo': e.memo,
+        });
+      }
     }
 
     setState(() => _submitting = true);
     int total = 0;
     final failed = <String>[];
     for (final entry in byPk.entries) {
-      final items = entry.value.map((e) => {
-        'field': e.field, 'before_value': e.beforeValue,
-        'after_value': e.afterValue, '장치번호': e.deviceNo, 'memo': e.memo,
-      }).toList();
       try {
-        final n = await widget.service.createChangeRequest(entry.key, items);
+        final n = await widget.service.createChangeRequest(entry.key, entry.value);
         total += n;
       } catch (e) {
         failed.add('${entry.key}: $e');
@@ -1949,11 +1964,9 @@ class _ChangeRequestDialogState extends State<_ChangeRequestDialog> {
     required ValueChanged<T?> onChanged,
     double? width,
   }) {
-    Widget w = DropdownButtonHideUnderline(
+    final inner = DropdownButtonHideUnderline(
       child: DropdownButton<T>(
-        isExpanded: true,
-        isDense: true,
-        value: value,
+        isExpanded: true, isDense: true, value: value,
         icon: const Icon(Icons.arrow_drop_down, color: _orange, size: 20),
         dropdownColor: Colors.white,
         borderRadius: BorderRadius.circular(12),
@@ -1962,7 +1975,7 @@ class _ChangeRequestDialogState extends State<_ChangeRequestDialog> {
         onChanged: _submitting ? null : onChanged,
       ),
     );
-    final container = Container(
+    final box = Container(
       width: width,
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
       decoration: BoxDecoration(
@@ -1970,9 +1983,9 @@ class _ChangeRequestDialogState extends State<_ChangeRequestDialog> {
         border: Border.all(color: const Color(0xFFD1D5DB)),
         borderRadius: BorderRadius.circular(10),
       ),
-      child: w,
+      child: inner,
     );
-    return width != null ? container : Expanded(child: container);
+    return width != null ? box : Expanded(child: box);
   }
 
   InputDecoration _inputDeco(String label) => InputDecoration(
@@ -2014,8 +2027,7 @@ class _ChangeRequestDialogState extends State<_ChangeRequestDialog> {
                 ),
                 const SizedBox(height: 10),
                 const Text('변경개설 요청 작성',
-                    style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800,
-                        color: Color(0xFF111827))),
+                    style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: Color(0xFF111827))),
               ])),
               GestureDetector(
                 onTap: _submitting ? null : () => Navigator.pop(context),
@@ -2028,7 +2040,6 @@ class _ChangeRequestDialogState extends State<_ChangeRequestDialog> {
               ),
             ]),
           ),
-          // ── 안내 문구
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 12, 20, 4),
             child: Text(
@@ -2038,12 +2049,12 @@ class _ChangeRequestDialogState extends State<_ChangeRequestDialog> {
             ),
           ),
           const Divider(height: 20),
-          // ── 항목 목록
+          // ── 카드 목록
           Flexible(
             child: SingleChildScrollView(
               padding: const EdgeInsets.fromLTRB(20, 0, 20, 0),
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                ..._entries.asMap().entries.map((e) => _buildEntryCard(e.key, e.value)),
+              child: Column(children: [
+                for (int ei = 0; ei < _entries.length; ei++) _buildEntryCard(ei),
                 if (remaining.isNotEmpty) ...[
                   const SizedBox(height: 4),
                   Wrap(spacing: 8, runSpacing: 8, children: [
@@ -2081,7 +2092,7 @@ class _ChangeRequestDialogState extends State<_ChangeRequestDialog> {
                           child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                       : const Icon(Icons.send_rounded, size: 16),
                   label: Text(
-                    _submitting ? '제출 중...' : '${_entries.length}건 신고 요청 등록',
+                    _submitting ? '제출 중...' : '$_totalRows건 신고 요청 등록',
                     style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
                   ),
                   style: ElevatedButton.styleFrom(
@@ -2104,10 +2115,8 @@ class _ChangeRequestDialogState extends State<_ChangeRequestDialog> {
     );
   }
 
-  Widget _buildEntryCard(int idx, _ChangeRequestEntry e) {
-    final isDevice = _deviceFields.contains(e.field);
-    final isTower = e.field == '설치형태';
-
+  Widget _buildEntryCard(int ei) {
+    final e = _entries[ei];
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       padding: const EdgeInsets.all(14),
@@ -2117,7 +2126,7 @@ class _ChangeRequestDialogState extends State<_ChangeRequestDialog> {
         border: Border.all(color: const Color(0xFFE5E7EB)),
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        // 허가번호 + 삭제
+        // 허가번호 헤더 + 카드 삭제
         Row(children: [
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
@@ -2128,17 +2137,7 @@ class _ChangeRequestDialogState extends State<_ChangeRequestDialog> {
           ),
           const Spacer(),
           GestureDetector(
-            onTap: _submitting ? null : () => _addFieldFor(idx, e.licenseNo),
-            child: Container(
-              padding: const EdgeInsets.all(4),
-              decoration: BoxDecoration(
-                color: _orange.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(6)),
-              child: const Icon(Icons.add, size: 16, color: _orange),
-            ),
-          ),
-          const SizedBox(width: 6),
-          GestureDetector(
-            onTap: _submitting ? null : () => _removeEntry(idx),
+            onTap: _submitting ? null : () => _removeEntry(ei),
             child: Container(
               padding: const EdgeInsets.all(4),
               decoration: BoxDecoration(
@@ -2148,53 +2147,32 @@ class _ChangeRequestDialogState extends State<_ChangeRequestDialog> {
           ),
         ]),
         const SizedBox(height: 10),
-        // 변경 항목 + 장치번호
-        Row(children: [
-          _dropdown<String>(
-            value: e.field,
-            items: _fields.map((f) => DropdownMenuItem(value: f,
-                child: Text(f, style: const TextStyle(fontSize: 13)))).toList(),
-            onChanged: (v) {
-              if (v == null) return;
-              setState(() { e.field = v; if (!_deviceFields.contains(v)) e.deviceNo = ''; });
-            },
+        // 변경 행들
+        for (int ri = 0; ri < e.rows.length; ri++) ...[
+          if (ri > 0) const Divider(height: 16, color: Color(0xFFE5E7EB)),
+          _buildFieldRow(ei, ri, e.rows[ri]),
+        ],
+        const SizedBox(height: 10),
+        // + 항목 추가 버튼
+        GestureDetector(
+          onTap: _submitting ? null : () => _addRow(ei),
+          child: Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            decoration: BoxDecoration(
+              color: _orange.withValues(alpha: 0.06),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: _orange.withValues(alpha: 0.2)),
+            ),
+            child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+              const Icon(Icons.add, size: 14, color: _orange),
+              const SizedBox(width: 4),
+              const Text('항목 추가', style: TextStyle(fontSize: 12, color: _orange, fontWeight: FontWeight.w600)),
+            ]),
           ),
-          if (isDevice) ...[
-            const SizedBox(width: 10),
-            SizedBox(width: 120, child: TextFormField(
-              initialValue: e.deviceNo,
-              decoration: _inputDeco('장치번호'),
-              style: const TextStyle(fontSize: 13),
-              onChanged: (v) => e.deviceNo = v,
-            )),
-          ],
-        ]),
+        ),
         const SizedBox(height: 10),
-        // DS 현재값 + 변경 후 값
-        Row(children: [
-          Expanded(child: TextFormField(
-            initialValue: e.beforeValue,
-            decoration: _inputDeco('DS 현재값'),
-            readOnly: true,
-            style: const TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)),
-          )),
-          const SizedBox(width: 10),
-          if (isTower)
-            _dropdown<String>(
-              value: _towerOptions.contains(e.afterValue) ? e.afterValue : _towerOptions.first,
-              items: _towerOptions.map((t) => DropdownMenuItem(value: t,
-                  child: Text(t, style: const TextStyle(fontSize: 13)))).toList(),
-              onChanged: (v) => setState(() => e.afterValue = v ?? ''),
-            )
-          else
-            Expanded(child: TextFormField(
-              initialValue: e.afterValue,
-              decoration: _inputDeco('변경 후 값'),
-              style: const TextStyle(fontSize: 13),
-              onChanged: (v) => e.afterValue = v,
-            )),
-        ]),
-        const SizedBox(height: 10),
+        // 메모 (카드 공통)
         TextFormField(
           initialValue: e.memo,
           decoration: _inputDeco('메모 (선택)'),
@@ -2203,5 +2181,67 @@ class _ChangeRequestDialogState extends State<_ChangeRequestDialog> {
         ),
       ]),
     );
+  }
+
+  Widget _buildFieldRow(int ei, int ri, _FieldRow r) {
+    final isDevice = _deviceFields.contains(r.field);
+    final isTower = r.field == '설치형태';
+    return Column(children: [
+      Row(children: [
+        _dropdown<String>(
+          value: r.field,
+          items: _fields.map((f) => DropdownMenuItem(value: f,
+              child: Text(f, style: const TextStyle(fontSize: 13)))).toList(),
+          onChanged: (v) {
+            if (v == null) return;
+            setState(() { r.field = v; if (!_deviceFields.contains(v)) r.deviceNo = ''; });
+          },
+        ),
+        if (isDevice) ...[
+          const SizedBox(width: 8),
+          SizedBox(width: 110, child: TextFormField(
+            initialValue: r.deviceNo,
+            decoration: _inputDeco('장치번호'),
+            style: const TextStyle(fontSize: 13),
+            onChanged: (v) => r.deviceNo = v,
+          )),
+        ],
+        const SizedBox(width: 8),
+        // 행 삭제
+        GestureDetector(
+          onTap: _submitting ? null : () => _removeRow(ei, ri),
+          child: Container(
+            padding: const EdgeInsets.all(4),
+            decoration: BoxDecoration(
+              color: const Color(0xFFF3F4F6), borderRadius: BorderRadius.circular(6)),
+            child: const Icon(Icons.remove, size: 14, color: Color(0xFF9CA3AF)),
+          ),
+        ),
+      ]),
+      const SizedBox(height: 8),
+      Row(children: [
+        Expanded(child: TextFormField(
+          initialValue: r.beforeValue,
+          decoration: _inputDeco('DS 현재값'),
+          readOnly: true,
+          style: const TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)),
+        )),
+        const SizedBox(width: 8),
+        if (isTower)
+          _dropdown<String>(
+            value: _towerOptions.contains(r.afterValue) ? r.afterValue : _towerOptions.first,
+            items: _towerOptions.map((t) => DropdownMenuItem(value: t,
+                child: Text(t, style: const TextStyle(fontSize: 13)))).toList(),
+            onChanged: (v) => setState(() => r.afterValue = v ?? ''),
+          )
+        else
+          Expanded(child: TextFormField(
+            initialValue: r.afterValue,
+            decoration: _inputDeco('변경 후 값'),
+            style: const TextStyle(fontSize: 13),
+            onChanged: (v) => r.afterValue = v,
+          )),
+      ]),
+    ]);
   }
 }
