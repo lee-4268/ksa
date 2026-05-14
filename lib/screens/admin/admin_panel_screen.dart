@@ -10,6 +10,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../services/auth_service.dart';
 import '../../services/callname_service.dart';
+import '../../services/ds_data_service.dart';
 import '../../services/inspection_service.dart';
 import '../../widgets/progress_dialog.dart';
 import 'user_management_screen.dart';
@@ -48,6 +49,11 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
   bool _remapping = false;
   String? _remapResult;
 
+  // DS Detail 재빌드
+  final _dsDataSvc = DsDataService();
+  List<DsUploadInfo> _dsUploads = [];
+  bool _dsDetailBuilding = false;
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
@@ -56,8 +62,10 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
       final token = context.read<AuthService>().authToken;
       _callnameService.setAuthToken(token);
       _inspSvc.setAuthToken(token);
+      _dsDataSvc.setAuthToken(token);
       _loadDbStatus();
       _loadKcaMeta();
+      _loadDsUploads();
     }
   }
 
@@ -66,6 +74,166 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
       final items = await _inspSvc.getMeta();
       if (mounted) setState(() => _kcaMeta = items);
     } catch (_) {}
+  }
+
+  Future<void> _loadDsUploads() async {
+    try {
+      final stats = await _dsDataSvc.getStats();
+      if (mounted) setState(() => _dsUploads = stats.uploads);
+    } catch (_) {}
+  }
+
+  Future<void> _showDsDetailBuildDialog() async {
+    if (_dsUploads.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('DS 업로드 목록을 불러오는 중입니다.')));
+      return;
+    }
+
+    DsUploadInfo? selected = _dsUploads.first;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setS) => Dialog(
+          insetPadding: const EdgeInsets.symmetric(horizontal: 32),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 400),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(24, 28, 24, 20),
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+                Container(
+                  width: 52, height: 52,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF2563EB).withValues(alpha: 0.10),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(Icons.sync_rounded, color: Color(0xFF2563EB), size: 26),
+                ),
+                const SizedBox(height: 14),
+                const Text('DS Detail 재빌드',
+                    style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: Color(0xFF111827))),
+                const SizedBox(height: 4),
+                const Text('선택한 DS 업로드 기준으로 ds_detail.db를 재빌드합니다.\n설치장소 등 신규 필드가 반영됩니다.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+                const SizedBox(height: 16),
+                Container(
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF9FAFB),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: const Color(0xFFE5E7EB)),
+                  ),
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+                  child: DropdownButton<DsUploadInfo>(
+                    value: selected,
+                    isExpanded: true,
+                    underline: const SizedBox(),
+                    style: const TextStyle(fontSize: 13, color: Color(0xFF111827)),
+                    items: _dsUploads.map((u) {
+                      final date = u.actualDate.length == 8
+                          ? '${u.actualDate.substring(0, 4)}-${u.actualDate.substring(4, 6)}-${u.actualDate.substring(6, 8)}'
+                          : u.actualDate;
+                      return DropdownMenuItem(
+                        value: u,
+                        child: Text('${u.divisionName} · $date'),
+                      );
+                    }).toList(),
+                    onChanged: (v) { if (v != null) setS(() => selected = v); },
+                  ),
+                ),
+                const SizedBox(height: 20),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF2563EB),
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      elevation: 0,
+                    ),
+                    onPressed: () => Navigator.pop(ctx, true),
+                    child: const Text('재빌드 시작',
+                        style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx, false),
+                  child: const Text('취소', style: TextStyle(fontSize: 14, color: Color(0xFF9CA3AF))),
+                ),
+              ]),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    if (confirmed != true || selected == null || !mounted) return;
+
+    setState(() => _dsDetailBuilding = true);
+    try {
+      final jobId = await _inspSvc.buildDsDetail(selected!.divisionId, selected!.importDateSk);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('재빌드 시작 (jobId: $jobId)\n완료까지 수분 소요될 수 있습니다.'),
+        backgroundColor: const Color(0xFF1A8754),
+        duration: const Duration(seconds: 6),
+      ));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('재빌드 실패: $e'), backgroundColor: Colors.red,
+      ));
+    } finally {
+      if (mounted) setState(() => _dsDetailBuilding = false);
+    }
+  }
+
+  Widget _buildDsDetailCard() {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 8, offset: const Offset(0, 2))],
+      ),
+      child: Row(children: [
+        Container(
+          width: 44, height: 44,
+          decoration: BoxDecoration(
+            color: const Color(0xFF2563EB).withValues(alpha: 0.08),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: const Icon(Icons.sync_rounded, color: Color(0xFF2563EB), size: 22),
+        ),
+        const SizedBox(width: 14),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text('DS Detail 재빌드',
+                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+            const SizedBox(height: 2),
+            Text('설치장소 등 신규 필드 반영',
+                style: TextStyle(fontSize: 12, color: Colors.grey.shade500)),
+          ]),
+        ),
+        const SizedBox(width: 8),
+        _dsDetailBuilding
+            ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2))
+            : TextButton(
+                onPressed: _showDsDetailBuildDialog,
+                style: TextButton.styleFrom(
+                  foregroundColor: const Color(0xFF2563EB),
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                ),
+                child: const Text('실행', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+              ),
+      ]),
+    );
   }
 
   Future<void> _runGeocode() async {
@@ -618,6 +786,10 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
           // KCA 수검대상 Import (관리자 이상)
           if (authService.isAdmin)
             _buildKcaImportCard(),
+
+          // DS Detail 재빌드 (관리자 이상)
+          if (authService.isAdmin)
+            _buildDsDetailCard(),
 
           // 호출명칭 DB 관리 (최고 관리자만)
           if (authService.userRole == AppUserRole.superAdmin)
