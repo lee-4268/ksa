@@ -1957,17 +1957,17 @@ class _ChangeRequestDialogState extends State<_ChangeRequestDialog> {
       }
     }
     final byPk = <String, List<Map<String, String>>>{};
+    final byLicense = <String, List<Map<String, String>>>{};  // pk 없는 경우
     for (final e in _entries) {
       final pk = _schedulePkFor(e.licenseNo);
+      final rowData = e.rows.map((r) => {
+        'field': r.field, 'before_value': r.beforeValue,
+        'after_value': r.afterValue, '장치번호': r.deviceNo, 'memo': e.memo,
+      }).toList();
       if (pk.isEmpty) {
-        await ProgressDialog(context).error(message: '연결된 일정을\n찾을 수 없습니다');
-        return;
-      }
-      for (final r in e.rows) {
-        byPk.putIfAbsent(pk, () => []).add({
-          'field': r.field, 'before_value': r.beforeValue,
-          'after_value': r.afterValue, '장치번호': r.deviceNo, 'memo': e.memo,
-        });
+        byLicense.putIfAbsent(e.licenseNo, () => []).addAll(rowData);
+      } else {
+        byPk.putIfAbsent(pk, () => []).addAll(rowData);
       }
     }
 
@@ -1977,6 +1977,14 @@ class _ChangeRequestDialogState extends State<_ChangeRequestDialog> {
     for (final entry in byPk.entries) {
       try {
         final n = await widget.service.createChangeRequest(entry.key, entry.value);
+        total += n;
+      } catch (e) {
+        failed.add('${entry.key}: $e');
+      }
+    }
+    for (final entry in byLicense.entries) {
+      try {
+        final n = await widget.service.createChangeRequestDirect(entry.key, entry.value);
         total += n;
       } catch (e) {
         failed.add('${entry.key}: $e');

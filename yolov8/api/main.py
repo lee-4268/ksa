@@ -14907,6 +14907,47 @@ async def inspection_change_request_create(pk: str, request: Request, req: Chang
     return {"success": True, "count": count}
 
 
+class ChangeRequestDirectReq(BaseModel):
+    허가번호: str
+    items: list[ChangeRequestItem]
+
+
+@app.post("/change-request/direct")
+async def change_request_direct(request: Request, req: ChangeRequestDirectReq):
+    """일정 미연결 허가번호에 대한 변경개설 요청 (admin/manager 전용)."""
+    empno = await _verify_auth(request)
+    role = await asyncio.to_thread(_get_user_role_sync, empno)
+    if role not in ("admin", "manager"):
+        raise HTTPException(403, "권한 없음")
+
+    if not req.items:
+        raise HTTPException(400, "변경 항목이 비어있습니다.")
+    for it in req.items:
+        if it.field not in WF_CHANGE_FIELDS:
+            raise HTTPException(400, f"잘못된 변경 항목: {it.field}")
+        if it.field in WF_CHANGE_DEVICE_FIELDS and not it.장치번호.strip():
+            raise HTTPException(400, f"{it.field}는 장치번호 필수")
+        if not it.after_value.strip():
+            raise HTTPException(400, f"{it.field} 변경 후 값이 비어있습니다.")
+
+    now = datetime.now(timezone.utc).isoformat()
+
+    def _save():
+        c = sqlite3.connect(_INSP_DB, timeout=60)
+        for it in req.items:
+            c.execute(
+                'INSERT INTO change_request(schedule_pk, 허가번호, field, before_value, '
+                'after_value, 장치번호, memo, status, requested_by, requested_at) '
+                'VALUES (?,?,?,?,?,?,?,?,?,?)',
+                (None, req.허가번호, it.field, it.before_value, it.after_value,
+                 it.장치번호, it.memo, 'REQUESTED', empno, now))
+        c.commit(); c.close()
+        return len(req.items)
+
+    count = await asyncio.to_thread(_save)
+    return {"success": True, "count": count}
+
+
 @app.get("/change-request")
 async def change_request_list(
     request: Request, schedule_pk: str = "", status: str = "",

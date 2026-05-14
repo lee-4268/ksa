@@ -343,6 +343,20 @@ class InspectionService {
     return (body['count'] as num?)?.toInt() ?? 0;
   }
 
+  Future<int> createChangeRequestDirect(String licenseNo, List<Map<String, dynamic>> items) async {
+    final resp = await http.post(
+      Uri.parse('$_baseUrl/change-request/direct'),
+      headers: _headers,
+      body: json.encode({'허가번호': licenseNo, 'items': items}),
+    ).timeout(_apiTimeout);
+    if (resp.statusCode != 200) {
+      final b = json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+      throw Exception(b['detail'] ?? '변경개설 요청 실패');
+    }
+    final body = json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+    return (body['count'] as num?)?.toInt() ?? 0;
+  }
+
   Future<List<Map<String, dynamic>>> listChangeRequests({
     String schedulePk = '', String status = '',
     String licenseNo = '', String accessTeam = '', int year = 0,
