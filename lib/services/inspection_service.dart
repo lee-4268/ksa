@@ -145,7 +145,7 @@ class InspectionService {
     int pageSize = 100,
     String scheduleYn = '',
     String scheduleWeek = '',
-    String workflowStatus = '',   // Phase 5: 워크플로우 상태 서버측 필터
+    List<String> workflowStatuses = const [],   // Phase 5: 워크플로우 상태 서버측 필터 (복수 선택)
     String needsRecheck = '',     // Phase 5: '1' = 재점검 필요만
     String overdueOnly = '',      // Phase 5: '1' = SLA 임계점 초과 건만
   }) async {
@@ -158,7 +158,7 @@ class InspectionService {
         'page': page, 'page_size': pageSize,
         'schedule_yn': scheduleYn,
         'schedule_week': scheduleWeek,
-        'workflow_status': workflowStatus,
+        'workflow_status': workflowStatuses.join(','),
         'needs_recheck': needsRecheck,
         'overdue_only': overdueOnly,
       }),

@@ -116,10 +116,10 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
   Map<String, String> _scheduleCrewMap = {};
   // 허가번호 → 재점검 필요 (Phase 4)
   Set<String> _scheduleNeedsRecheck = <String>{};
-  // 워크플로우 상태 필터 ('' = 전체)
-  String _statusFilter = '';
-  String _pStatusFilter = '';   // pending (드롭다운 적용 전)
-  String _pNationGroup = '';    // 밴드선택 pending (단일 선택)
+  // 워크플로우 상태 필터 (빈 리스트 = 전체)
+  List<String> _statusFilters = [];
+  List<String> _pStatusFilters = [];   // pending (다이얼로그 적용 전)
+  List<String> _pNationGroups = [];    // 밴드선택 pending (복수 선택)
   // 재점검 필요 건만 보기 (Phase 4)
   bool _recheckOnly = false;
   // SLA 임계점 초과 건만 보기 (Phase 5)
@@ -227,7 +227,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
       _aHdqt.isNotEmpty || _aTeam.isNotEmpty || _aQuarters.isNotEmpty ||
       _aNationGroups.isNotEmpty || _aKcaResults.isNotEmpty || _aSearch.isNotEmpty ||
       _aScheduled.isNotEmpty || _aSchedWeek.isNotEmpty || _aCrew.isNotEmpty ||
-      _statusFilter.isNotEmpty || _recheckOnly || _overdueOnly;
+      _statusFilters.isNotEmpty || _recheckOnly || _overdueOnly;
 
   @override
   void initState() {
@@ -250,7 +250,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
       } else if (f == 'OVERDUE') {
         _overdueOnly = true;
       } else {
-        _pStatusFilter = _statusFilter = f;
+        _pStatusFilters = _statusFilters = [f];
       }
     }
     _hdrHorizCtrl.addListener(_syncHdrScroll);
@@ -370,7 +370,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
         scheduleWeek: _aSchedWeek,
         // Phase 5: 워크플로우 상태/재점검/SLA 지연도 서버에 전달
         // (클라이언트 _filteredItems도 동일 조건 → 멱등 OK)
-        workflowStatus: _statusFilter,
+        workflowStatuses: _statusFilters,
         needsRecheck: _recheckOnly ? '1' : '',
         overdueOnly: _overdueOnly ? '1' : '',
       );
@@ -502,9 +502,9 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     _aScheduled = _pScheduled;
     _aSchedWeek = _pSchedWeek;
     _aCrew = _pCrew;
-    _statusFilter = _pStatusFilter;
+    _statusFilters = List.from(_pStatusFilters);
     _aQuarters = List.from(_pQuarters);
-    _aNationGroups = _pNationGroup.isEmpty ? [] : [_pNationGroup];
+    _aNationGroups = List.from(_pNationGroups);
     _aKcaResults = List.from(_pKcaResults);
     _page = 1;
     _selectedLicenseNos.clear();
@@ -513,10 +513,9 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
 
   void _resetFilters() {
     _pHdqt = _pTeam = _pSearch = _pScheduled = _pSchedWeek = _pCrew = '';
-    _pStatusFilter = _pNationGroup = '';
     _aHdqt = _aTeam = _aSearch = _aScheduled = _aSchedWeek = _aCrew = '';
-    _statusFilter = '';
-    _pNationGroup = '';
+    _pStatusFilters = []; _statusFilters = [];
+    _pNationGroups = [];
     _pQuarters = []; _pKcaResults = [];
     _aQuarters = []; _aNationGroups = []; _aKcaResults = [];
     _searchCtrl.clear();
@@ -1721,7 +1720,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                 Builder(builder: (_) {
                   // 조 필터는 클라이언트 사이드라 _total(서버 카운트)에 미반영.
                   // 조/상태/재점검/SLA 필터 활성 시 현재 페이지에서 필터된 건수를 표시.
-                  final clientFiltered = _aCrew.isNotEmpty || _statusFilter.isNotEmpty
+                  final clientFiltered = _aCrew.isNotEmpty || _statusFilters.isNotEmpty
                       || _recheckOnly || _overdueOnly;
                   final shown = clientFiltered ? _filteredItems.length : _total;
                   final truncated = clientFiltered && _total > _items.length;
@@ -1839,14 +1838,14 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                 return _filterDropdown('조', _pCrew, crewOptions,
                     (v) => setState(() => _pCrew = v ?? ''));
               }),
-              _filterDropdown('밴드선택', _pNationGroup, ['', ..._allNationGroups],
-                  (v) => setState(() => _pNationGroup = v ?? '')),
-              _filterDropdown(
-                '상태', _pStatusFilter,
-                const ['', '미배정', 'REGISTERED', 'PRE_CHECKED', 'PRE_CHECK',
+              _buildMultiDropdown('밴드선택', _pNationGroups, _allNationGroups,
+                  (v) => setState(() => _pNationGroups = v)),
+              _buildMultiDropdown(
+                '상태', _pStatusFilters,
+                const ['미배정', 'REGISTERED', 'PRE_CHECKED', 'PRE_CHECK',
                        'PRE_CHECK_DONE', 'CHANGE_FILING', 'RE_CHECK',
                        'REPORT_ISSUED', 'SUBMITTED', 'INSPECTED'],
-                (v) => setState(() => _pStatusFilter = v ?? ''),
+                (v) => setState(() => _pStatusFilters = v),
                 displayMap: const {
                   '미배정': '미배정',
                   'REGISTERED': '등록됨',
@@ -2081,7 +2080,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
               _year = v;
               _pHdqt = _pTeam = _pSearch = _pCrew = '';
               _aHdqt = _aTeam = _aSearch = _aCrew = '';
-              _pNationGroup = '';
+              _pNationGroups = [];
               _pQuarters = []; _pKcaResults = [];
               _aQuarters = []; _aNationGroups = []; _aKcaResults = [];
               _searchCtrl.clear();
@@ -2169,7 +2168,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
   }
 
   Widget _buildMultiDropdown(String label, List<String> selected, List<String> options,
-      void Function(List<String>) onChanged) {
+      void Function(List<String>) onChanged, {Map<String, String>? displayMap}) {
     final hasVal = selected.isNotEmpty;
     final displayText = hasVal ? '$label (${selected.length})' : label;
     return GestureDetector(
@@ -2178,6 +2177,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
           context: context,
           builder: (ctx) => _MultiSelectDialog(
             title: label, options: options, selected: selected,
+            displayMap: displayMap,
           ),
         );
         if (result != null) onChanged(result);
@@ -2237,19 +2237,20 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     }
     if (_aNationGroups.isNotEmpty) {
       addChip('밴드', _aNationGroups.join(', '), () {
-        setState(() { _pNationGroup = ''; _aNationGroups = []; _page = 1; _selectedLicenseNos.clear(); });
+        setState(() { _pNationGroups = []; _aNationGroups = []; _page = 1; _selectedLicenseNos.clear(); });
         _loadAll();
       });
     }
-    if (_statusFilter.isNotEmpty) {
+    if (_statusFilters.isNotEmpty) {
       const statusLabels = {
         '미배정': '미배정', 'REGISTERED': '등록됨', 'PRE_CHECKED': '사전점검완료',
         'PRE_CHECK': '사전점검중', 'PRE_CHECK_DONE': '점검완료',
         'CHANGE_FILING': '변경개설중', 'RE_CHECK': '재점검대기',
         'REPORT_ISSUED': '내역서발급', 'SUBMITTED': '접수완료', 'INSPECTED': '수검완료',
       };
-      addChip('상태', statusLabels[_statusFilter] ?? _statusFilter, () {
-        setState(() { _pStatusFilter = ''; _statusFilter = ''; _page = 1; _selectedLicenseNos.clear(); });
+      final label = _statusFilters.map((s) => statusLabels[s] ?? s).join(', ');
+      addChip('상태', label, () {
+        setState(() { _pStatusFilters = []; _statusFilters = []; _page = 1; _selectedLicenseNos.clear(); });
         _loadAll();
       });
     }
@@ -2398,23 +2399,18 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
       });
     }
     // 워크플로우 상태 필터 (서버 필터와 동일 조건 — 페이지 내 멱등 재적용)
-    if (_statusFilter.isNotEmpty) {
-      if (_statusFilter == '미배정') {
-        rows = rows.where((it) => !_isScheduled('${it['허가번호'] ?? ''}'));
-      } else if (_statusFilter == 'PRE_CHECKED') {
-        // inspection_targets.pre_check_status 기반 (일정 미등록 상태에서 사전점검완료 표시된 건)
-        rows = rows.where((it) {
-          final no = '${it['허가번호'] ?? ''}';
-          return !_isScheduled(no) && (_targetPreCheckMap[no] ?? '').isNotEmpty;
-        });
-      } else {
-        rows = rows.where((it) {
-          final no = '${it['허가번호'] ?? ''}';
+    if (_statusFilters.isNotEmpty) {
+      rows = rows.where((it) {
+        final no = '${it['허가번호'] ?? ''}';
+        return _statusFilters.any((f) {
+          if (f == '미배정') return !_isScheduled(no);
+          if (f == 'PRE_CHECKED') {
+            return !_isScheduled(no) && (_targetPreCheckMap[no] ?? '').isNotEmpty;
+          }
           if (!_isScheduled(no)) return false;
-          final st = _scheduleStatusMap[no] ?? 'REGISTERED';
-          return st == _statusFilter;
+          return (_scheduleStatusMap[no] ?? 'REGISTERED') == f;
         });
-      }
+      });
     }
     // 재점검 필요 (불합격/부적합 결과)
     if (_recheckOnly) {
@@ -4377,7 +4373,8 @@ class _MultiSelectDialog extends StatefulWidget {
   final String title;
   final List<String> options;
   final List<String> selected;
-  const _MultiSelectDialog({required this.title, required this.options, required this.selected});
+  final Map<String, String>? displayMap;
+  const _MultiSelectDialog({required this.title, required this.options, required this.selected, this.displayMap});
 
   @override
   State<_MultiSelectDialog> createState() => _MultiSelectDialogState();
@@ -4427,7 +4424,8 @@ class _MultiSelectDialogState extends State<_MultiSelectDialog> {
               shrinkWrap: true,
               children: widget.options.map((opt) => CheckboxListTile(
                 dense: true,
-                title: Text(opt, style: const TextStyle(fontSize: 13)),
+                title: Text(widget.displayMap?[opt] ?? opt,
+                    style: const TextStyle(fontSize: 13)),
                 value: _selected.contains(opt),
                 activeColor: const Color(0xFFE53935),
                 onChanged: (v) => setState(() {

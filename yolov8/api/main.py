@@ -13731,18 +13731,25 @@ def _build_insp_where(year, sheet, filters, search, addr, schedule_yn="", schedu
         params.extend([year, schedule_week])
     # Phase 5: 워크플로우 상태 필터 (대시보드 카드 → 일정 화면 점프용)
     if workflow_status:
-        if workflow_status == '미배정':
-            # 일정 미등록 — schedule이 없는 건만
-            where.append("REPLACE(허가번호,'-','') NOT IN (SELECT REPLACE(허가번호,'-','') FROM inspection_schedules WHERE year=?)")
-            params.append(year)
-        elif workflow_status == 'PRE_CHECKED':
-            # 사전점검완료 — inspection_targets.pre_check_status 기반, 일정 미등록
-            where.append("(pre_check_status IS NOT NULL AND pre_check_status != '')")
-            where.append("REPLACE(허가번호,'-','') NOT IN (SELECT REPLACE(허가번호,'-','') FROM inspection_schedules WHERE year=?)")
-            params.append(year)
-        else:
-            where.append("REPLACE(허가번호,'-','') IN (SELECT REPLACE(허가번호,'-','') FROM inspection_schedules WHERE year=? AND workflow_status=?)")
-            params.extend([year, workflow_status])
+        statuses = [s.strip() for s in workflow_status.split(',') if s.strip()]
+        or_parts, or_params = [], []
+        sched_statuses = []
+        for st in statuses:
+            if st == '미배정':
+                or_parts.append("REPLACE(허가번호,'-','') NOT IN (SELECT REPLACE(허가번호,'-','') FROM inspection_schedules WHERE year=?)")
+                or_params.append(year)
+            elif st == 'PRE_CHECKED':
+                or_parts.append("(pre_check_status IS NOT NULL AND pre_check_status != '' AND REPLACE(허가번호,'-','') NOT IN (SELECT REPLACE(허가번호,'-','') FROM inspection_schedules WHERE year=?))")
+                or_params.append(year)
+            else:
+                sched_statuses.append(st)
+        if sched_statuses:
+            ph = ','.join('?' * len(sched_statuses))
+            or_parts.append(f"REPLACE(허가번호,'-','') IN (SELECT REPLACE(허가번호,'-','') FROM inspection_schedules WHERE year=? AND workflow_status IN ({ph}))")
+            or_params.extend([year, *sched_statuses])
+        if or_parts:
+            where.append('(' + ' OR '.join(or_parts) + ')')
+            params.extend(or_params)
     if needs_recheck == '1':
         where.append("REPLACE(허가번호,'-','') IN (SELECT REPLACE(허가번호,'-','') FROM inspection_results WHERE year=? AND needs_recheck='1')")
         params.append(year)
