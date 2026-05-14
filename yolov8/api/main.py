@@ -8085,7 +8085,7 @@ def _cert_batch_lookup_cached(zpwino_list: list) -> dict:
     if not zpwino_list:
         return {}
     _cert_cache_load()
-    cols = ["zpwino", "zpwina", "zpwiadr", "zpcode", "area_hdofc_nm", "ons_team_nm", "zpirty3", "eqp_ser_no", "zpwilat", "zpwilon", "max_seqno", "zpprac1"]
+    cols = ["zpwino", "zpwina", "zpwiadr", "zpcode", "area_hdofc_nm", "ons_team_nm", "zpirty3", "eqp_ser_no", "max_seqno", "zpprac1"]
     col_str = ', '.join(cols)
     results = {}
     BATCH = 900
