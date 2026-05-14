@@ -102,6 +102,8 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
   final _selectedLicenseNos = <String>{};
   // 이미 일정 등록된 허가번호 세트
   Set<String> _scheduledNos = {};
+  // 허가번호 → pre_check_status 맵 (사전점검완료 칩용)
+  Map<String, String> _targetPreCheckMap = {};
   // 허가번호 → 수검예정주차 맵
   Map<String, String> _scheduleWeekMap = {};
   // 허가번호 → workflow_status 맵 (Phase 1)
@@ -299,6 +301,11 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
       if (dataRes != null) {
         _items = List<Map<String, dynamic>>.from(dataRes['items'] ?? []);
         _total = (dataRes['total'] as num?)?.toInt() ?? 0;
+        _targetPreCheckMap = {
+          for (final it in _items)
+            if ((it['pre_check_status'] ?? '').toString().isNotEmpty)
+              '${it['허가번호'] ?? ''}': '${it['pre_check_status']}',
+        };
       } else {
         _error = '데이터 로드 실패';
       }
@@ -446,6 +453,11 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
       if (res != null) {
         _items = List<Map<String, dynamic>>.from(res['items'] ?? []);
         _total = (res['total'] as num?)?.toInt() ?? 0;
+        _targetPreCheckMap = {
+          for (final it in _items)
+            if ((it['pre_check_status'] ?? '').toString().isNotEmpty)
+              '${it['허가번호'] ?? ''}': '${it['pre_check_status']}',
+        };
       } else {
         _error = '데이터 로드 실패';
       }
@@ -869,6 +881,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
   Widget _buildStatusBadge(String? status) {
     final s = (status ?? 'REGISTERED').isEmpty ? 'REGISTERED' : status!;
     final (label, color) = switch (s) {
+      'PRE_CHECKED' => ('사전점검완료', const Color(0xFF00897B)),
       'REGISTERED' => ('등록됨', const Color(0xFF6E7780)),
       'PRE_CHECK' => ('사전점검중', const Color(0xFF6B47DC)),
       'PRE_CHECK_DONE' => ('점검완료', const Color(0xFF1A8754)),
@@ -2471,7 +2484,11 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     final week = _scheduleWeekMap[licenseNo] ?? '';
     final status = _scheduleStatusMap[licenseNo];
     final submission = _scheduleSubmissionMap[licenseNo] ?? '';
-    if (week.isEmpty && status == null) return const SizedBox.shrink();
+    if (week.isEmpty && status == null) {
+      final preCheck = _targetPreCheckMap[licenseNo] ?? '';
+      if (preCheck.isNotEmpty) return _buildStatusBadge(preCheck);
+      return const SizedBox.shrink();
+    }
     final showSubmission = status == 'SUBMITTED' && submission.isNotEmpty;
     final needsRecheck =
         status == 'INSPECTED' && _scheduleNeedsRecheck.contains(licenseNo);

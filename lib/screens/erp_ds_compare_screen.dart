@@ -87,6 +87,8 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
   String? _error;
   ErpDsCompareResult? _result;
   String _filter = '전체';
+  Set<String> _selectedForPreCheck = {};
+  bool _markingPreCheck = false;
 
   // 결과 테이블: 컬럼 정의 (가용 폭에 비례 분배)
   static const List<String> _colTitles = [
@@ -812,6 +814,32 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
                 ),
               ),
               const Spacer(),
+              if (context.read<AuthService>().isAdmin) ...[
+                ElevatedButton.icon(
+                  onPressed: _selectedForPreCheck.isEmpty || _markingPreCheck
+                      ? null
+                      : _markPreChecked,
+                  icon: _markingPreCheck
+                      ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                      : const Icon(Icons.check_circle_outline, size: 16),
+                  label: Text(
+                    _selectedForPreCheck.isEmpty
+                        ? '사전점검완료로 표시'
+                        : '사전점검완료 (${_selectedForPreCheck.length}건)',
+                    style: const TextStyle(fontSize: 13),
+                  ),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF00897B),
+                    foregroundColor: Colors.white,
+                    disabledBackgroundColor: Colors.grey.shade300,
+                    disabledForegroundColor: Colors.grey.shade500,
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                    elevation: 0,
+                  ),
+                ),
+                const SizedBox(width: 8),
+              ],
               if (widget.onScheduleNavigate != null) ...[
                 ElevatedButton.icon(
                   onPressed: () => widget.onScheduleNavigate!(
@@ -945,13 +973,17 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
 
   Widget _buildResultTable(List<CompareItem> items, ErpDsCompareResult r) {
     const tableHeight = 560.0;
+    const chkW = 36.0;
+    final isAdmin = context.read<AuthService>().isAdmin;
 
     return SizedBox(
       height: tableHeight,
       child: LayoutBuilder(
         builder: (ctx, cons) {
-          _ensureColWidths(cons.maxWidth);
+          _ensureColWidths(isAdmin ? cons.maxWidth - chkW : cons.maxWidth);
           final widths = _colWidths!;
+          final allSelected = items.isNotEmpty &&
+              items.every((it) => _selectedForPreCheck.contains(it.zpwino));
           return Column(
             children: [
               // 헤더 (sticky)
@@ -965,18 +997,36 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
                 ),
                 height: 44,
                 child: Row(
-                  children: List.generate(_colTitles.length, (i) {
-                    return _buildHeaderCell(i, widths[i]);
-                  }),
+                  children: [
+                    if (isAdmin)
+                      SizedBox(
+                        width: chkW,
+                        height: 44,
+                        child: Checkbox(
+                          value: allSelected,
+                          tristate: false,
+                          activeColor: const Color(0xFF00897B),
+                          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          onChanged: (_) => setState(() {
+                            if (allSelected) {
+                              _selectedForPreCheck.removeAll(items.map((e) => e.zpwino));
+                            } else {
+                              _selectedForPreCheck.addAll(items.map((e) => e.zpwino));
+                            }
+                          }),
+                        ),
+                      ),
+                    ...List.generate(_colTitles.length, (i) => _buildHeaderCell(i, widths[i])),
+                  ],
                 ),
               ),
-              // 바디 (가로 스크롤 없음, 세로만)
+              // 바디 (세로 스크롤)
               Expanded(
                 child: ListView.builder(
                   itemCount: items.length,
                   itemExtent: 48,
                   itemBuilder: (ctx, idx) {
-                    return _buildDataRow(items[idx], r, idx, widths);
+                    return _buildDataRow(items[idx], r, idx, widths, isAdmin ? chkW : 0);
                   },
                 ),
               ),
@@ -1089,7 +1139,9 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
   }
 
   Widget _buildDataRow(
-      CompareItem item, ErpDsCompareResult r, int idx, List<double> widths) {
+      CompareItem item, ErpDsCompareResult r, int idx, List<double> widths,
+      [double chkW = 0]) {
+    final isSelected = _selectedForPreCheck.contains(item.zpwino);
     final cells = <Widget>[
       // 0 허가번호
       Text(item.zpwino,
@@ -1160,29 +1212,48 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
 
     return Container(
       decoration: BoxDecoration(
-        color: idx.isEven ? Colors.white : const Color(0xFFFAFBFC),
-        border: const Border(
-          bottom: BorderSide(color: Color(0xFFEEF1F5)),
-        ),
+        color: isSelected
+            ? const Color(0xFF00897B).withValues(alpha: 0.08)
+            : (idx.isEven ? Colors.white : const Color(0xFFFAFBFC)),
+        border: const Border(bottom: BorderSide(color: Color(0xFFEEF1F5))),
       ),
       child: Row(
-        children: List.generate(cells.length, (i) {
-          final isGroupBoundary = _groupBoundaryRight.contains(i);
-          return Container(
-            width: widths[i],
-            height: 48,
-            padding: const EdgeInsets.symmetric(horizontal: 8),
-            alignment: Alignment.center,
-            decoration: isGroupBoundary
-                ? const BoxDecoration(
-                    border: Border(
-                      right: BorderSide(color: Color(0xFF9AA3AE), width: 2),
-                    ),
-                  )
-                : null,
-            child: cells[i],
-          );
-        }),
+        children: [
+          if (chkW > 0)
+            SizedBox(
+              width: chkW,
+              height: 48,
+              child: Checkbox(
+                value: isSelected,
+                activeColor: const Color(0xFF00897B),
+                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                onChanged: (_) => setState(() {
+                  if (isSelected) {
+                    _selectedForPreCheck.remove(item.zpwino);
+                  } else {
+                    _selectedForPreCheck.add(item.zpwino);
+                  }
+                }),
+              ),
+            ),
+          ...List.generate(cells.length, (i) {
+            final isGroupBoundary = _groupBoundaryRight.contains(i);
+            return Container(
+              width: widths[i],
+              height: 48,
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              alignment: Alignment.center,
+              decoration: isGroupBoundary
+                  ? const BoxDecoration(
+                      border: Border(
+                        right: BorderSide(color: Color(0xFF9AA3AE), width: 2),
+                      ),
+                    )
+                  : null,
+              child: cells[i],
+            );
+          }),
+        ],
       ),
     );
   }
@@ -1618,6 +1689,31 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
       );
     }
     return chipContent;
+  }
+
+  Future<void> _markPreChecked() async {
+    final licenseNos = _selectedForPreCheck.toList();
+    if (licenseNos.isEmpty) return;
+    setState(() => _markingPreCheck = true);
+    try {
+      final auth = context.read<AuthService>();
+      _inspectionService.setAuthToken(auth.authToken);
+      final updated = await _inspectionService.markPreChecked(licenseNos);
+      if (!mounted) return;
+      setState(() => _selectedForPreCheck.clear());
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('사전점검완료 표시 완료: $updated건'),
+        backgroundColor: const Color(0xFF00897B),
+      ));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('실패: $e'),
+        backgroundColor: Colors.red,
+      ));
+    } finally {
+      if (mounted) setState(() => _markingPreCheck = false);
+    }
   }
 
   void _openTowerMismatchModal(CompareItem item) {

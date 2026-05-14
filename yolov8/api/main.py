@@ -11615,8 +11615,8 @@ def _init_inspection_db():
         기준연도 INTEGER, skt본부 TEXT, access담당 TEXT, 품질개선팀 TEXT,
         위도 REAL, 경도 REAL, 검사종류 TEXT DEFAULT ''
     )''')
-    # 마이그레이션: 기존 DB에 위도/경도/검사종류 컬럼 추가
-    for col in ('위도 REAL', '경도 REAL', "검사종류 TEXT DEFAULT ''"):
+    # 마이그레이션: 기존 DB에 위도/경도/검사종류/pre_check_status 컬럼 추가
+    for col in ('위도 REAL', '경도 REAL', "검사종류 TEXT DEFAULT ''", "pre_check_status TEXT DEFAULT ''"):
         try: conn.execute(f'ALTER TABLE inspection_targets ADD COLUMN {col}')
         except Exception: pass
     conn.execute('CREATE INDEX IF NOT EXISTS idx_it_year ON inspection_targets(year)')
@@ -13377,6 +13377,42 @@ async def inspection_remap_divisions(request: Request, year: int, dry_run: bool 
         'year': year,
         **result,
     }
+
+
+class PreCheckStatusReq(BaseModel):
+    license_nos: list[str]
+    status: str = "PRE_CHECKED"   # PRE_CHECKED 또는 '' (취소)
+    year: int = 0                  # 0이면 연도 무관 전체 업데이트
+
+
+@app.patch("/inspection/targets/pre-check-status")
+async def update_pre_check_status(request: Request, req: PreCheckStatusReq):
+    """사전점검완료 상태 마킹 (admin/manager 전용)."""
+    empno = await _verify_auth(request)
+    role = await asyncio.to_thread(_get_user_role_sync, empno)
+    if role not in ("admin", "manager"):
+        raise HTTPException(403, "admin/manager만 가능")
+    if not req.license_nos:
+        raise HTTPException(400, "license_nos 비어있음")
+
+    def _update():
+        c = sqlite3.connect(_INSP_DB, timeout=60)
+        updated = 0
+        for no in req.license_nos:
+            if req.year:
+                cur = c.execute(
+                    "UPDATE inspection_targets SET pre_check_status=? WHERE 허가번호=? AND year=?",
+                    (req.status, no, req.year))
+            else:
+                cur = c.execute(
+                    "UPDATE inspection_targets SET pre_check_status=? WHERE 허가번호=?",
+                    (req.status, no))
+            updated += cur.rowcount
+        c.commit(); c.close()
+        return updated
+
+    updated = await asyncio.to_thread(_update)
+    return {"success": True, "updated": updated}
 
 
 @app.post("/inspection/geocode-targets")
