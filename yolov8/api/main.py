@@ -8085,7 +8085,7 @@ def _cert_batch_lookup_cached(zpwino_list: list) -> dict:
     if not zpwino_list:
         return {}
     _cert_cache_load()
-    cols = ["zpwino", "zpwina", "zpwiadr", "zpcode", "area_hdofc_nm", "ons_team_nm", "zpirty3", "eqp_ser_no", "max_seqno", "zpprac1"]
+    cols = ["zpwino", "zpwina", "zpwiadr", "zpcode", "zpkcode", "area_hdofc_nm", "ons_team_nm", "zpirty3", "eqp_ser_no", "max_seqno", "zpprac1"]
     col_str = ', '.join(cols)
     results = {}
     BATCH = 900
@@ -10945,8 +10945,37 @@ def _erp_ds_compare_sync(
     """ERP vs DS 비교 동기 처리 — ds_detail.db 활용 (메모리 절약)."""
     import sqlite3
 
-    # 1) ERP 데이터 조회
+    # 1) ERP 데이터 조회 (기본 정보)
     erp_data = _cert_batch_lookup_cached(zpwino_list)
+
+    # 1-1) cert 직접 조회: 허가번호별 통시목록 + 일련번호목록 (복수 장치 대응)
+    erp_multi = {}  # {zpwino_norm: {"통시들": [], "일련번호들": [], "공대": "", "zpirty3": ""}}
+    _cert_db = _cert_cache_db_path or ""
+    if _cert_db and os.path.exists(_cert_db):
+        try:
+            import sqlite3 as _sq
+            _cc = _sq.connect(_cert_db, timeout=15)
+            _cc.row_factory = _sq.Row
+            all_nos_erp = list({n for raw in zpwino_list for n in (raw, raw.replace('-', ''))})
+            for i in range(0, len(all_nos_erp), BATCH if 'BATCH' in dir() else 900):
+                _ph = ','.join('?' * len(all_nos_erp[i:i+900]))
+                for _r in _cc.execute(
+                    f"SELECT REPLACE(TRIM(zpwino),'-','') AS wn, zpcode, zpkcode, eqp_ser_no, zpirty3 "
+                    f"FROM cert WHERE REPLACE(TRIM(zpwino),'-','') IN ({_ph})",
+                    all_nos_erp[i:i+900]
+                ):
+                    z = _r['wn'] or ''
+                    if z not in erp_multi:
+                        erp_multi[z] = {"통시들": [], "일련번호들": [], "공대": _r['zpkcode'] or '', "zpirty3": _r['zpirty3'] or ''}
+                    tc = str(_r['zpcode'] or '').strip()
+                    sn = str(_r['eqp_ser_no'] or '').strip()
+                    if tc and tc not in erp_multi[z]["통시들"]:
+                        erp_multi[z]["통시들"].append(tc)
+                    if sn and sn not in erp_multi[z]["일련번호들"]:
+                        erp_multi[z]["일련번호들"].append(sn)
+            _cc.close()
+        except Exception as _ce:
+            logger.warning(f"erp_multi 조회 실패: {_ce}")
 
     # 2) DS 데이터: ds_detail.db에서 직접 조회 (ZIP 파싱 불필요)
     ds_device = {}      # {zpwino: [serial, ...]}
@@ -11071,9 +11100,19 @@ def _erp_ds_compare_sync(
 
     for z in zpwino_list:
         erp = erp_data.get(z)
-        erp_zpirty3 = erp.get("zpirty3", "") if erp else ""
-        erp_serial = erp.get("eqp_ser_no", "") if erp else ""
         z_clean = z.replace('-', '')
+        multi = erp_multi.get(z_clean, {})
+
+        # ERP 철탑형태: erp_data 우선, 없으면 erp_multi
+        erp_zpirty3 = (erp.get("zpirty3", "") if erp else "") or multi.get("zpirty3", "")
+        # ERP 일련번호: cert 복수 행 모두 수집
+        erp_serials = multi.get("일련번호들", [])
+        if not erp_serials and erp:
+            sn = erp.get("eqp_ser_no", "")
+            if sn:
+                erp_serials = [sn]
+        erp_serial = ", ".join(erp_serials)
+
         ds_tower = ds_antenna.get(z_clean, "") or ds_antenna.get(z, "")
         ds_serials = ds_device.get(z_clean, []) or ds_device.get(z, [])
         ds_serial_str = ", ".join(ds_serials) if ds_serials else ""
@@ -11134,8 +11173,8 @@ def _erp_ds_compare_sync(
             "ds_form_no": ", ".join(ds_form_no.get(z_clean, []) or ds_form_no.get(z, [])),
             "tower_match": tower_result,
             "serial_match": serial_result,
-            "통시": insp.get("통시", ""),
-            "공대": insp.get("공대", ""),
+            "통시": insp.get("통시", "") or ", ".join(multi.get("통시들", [])) or (erp.get("zpcode", "") if erp else ""),
+            "공대": insp.get("공대", "") or multi.get("공대", "") or (erp.get("zpkcode", "") if erp else ""),
             "erp_prac1": erp_prac,
             "ds_prac1": ds_prac,
             "prac1_match": prac_match,

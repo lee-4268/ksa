@@ -904,7 +904,7 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
           _tongsi(item), _gongdae(item),
           item.erpZpirty3, item.dsTowerType, item.towerMatch,
           item.erpSerial, item.dsSerial, item.serialMatch,
-          _erpPrac1(item), item.dsPrac1, item.prac1Match,
+          _erpPrac1(item), item.dsPrac1, _prac1Match(item),
         ];
         for (var colIdx = 0; colIdx < values.length; colIdx++) {
           sheet
@@ -1155,7 +1155,7 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
           overflow: TextOverflow.ellipsis,
           textAlign: TextAlign.center),
       // 13 활용구분비교
-      _buildMatchChip(item.prac1Match),
+      _buildMatchChip(_prac1Match(item)),
     ];
 
     return Container(
@@ -1208,6 +1208,15 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
     final v = _schedMap?[item.zpwino]?['zpprac1'] ?? '';
     return v.isNotEmpty ? v : item.erpPrac1;
   }
+
+  String _prac1Match(CompareItem item) {
+    final erp = _erpPrac1(item);
+    final ds = item.dsPrac1;
+    if (erp.isNotEmpty && ds.isNotEmpty) return erp == ds ? '일치' : '불일치';
+    if (erp.isNotEmpty && ds.isEmpty) return 'DS누락';
+    if (erp.isEmpty && ds.isNotEmpty) return 'ERP누락';
+    return '';
+  }
   String _zpwina(CompareItem item) {
     final v = _schedMap?[item.zpwino]?['호출명칭'] ?? '';
     return v.isNotEmpty ? v : item.zpwina;
@@ -1221,7 +1230,7 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
     if (_result == null) return [];
     if (_filter == '전체') return _result!.items;
     return _result!.items.where((it) {
-      return it.towerMatch == _filter || it.serialMatch == _filter || it.prac1Match == _filter;
+      return it.towerMatch == _filter || it.serialMatch == _filter || _prac1Match(it) == _filter;
     }).toList();
   }
 
