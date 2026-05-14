@@ -13084,14 +13084,15 @@ async def inspection_staging_confirm(request: Request, req: InspStagingConfirmRe
         params + exclude_params,
     )
 
-    # "대상 추가"로 보존한 행들 다시 삽입
+    # "대상 추가"로 보존한 행들 다시 삽입 (위도/경도 포함)
     preserved_count = 0
     if added_list:
-        col_list = cols.split(',')
-        ph = ','.join('?' * len(col_list))
+        cols_with_coord = cols + ',위도,경도'
+        col_list_wc = cols_with_coord.split(',')
+        ph = ','.join('?' * len(col_list_wc))
         for row in added_list:
-            vals = tuple(row.get(c) for c in col_list)
-            conn.execute(f'INSERT INTO inspection_targets ({cols}) VALUES ({ph})', vals)
+            vals = tuple(row.get(c) for c in col_list_wc)
+            conn.execute(f'INSERT INTO inspection_targets ({cols_with_coord}) VALUES ({ph})', vals)
             preserved_count += 1
 
     # 스테이징에서 해당 허가번호 제거 (중복 방지)
