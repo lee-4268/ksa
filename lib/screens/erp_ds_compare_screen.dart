@@ -1884,6 +1884,10 @@ class _ChangeRequestDialogState extends State<_ChangeRequestDialog> {
 
   void _removeEntry(int idx) => setState(() => _entries.removeAt(idx));
 
+  void _addFieldFor(int idx, String licenseNo) {
+    setState(() => _entries.insert(idx + 1, _ChangeRequestEntry(licenseNo: licenseNo)));
+  }
+
   String _schedulePkFor(String licenseNo) {
     for (final pk in widget.schedulePks) {
       final parts = pk.split('#');
@@ -2123,6 +2127,16 @@ class _ChangeRequestDialogState extends State<_ChangeRequestDialog> {
                 style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: _orangeDark)),
           ),
           const Spacer(),
+          GestureDetector(
+            onTap: _submitting ? null : () => _addFieldFor(idx, e.licenseNo),
+            child: Container(
+              padding: const EdgeInsets.all(4),
+              decoration: BoxDecoration(
+                color: _orange.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(6)),
+              child: const Icon(Icons.add, size: 16, color: _orange),
+            ),
+          ),
+          const SizedBox(width: 6),
           GestureDetector(
             onTap: _submitting ? null : () => _removeEntry(idx),
             child: Container(
