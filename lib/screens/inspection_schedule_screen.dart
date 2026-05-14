@@ -85,7 +85,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
 
   // pending 필터 (UI 선택 중)
   String _pHdqt = '', _pTeam = '', _pSearch = '', _pScheduled = '', _pSchedWeek = '', _pCrew = '';
-  List<String> _pQuarters = [], _pNationGroups = [], _pKcaResults = [];
+  List<String> _pQuarters = [], _pKcaResults = [];
 
   // applied 필터 (실제 쿼리)
   String _aHdqt = '', _aTeam = '', _aSearch = '', _aScheduled = '';
@@ -118,6 +118,8 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
   Set<String> _scheduleNeedsRecheck = <String>{};
   // 워크플로우 상태 필터 ('' = 전체)
   String _statusFilter = '';
+  String _pStatusFilter = '';   // pending (드롭다운 적용 전)
+  String _pNationGroup = '';    // 밴드선택 pending (단일 선택)
   // 재점검 필요 건만 보기 (Phase 4)
   bool _recheckOnly = false;
   // SLA 임계점 초과 건만 보기 (Phase 5)
@@ -225,7 +227,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
       _aHdqt.isNotEmpty || _aTeam.isNotEmpty || _aQuarters.isNotEmpty ||
       _aNationGroups.isNotEmpty || _aKcaResults.isNotEmpty || _aSearch.isNotEmpty ||
       _aScheduled.isNotEmpty || _aSchedWeek.isNotEmpty || _aCrew.isNotEmpty ||
-      _recheckOnly || _overdueOnly;
+      _statusFilter.isNotEmpty || _recheckOnly || _overdueOnly;
 
   @override
   void initState() {
@@ -248,7 +250,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
       } else if (f == 'OVERDUE') {
         _overdueOnly = true;
       } else {
-        _statusFilter = f;
+        _pStatusFilter = _statusFilter = f;
       }
     }
     _hdrHorizCtrl.addListener(_syncHdrScroll);
@@ -500,8 +502,9 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     _aScheduled = _pScheduled;
     _aSchedWeek = _pSchedWeek;
     _aCrew = _pCrew;
+    _statusFilter = _pStatusFilter;
     _aQuarters = List.from(_pQuarters);
-    _aNationGroups = List.from(_pNationGroups);
+    _aNationGroups = _pNationGroup.isEmpty ? [] : [_pNationGroup];
     _aKcaResults = List.from(_pKcaResults);
     _page = 1;
     _selectedLicenseNos.clear();
@@ -510,8 +513,11 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
 
   void _resetFilters() {
     _pHdqt = _pTeam = _pSearch = _pScheduled = _pSchedWeek = _pCrew = '';
+    _pStatusFilter = _pNationGroup = '';
     _aHdqt = _aTeam = _aSearch = _aScheduled = _aSchedWeek = _aCrew = '';
-    _pQuarters = []; _pNationGroups = []; _pKcaResults = [];
+    _statusFilter = '';
+    _pNationGroup = '';
+    _pQuarters = []; _pKcaResults = [];
     _aQuarters = []; _aNationGroups = []; _aKcaResults = [];
     _searchCtrl.clear();
     _page = 1;
@@ -1833,6 +1839,51 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                 return _filterDropdown('조', _pCrew, crewOptions,
                     (v) => setState(() => _pCrew = v ?? ''));
               }),
+              Builder(builder: (_) {
+                final bands = <String>{};
+                for (final it in _items) {
+                  final b = (it['국종군'] as String? ?? '').trim();
+                  if (b.isNotEmpty) bands.add(b);
+                }
+                final bandOptions = <String>['', ...bands.toList()..sort()];
+                return _filterDropdown('밴드선택', _pNationGroup, bandOptions,
+                    (v) => setState(() => _pNationGroup = v ?? ''));
+              }),
+              _filterDropdown(
+                '상태', _pStatusFilter,
+                const ['', '미배정', 'REGISTERED', 'PRE_CHECKED', 'PRE_CHECK',
+                       'PRE_CHECK_DONE', 'CHANGE_FILING', 'RE_CHECK',
+                       'REPORT_ISSUED', 'SUBMITTED', 'INSPECTED'],
+                (v) => setState(() => _pStatusFilter = v ?? ''),
+                displayMap: const {
+                  '미배정': '미배정',
+                  'REGISTERED': '등록됨',
+                  'PRE_CHECKED': '사전점검완료',
+                  'PRE_CHECK': '사전점검중',
+                  'PRE_CHECK_DONE': '점검완료',
+                  'CHANGE_FILING': '변경개설중',
+                  'RE_CHECK': '재점검대기',
+                  'REPORT_ISSUED': '내역서발급',
+                  'SUBMITTED': '접수완료',
+                  'INSPECTED': '수검완료',
+                },
+              ),
+              StatefulBuilder(builder: (_, ss) => OutlinedButton.icon(
+                icon: Icon(Icons.warning_amber_rounded, size: 14,
+                    color: _recheckOnly ? Colors.white : const Color(0xFFE17055)),
+                label: Text('재점검 필요', style: TextStyle(fontSize: 13,
+                    color: _recheckOnly ? Colors.white : const Color(0xFFE17055))),
+                style: OutlinedButton.styleFrom(
+                  backgroundColor: _recheckOnly ? const Color(0xFFE17055) : Colors.white,
+                  side: const BorderSide(color: Color(0xFFE17055)),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                ),
+                onPressed: () {
+                  setState(() { _recheckOnly = !_recheckOnly; _page = 1; _selectedLicenseNos.clear(); });
+                  _loadAll();
+                },
+              )),
               const SizedBox(width: 4),
               ElevatedButton(
                 style: ElevatedButton.styleFrom(
@@ -2038,7 +2089,8 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
               _year = v;
               _pHdqt = _pTeam = _pSearch = _pCrew = '';
               _aHdqt = _aTeam = _aSearch = _aCrew = '';
-              _pQuarters = []; _pNationGroups = []; _pKcaResults = [];
+              _pNationGroup = '';
+              _pQuarters = []; _pKcaResults = [];
               _aQuarters = []; _aNationGroups = []; _aKcaResults = [];
               _searchCtrl.clear();
               _selectedLicenseNos.clear();
@@ -2193,7 +2245,19 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     }
     if (_aNationGroups.isNotEmpty) {
       addChip('밴드', _aNationGroups.join(', '), () {
-        setState(() { _pNationGroups = []; _aNationGroups = []; _page = 1; _selectedLicenseNos.clear(); });
+        setState(() { _pNationGroup = ''; _aNationGroups = []; _page = 1; _selectedLicenseNos.clear(); });
+        _loadAll();
+      });
+    }
+    if (_statusFilter.isNotEmpty) {
+      const statusLabels = {
+        '미배정': '미배정', 'REGISTERED': '등록됨', 'PRE_CHECKED': '사전점검완료',
+        'PRE_CHECK': '사전점검중', 'PRE_CHECK_DONE': '점검완료',
+        'CHANGE_FILING': '변경개설중', 'RE_CHECK': '재점검대기',
+        'REPORT_ISSUED': '내역서발급', 'SUBMITTED': '접수완료', 'INSPECTED': '수검완료',
+      };
+      addChip('상태', statusLabels[_statusFilter] ?? _statusFilter, () {
+        setState(() { _pStatusFilter = ''; _statusFilter = ''; _page = 1; _selectedLicenseNos.clear(); });
         _loadAll();
       });
     }
@@ -2263,10 +2327,6 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     }
 
     return Column(children: [
-      Padding(
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-        child: _buildStatusFilterBar(),
-      ),
       Padding(
         padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
         child: Row(
@@ -2364,120 +2424,6 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
           _scheduleNeedsRecheck.contains('${it['허가번호'] ?? ''}'));
     }
     return rows.toList();
-  }
-
-  // 조 필터 적용된 items (상태 카운트 산정용 — 상태 필터는 미적용)
-  List<Map<String, dynamic>> get _crewFilteredItems {
-    if (_aCrew.isEmpty) return _items;
-    return _items.where((it) {
-      final no = '${it['허가번호'] ?? ''}';
-      return (_scheduleCrewMap[no] ?? '') == _aCrew;
-    }).toList();
-  }
-
-  // 상태별 카운트 (조 필터 반영, 현재 페이지 기준)
-  Map<String, int> get _statusCounts {
-    final counts = <String, int>{
-      '미배정': 0,
-      'REGISTERED': 0, 'PRE_CHECK': 0, 'PRE_CHECK_DONE': 0,
-      'CHANGE_FILING': 0, 'RE_CHECK': 0,
-      'REPORT_ISSUED': 0, 'SUBMITTED': 0, 'INSPECTED': 0,
-    };
-    for (final it in _crewFilteredItems) {
-      final no = '${it['허가번호'] ?? ''}';
-      if (!_isScheduled(no)) {
-        counts['미배정'] = (counts['미배정'] ?? 0) + 1;
-        continue;
-      }
-      final st = _scheduleStatusMap[no] ?? 'REGISTERED';
-      counts[st] = (counts[st] ?? 0) + 1;
-    }
-    return counts;
-  }
-
-  Widget _buildStatusFilterBar() {
-    final counts = _statusCounts;
-    final crewFilteredTotal = _crewFilteredItems.length;
-    Widget chip(String value, String label, Color color) {
-      final selected = _statusFilter == value;
-      final count = value.isEmpty ? crewFilteredTotal : (counts[value] ?? 0);
-      return Padding(
-        padding: const EdgeInsets.only(right: 6),
-        child: FilterChip(
-          label: Text('$label · $count',
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-                color: selected ? Colors.white : color,
-              )),
-          selected: selected,
-          showCheckmark: false,
-          backgroundColor: Colors.white,
-          selectedColor: color,
-          side: BorderSide(color: color.withValues(alpha: selected ? 0.0 : 0.4)),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-          onSelected: (_) {
-            setState(() {
-              _statusFilter = selected ? '' : value;
-              _page = 1;
-              _selectedLicenseNos.clear();
-            });
-            _loadAll();   // 서버측 workflow_status 필터 재조회
-          },
-        ),
-      );
-    }
-    // 재점검 필요 카운트 (INSPECTED + needs_recheck — 조 필터 적용된 셋 기준)
-    final recheckCount = _crewFilteredItems.where((it) {
-      final no = '${it['허가번호'] ?? ''}';
-      return _scheduleNeedsRecheck.contains(no);
-    }).length;
-    const recheckColor = Color(0xFFE17055);
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: Row(children: [
-        chip('', '전체', const Color(0xFF607D8B)),
-        chip('미배정', '미배정', const Color(0xFFB0BEC5)),
-        chip('REGISTERED', '등록됨', const Color(0xFF6E7780)),
-        chip('PRE_CHECK', '사전점검중', const Color(0xFF6B47DC)),
-        chip('PRE_CHECK_DONE', '점검완료', const Color(0xFF1A8754)),
-        chip('CHANGE_FILING', '변경개설중', const Color(0xFFE17055)),
-        chip('RE_CHECK', '재점검대기', const Color(0xFFE17055)),
-        chip('REPORT_ISSUED', '내역서발급', const Color(0xFF0984E3)),
-        chip('SUBMITTED', '접수완료', const Color(0xFF0984E3)),
-        chip('INSPECTED', '수검완료', const Color(0xFF2D3436)),
-        // 재점검 필요 (별도 토글 — 상태 필터와 독립)
-        Padding(
-          padding: const EdgeInsets.only(right: 6),
-          child: FilterChip(
-            avatar: Icon(Icons.warning_amber_rounded,
-                size: 14, color: _recheckOnly ? Colors.white : recheckColor),
-            label: Text('재점검 필요 · $recheckCount',
-                style: TextStyle(
-                    fontSize: 12, fontWeight: FontWeight.w600,
-                    color: _recheckOnly ? Colors.white : recheckColor)),
-            selected: _recheckOnly,
-            showCheckmark: false,
-            backgroundColor: Colors.white,
-            selectedColor: recheckColor,
-            side: BorderSide(color: recheckColor.withValues(alpha: _recheckOnly ? 0.0 : 0.4)),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-            onSelected: (_) {
-              setState(() {
-                _recheckOnly = !_recheckOnly;
-                _page = 1;
-                _selectedLicenseNos.clear();
-              });
-              _loadAll();   // 서버측 needs_recheck 필터 재조회
-            },
-          ),
-        ),
-      ]),
-    );
   }
 
   Widget _buildScheduleCell(String licenseNo) {
