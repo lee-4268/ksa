@@ -548,24 +548,50 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
     return vals.join(' ');
   }
 
-  /// 기기일련번호: 중복 제거 후 줄바꿈으로 연결
-  String _serialNumbers(List<dynamic> list) {
-    final seen = <String>{};
-    final vals = list
-        .map((a) => (a as Map<String, dynamic>)['기기일련번호']?.toString().trim() ?? '')
-        .where((v) => v.isNotEmpty && seen.add(v))
-        .toList();
-    return vals.join('\n');
+  /// 장치번호별로 값을 묶어 "장치1: A · 장치2: B" 형태로 반환.
+  /// - 같은 장치번호 안에서는 중복 제거 (같은 값이면 1번만 표시)
+  /// - 장치가 1개뿐이면 라벨 생략하고 값만 반환 (기존 표시 유지)
+  /// - 줄바꿈 구분이 필요한 경우 sep='\n' 지정
+  String _fieldByDevice(List<dynamic> rows, String key, {String sep = ' · '}) {
+    final byJn = <String, List<String>>{};
+    final order = <String>[];
+    for (final r in rows) {
+      final m = r as Map<String, dynamic>;
+      final jn = (m['장치번호']?.toString().trim() ?? '');
+      final v  = (m[key]?.toString().trim() ?? '');
+      if (v.isEmpty) continue;
+      final bucket = byJn.putIfAbsent(jn, () {
+        order.add(jn);
+        return <String>[];
+      });
+      if (!bucket.contains(v)) bucket.add(v);
+    }
+    if (byJn.isEmpty) return '';
+    // 장치번호 숫자 오름차순 (비숫자/빈값은 뒤로)
+    order.sort((a, b) {
+      final ai = int.tryParse(a);
+      final bi = int.tryParse(b);
+      if (ai != null && bi != null) return ai.compareTo(bi);
+      if (ai != null) return -1;
+      if (bi != null) return 1;
+      return a.compareTo(b);
+    });
+    if (order.length == 1) {
+      return byJn[order.first]!.join(sep);
+    }
+    return order.map((jn) {
+      final label = jn.isEmpty ? '장치' : '장치$jn';
+      return '$label: ${byJn[jn]!.join(sep)}';
+    }).join(sep);
   }
 
-  String _typeApprovalNumbers(List<dynamic> list) {
-    final seen = <String>{};
-    final vals = list
-        .map((a) => (a as Map<String, dynamic>)['형식검정번호']?.toString().trim() ?? '')
-        .where((v) => v.isNotEmpty && seen.add(v))
-        .toList();
-    return vals.join('\n');
-  }
+  /// 기기일련번호: 장치별로 묶어 표시
+  String _serialNumbers(List<dynamic> list) =>
+      _fieldByDevice(list, '기기일련번호', sep: '\n');
+
+  /// 형식검정번호: 장치별로 묶어 표시
+  String _typeApprovalNumbers(List<dynamic> list) =>
+      _fieldByDevice(list, '형식검정번호', sep: '\n');
 
   String _fmtDate(String raw) {
     if (raw.length == 8 && RegExp(r'^\d{8}$').hasMatch(raw)) {
@@ -580,9 +606,11 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
     final deviceList  = (ds?['장치']  as List<dynamic>?) ?? [];
     final gain      = _antennaField(antennaList, '이득');
     final antCount  = _antennaField(antennaList, '기');
-    final mountType = _antennaField(antennaList, '공중선주 설치형태명').isNotEmpty
-        ? _antennaField(antennaList, '공중선주 설치형태명')
-        : _antennaField(antennaList, '공중선주설치형태명');
+    // 장치별 라벨링 — 컬럼명 변형(공중선주 설치형태명 / 공중선주설치형태명) 모두 시도
+    String mountType = _fieldByDevice(antennaList, '공중선주 설치형태명');
+    if (mountType.isEmpty) {
+      mountType = _fieldByDevice(antennaList, '공중선주설치형태명');
+    }
     final serial    = _serialNumbers(deviceList);  // 기기일련번호는 ds['장치'] 테이블
     final callnameList = List<Map<String, dynamic>>.from(_data?['callname_list'] ?? []);
     final facilityNames = callnameList
