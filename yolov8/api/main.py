@@ -16083,14 +16083,18 @@ async def ds_apply_partial_update(request: Request, file: UploadFile = File(...)
                 (hn, jn)
             ).fetchone()
             if not existing: continue
-            set_parts = [f'{col}=?' for col in included]
+            # 실제로 값이 달라지는 필드만 추려서 UPDATE — preview의 diff 기준과 일치시킴
+            changed = {col: new_val for col, new_val in included.items()
+                       if (str(existing[col] or '') if existing[col] is not None else '') != new_val}
+            if not changed: continue
+            set_parts = [f'{col}=?' for col in changed]
             cur = dc.execute(
                 f'UPDATE ds_장치 SET {", ".join(set_parts)} WHERE 허가번호=? AND 장치번호=?',
-                list(included.values()) + [hn, jn]
+                list(changed.values()) + [hn, jn]
             )
             if cur.rowcount > 0:
                 updated_count += 1
-                for col, new_val in included.items():
+                for col, new_val in changed.items():
                     old_val = str(existing[col] or '') if existing[col] is not None else ''
                     dc.execute(
                         'INSERT INTO ds_변경이력(허가번호,변경일자,시트,필드명,변경전값,변경후값,장치번호,'
