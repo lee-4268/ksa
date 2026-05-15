@@ -538,11 +538,12 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
 
   // ── 기본 정보 ───────────────────────────────────────────
 
-  /// 장치번호별로 값을 묶어 "장치1: A · 장치2: B" 형태로 반환.
-  /// - 같은 장치번호 안에서는 중복 제거 (같은 값이면 1번만 표시)
-  /// - 장치가 1개뿐이면 라벨 생략하고 값만 반환 (기존 표시 유지)
-  /// - 줄바꿈 구분이 필요한 경우 sep='\n' 지정
-  String _fieldByDevice(List<dynamic> rows, String key, {String sep = ' · '}) {
+  /// 장치번호별로 값을 묶어 표시.
+  /// - groupSep: 장치(그룹) 간 구분자 (기본 '\n')
+  /// - innerSep: 같은 장치 내 여러 값 구분자 (기본 ' · ')
+  /// - 장치가 1개뿐이면 라벨 생략, 그룹 내 값만 innerSep로 연결
+  String _fieldByDevice(List<dynamic> rows, String key,
+      {String groupSep = '\n', String innerSep = ' · '}) {
     final byJn = <String, List<String>>{};
     final order = <String>[];
     for (final r in rows) {
@@ -567,21 +568,21 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
       return a.compareTo(b);
     });
     if (order.length == 1) {
-      return byJn[order.first]!.join(sep);
+      return byJn[order.first]!.join(innerSep);
     }
     return order.map((jn) {
       final label = jn.isEmpty ? '장치' : '장치$jn';
-      return '$label: ${byJn[jn]!.join(sep)}';
-    }).join(sep);
+      return '$label: ${byJn[jn]!.join(innerSep)}';
+    }).join(groupSep);
   }
 
-  /// 기기일련번호: 장치별로 묶어 표시
+  /// 기기일련번호: 장치별로 묶어 줄바꿈 표시
   String _serialNumbers(List<dynamic> list) =>
-      _fieldByDevice(list, '기기일련번호', sep: '\n');
+      _fieldByDevice(list, '기기일련번호');
 
-  /// 형식검정번호: 장치별로 묶어 표시
+  /// 형식검정번호: 장치별로 묶어 줄바꿈 표시
   String _typeApprovalNumbers(List<dynamic> list) =>
-      _fieldByDevice(list, '형식검정번호', sep: '\n');
+      _fieldByDevice(list, '형식검정번호');
 
   /// 공중선 요약: (장치번호, 공중선일련번호) 단위로 묶어
   ///   "장치1 · #ANT001  기2 / 이득 13.5"
