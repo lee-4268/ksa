@@ -15516,8 +15516,9 @@ async def ds_preview_partial_update(request: Request, file: UploadFile = File(..
 
         # 장치: (허가번호, 장치번호) → {기기일련번호, 형식검정번호}  (장치상태 제외)
         device_data: dict[tuple, dict] = {}
-        # 안테나: 허가번호 → 설치형태 텍스트 (숫자 코드 정규화)
-        antenna_data: dict[str, str] = {}
+        # 안테나: (허가번호, 장치번호) → 설치형태 텍스트 (숫자 코드 정규화)
+        # 장치번호별로 다른 안테나가 연결될 수 있어 행별 처리
+        antenna_data: dict[tuple[str, str], str] = {}
         # 설치장소: 허가번호 → 설치장소주소
         location_data: dict[str, str] = {}
         license_set: set[str] = set()
@@ -15545,6 +15546,7 @@ async def ds_preview_partial_update(request: Request, file: UploadFile = File(..
             ws = wb.sheet_by_index(안테나_si)
             설치형태_col = _find_col(ws, '설치형태명', '설치형태')
             if 설치형태_col < 0: 설치형태_col = 28
+            jn_col_a = _find_col(ws, '장치번호')
             for ri in range(1, ws.nrows):
                 hn = _norm_hn(ws.cell_value(ri, 0))
                 if not hn: continue
@@ -15552,8 +15554,11 @@ async def ds_preview_partial_update(request: Request, file: UploadFile = File(..
                 if ws.ncols > 설치형태_col:
                     raw = str(ws.cell_value(ri, 설치형태_col) or '').strip()
                     v = _normalize_설치형태(raw)  # 숫자코드 → 텍스트
-                    if v and hn not in antenna_data:
-                        antenna_data[hn] = v
+                    jn = (_norm_hn(ws.cell_value(ri, jn_col_a))
+                          if jn_col_a >= 0 and ws.ncols > jn_col_a else '')
+                    key = (hn, jn)
+                    if v and key not in antenna_data:
+                        antenna_data[key] = v
 
         # 설치장소: 같은 허가번호에 여러 행 가능 — (허가번호, 설치장소구분) 단위로 모두 수집
         # location_rows: list[(허가번호, 설치장소구분, 설치장소주소)]
@@ -15596,13 +15601,22 @@ async def ds_preview_partial_update(request: Request, file: UploadFile = File(..
                 if old_val != new_val:
                     diffs.append({"허가번호": hn, "장치번호": jn, "필드명": col, "변경전": old_val, "변경후": new_val})
 
-        for hn, new_형태 in antenna_data.items():
+        # 설치형태: (허가번호, 장치번호) 단위로 행별 비교
+        # 장치번호별로 안테나가 다를 수 있어 행별 매칭
+        for (hn, jn), new_형태 in antenna_data.items():
             existing = dc.execute(
-                'SELECT 공중선주설치형태명 FROM ds_안테나 WHERE 허가번호=? LIMIT 1', (hn,)
+                'SELECT 공중선주설치형태명 FROM ds_안테나 WHERE 허가번호=? AND 장치번호=? LIMIT 1',
+                (hn, jn)
             ).fetchone()
             old_val = str(existing['공중선주설치형태명'] or '') if existing else ''
             if old_val != new_형태:
-                diffs.append({"허가번호": hn, "장치번호": "", "필드명": "설치형태", "변경전": old_val, "변경후": new_형태})
+                diffs.append({
+                    "허가번호": hn,
+                    "장치번호": jn,
+                    "필드명": "설치형태",
+                    "변경전": old_val,
+                    "변경후": new_형태,
+                })
 
         # 설치장소: (허가번호, 설치장소구분) 단위로 행별 비교
         # 신고서 파일 각 행에 대해 ds_설치장소의 동일 (허가번호, 설치장소구분) 행과 비교
@@ -15722,9 +15736,16 @@ async def ds_change_history_cancel(history_id: int, request: Request):
                     'UPDATE ds_장치 SET 형식검정번호=? WHERE 허가번호=? AND 장치번호=?',
                     (before, hn, jn))
             elif field == '설치형태':
-                dc.execute(
-                    'UPDATE ds_안테나 SET 공중선주설치형태명=? WHERE 허가번호=?',
-                    (before, hn))
+                # 행별 되돌리기: 이력의 장치번호 컬럼이 장치별 안테나 식별자
+                # 구버전 이력은 장치번호 빈 값일 수 있어 그 경우 전체 안테나 행 복원 (하위 호환)
+                if jn:
+                    dc.execute(
+                        'UPDATE ds_안테나 SET 공중선주설치형태명=? WHERE 허가번호=? AND 장치번호=?',
+                        (before, hn, jn))
+                else:
+                    dc.execute(
+                        'UPDATE ds_안테나 SET 공중선주설치형태명=? WHERE 허가번호=?',
+                        (before, hn))
             elif field == '설치장소':
                 # 행별 되돌리기: 이력의 장치번호 컬럼이 설치장소구분으로 사용됨
                 gubun = jn
@@ -15841,14 +15862,16 @@ async def ds_apply_partial_update(request: Request, file: UploadFile = File(...)
                     if v: d['형식검정번호'] = v
                 if d: device_data[(hn, jn)] = d
 
-        # ── 안테나 시트: 허가번호 → 공중선주설치형태명 (숫자코드 정규화)
-        antenna_data: dict[str, str] = {}
+        # ── 안테나 시트: (허가번호, 장치번호) → 공중선주설치형태명 (숫자코드 정규화)
+        # 장치별로 안테나가 다를 수 있어 행별 처리
+        antenna_data: dict[tuple[str, str], str] = {}
 
         if 안테나_si >= 0:
             ws = wb.sheet_by_index(안테나_si)
             설치형태_col = _find_col(ws, '설치형태명')
             if 설치형태_col < 0: 설치형태_col = _find_col(ws, '설치형태')
             if 설치형태_col < 0: 설치형태_col = 28
+            jn_col_a = _find_col(ws, '장치번호')
 
             for ri in range(1, ws.nrows):
                 hn = _norm_hn(ws.cell_value(ri, 0))
@@ -15857,8 +15880,11 @@ async def ds_apply_partial_update(request: Request, file: UploadFile = File(...)
                 if ws.ncols > 설치형태_col:
                     raw = str(ws.cell_value(ri, 설치형태_col) or '').strip()
                     v = _normalize_설치형태(raw)  # 숫자코드 → 텍스트
-                    if v and hn not in antenna_data:
-                        antenna_data[hn] = v
+                    jn = (_norm_hn(ws.cell_value(ri, jn_col_a))
+                          if jn_col_a >= 0 and ws.ncols > jn_col_a else '')
+                    key = (hn, jn)
+                    if v and key not in antenna_data:
+                        antenna_data[key] = v
 
         # ── 설치장소 시트: (허가번호, 설치장소구분) 단위로 모든 행 수집
         location_rows: list[tuple[str, str, str]] = []
@@ -15919,19 +15945,23 @@ async def ds_apply_partial_update(request: Request, file: UploadFile = File(...)
                         (hn, applied_date, '부분DS장치', col, old_val, new_val, jn)
                     )
 
-        for hn, 설치형태 in antenna_data.items():
-            if f"{hn}#설치형태#" in excluded_set: continue
+        # 설치형태: (허가번호, 장치번호) 단위로 행별 적용
+        for (hn, jn), 설치형태 in antenna_data.items():
+            if f"{hn}#설치형태#{jn}" in excluded_set: continue
             existing = dc.execute(
-                'SELECT 공중선주설치형태명 FROM ds_안테나 WHERE 허가번호=? LIMIT 1', (hn,)
+                'SELECT 공중선주설치형태명 FROM ds_안테나 WHERE 허가번호=? AND 장치번호=? LIMIT 1',
+                (hn, jn)
             ).fetchone()
             old_val = str(existing['공중선주설치형태명'] or '') if existing else ''
             if old_val == 설치형태: continue
-            cur = dc.execute('UPDATE ds_안테나 SET 공중선주설치형태명=? WHERE 허가번호=?', (설치형태, hn))
+            cur = dc.execute(
+                'UPDATE ds_안테나 SET 공중선주설치형태명=? WHERE 허가번호=? AND 장치번호=?',
+                (설치형태, hn, jn))
             if cur.rowcount > 0:
                 updated_count += 1
                 dc.execute(
                     'INSERT INTO ds_변경이력(허가번호,변경일자,시트,필드명,변경전값,변경후값,장치번호) VALUES(?,?,?,?,?,?,?)',
-                    (hn, applied_date, '부분DS안테나', '설치형태', old_val, 설치형태, '')
+                    (hn, applied_date, '부분DS안테나', '설치형태', old_val, 설치형태, jn)
                 )
 
         # 설치장소: (허가번호, 설치장소구분) 단위로 행별 적용
