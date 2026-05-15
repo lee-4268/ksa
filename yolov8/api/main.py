@@ -15451,8 +15451,12 @@ async def change_request_generate_form(
 async def ds_preview_partial_update(request: Request, file: UploadFile = File(...)):
     """부분 DS 파일을 파싱하여 변경 전/후 diff를 반환 (DB 미적용).
     비교 대상: 기기일련번호, 형식검정번호, 공중선주설치형태명, 설치장소 (장치상태 제외)
+    - 권한: admin/manager만 가능 (apply와 동일 정책)
     """
-    await _verify_auth(request)
+    empno = await _verify_auth(request)
+    role = await asyncio.to_thread(_get_user_role_sync, empno)
+    if role not in {"admin", "manager"}:
+        raise HTTPException(403, "관리자/매니저만 가능")
     file_bytes = await file.read()
     if not file_bytes:
         raise HTTPException(400, "빈 파일")
@@ -15725,8 +15729,12 @@ async def ds_apply_partial_update(request: Request, file: UploadFile = File(...)
     - 해당 허가번호의 ds_장치/ds_안테나를 파일 실제 값으로 갱신 (change_request 값 아님)
     - FILED/REQUESTED 상태 change_request → APPLIED 전환
     - 모든 change_request 항목이 APPLIED 이상이면 RE_CHECK → PRE_CHECK_DONE 자동 전환
+    - 권한: admin/manager만 가능 (운영 절차상 본부관리자가 수행)
     """
     empno = await _verify_auth(request)
+    role = await asyncio.to_thread(_get_user_role_sync, empno)
+    if role not in {"admin", "manager"}:
+        raise HTTPException(403, "관리자/매니저만 가능")
 
     file_bytes = await file.read()
     if not file_bytes:

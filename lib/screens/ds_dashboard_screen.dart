@@ -965,13 +965,16 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
                     ),
                   ),
                 ),
-                const SizedBox(width: 4),
-                TextButton.icon(
-                  onPressed: () => _showPartialDsUploadDialog(),
-                  icon: Icon(Icons.upload_file_outlined, size: 18, color: Colors.deepOrange.shade600),
-                  label: Text('데이터 변경요청',
-                      style: TextStyle(color: Colors.deepOrange.shade600, fontSize: 13)),
-                ),
+                // 데이터 변경요청은 admin/manager만 (운영 절차상 본부관리자가 수행)
+                if (context.read<AuthService>().isAdmin) ...[
+                  const SizedBox(width: 4),
+                  TextButton.icon(
+                    onPressed: () => _showPartialDsUploadDialog(),
+                    icon: Icon(Icons.upload_file_outlined, size: 18, color: Colors.deepOrange.shade600),
+                    label: Text('데이터 변경요청',
+                        style: TextStyle(color: Colors.deepOrange.shade600, fontSize: 13)),
+                  ),
+                ],
                 if (_changeHistoryCount > 0) ...[
                   const SizedBox(width: 2),
                   InkWell(
