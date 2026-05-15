@@ -496,6 +496,43 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     }
   }
 
+  Future<void> _cancelDsChange(int id, String label, String before, String after) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('변경 되돌리기', style: TextStyle(fontSize: 16)),
+        content: Column(mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(label, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+          const SizedBox(height: 8),
+          Text('"$after" → "$before"',
+              style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+          const SizedBox(height: 10),
+          const Text('워크플로우 상태는 변경되지 않습니다.',
+              style: TextStyle(fontSize: 11, color: Color(0xFF9CA3AF))),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('취소')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFE17055), foregroundColor: Colors.white,
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('되돌리기'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      await _svc.cancelDsChange(id);
+      if (_detailLicenseNo != null) await _loadDetail(_detailLicenseNo!);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('되돌리기 실패: $e')));
+    }
+  }
+
   void _applyFilters() {
     // setState 없이 먼저 값 업데이트 → _loadAll의 setState로 한 번만 리빌드
     _aHdqt = _pHdqt; _aTeam = _pTeam; _aSearch = _pSearch;
@@ -3923,6 +3960,8 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                   final after = c['변경후값'] as String? ?? '';
                   final date = c['변경일자'] as String? ?? '';
                   final jn = c['장치번호'] as String? ?? '';
+                  final id = c['id'] as int? ?? 0;
+                  final cancelled = (c['cancelled'] ?? '0') == '1';
                   final label = jn.isNotEmpty ? '$field (장치$jn)' : field;
                   return Padding(
                     padding: const EdgeInsets.only(bottom: 10),
@@ -3930,9 +3969,22 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                       Row(children: [
                         Expanded(
                           child: Text(label,
-                              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
-                                  color: Color(0xFF374151))),
+                              style: TextStyle(
+                                  fontSize: 12, fontWeight: FontWeight.w600,
+                                  color: cancelled ? const Color(0xFF9CA3AF) : const Color(0xFF374151),
+                                  decoration: cancelled ? TextDecoration.lineThrough : null)),
                         ),
+                        if (cancelled)
+                          Container(
+                            margin: const EdgeInsets.only(right: 6),
+                            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFE17055).withValues(alpha: 0.12),
+                              borderRadius: BorderRadius.circular(3),
+                            ),
+                            child: const Text('취소됨',
+                                style: TextStyle(fontSize: 9, color: Color(0xFFE17055), fontWeight: FontWeight.w700)),
+                          ),
                         if (date.isNotEmpty)
                           Text(() {
                             if (date.length == 6 && RegExp(r'^\d{6}$').hasMatch(date)) {
@@ -3941,6 +3993,22 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                             return date;
                           }(),
                           style: const TextStyle(fontSize: 10, color: Color(0xFF9CA3AF))),
+                        if (!cancelled && _isAdmin && id > 0) ...[
+                          const SizedBox(width: 6),
+                          InkWell(
+                            onTap: () => _cancelDsChange(id, label, before, after),
+                            borderRadius: BorderRadius.circular(4),
+                            child: const Padding(
+                              padding: EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                                Icon(Icons.undo, size: 11, color: Color(0xFFE17055)),
+                                SizedBox(width: 2),
+                                Text('되돌리기',
+                                    style: TextStyle(fontSize: 9, color: Color(0xFFE17055), fontWeight: FontWeight.w600)),
+                              ]),
+                            ),
+                          ),
+                        ],
                       ]),
                       const SizedBox(height: 4),
                       Row(children: [
@@ -3948,11 +4016,14 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                           child: Container(
                             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
                             decoration: BoxDecoration(
-                              color: const Color(0xFFFFEDED),
+                              color: cancelled ? Colors.grey.shade100 : const Color(0xFFFFEDED),
                               borderRadius: BorderRadius.circular(5),
                             ),
                             child: Text(before.isEmpty ? '(없음)' : before,
-                                style: const TextStyle(fontSize: 10, color: Color(0xFFB91C1C))),
+                                style: TextStyle(
+                                    fontSize: 10,
+                                    color: cancelled ? Colors.grey.shade500 : const Color(0xFFB91C1C),
+                                    decoration: cancelled ? TextDecoration.lineThrough : null)),
                           ),
                         ),
                         const Padding(
@@ -3963,11 +4034,14 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                           child: Container(
                             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
                             decoration: BoxDecoration(
-                              color: const Color(0xFFECFDF5),
+                              color: cancelled ? Colors.grey.shade100 : const Color(0xFFECFDF5),
                               borderRadius: BorderRadius.circular(5),
                             ),
                             child: Text(after.isEmpty ? '(없음)' : after,
-                                style: const TextStyle(fontSize: 10, color: Color(0xFF065F46))),
+                                style: TextStyle(
+                                    fontSize: 10,
+                                    color: cancelled ? Colors.grey.shade500 : const Color(0xFF065F46),
+                                    decoration: cancelled ? TextDecoration.lineThrough : null)),
                           ),
                         ),
                       ]),

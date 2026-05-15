@@ -461,6 +461,38 @@ class InspectionService {
     return (body['count'] as num?)?.toInt() ?? 0;
   }
 
+  /// DS 변경 이력 목록 조회. licenseNo 비면 전체.
+  Future<List<Map<String, dynamic>>> listDsChangeHistory({
+    String licenseNo = '',
+    bool includeCancelled = true,
+    int limit = 500,
+  }) async {
+    final uri = Uri.parse('$_baseUrl/ds/change-history').replace(queryParameters: {
+      if (licenseNo.isNotEmpty) '허가번호': licenseNo,
+      'include_cancelled': includeCancelled ? 'true' : 'false',
+      'limit': '$limit',
+    });
+    final resp = await http.get(uri, headers: _headers).timeout(_apiTimeout);
+    final body = json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+    if (resp.statusCode != 200) {
+      throw Exception(body['detail'] ?? 'DS 변경 이력 조회 실패');
+    }
+    return List<Map<String, dynamic>>.from(body['items'] ?? []);
+  }
+
+  /// DS 변경 이력 단건 취소(되돌리기). 변경전값으로 DS DB 복원.
+  Future<Map<String, dynamic>> cancelDsChange(int historyId) async {
+    final resp = await http.post(
+      Uri.parse('$_baseUrl/ds/change-history/$historyId/cancel'),
+      headers: _headers,
+    ).timeout(_apiTimeout);
+    final body = json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+    if (resp.statusCode != 200) {
+      throw Exception(body['detail'] ?? 'DS 변경 취소 실패');
+    }
+    return body;
+  }
+
   /// 부분 DS 업로드 → DB 패치 + 자동 재비교
   Future<Map<String, dynamic>> applyPartialDsUpdate(Uint8List bytes, String filename,
       {List<String> excludedKeys = const []}) async {

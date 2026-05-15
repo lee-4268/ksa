@@ -12016,6 +12016,16 @@ def _init_ds_detail_db():
         장치번호 TEXT
     )''')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_dsh_허가번호 ON ds_변경이력(허가번호)')
+    # 변경 이력 취소(되돌리기) 마이그레이션
+    for col, dflt in [
+        ('cancelled', "'0'"),       # '1' = 취소된 변경
+        ('cancelled_at', "''"),     # 취소 시각
+        ('cancelled_by', "''"),     # 취소 주체 사번
+    ]:
+        try:
+            conn.execute(f"ALTER TABLE ds_변경이력 ADD COLUMN {col} TEXT DEFAULT {dflt}")
+        except Exception:
+            pass
     conn.commit(); conn.close()
 
 try:
@@ -15575,7 +15585,7 @@ async def ds_preview_partial_update(request: Request, file: UploadFile = File(..
 
 @app.get("/ds/변경이력-count")
 async def ds_change_history_count(request: Request):
-    """ds_변경이력 전체 건수 조회."""
+    """ds_변경이력 활성(취소 안 됨) 건수 조회. 취소된 이력은 카운트에서 제외."""
     await _verify_auth(request)
     if not os.path.exists(_DS_DETAIL_DB):
         return {"count": 0}
@@ -15583,7 +15593,9 @@ async def ds_change_history_count(request: Request):
     def _count():
         dc = sqlite3.connect(_DS_DETAIL_DB, timeout=10)
         try:
-            row = dc.execute('SELECT COUNT(*) FROM ds_변경이력').fetchone()
+            row = dc.execute(
+                "SELECT COUNT(*) FROM ds_변경이력 WHERE cancelled IS NULL OR cancelled='0'"
+            ).fetchone()
             return row[0] if row else 0
         except Exception:
             return 0
@@ -15592,6 +15604,116 @@ async def ds_change_history_count(request: Request):
 
     count = await asyncio.to_thread(_count)
     return {"count": count}
+
+
+@app.get("/ds/change-history")
+async def ds_change_history_list(
+    request: Request,
+    허가번호: str = "",
+    include_cancelled: bool = True,
+    limit: int = 500,
+):
+    """DS 변경 이력 목록. 허가번호 지정 시 단건 필터, 없으면 전체 최신순."""
+    await _verify_auth(request)
+    if not os.path.exists(_DS_DETAIL_DB):
+        return {"items": [], "total": 0}
+
+    def _do():
+        dc = sqlite3.connect(_DS_DETAIL_DB, timeout=30); dc.row_factory = sqlite3.Row
+        try:
+            wheres: list = ['1=1']
+            params: list = []
+            if 허가번호.strip():
+                wheres.append('허가번호=?')
+                params.append(허가번호.replace('-', ''))
+            if not include_cancelled:
+                wheres.append("(cancelled IS NULL OR cancelled='0')")
+            sql = (f"SELECT * FROM ds_변경이력 WHERE {' AND '.join(wheres)} "
+                   f"ORDER BY 변경일자 DESC, id DESC LIMIT ?")
+            params.append(max(1, min(limit, 2000)))
+            return [dict(r) for r in dc.execute(sql, params).fetchall()]
+        finally:
+            dc.close()
+
+    items = await asyncio.to_thread(_do)
+    return {"items": items, "total": len(items)}
+
+
+@app.post("/ds/change-history/{history_id}/cancel")
+async def ds_change_history_cancel(history_id: int, request: Request):
+    """DS 변경 이력 단건 취소(되돌리기).
+
+    - admin/manager만 수행 가능
+    - 필드 매핑은 apply-partial-update와 동일 (ds_장치/ds_안테나/inspection_targets)
+    - 워크플로우 상태(change_request/workflow_status)는 건드리지 않음
+    - 이력 행은 보존하고 cancelled='1'로 마킹
+    """
+    empno = await _verify_auth(request)
+    role = await asyncio.to_thread(_get_user_role_sync, empno)
+    if role not in {"admin", "manager"}:
+        raise HTTPException(403, "관리자/매니저만 가능")
+
+    def _do():
+        dc = sqlite3.connect(_DS_DETAIL_DB, timeout=60); dc.row_factory = sqlite3.Row
+        ic = None
+        try:
+            row = dc.execute('SELECT * FROM ds_변경이력 WHERE id=?', (history_id,)).fetchone()
+            if not row:
+                raise HTTPException(404, "변경 이력을 찾을 수 없습니다")
+            d = dict(row)
+            if (d.get('cancelled') or '0') == '1':
+                raise HTTPException(400, "이미 취소된 변경입니다")
+            hn = (d.get('허가번호') or '').replace('-', '')
+            jn = (d.get('장치번호') or '').strip()
+            field = (d.get('필드명') or '').strip()
+            before = d.get('변경전값') or ''
+
+            if field == '일련번호':
+                dc.execute(
+                    'UPDATE ds_장치 SET 기기일련번호=? WHERE 허가번호=? AND 장치번호=?',
+                    (before, hn, jn))
+            elif field == '형식검정번호':
+                dc.execute(
+                    'UPDATE ds_장치 SET 형식검정번호=? WHERE 허가번호=? AND 장치번호=?',
+                    (before, hn, jn))
+            elif field == '설치형태':
+                dc.execute(
+                    'UPDATE ds_안테나 SET 공중선주설치형태명=? WHERE 허가번호=?',
+                    (before, hn))
+            elif field == '설치장소':
+                # inspection_targets은 다른 DB
+                ic = sqlite3.connect(_INSP_DB, timeout=60)
+                ic.execute(
+                    "UPDATE inspection_targets SET 설치장소=? WHERE REPLACE(허가번호,'-','')=?",
+                    (before, hn))
+                # ds_일반사항도 (preview에서 사용)
+                try:
+                    dc.execute(
+                        'UPDATE ds_일반사항 SET 설치장소=? WHERE 허가번호=?',
+                        (before, hn))
+                except Exception:
+                    pass
+                ic.commit()
+            else:
+                raise HTTPException(400, f"취소를 지원하지 않는 필드: {field}")
+
+            now = datetime.now(timezone.utc).isoformat()
+            dc.execute(
+                "UPDATE ds_변경이력 SET cancelled='1', cancelled_at=?, cancelled_by=? "
+                "WHERE id=?",
+                (now, empno, history_id))
+            dc.commit()
+            return {"허가번호": hn, "field": field, "장치번호": jn, "restored_to": before}
+        finally:
+            if ic is not None:
+                ic.close()
+            dc.close()
+
+    result = await asyncio.to_thread(_do)
+    await asyncio.to_thread(_record_audit_log_sync,
+                           "ds_change_cancel", "ds_변경이력",
+                           f"id={history_id},field={result['field']}", empno)
+    return {"success": True, **result}
 
 
 @app.post("/ds/apply-partial-update")

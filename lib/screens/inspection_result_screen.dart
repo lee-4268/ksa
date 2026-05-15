@@ -1353,6 +1353,8 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
           .cast<Map<String, dynamic>>();
 
   Widget _buildDsChangesCard() {
+    final auth = context.read<AuthService>();
+    final canCancel = auth.isAdmin;   // admin/manager 모두 (auth.isAdmin이 둘 다 포함)
     return _card(
       title: 'DS 변경이력',
       icon: Icons.compare_arrows_rounded,
@@ -1365,6 +1367,8 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
           final after = c['변경후값'] as String? ?? '';
           final date = c['변경일자'] as String? ?? '';
           final jn = (c['장치번호'] as String? ?? '');
+          final id = c['id'] as int? ?? 0;
+          final cancelled = (c['cancelled'] ?? '0') == '1';
           final label = jn.isNotEmpty ? '$field (장치$jn)' : field;
           return Padding(
             padding: const EdgeInsets.only(bottom: 10),
@@ -1372,13 +1376,42 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
               Row(children: [
                 Expanded(
                   child: Text(label,
-                      style: const TextStyle(
-                          fontSize: 12, fontWeight: FontWeight.w600,
-                          color: Color(0xFF374151))),
+                      style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: cancelled ? const Color(0xFF9CA3AF) : const Color(0xFF374151),
+                          decoration: cancelled ? TextDecoration.lineThrough : null)),
                 ),
+                if (cancelled)
+                  Container(
+                    margin: const EdgeInsets.only(right: 6),
+                    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFE17055).withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(3),
+                    ),
+                    child: const Text('취소됨',
+                        style: TextStyle(fontSize: 9, color: Color(0xFFE17055), fontWeight: FontWeight.w700)),
+                  ),
                 if (date.isNotEmpty)
                   Text(_fmtChangeDate(date),
                       style: const TextStyle(fontSize: 10, color: Color(0xFF9CA3AF))),
+                if (!cancelled && canCancel && id > 0) ...[
+                  const SizedBox(width: 6),
+                  InkWell(
+                    onTap: () => _cancelDsChange(id, label, before, after),
+                    borderRadius: BorderRadius.circular(4),
+                    child: const Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      child: Row(mainAxisSize: MainAxisSize.min, children: [
+                        Icon(Icons.undo, size: 12, color: Color(0xFFE17055)),
+                        SizedBox(width: 2),
+                        Text('되돌리기',
+                            style: TextStyle(fontSize: 10, color: Color(0xFFE17055), fontWeight: FontWeight.w600)),
+                      ]),
+                    ),
+                  ),
+                ],
               ]),
               const SizedBox(height: 4),
               Row(children: [
@@ -1386,11 +1419,14 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
                   child: Container(
                     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                     decoration: BoxDecoration(
-                      color: const Color(0xFFFFEDED),
+                      color: cancelled ? Colors.grey.shade100 : const Color(0xFFFFEDED),
                       borderRadius: BorderRadius.circular(6),
                     ),
                     child: Text(before.isEmpty ? '(없음)' : before,
-                        style: const TextStyle(fontSize: 11, color: Color(0xFFB91C1C))),
+                        style: TextStyle(
+                            fontSize: 11,
+                            color: cancelled ? Colors.grey.shade500 : const Color(0xFFB91C1C),
+                            decoration: cancelled ? TextDecoration.lineThrough : null)),
                   ),
                 ),
                 const Padding(
@@ -1401,11 +1437,14 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
                   child: Container(
                     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                     decoration: BoxDecoration(
-                      color: const Color(0xFFECFDF5),
+                      color: cancelled ? Colors.grey.shade100 : const Color(0xFFECFDF5),
                       borderRadius: BorderRadius.circular(6),
                     ),
                     child: Text(after.isEmpty ? '(없음)' : after,
-                        style: const TextStyle(fontSize: 11, color: Color(0xFF065F46))),
+                        style: TextStyle(
+                            fontSize: 11,
+                            color: cancelled ? Colors.grey.shade500 : const Color(0xFF065F46),
+                            decoration: cancelled ? TextDecoration.lineThrough : null)),
                   ),
                 ),
               ]),
@@ -1414,6 +1453,43 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
         }).toList(),
       ),
     );
+  }
+
+  Future<void> _cancelDsChange(int id, String label, String before, String after) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('변경 되돌리기', style: TextStyle(fontSize: 16)),
+        content: Column(mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(label, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+          const SizedBox(height: 8),
+          Text('"$after" → "$before"',
+              style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+          const SizedBox(height: 10),
+          const Text('워크플로우 상태는 변경되지 않습니다.',
+              style: TextStyle(fontSize: 11, color: Color(0xFF9CA3AF))),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('취소')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFE17055), foregroundColor: Colors.white,
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('되돌리기'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      await _svc.cancelDsChange(id);
+      await _loadData();
+      if (mounted) _showSnack('변경이 되돌려졌습니다');
+    } catch (e) {
+      if (mounted) _showSnack('되돌리기 실패: $e', isError: true);
+    }
   }
 
   String _fmtChangeDate(String raw) {
@@ -1426,7 +1502,9 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
 
   Widget? _changeBadge(String fieldType) {
     try {
-      final change = _dsChanges.firstWhere((c) => c['필드명'] == fieldType);
+      // 취소된 이력은 배지 표시 안 함
+      final change = _dsChanges.firstWhere(
+          (c) => c['필드명'] == fieldType && (c['cancelled'] ?? '0') != '1');
       final date = change['변경일자'] as String? ?? '';
       return Container(
         margin: const EdgeInsets.only(left: 6, top: 1),
