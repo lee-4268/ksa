@@ -13987,29 +13987,46 @@ async def inspection_data(request: Request, req: InspectionDataReq):
             except Exception as _e:
                 logger.warning(f"[통시/공대 보완] cert lookup 실패: {_e}")
 
+        # ERP 활용구분(zpprac1): zpcode(통시) 우선, 없으면 허가번호(zpwino) 기준으로 fallback
         zpcodes = list({(it.get('통시') or '').strip() for it in items if (it.get('통시') or '').strip()})
-        zpprac1_map: dict = {}
-        if zpcodes:
+        zpwinos = list({(it.get('허가번호') or '').replace('-', '').strip() for it in items if it.get('허가번호')})
+        zpprac1_by_zpcode: dict = {}
+        zpprac1_by_zpwino: dict = {}
+        if zpcodes or zpwinos:
             cert_db = _cert_cache_db_path or os.path.join(_tempfile.gettempdir(), "cert_cache.db")
             if cert_db and os.path.exists(cert_db):
                 try:
                     cc = sqlite3.connect(cert_db, timeout=10)
                     cc.row_factory = sqlite3.Row
-                    ph = ','.join('?' * len(zpcodes))
-                    for row in cc.execute(
-                        f"SELECT TRIM(zpcode) AS zpcode, zpprac1 FROM cert "
-                        f"WHERE TRIM(zpcode) IN ({ph})",
-                        zpcodes
-                    ):
-                        if row['zpcode']:
-                            zpprac1_map[row['zpcode']] = row['zpprac1'] or ''
+                    if zpcodes:
+                        ph = ','.join('?' * len(zpcodes))
+                        for row in cc.execute(
+                            f"SELECT TRIM(zpcode) AS zpcode, zpprac1 FROM cert "
+                            f"WHERE TRIM(zpcode) IN ({ph}) AND zpprac1 != ''",
+                            zpcodes
+                        ):
+                            if row['zpcode']:
+                                zpprac1_by_zpcode[row['zpcode']] = row['zpprac1'] or ''
+                    if zpwinos:
+                        ph2 = ','.join('?' * len(zpwinos))
+                        for row in cc.execute(
+                            f"SELECT REPLACE(TRIM(zpwino), '-', '') AS zpwino, zpprac1 FROM cert "
+                            f"WHERE REPLACE(TRIM(zpwino), '-', '') IN ({ph2}) AND zpprac1 != ''",
+                            zpwinos
+                        ):
+                            if row['zpwino'] and row['zpwino'] not in zpprac1_by_zpwino:
+                                zpprac1_by_zpwino[row['zpwino']] = row['zpprac1'] or ''
                     cc.close()
-                    logger.info(f"[zpprac1] zpcodes={len(zpcodes)} hit={len(zpprac1_map)}")
+                    logger.info(
+                        f"[zpprac1] zpcodes={len(zpcodes)} hit_zpcode={len(zpprac1_by_zpcode)} "
+                        f"zpwinos={len(zpwinos)} hit_zpwino={len(zpprac1_by_zpwino)}"
+                    )
                 except Exception as _ze:
                     logger.warning(f"[zpprac1] lookup 실패: {_ze}")
         for it in items:
             tongsi = (it.get('통시') or '').strip()
-            it['zpprac1'] = zpprac1_map.get(tongsi, '')
+            zpw = (it.get('허가번호') or '').replace('-', '').strip()
+            it['zpprac1'] = zpprac1_by_zpcode.get(tongsi) or zpprac1_by_zpwino.get(zpw, '')
         return total, items
     total, items = await asyncio.to_thread(_read)
     return {"items": items, "total": total, "page": req.page, "page_size": req.page_size}
