@@ -15822,10 +15822,12 @@ async def ds_apply_partial_update(request: Request, file: UploadFile = File(...)
                 return str(int(val))
             return str(val).strip().replace('-', '')
 
-        def _find_col(ws, keyword):
-            for c in range(ws.ncols):
-                if keyword in str(ws.cell_value(0, c)).strip():
-                    return c
+        def _find_col(ws, *keywords):
+            # 첫 번째로 매치되는 키워드의 컬럼 인덱스 반환 (폴백 키워드 지원)
+            for keyword in keywords:
+                for c in range(ws.ncols):
+                    if keyword in str(ws.cell_value(0, c)).strip():
+                        return c
             return -1
 
         def _find_sheet(keyword):
