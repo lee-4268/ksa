@@ -218,6 +218,13 @@ DYNAMODB_TABLES = {
 # 수도권 본부명 한글 → S3 키용 영문 변환 (presigned URL 인코딩 문제 방지)
 _HDQT_S3_KEY: dict = {'강남': 'gangnam', '강북': 'gangbuk', '경기': 'gyeonggi', '인천': 'incheon'}
 
+# access담당 한글명 → divisionId 매핑 (수도권 4개 본부는 sudogwon로 통합)
+_ACCESS_TO_DIVISION: dict = {
+    '강남': 'sudogwon', '강북': 'sudogwon', '경기': 'sudogwon', '인천': 'sudogwon',
+    '강원': 'gangwon', '충청': 'chungcheong', '경북': 'gyeongbuk',
+    '경남': 'gyeongnam', '서부': 'seobu',
+}
+
 # DS 전파관리소 지역코드 → 회사 본부 매핑
 # 수도권(10) → 강남/강북/인천/경기 4개 본부 통합 저장
 # 충남(50)+충북(55) → 충청본부, 전남(30)+전북(70) → 서부본부
@@ -12031,11 +12038,19 @@ def _init_ds_detail_db():
         ('cancelled', "'0'"),       # '1' = 취소된 변경
         ('cancelled_at', "''"),     # 취소 시각
         ('cancelled_by', "''"),     # 취소 주체 사번
+        # 본부별 카운트/필터 + 업로드 묶음 단위 그룹핑용
+        ('division_id', "''"),       # 본부 ID (gangnam, gyeongbuk 등)
+        ('upload_id', "''"),         # 한 업로드 세션 UUID — 같은 파일 변경 묶음 식별
+        ('uploaded_by', "''"),       # 업로드한 사번
+        ('uploaded_at', "''"),       # 업로드 시각 (ISO)
+        ('uploaded_filename', "''"), # 업로드한 파일명 (UI 표시용)
     ]:
         try:
             conn.execute(f"ALTER TABLE ds_변경이력 ADD COLUMN {col} TEXT DEFAULT {dflt}")
         except Exception:
             pass
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_dsh_division ON ds_변경이력(division_id)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_dsh_upload ON ds_변경이력(upload_id)')
     conn.commit(); conn.close()
 
 try:
@@ -15643,8 +15658,8 @@ async def ds_preview_partial_update(request: Request, file: UploadFile = File(..
 
 
 @app.get("/ds/변경이력-count")
-async def ds_change_history_count(request: Request):
-    """ds_변경이력 활성(취소 안 됨) 건수 조회. 취소된 이력은 카운트에서 제외."""
+async def ds_change_history_count(request: Request, division_id: str = ""):
+    """ds_변경이력 활성(취소 안 됨) 건수 조회. division_id 지정 시 본부별 카운트."""
     await _verify_auth(request)
     if not os.path.exists(_DS_DETAIL_DB):
         return {"count": 0}
@@ -15652,8 +15667,14 @@ async def ds_change_history_count(request: Request):
     def _count():
         dc = sqlite3.connect(_DS_DETAIL_DB, timeout=10)
         try:
+            wheres = ["(cancelled IS NULL OR cancelled='0')"]
+            params: list = []
+            if division_id:
+                wheres.append("division_id=?")
+                params.append(division_id)
             row = dc.execute(
-                "SELECT COUNT(*) FROM ds_변경이력 WHERE cancelled IS NULL OR cancelled='0'"
+                f"SELECT COUNT(*) FROM ds_변경이력 WHERE {' AND '.join(wheres)}",
+                params
             ).fetchone()
             return row[0] if row else 0
         except Exception:
@@ -15669,10 +15690,21 @@ async def ds_change_history_count(request: Request):
 async def ds_change_history_list(
     request: Request,
     허가번호: str = "",
+    division_id: str = "",
+    upload_id: str = "",
+    search: str = "",
     include_cancelled: bool = True,
-    limit: int = 500,
+    limit: int = 2000,
 ):
-    """DS 변경 이력 목록. 허가번호 지정 시 단건 필터, 없으면 전체 최신순."""
+    """DS 변경 이력 목록.
+
+    필터:
+    - 허가번호: 단건 정확 매칭 (하이픈 정규화)
+    - division_id: 본부 필터 (gyeongbuk 등)
+    - upload_id: 특정 업로드 묶음만
+    - search: 허가번호 부분 일치 검색 (하이픈 정규화 후 LIKE)
+    - include_cancelled: 취소된 이력 포함 여부 (기본 True)
+    """
     await _verify_auth(request)
     if not os.path.exists(_DS_DETAIL_DB):
         return {"items": [], "total": 0}
@@ -15685,17 +15717,101 @@ async def ds_change_history_list(
             if 허가번호.strip():
                 wheres.append('허가번호=?')
                 params.append(허가번호.replace('-', ''))
+            if division_id.strip():
+                wheres.append('division_id=?')
+                params.append(division_id.strip())
+            if upload_id.strip():
+                wheres.append('upload_id=?')
+                params.append(upload_id.strip())
+            if search.strip():
+                wheres.append('허가번호 LIKE ?')
+                params.append(f"%{search.replace('-', '')}%")
             if not include_cancelled:
                 wheres.append("(cancelled IS NULL OR cancelled='0')")
             sql = (f"SELECT * FROM ds_변경이력 WHERE {' AND '.join(wheres)} "
-                   f"ORDER BY 변경일자 DESC, id DESC LIMIT ?")
-            params.append(max(1, min(limit, 2000)))
+                   f"ORDER BY uploaded_at DESC, id DESC LIMIT ?")
+            params.append(max(1, min(limit, 5000)))
             return [dict(r) for r in dc.execute(sql, params).fetchall()]
         finally:
             dc.close()
 
     items = await asyncio.to_thread(_do)
     return {"items": items, "total": len(items)}
+
+
+@app.get("/ds/change-history/uploads")
+async def ds_change_history_uploads(
+    request: Request,
+    division_id: str = "",
+    include_cancelled: bool = True,
+    limit: int = 100,
+):
+    """업로드 묶음(upload_id) 단위 요약 — 다이얼로그 트리뷰 헤더용.
+
+    각 묶음: {upload_id, uploaded_at, uploaded_by, uploaded_filename, division_id,
+              active_count, cancelled_count}
+    """
+    await _verify_auth(request)
+    if not os.path.exists(_DS_DETAIL_DB):
+        return {"items": []}
+
+    def _do():
+        dc = sqlite3.connect(_DS_DETAIL_DB, timeout=30); dc.row_factory = sqlite3.Row
+        try:
+            wheres: list = ["upload_id != ''"]
+            params: list = []
+            if division_id.strip():
+                wheres.append('division_id=?')
+                params.append(division_id.strip())
+            sql = (f"SELECT upload_id, uploaded_at, uploaded_by, uploaded_filename, division_id, "
+                   f"COUNT(*) AS total, "
+                   f"SUM(CASE WHEN cancelled='1' THEN 1 ELSE 0 END) AS cancelled_count, "
+                   f"SUM(CASE WHEN cancelled IS NULL OR cancelled='0' THEN 1 ELSE 0 END) AS active_count "
+                   f"FROM ds_변경이력 WHERE {' AND '.join(wheres)} "
+                   f"GROUP BY upload_id "
+                   f"ORDER BY uploaded_at DESC LIMIT ?")
+            params.append(max(1, min(limit, 500)))
+            rows = [dict(r) for r in dc.execute(sql, params).fetchall()]
+            if not include_cancelled:
+                rows = [r for r in rows if (r.get('active_count') or 0) > 0]
+            return rows
+        finally:
+            dc.close()
+
+    items = await asyncio.to_thread(_do)
+    return {"items": items}
+
+
+class BulkCancelReq(BaseModel):
+    ids: list[int]
+
+
+@app.post("/ds/change-history/bulk-cancel")
+async def ds_change_history_bulk_cancel(request: Request, req: BulkCancelReq):
+    """여러 변경 이력을 한 번에 되돌리기. 활성(미취소) 이력만 처리, 결과 요약 반환."""
+    empno = await _verify_auth(request)
+    role = await asyncio.to_thread(_get_user_role_sync, empno)
+    if role not in {"admin", "manager"}:
+        raise HTTPException(403, "관리자/매니저만 가능")
+    if not req.ids:
+        raise HTTPException(400, "ids 비어있음")
+
+    results = {"succeeded": 0, "failed": 0, "skipped": 0, "errors": []}
+    # 단건 cancel 라우터 로직을 재사용해 일관성 유지
+    for hid in req.ids:
+        try:
+            await ds_change_history_cancel(hid, request)
+            results["succeeded"] += 1
+        except HTTPException as he:
+            if he.status_code == 400 and '이미 취소된' in (he.detail or ''):
+                results["skipped"] += 1
+            else:
+                results["failed"] += 1
+                results["errors"].append({"id": hid, "detail": he.detail})
+        except Exception as e:
+            results["failed"] += 1
+            results["errors"].append({"id": hid, "detail": str(e)})
+    return {"success": True, **results}
 
 
 @app.post("/ds/change-history/{history_id}/cancel")
@@ -15809,6 +15925,11 @@ async def ds_apply_partial_update(request: Request, file: UploadFile = File(...)
         raise HTTPException(400, "빈 파일")
 
     excluded_set: set[str] = set(json.loads(excluded)) if excluded.strip() else set()
+    # 업로드 묶음 식별자 — 같은 파일에서 발생한 모든 이력 행이 공유
+    import uuid as _uuid
+    upload_id = _uuid.uuid4().hex
+    upload_filename = file.filename or ''
+    upload_ts = datetime.now(timezone.utc).isoformat()
 
     def _process():
         import xlrd as _xlrd
@@ -15920,9 +16041,38 @@ async def ds_apply_partial_update(request: Request, file: UploadFile = File(...)
             시트 TEXT NOT NULL, 필드명 TEXT NOT NULL,
             변경전값 TEXT, 변경후값 TEXT, 장치번호 TEXT
         )''')
+        # 신규 컬럼 (구버전 DB 호환용 — _init_ds_detail_db에서 이미 추가됐어야 정상)
+        for _col, _dflt in [
+            ('cancelled', "'0'"), ('cancelled_at', "''"), ('cancelled_by', "''"),
+            ('division_id', "''"), ('upload_id', "''"),
+            ('uploaded_by', "''"), ('uploaded_at', "''"), ('uploaded_filename', "''"),
+        ]:
+            try:
+                dc.execute(f"ALTER TABLE ds_변경이력 ADD COLUMN {_col} TEXT DEFAULT {_dflt}")
+            except Exception:
+                pass
 
         applied_date = datetime.now().strftime('%y%m%d')
         updated_count = 0
+
+        # 허가번호 → division_id 매핑 (inspection_targets에서 일괄 조회)
+        hn_to_div: dict[str, str] = {}
+        try:
+            ic_tmp = sqlite3.connect(_INSP_DB, timeout=10); ic_tmp.row_factory = sqlite3.Row
+            for r in ic_tmp.execute(
+                "SELECT DISTINCT REPLACE(허가번호,'-','') AS hn, access담당 "
+                "FROM inspection_targets WHERE access담당 != ''"
+            ):
+                acc = (r['access담당'] or '').strip()
+                div = _ACCESS_TO_DIVISION.get(acc, '')
+                if r['hn']:
+                    hn_to_div[r['hn']] = div
+            ic_tmp.close()
+        except Exception as _e:
+            logger.warning(f"hn_to_div 매핑 실패: {_e}")
+
+        def _div(hn: str) -> str:
+            return hn_to_div.get(hn, '')
 
         for (hn, jn), fields in device_data.items():
             included = {col: val for col, val in fields.items()
@@ -15943,8 +16093,11 @@ async def ds_apply_partial_update(request: Request, file: UploadFile = File(...)
                 for col, new_val in included.items():
                     old_val = str(existing[col] or '') if existing[col] is not None else ''
                     dc.execute(
-                        'INSERT INTO ds_변경이력(허가번호,변경일자,시트,필드명,변경전값,변경후값,장치번호) VALUES(?,?,?,?,?,?,?)',
-                        (hn, applied_date, '부분DS장치', col, old_val, new_val, jn)
+                        'INSERT INTO ds_변경이력(허가번호,변경일자,시트,필드명,변경전값,변경후값,장치번호,'
+                        'division_id,upload_id,uploaded_by,uploaded_at,uploaded_filename) '
+                        'VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
+                        (hn, applied_date, '부분DS장치', col, old_val, new_val, jn,
+                         _div(hn), upload_id, empno, upload_ts, upload_filename)
                     )
 
         # 설치형태: (허가번호, 장치번호) 단위로 행별 적용
@@ -15962,8 +16115,11 @@ async def ds_apply_partial_update(request: Request, file: UploadFile = File(...)
             if cur.rowcount > 0:
                 updated_count += 1
                 dc.execute(
-                    'INSERT INTO ds_변경이력(허가번호,변경일자,시트,필드명,변경전값,변경후값,장치번호) VALUES(?,?,?,?,?,?,?)',
-                    (hn, applied_date, '부분DS안테나', '설치형태', old_val, 설치형태, jn)
+                    'INSERT INTO ds_변경이력(허가번호,변경일자,시트,필드명,변경전값,변경후값,장치번호,'
+                    'division_id,upload_id,uploaded_by,uploaded_at,uploaded_filename) '
+                    'VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
+                    (hn, applied_date, '부분DS안테나', '설치형태', old_val, 설치형태, jn,
+                     _div(hn), upload_id, empno, upload_ts, upload_filename)
                 )
 
         # 설치장소: (허가번호, 설치장소구분) 단위로 행별 적용
@@ -15984,8 +16140,11 @@ async def ds_apply_partial_update(request: Request, file: UploadFile = File(...)
                 updated_count += 1
                 # 이력에 설치장소구분도 장치번호 컬럼에 기록 (되돌리기 시 식별)
                 dc.execute(
-                    'INSERT INTO ds_변경이력(허가번호,변경일자,시트,필드명,변경전값,변경후값,장치번호) VALUES(?,?,?,?,?,?,?)',
-                    (hn, applied_date, '부분DS설치장소', '설치장소', old_val, new_addr, gubun)
+                    'INSERT INTO ds_변경이력(허가번호,변경일자,시트,필드명,변경전값,변경후값,장치번호,'
+                    'division_id,upload_id,uploaded_by,uploaded_at,uploaded_filename) '
+                    'VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
+                    (hn, applied_date, '부분DS설치장소', '설치장소', old_val, new_addr, gubun,
+                     _div(hn), upload_id, empno, upload_ts, upload_filename)
                 )
                 # 하위 호환: ds_일반사항.설치장소도 동기화 (대표값 — 첫 행만 의미 있음)
                 if not gubun or gubun == '01':

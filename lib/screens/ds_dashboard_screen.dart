@@ -58,8 +58,8 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
   // 자동 갱신 (uploading 레코드 존재 시 10초마다)
   Timer? _autoRefreshTimer;
 
-  // DS 변경이력
-  int _changeHistoryCount = 0;
+  // DS 변경이력 — 본부별 카운트 (divisionId → 활성 건수)
+  Map<String, int> _changeHistoryCountByDivision = {};
 
   bool _initialized = false;
 
@@ -132,20 +132,33 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
     try {
       final svc = InspectionService()
         ..setAuthToken(context.read<AuthService>().authToken);
-      final count = await svc.getDsChangeHistoryCount();
-      if (mounted) setState(() => _changeHistoryCount = count);
+      // 화면에 표시 중인 본부들에 대해 병렬로 카운트 조회
+      if (_stats == null) return;
+      final divisionIds = <String>{};
+      for (final u in _stats!.uploads) {
+        if (u.divisionId.isNotEmpty) divisionIds.add(u.divisionId);
+      }
+      final futures = divisionIds.map((d) async => MapEntry(d, await svc.getDsChangeHistoryCount(divisionId: d)));
+      final entries = await Future.wait(futures);
+      if (!mounted) return;
+      setState(() {
+        _changeHistoryCountByDivision = {for (final e in entries) e.key: e.value};
+      });
     } catch (_) {}
   }
 
-  Future<void> _showDsChangeHistoryDialog() async {
+  Future<void> _showDsChangeHistoryDialog(String divisionId) async {
     final svc = InspectionService()
       ..setAuthToken(context.read<AuthService>().authToken);
     final canCancel = context.read<AuthService>().isAdmin;
     await showDialog<void>(
       context: context,
-      builder: (ctx) => _DsChangeHistoryBulkDialog(svc: svc, canCancel: canCancel),
+      builder: (ctx) => _DsChangeHistoryBulkDialog(
+        svc: svc,
+        canCancel: canCancel,
+        divisionId: divisionId,
+      ),
     );
-    // 다이얼로그 닫히면 카운트 갱신
     _loadChangeHistoryCount();
   }
 
@@ -975,10 +988,10 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
                         style: TextStyle(color: Colors.deepOrange.shade600, fontSize: 13)),
                   ),
                 ],
-                if (_changeHistoryCount > 0) ...[
+                if ((_changeHistoryCountByDivision[upload.divisionId] ?? 0) > 0) ...[
                   const SizedBox(width: 2),
                   InkWell(
-                    onTap: _showDsChangeHistoryDialog,
+                    onTap: () => _showDsChangeHistoryDialog(upload.divisionId),
                     borderRadius: BorderRadius.circular(8),
                     child: Container(
                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
@@ -990,7 +1003,7 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
                       child: Row(mainAxisSize: MainAxisSize.min, children: [
                         const Icon(Icons.history, size: 12, color: Color(0xFF1565C0)),
                         const SizedBox(width: 4),
-                        Text('변경내역 $_changeHistoryCount건',
+                        Text('변경내역 ${_changeHistoryCountByDivision[upload.divisionId] ?? 0}건',
                             style: const TextStyle(fontSize: 11, color: Color(0xFF1565C0), fontWeight: FontWeight.w600)),
                       ]),
                     ),
@@ -1443,12 +1456,20 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
   }
 }
 
-/// DS 변경 이력 묶음 다이얼로그 — 전체 이력 + 행마다 되돌리기 버튼
+/// DS 변경 이력 묶음 다이얼로그
+/// - 업로드 세션(upload_id) 단위로 트리뷰 헤더
+/// - 헤더 펼치면 그 묶음의 행 목록
+/// - 행별 체크박스 + 일괄 되돌리기 + 허가번호 검색
 class _DsChangeHistoryBulkDialog extends StatefulWidget {
   final InspectionService svc;
   final bool canCancel;
+  final String divisionId;
 
-  const _DsChangeHistoryBulkDialog({required this.svc, required this.canCancel});
+  const _DsChangeHistoryBulkDialog({
+    required this.svc,
+    required this.canCancel,
+    required this.divisionId,
+  });
 
   @override
   State<_DsChangeHistoryBulkDialog> createState() => _DsChangeHistoryBulkDialogState();
@@ -1456,7 +1477,12 @@ class _DsChangeHistoryBulkDialog extends StatefulWidget {
 
 class _DsChangeHistoryBulkDialogState extends State<_DsChangeHistoryBulkDialog> {
   bool _loading = true;
-  List<Map<String, dynamic>> _items = [];
+  List<Map<String, dynamic>> _uploads = [];     // 업로드 묶음 헤더
+  Map<String, List<Map<String, dynamic>>> _itemsByUpload = {};
+  Set<String> _expanded = {};                   // 펼쳐진 upload_id
+  final Set<int> _selected = {};                // 선택된 이력 id
+  final _searchCtrl = TextEditingController();
+  String _searchTerm = '';
 
   @override
   void initState() {
@@ -1464,12 +1490,45 @@ class _DsChangeHistoryBulkDialogState extends State<_DsChangeHistoryBulkDialog> 
     _load();
   }
 
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
   Future<void> _load() async {
     setState(() => _loading = true);
     try {
-      final items = await widget.svc.listDsChangeHistory();
-      if (!mounted) return;
-      setState(() { _items = items; _loading = false; });
+      final uploads = await widget.svc.listDsChangeHistoryUploads(divisionId: widget.divisionId);
+      // 검색 활성 시 전체 이력을 미리 가져와서 필터 (펼침 무관)
+      Map<String, List<Map<String, dynamic>>> map = {};
+      if (_searchTerm.isNotEmpty) {
+        final items = await widget.svc.listDsChangeHistory(
+          divisionId: widget.divisionId,
+          search: _searchTerm,
+        );
+        for (final it in items) {
+          final uid = (it['upload_id'] ?? '').toString();
+          map.putIfAbsent(uid, () => []).add(it);
+        }
+        // 검색 결과가 있는 묶음만 표시
+        final hitUploadIds = map.keys.toSet();
+        if (!mounted) return;
+        setState(() {
+          _uploads = uploads.where((u) => hitUploadIds.contains(u['upload_id'])).toList();
+          _itemsByUpload = map;
+          _expanded = hitUploadIds;  // 검색 시 자동 펼침
+          _loading = false;
+        });
+      } else {
+        if (!mounted) return;
+        setState(() {
+          _uploads = uploads;
+          _itemsByUpload = {};
+          _expanded.clear();
+          _loading = false;
+        });
+      }
     } catch (e) {
       if (!mounted) return;
       setState(() => _loading = false);
@@ -1477,45 +1536,126 @@ class _DsChangeHistoryBulkDialogState extends State<_DsChangeHistoryBulkDialog> 
     }
   }
 
-  Future<void> _cancel(Map<String, dynamic> r) async {
-    final id = r['id'] as int? ?? 0;
-    if (id == 0) return;
-    final hn = r['허가번호'] ?? '';
-    final field = r['필드명'] ?? '';
-    final before = r['변경전값'] ?? '';
-    final after = r['변경후값'] ?? '';
-    final jn = r['장치번호'] ?? '';
-    final label = jn.toString().isNotEmpty ? '$field (장치$jn)' : '$field';
+  Future<void> _toggleExpand(String uploadId) async {
+    if (_expanded.contains(uploadId)) {
+      setState(() => _expanded.remove(uploadId));
+      return;
+    }
+    // 아직 로드 안 됐으면 가져오기
+    if (!_itemsByUpload.containsKey(uploadId)) {
+      try {
+        final items = await widget.svc.listDsChangeHistory(uploadId: uploadId);
+        if (!mounted) return;
+        _itemsByUpload[uploadId] = items;
+      } catch (e) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('상세 조회 실패: $e')));
+        return;
+      }
+    }
+    setState(() => _expanded.add(uploadId));
+  }
 
+  Future<void> _bulkCancel() async {
+    if (_selected.isEmpty) return;
     final ok = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('변경 되돌리기', style: TextStyle(fontSize: 16)),
-        content: Column(mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text('$hn · $label', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-          const SizedBox(height: 8),
-          Text('"$after" → "$before"',
-              style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
-          const SizedBox(height: 10),
-          const Text('워크플로우 상태는 변경되지 않습니다.',
-              style: TextStyle(fontSize: 11, color: Color(0xFF9CA3AF))),
-        ]),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('취소')),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFFE17055), foregroundColor: Colors.white,
+      builder: (ctx) => Dialog(
+        insetPadding: const EdgeInsets.symmetric(horizontal: 40),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 320),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 32, 20, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: const BoxDecoration(
+                    color: Color(0xFFFEF2F2),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(Icons.undo_rounded,
+                      color: Color(0xFFEF4444), size: 24),
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  '${_selected.length}건 되돌리기',
+                  style: const TextStyle(
+                    fontSize: 17,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: -0.5,
+                    color: Color(0xFF111827),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  '선택한 변경 이력을 되돌립니다.\n워크플로우 상태는 변경되지 않습니다.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 13,
+                    height: 1.4,
+                    color: Color(0xFF6B7280),
+                  ),
+                ),
+                const SizedBox(height: 24),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: () => Navigator.pop(ctx, true),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF2563EB),
+                      foregroundColor: Colors.white,
+                      elevation: 0,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                    child: const Text('되돌리기', style: TextStyle(fontWeight: FontWeight.bold)),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                SizedBox(
+                  width: double.infinity,
+                  child: TextButton(
+                    onPressed: () => Navigator.pop(ctx, false),
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                    ),
+                    child: const Text('취소',
+                        style: TextStyle(color: Color(0xFF9CA3AF), fontSize: 13)),
+                  ),
+                ),
+              ],
             ),
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('되돌리기'),
           ),
-        ],
+        ),
       ),
     );
     if (ok != true) return;
     try {
+      final res = await widget.svc.bulkCancelDsChanges(_selected.toList());
+      if (!mounted) return;
+      final succeeded = (res['succeeded'] as num?)?.toInt() ?? 0;
+      final failed = (res['failed'] as num?)?.toInt() ?? 0;
+      final skipped = (res['skipped'] as num?)?.toInt() ?? 0;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('되돌리기 완료: 성공 $succeeded · 실패 $failed · 스킵 $skipped'),
+      ));
+      _selected.clear();
+      _itemsByUpload.clear();
+      await _load();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('일괄 되돌리기 실패: $e')));
+    }
+  }
+
+  Future<void> _cancelOne(int id) async {
+    try {
       await widget.svc.cancelDsChange(id);
+      _itemsByUpload.clear();
+      _selected.remove(id);
       await _load();
     } catch (e) {
       if (!mounted) return;
@@ -1530,114 +1670,346 @@ class _DsChangeHistoryBulkDialogState extends State<_DsChangeHistoryBulkDialog> 
     return raw;
   }
 
+  String _fmtTime(String iso) {
+    if (iso.isEmpty) return '';
+    try {
+      final t = DateTime.parse(iso).toLocal();
+      return '${t.year}-${t.month.toString().padLeft(2, '0')}-${t.day.toString().padLeft(2, '0')} '
+             '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
+    } catch (_) {
+      return iso;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    final active = _items.where((it) => (it['cancelled'] ?? '0') != '1').length;
     return Dialog(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      child: SizedBox(
-        width: 600,
-        height: 560,
+      insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 720, maxHeight: 640),
         child: Column(children: [
-          Container(
-            padding: const EdgeInsets.fromLTRB(16, 14, 12, 12),
-            decoration: const BoxDecoration(
-              color: Color(0xFFF8F9FA),
-              borderRadius: BorderRadius.vertical(top: Radius.circular(12)),
-              border: Border(bottom: BorderSide(color: Color(0xFFE5E7EB))),
-            ),
+          // 헤더 — 알림 다이얼로그와 같은 톤 (Modern Minimal)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(24, 28, 16, 16),
             child: Row(children: [
-              const Icon(Icons.history, color: Color(0xFF1565C0), size: 18),
-              const SizedBox(width: 8),
-              Text('DS 변경 이력 · 활성 $active건 / 전체 ${_items.length}건',
-                  style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
-              const Spacer(),
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: const BoxDecoration(
+                  color: Color(0xFFFEF2F2),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.history_rounded,
+                    color: Color(0xFFEF4444), size: 20),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text(
+                      'DS 변경 이력',
+                      style: TextStyle(
+                        fontSize: 17,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: -0.5,
+                        color: Color(0xFF111827),
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      '${widget.divisionId.isEmpty ? "전체 본부" : widget.divisionId} · 업로드 묶음 ${_uploads.length}건',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: Color(0xFF6B7280),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
               IconButton(
-                icon: const Icon(Icons.close, size: 18),
+                icon: const Icon(Icons.close_rounded, size: 20, color: Color(0xFF9CA3AF)),
                 padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
                 onPressed: () => Navigator.pop(context),
               ),
             ]),
           ),
+          // 검색 + 일괄 되돌리기
+          Padding(
+            padding: const EdgeInsets.fromLTRB(24, 0, 24, 12),
+            child: Row(children: [
+              Expanded(
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF9FAFB),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: TextField(
+                    controller: _searchCtrl,
+                    style: const TextStyle(fontSize: 13, color: Color(0xFF111827)),
+                    decoration: InputDecoration(
+                      hintText: '허가번호 검색 (하이픈 무시)',
+                      hintStyle: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+                      prefixIcon: const Icon(Icons.search_rounded, size: 18, color: Color(0xFF9CA3AF)),
+                      isDense: true,
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+                      border: InputBorder.none,
+                      enabledBorder: InputBorder.none,
+                      focusedBorder: InputBorder.none,
+                      suffixIcon: _searchTerm.isEmpty ? null : IconButton(
+                        icon: const Icon(Icons.clear_rounded, size: 16, color: Color(0xFF9CA3AF)),
+                        onPressed: () {
+                          _searchCtrl.clear();
+                          setState(() => _searchTerm = '');
+                          _load();
+                        },
+                      ),
+                    ),
+                    onSubmitted: (v) {
+                      setState(() => _searchTerm = v.trim());
+                      _load();
+                    },
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              if (widget.canCancel && _selected.isNotEmpty)
+                ElevatedButton.icon(
+                  icon: const Icon(Icons.undo_rounded, size: 16),
+                  label: Text('${_selected.length}건 되돌리기',
+                      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF2563EB),
+                    foregroundColor: Colors.white,
+                    elevation: 0,
+                    minimumSize: const Size(0, 44),
+                    padding: const EdgeInsets.symmetric(horizontal: 14),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                  onPressed: _bulkCancel,
+                ),
+            ]),
+          ),
+          // 본문
           Expanded(
             child: _loading
-                ? const Center(child: CircularProgressIndicator())
-                : _items.isEmpty
-                    ? Center(child: Text('변경 이력이 없습니다',
-                        style: TextStyle(fontSize: 13, color: Colors.grey.shade500)))
-                    : ListView.separated(
-                        itemCount: _items.length,
-                        separatorBuilder: (_, __) => Divider(height: 1, color: Colors.grey.shade100),
+                ? const Center(child: CircularProgressIndicator(strokeWidth: 2))
+                : _uploads.isEmpty
+                    ? Center(child: Text(
+                        _searchTerm.isEmpty ? '변경 이력이 없습니다' : '검색 결과가 없습니다',
+                        style: const TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))))
+                    : ListView.builder(
+                        padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+                        itemCount: _uploads.length,
                         itemBuilder: (_, i) {
-                          final r = _items[i];
-                          final cancelled = (r['cancelled'] ?? '0') == '1';
-                          final hn = r['허가번호'] ?? '';
-                          final field = r['필드명'] ?? '';
-                          final jn = r['장치번호'] ?? '';
-                          final before = r['변경전값'] ?? '';
-                          final after = r['변경후값'] ?? '';
-                          final date = r['변경일자'] ?? '';
-                          final label = jn.toString().isNotEmpty ? '$field · 장치$jn' : '$field';
-                          return Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                            color: cancelled ? const Color(0xFFFAFAFA) : Colors.white,
-                            child: Row(children: [
-                              Expanded(
-                                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                                  Row(children: [
-                                    Text('$hn',
-                                        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
-                                            color: Color(0xFF1565C0))),
-                                    const SizedBox(width: 8),
-                                    Text(label,
-                                        style: TextStyle(
-                                            fontSize: 13,
-                                            color: cancelled ? Colors.grey.shade500 : const Color(0xFF111827),
-                                            fontWeight: FontWeight.w600,
-                                            decoration: cancelled ? TextDecoration.lineThrough : null)),
-                                    const SizedBox(width: 8),
-                                    Text(_fmtDate(date),
-                                        style: TextStyle(fontSize: 11, color: Colors.grey.shade500)),
-                                    if (cancelled) ...[
-                                      const SizedBox(width: 6),
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-                                        decoration: BoxDecoration(
-                                          color: const Color(0xFFE17055).withValues(alpha: 0.12),
-                                          borderRadius: BorderRadius.circular(3),
-                                        ),
-                                        child: const Text('취소됨',
-                                            style: TextStyle(fontSize: 9, color: Color(0xFFE17055),
-                                                fontWeight: FontWeight.w700)),
-                                      ),
-                                    ],
-                                  ]),
-                                  const SizedBox(height: 2),
-                                  Text('$before → $after',
-                                      style: TextStyle(
-                                          fontSize: 11,
-                                          color: cancelled ? Colors.grey.shade400 : const Color(0xFF6B7280))),
-                                ]),
-                              ),
-                              if (!cancelled && widget.canCancel)
-                                TextButton.icon(
-                                  icon: const Icon(Icons.undo, size: 14),
-                                  label: const Text('되돌리기', style: TextStyle(fontSize: 11)),
-                                  style: TextButton.styleFrom(
-                                    foregroundColor: const Color(0xFFE17055),
-                                    minimumSize: const Size(0, 28),
-                                    padding: const EdgeInsets.symmetric(horizontal: 8),
-                                  ),
-                                  onPressed: () => _cancel(r),
-                                ),
-                            ]),
-                          );
+                          final u = _uploads[i];
+                          final uploadId = u['upload_id'] as String? ?? '';
+                          final isExpanded = _expanded.contains(uploadId);
+                          final items = _itemsByUpload[uploadId] ?? [];
+                          return _buildUploadGroup(u, uploadId, isExpanded, items);
                         },
                       ),
           ),
         ]),
       ),
+    );
+  }
+
+  Widget _buildUploadGroup(Map<String, dynamic> u, String uploadId, bool isExpanded, List<Map<String, dynamic>> items) {
+    final active = (u['active_count'] as num?)?.toInt() ?? 0;
+    final cancelled = (u['cancelled_count'] as num?)?.toInt() ?? 0;
+    final total = (u['total'] as num?)?.toInt() ?? 0;
+    final filename = u['uploaded_filename'] as String? ?? '(파일명 없음)';
+    final uploadedBy = u['uploaded_by'] as String? ?? '';
+    final uploadedAt = u['uploaded_at'] as String? ?? '';
+
+    // 활성 행만 체크 가능
+    final activeItems = items.where((it) => (it['cancelled'] ?? '0') != '1').toList();
+    final activeIds = activeItems.map((it) => it['id'] as int).toSet();
+    final allChecked = activeIds.isNotEmpty && activeIds.every(_selected.contains);
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border.all(color: const Color(0xFFE5E7EB)),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Column(children: [
+        InkWell(
+          onTap: () => _toggleExpand(uploadId),
+          borderRadius: BorderRadius.circular(14),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            child: Row(children: [
+              Icon(isExpanded ? Icons.expand_more_rounded : Icons.chevron_right_rounded,
+                  size: 20, color: const Color(0xFF9CA3AF)),
+              const SizedBox(width: 8),
+              if (widget.canCancel && isExpanded && activeIds.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(right: 6),
+                  child: SizedBox(
+                    width: 22, height: 22,
+                    child: Checkbox(
+                      value: allChecked,
+                      tristate: false,
+                      activeColor: const Color(0xFF2563EB),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+                      onChanged: (v) {
+                        setState(() {
+                          if (v == true) {
+                            _selected.addAll(activeIds);
+                          } else {
+                            _selected.removeAll(activeIds);
+                          }
+                        });
+                      },
+                    ),
+                  ),
+                ),
+              Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(filename,
+                      style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        color: Color(0xFF111827),
+                        letterSpacing: -0.2,
+                      ),
+                      maxLines: 1, overflow: TextOverflow.ellipsis),
+                  const SizedBox(height: 3),
+                  Text('${_fmtTime(uploadedAt)} · ${uploadedBy.isEmpty ? "-" : uploadedBy}',
+                      style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF))),
+                ]),
+              ),
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFEFF6FF),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  cancelled > 0 ? '활성 $active / 전체 $total · 취소 $cancelled' : '활성 $active / 전체 $total',
+                  style: const TextStyle(
+                    fontSize: 10,
+                    color: Color(0xFF2563EB),
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ]),
+          ),
+        ),
+        if (isExpanded)
+          Container(
+            decoration: const BoxDecoration(
+              color: Color(0xFFF9FAFB),
+              borderRadius: BorderRadius.vertical(bottom: Radius.circular(13)),
+              border: Border(top: BorderSide(color: Color(0xFFE5E7EB))),
+            ),
+            child: Column(children: items.map(_buildItemRow).toList()),
+          ),
+      ]),
+    );
+  }
+
+  Widget _buildItemRow(Map<String, dynamic> r) {
+    final id = r['id'] as int? ?? 0;
+    final cancelled = (r['cancelled'] ?? '0') == '1';
+    final hn = r['허가번호'] ?? '';
+    final field = r['필드명'] ?? '';
+    final jn = r['장치번호'] ?? '';
+    final before = r['변경전값'] ?? '';
+    final after = r['변경후값'] ?? '';
+    final date = r['변경일자'] ?? '';
+    final label = jn.toString().isNotEmpty ? '$field · $jn' : '$field';
+    final checked = _selected.contains(id);
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+      decoration: const BoxDecoration(
+        border: Border(bottom: BorderSide(color: Color(0xFFEEF0F3))),
+      ),
+      child: Row(children: [
+        if (widget.canCancel)
+          SizedBox(
+            width: 22, height: 22,
+            child: Checkbox(
+              value: cancelled ? false : checked,
+              activeColor: const Color(0xFF2563EB),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+              onChanged: cancelled ? null : (v) {
+                setState(() {
+                  if (v == true) {
+                    _selected.add(id);
+                  } else {
+                    _selected.remove(id);
+                  }
+                });
+              },
+            ),
+          ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(children: [
+              Text('$hn',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    color: Color(0xFF2563EB),
+                  )),
+              const SizedBox(width: 10),
+              Flexible(
+                child: Text(label,
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: cancelled ? const Color(0xFF9CA3AF) : const Color(0xFF111827),
+                      fontWeight: FontWeight.w600,
+                      decoration: cancelled ? TextDecoration.lineThrough : null,
+                    ),
+                    maxLines: 1, overflow: TextOverflow.ellipsis),
+              ),
+              const SizedBox(width: 8),
+              Text(_fmtDate(date),
+                  style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF))),
+              if (cancelled) ...[
+                const SizedBox(width: 6),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFEF2F2),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: const Text('취소됨',
+                      style: TextStyle(fontSize: 9, color: Color(0xFFEF4444), fontWeight: FontWeight.w700)),
+                ),
+              ],
+            ]),
+            const SizedBox(height: 3),
+            Text('$before → $after',
+                style: TextStyle(
+                  fontSize: 11,
+                  color: cancelled ? const Color(0xFFC1C5CC) : const Color(0xFF6B7280),
+                )),
+          ]),
+        ),
+        if (!cancelled && widget.canCancel)
+          TextButton.icon(
+            icon: const Icon(Icons.undo_rounded, size: 14),
+            label: const Text('되돌리기', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700)),
+            style: TextButton.styleFrom(
+              foregroundColor: const Color(0xFF2563EB),
+              minimumSize: const Size(0, 30),
+              padding: const EdgeInsets.symmetric(horizontal: 10),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            onPressed: () => _cancelOne(id),
+          ),
+      ]),
     );
   }
 }

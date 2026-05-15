@@ -451,11 +451,11 @@ class InspectionService {
   }
 
   /// ds_변경이력 전체 건수
-  Future<int> getDsChangeHistoryCount() async {
-    final resp = await http.get(
-      Uri.parse('$_baseUrl/ds/변경이력-count'),
-      headers: _headers,
-    ).timeout(_apiTimeout);
+  Future<int> getDsChangeHistoryCount({String divisionId = ''}) async {
+    final uri = Uri.parse('$_baseUrl/ds/변경이력-count').replace(
+      queryParameters: divisionId.isEmpty ? null : {'division_id': divisionId},
+    );
+    final resp = await http.get(uri, headers: _headers).timeout(_apiTimeout);
     if (resp.statusCode != 200) return 0;
     final body = json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
     return (body['count'] as num?)?.toInt() ?? 0;
@@ -464,11 +464,17 @@ class InspectionService {
   /// DS 변경 이력 목록 조회. licenseNo 비면 전체.
   Future<List<Map<String, dynamic>>> listDsChangeHistory({
     String licenseNo = '',
+    String divisionId = '',
+    String uploadId = '',
+    String search = '',
     bool includeCancelled = true,
-    int limit = 500,
+    int limit = 2000,
   }) async {
     final uri = Uri.parse('$_baseUrl/ds/change-history').replace(queryParameters: {
       if (licenseNo.isNotEmpty) '허가번호': licenseNo,
+      if (divisionId.isNotEmpty) 'division_id': divisionId,
+      if (uploadId.isNotEmpty) 'upload_id': uploadId,
+      if (search.isNotEmpty) 'search': search,
       'include_cancelled': includeCancelled ? 'true' : 'false',
       'limit': '$limit',
     });
@@ -476,6 +482,25 @@ class InspectionService {
     final body = json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
     if (resp.statusCode != 200) {
       throw Exception(body['detail'] ?? 'DS 변경 이력 조회 실패');
+    }
+    return List<Map<String, dynamic>>.from(body['items'] ?? []);
+  }
+
+  /// 업로드 묶음(upload_id) 요약 조회.
+  Future<List<Map<String, dynamic>>> listDsChangeHistoryUploads({
+    String divisionId = '',
+    bool includeCancelled = true,
+    int limit = 100,
+  }) async {
+    final uri = Uri.parse('$_baseUrl/ds/change-history/uploads').replace(queryParameters: {
+      if (divisionId.isNotEmpty) 'division_id': divisionId,
+      'include_cancelled': includeCancelled ? 'true' : 'false',
+      'limit': '$limit',
+    });
+    final resp = await http.get(uri, headers: _headers).timeout(_apiTimeout);
+    final body = json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+    if (resp.statusCode != 200) {
+      throw Exception(body['detail'] ?? 'DS 업로드 묶음 조회 실패');
     }
     return List<Map<String, dynamic>>.from(body['items'] ?? []);
   }
@@ -489,6 +514,20 @@ class InspectionService {
     final body = json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
     if (resp.statusCode != 200) {
       throw Exception(body['detail'] ?? 'DS 변경 취소 실패');
+    }
+    return body;
+  }
+
+  /// DS 변경 이력 다중 일괄 되돌리기. {succeeded, failed, skipped, errors} 반환.
+  Future<Map<String, dynamic>> bulkCancelDsChanges(List<int> ids) async {
+    final resp = await http.post(
+      Uri.parse('$_baseUrl/ds/change-history/bulk-cancel'),
+      headers: _headers,
+      body: json.encode({'ids': ids}),
+    ).timeout(_apiTimeout);
+    final body = json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+    if (resp.statusCode != 200) {
+      throw Exception(body['detail'] ?? 'DS 변경 일괄 취소 실패');
     }
     return body;
   }
