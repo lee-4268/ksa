@@ -11966,12 +11966,22 @@ def _init_ds_detail_db():
         conn.commit()
     except Exception:
         pass
-    # 마이그레이션: 설치장소 컬럼 추가
+    # 마이그레이션: 설치장소 컬럼 추가 (대표값 — 정렬 가능한 첫 행 또는 단일 행용 호환)
     try:
         conn.execute('ALTER TABLE ds_일반사항 ADD COLUMN 설치장소 TEXT')
         conn.commit()
     except Exception:
         pass
+    # 같은 허가번호에 여러 설치장소 행이 있을 수 있어 별도 테이블에 모든 행 보관
+    # 행 구분키: 설치장소구분 (예: '01', '02', '03')
+    conn.execute('''CREATE TABLE IF NOT EXISTS ds_설치장소 (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        허가번호 TEXT NOT NULL,
+        설치장소구분 TEXT NOT NULL DEFAULT '',
+        설치장소주소 TEXT,
+        UNIQUE(허가번호, 설치장소구분)
+    )''')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_dsd_설치장소_허가번호 ON ds_설치장소(허가번호)')
     conn.execute('''CREATE TABLE IF NOT EXISTS ds_장치 (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         허가번호 TEXT, 장치번호 TEXT, 기기일련번호 TEXT, 형식검정번호 TEXT
@@ -12044,7 +12054,8 @@ def _build_ds_detail_from_zip_sync(zip_path: str):
     conn.execute('PRAGMA journal_mode=WAL')
 
     # 1pass: 모든 데이터 수집 (INSERT 전 DELETE를 위해 허가번호 먼저 확보)
-    batches: dict = {'일반사항': [], '장치': [], '안테나': [], '전파형식': [], '주파수': [], '설치장소': {}}
+    batches: dict = {'일반사항': [], '장치': [], '안테나': [], '전파형식': [], '주파수': [],
+                     '설치장소': {}, '설치장소_rows': []}
     _seen_licenses: set = set()
 
     def _col_idx(ws, *names):
@@ -12137,17 +12148,25 @@ def _build_ds_detail_from_zip_sync(zip_path: str):
                                     _seen_licenses.add(h)
                                     batches['주파수'].append((h, _sv(ws, r, ji), _sv(ws, r, fi), _sv(ws, r, di)))
 
-                    # 설치장소 (설치장소입력주소 컬럼)
+                    # 설치장소 (설치장소입력주소 컬럼) — 같은 허가번호에 여러 행 가능
+                    # 행 구분: 설치장소구분 컬럼 (예: '01', '02', '03')
                     if '설치장소' in sheet_names:
                         ws = wb.sheet_by_name('설치장소')
                         hi = _col_idx(ws, '허가번호')
                         ai = _col_idx(ws, '설치장소입력주소')
+                        gi = _col_idx(ws, '설치장소구분')
                         if hi >= 0 and ai >= 0:
                             for r in range(1, ws.nrows):
                                 h = _hn(ws, r, hi)
                                 v = _sv(ws, r, ai)
-                                if h and v:
-                                    batches['설치장소'][h] = v  # 허가번호당 하나
+                                if not (h and v):
+                                    continue
+                                gubun = _sv(ws, r, gi) if gi >= 0 else ''
+                                # ds_설치장소: (허가번호, 설치장소구분) 단위로 모든 행 보관
+                                batches['설치장소_rows'].append((h, gubun, v))
+                                # ds_일반사항.설치장소: 첫 행만 대표값으로 유지 (하위 호환)
+                                if h not in batches['설치장소']:
+                                    batches['설치장소'][h] = v
 
                     wb.release_resources()
                 except Exception as xe:
@@ -12157,7 +12176,7 @@ def _build_ds_detail_from_zip_sync(zip_path: str):
         if _seen_licenses:
             lic_list = list(_seen_licenses)
             _BATCH = 900
-            for tbl in ('ds_일반사항', 'ds_장치', 'ds_안테나', 'ds_전파형식', 'ds_주파수'):
+            for tbl in ('ds_일반사항', 'ds_장치', 'ds_안테나', 'ds_전파형식', 'ds_주파수', 'ds_설치장소'):
                 for i in range(0, len(lic_list), _BATCH):
                     chunk = lic_list[i:i+_BATCH]
                     ph = ','.join('?' * len(chunk))
@@ -12167,7 +12186,12 @@ def _build_ds_detail_from_zip_sync(zip_path: str):
             conn.executemany('INSERT INTO ds_안테나(허가번호,장치번호,기,이득,공중선주설치형태명,공중선일련번호,공중선형식명) VALUES(?,?,?,?,?,?,?)', batches['안테나'])
             conn.executemany('INSERT INTO ds_전파형식(허가번호,장치번호,공중선전력) VALUES(?,?,?)', batches['전파형식'])
             conn.executemany('INSERT INTO ds_주파수(허가번호,장치번호,주파수,송수신구분) VALUES(?,?,?,?)', batches['주파수'])
-            # 설치장소: INSERT 후 UPDATE (별도 시트이므로)
+            # 설치장소: 모든 행을 ds_설치장소에 적재 (행 구분키: 설치장소구분)
+            if batches['설치장소_rows']:
+                conn.executemany(
+                    'INSERT OR REPLACE INTO ds_설치장소(허가번호,설치장소구분,설치장소주소) VALUES(?,?,?)',
+                    batches['설치장소_rows'])
+            # 하위 호환: ds_일반사항.설치장소 컬럼에는 대표값(첫 행)만 유지
             for hn, addr in batches['설치장소'].items():
                 conn.execute('UPDATE ds_일반사항 SET 설치장소=? WHERE 허가번호=?', (addr, hn))
             conn.commit()
@@ -15531,18 +15555,25 @@ async def ds_preview_partial_update(request: Request, file: UploadFile = File(..
                     if v and hn not in antenna_data:
                         antenna_data[hn] = v
 
+        # 설치장소: 같은 허가번호에 여러 행 가능 — (허가번호, 설치장소구분) 단위로 모두 수집
+        # location_rows: list[(허가번호, 설치장소구분, 설치장소주소)]
+        location_rows: list[tuple[str, str, str]] = []
         if 설치장소_si >= 0:
             ws = wb.sheet_by_index(설치장소_si)
             hn_col = _find_col(ws, '허가번호')
-            # 부분 DS 파일의 설치장소 컬럼명: 설치장소주소
-            addr_col = _find_col(ws, '설치장소주소')
+            # 부분 DS 파일 컬럼명: 설치장소주소 (원본 DS는 설치장소입력주소)
+            addr_col = _find_col(ws, '설치장소주소', '설치장소입력주소')
+            gubun_col = _find_col(ws, '설치장소구분')
             if hn_col >= 0 and addr_col >= 0:
                 for ri in range(1, ws.nrows):
                     hn = _norm_hn(ws.cell_value(ri, hn_col))
                     v = str(ws.cell_value(ri, addr_col) or '').strip()
-                    if hn and v and hn not in location_data:
-                        license_set.add(hn)
-                        location_data[hn] = v
+                    if not (hn and v):
+                        continue
+                    license_set.add(hn)
+                    gubun = (str(ws.cell_value(ri, gubun_col) or '').strip()
+                             if gubun_col >= 0 and ws.ncols > gubun_col else '')
+                    location_rows.append((hn, gubun, v))
 
         if not license_set:
             raise HTTPException(400, "허가번호 없음")
@@ -15573,13 +15604,23 @@ async def ds_preview_partial_update(request: Request, file: UploadFile = File(..
             if old_val != new_형태:
                 diffs.append({"허가번호": hn, "장치번호": "", "필드명": "설치형태", "변경전": old_val, "변경후": new_형태})
 
-        for hn, new_addr in location_data.items():
+        # 설치장소: (허가번호, 설치장소구분) 단위로 행별 비교
+        # 신고서 파일 각 행에 대해 ds_설치장소의 동일 (허가번호, 설치장소구분) 행과 비교
+        for hn, gubun, new_addr in location_rows:
             existing = dc.execute(
-                'SELECT 설치장소 FROM ds_일반사항 WHERE 허가번호=?', (hn,)
+                'SELECT 설치장소주소 FROM ds_설치장소 WHERE 허가번호=? AND 설치장소구분=?',
+                (hn, gubun)
             ).fetchone()
-            old_val = str(existing['설치장소'] or '') if existing and existing['설치장소'] else ''
+            old_val = str(existing['설치장소주소'] or '') if existing and existing['설치장소주소'] else ''
             if old_val != new_addr:
-                diffs.append({"허가번호": hn, "장치번호": "", "필드명": "설치장소", "변경전": old_val, "변경후": new_addr})
+                # 장치번호 필드를 설치장소구분으로 사용해 화면/적용 시 어느 행인지 식별
+                diffs.append({
+                    "허가번호": hn,
+                    "장치번호": gubun,  # 설치장소구분 (예: '01')
+                    "필드명": "설치장소",
+                    "변경전": old_val,
+                    "변경후": new_addr,
+                })
 
         dc.close()
         return {"diffs": diffs, "license_count": len(license_set)}
@@ -15685,19 +15726,25 @@ async def ds_change_history_cancel(history_id: int, request: Request):
                     'UPDATE ds_안테나 SET 공중선주설치형태명=? WHERE 허가번호=?',
                     (before, hn))
             elif field == '설치장소':
-                # inspection_targets은 다른 DB
-                ic = sqlite3.connect(_INSP_DB, timeout=60)
-                ic.execute(
-                    "UPDATE inspection_targets SET 설치장소=? WHERE REPLACE(허가번호,'-','')=?",
-                    (before, hn))
-                # ds_일반사항도 (preview에서 사용)
-                try:
-                    dc.execute(
-                        'UPDATE ds_일반사항 SET 설치장소=? WHERE 허가번호=?',
+                # 행별 되돌리기: 이력의 장치번호 컬럼이 설치장소구분으로 사용됨
+                gubun = jn
+                dc.execute(
+                    'UPDATE ds_설치장소 SET 설치장소주소=? WHERE 허가번호=? AND 설치장소구분=?',
+                    (before, hn, gubun))
+                # 하위 호환: 첫 행(또는 구분 없음)일 때만 ds_일반사항.설치장소도 갱신
+                if not gubun or gubun == '01':
+                    try:
+                        dc.execute(
+                            'UPDATE ds_일반사항 SET 설치장소=? WHERE 허가번호=?',
+                            (before, hn))
+                    except Exception:
+                        pass
+                    # inspection_targets도 대표값으로만 동기화
+                    ic = sqlite3.connect(_INSP_DB, timeout=60)
+                    ic.execute(
+                        "UPDATE inspection_targets SET 설치장소=? WHERE REPLACE(허가번호,'-','')=?",
                         (before, hn))
-                except Exception:
-                    pass
-                ic.commit()
+                    ic.commit()
             else:
                 raise HTTPException(400, f"취소를 지원하지 않는 필드: {field}")
 
@@ -15813,20 +15860,24 @@ async def ds_apply_partial_update(request: Request, file: UploadFile = File(...)
                     if v and hn not in antenna_data:
                         antenna_data[hn] = v
 
-        # ── 설치장소 시트: 허가번호 → 설치장소주소
-        location_data: dict[str, str] = {}
+        # ── 설치장소 시트: (허가번호, 설치장소구분) 단위로 모든 행 수집
+        location_rows: list[tuple[str, str, str]] = []
 
         if 설치장소_si >= 0:
             ws = wb.sheet_by_index(설치장소_si)
             hn_col = _find_col(ws, '허가번호')
-            addr_col = _find_col(ws, '설치장소주소')
+            addr_col = _find_col(ws, '설치장소주소', '설치장소입력주소')
+            gubun_col = _find_col(ws, '설치장소구분')
             if hn_col >= 0 and addr_col >= 0:
                 for ri in range(1, ws.nrows):
                     hn = _norm_hn(ws.cell_value(ri, hn_col))
                     v = str(ws.cell_value(ri, addr_col) or '').strip()
-                    if hn and v and hn not in location_data:
-                        license_set.add(hn)
-                        location_data[hn] = v
+                    if not (hn and v):
+                        continue
+                    license_set.add(hn)
+                    gubun = (str(ws.cell_value(ri, gubun_col) or '').strip()
+                             if gubun_col >= 0 and ws.ncols > gubun_col else '')
+                    location_rows.append((hn, gubun, v))
 
         if not license_set:
             raise HTTPException(400, "허가번호 없음")
@@ -15883,20 +15934,30 @@ async def ds_apply_partial_update(request: Request, file: UploadFile = File(...)
                     (hn, applied_date, '부분DS안테나', '설치형태', old_val, 설치형태, '')
                 )
 
-        for hn, new_addr in location_data.items():
-            if f"{hn}#설치장소#" in excluded_set: continue
+        # 설치장소: (허가번호, 설치장소구분) 단위로 행별 적용
+        for hn, gubun, new_addr in location_rows:
+            # excluded_set의 키는 "허가번호#설치장소#설치장소구분" 형태로 통일
+            if f"{hn}#설치장소#{gubun}" in excluded_set: continue
             existing = dc.execute(
-                'SELECT 설치장소 FROM ds_일반사항 WHERE 허가번호=?', (hn,)
+                'SELECT 설치장소주소 FROM ds_설치장소 WHERE 허가번호=? AND 설치장소구분=?',
+                (hn, gubun)
             ).fetchone()
-            old_val = str(existing['설치장소'] or '') if existing and existing['설치장소'] else ''
+            old_val = str(existing['설치장소주소'] or '') if existing and existing['설치장소주소'] else ''
             if old_val == new_addr: continue
-            cur = dc.execute('UPDATE ds_일반사항 SET 설치장소=? WHERE 허가번호=?', (new_addr, hn))
+            cur = dc.execute(
+                'INSERT INTO ds_설치장소(허가번호,설치장소구분,설치장소주소) VALUES(?,?,?) '
+                'ON CONFLICT(허가번호,설치장소구분) DO UPDATE SET 설치장소주소=excluded.설치장소주소',
+                (hn, gubun, new_addr))
             if cur.rowcount > 0:
                 updated_count += 1
+                # 이력에 설치장소구분도 장치번호 컬럼에 기록 (되돌리기 시 식별)
                 dc.execute(
                     'INSERT INTO ds_변경이력(허가번호,변경일자,시트,필드명,변경전값,변경후값,장치번호) VALUES(?,?,?,?,?,?,?)',
-                    (hn, applied_date, '부분DS설치장소', '설치장소', old_val, new_addr, '')
+                    (hn, applied_date, '부분DS설치장소', '설치장소', old_val, new_addr, gubun)
                 )
+                # 하위 호환: ds_일반사항.설치장소도 동기화 (대표값 — 첫 행만 의미 있음)
+                if not gubun or gubun == '01':
+                    dc.execute('UPDATE ds_일반사항 SET 설치장소=? WHERE 허가번호=?', (new_addr, hn))
 
         dc.commit(); dc.close()
 
