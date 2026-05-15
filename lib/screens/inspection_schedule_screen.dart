@@ -3873,11 +3873,14 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     final stationName = (dsGeneral?['무선국명'] ?? '') as String;
     final licenseNo = (target?['허가번호'] ?? '') as String;
     final location = (target?['도로명주소'] ?? target?['설치장소'] ?? '') as String;
-    final kisuList = dsAntennas.map((a) => a['기'] ?? '').where((v) => v.toString().isNotEmpty).map((v) => v.toString()).toSet().toList();
-    final gainList = dsAntennas.map((a) => a['이득'] ?? '').where((v) => v.toString().isNotEmpty).map((v) => v.toString()).toSet().toList();
-    final installTypeSet = dsAntennas.map((a) => a['공중선주설치형태명'] ?? '').where((v) => v.toString().isNotEmpty).toSet();
-    final serialList = dsDevices.map((dv) => dv['기기일련번호'] ?? '').where((v) => v.toString().isNotEmpty).map((v) => v.toString()).toSet().toList();
-    final typeApprovalSet = dsDevices.map((dv) => dv['형식검정번호'] ?? '').where((v) => v.toString().isNotEmpty).map((v) => v.toString()).toSet().toList();
+    // 공중선별 한 줄 요약 (이득/기수 통합) + 장치별 라벨링 (설치대/형검/일련번호)
+    final antennaSummary = _antennaSummary(dsAntennas);
+    String installType = _fieldByDevice(dsAntennas, '공중선주 설치형태명');
+    if (installType.isEmpty) {
+      installType = _fieldByDevice(dsAntennas, '공중선주설치형태명');
+    }
+    final serialText = _fieldByDevice(dsDevices, '기기일련번호');
+    final typeApprovalText = _fieldByDevice(dsDevices, '형식검정번호');
     final callnameList = List<Map<String, dynamic>>.from(d['callname_list'] ?? []);
     // eqp_ser_no(zpcname) 형식으로 조합, 중복 제거
     final facilityNames = callnameList
@@ -3934,16 +3937,13 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
             _infoRow('허가번호', licenseNo),
             _infoRow('설치장소', location),
             _infoRow('호출명칭', callname),
-            if (facilityNames.isNotEmpty || serialList.isNotEmpty) _infoRow(
+            if (facilityNames.isNotEmpty || serialText.isNotEmpty) _infoRow(
               '일련번호 및 통합시설명칭',
-              facilityNames.isNotEmpty
-                  ? facilityNames.join('\n')
-                  : serialList.join('\n'),
+              facilityNames.isNotEmpty ? facilityNames.join('\n') : serialText,
             ),
-            if (gainList.isNotEmpty) _infoRow('이득(dB)', gainList.join('  ')),
-            if (kisuList.isNotEmpty) _infoRow('기수', kisuList.join('  ')),
-            if (installTypeSet.isNotEmpty) _infoRow('설치대', installTypeSet.join(', ')),
-            if (typeApprovalSet.isNotEmpty) _infoRow('형식검정번호', typeApprovalSet.join('\n')),
+            if (antennaSummary.isNotEmpty) _infoRow('공중선', antennaSummary),
+            if (installType.isNotEmpty) _infoRow('설치대', installType),
+            if (typeApprovalText.isNotEmpty) _infoRow('형식검정번호', typeApprovalText),
             _infoRow('분기', target?['분기'] ?? ''),
             _infoRow('국종군', target?['국종군'] ?? ''),
             _infoRow('KCA검토결과', target?['kca검토결과'] ?? ''),
@@ -4177,6 +4177,105 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
         Expanded(child: Text(value, style: const TextStyle(fontSize: 13))),
       ]),
     );
+  }
+
+  /// 장치번호별로 값을 묶어 표시.
+  /// - groupSep: 장치 간 구분자 (기본 줄바꿈)
+  /// - innerSep: 같은 장치 내 여러 값 구분자 (기본 ' · ')
+  /// - 장치가 1개뿐이면 라벨 생략하고 값만 innerSep로 연결
+  String _fieldByDevice(List<dynamic> rows, String key,
+      {String groupSep = '\n', String innerSep = ' · '}) {
+    final byJn = <String, List<String>>{};
+    final order = <String>[];
+    for (final r in rows) {
+      final m = r as Map<String, dynamic>;
+      final jn = (m['장치번호']?.toString().trim() ?? '');
+      final v  = (m[key]?.toString().trim() ?? '');
+      if (v.isEmpty) continue;
+      final bucket = byJn.putIfAbsent(jn, () {
+        order.add(jn);
+        return <String>[];
+      });
+      if (!bucket.contains(v)) bucket.add(v);
+    }
+    if (byJn.isEmpty) return '';
+    order.sort((a, b) {
+      final ai = int.tryParse(a);
+      final bi = int.tryParse(b);
+      if (ai != null && bi != null) return ai.compareTo(bi);
+      if (ai != null) return -1;
+      if (bi != null) return 1;
+      return a.compareTo(b);
+    });
+    if (order.length == 1) {
+      return byJn[order.first]!.join(innerSep);
+    }
+    return order.map((jn) {
+      final label = jn.isEmpty ? '장치' : '장치$jn';
+      return '$label: ${byJn[jn]!.join(innerSep)}';
+    }).join(groupSep);
+  }
+
+  /// 공중선 요약: (장치번호, 공중선일련번호) 단위로
+  ///   "장치1 · #ANT001  기2 / 이득 13.5"
+  /// 형태 한 줄씩. 장치/공중선 단일이면 라벨 자동 축약.
+  String _antennaSummary(List<dynamic> list) {
+    final groups = <String, _SchedAntGroup>{};
+    final orderKeys = <String>[];
+    for (final r in list) {
+      final m = r as Map<String, dynamic>;
+      final jn   = (m['장치번호']?.toString().trim() ?? '');
+      final sn   = (m['공중선일련번호']?.toString().trim() ?? '');
+      final gi   = (m['기']?.toString().trim() ?? '');
+      final gain = (m['이득']?.toString().trim() ?? '');
+      if (jn.isEmpty && sn.isEmpty && gi.isEmpty && gain.isEmpty) continue;
+      final key = '$jn|$sn';
+      final g = groups.putIfAbsent(key, () {
+        orderKeys.add(key);
+        return _SchedAntGroup(jn: jn, sn: sn);
+      });
+      final pair = '$gi|$gain';
+      if (!g.pairsKey.contains(pair)) {
+        g.pairsKey.add(pair);
+        g.pairs.add(_SchedGainCount(gain: gain, count: gi));
+      }
+    }
+    if (groups.isEmpty) return '';
+    orderKeys.sort((a, b) {
+      final ga = groups[a]!, gb = groups[b]!;
+      final ai = int.tryParse(ga.jn);
+      final bi = int.tryParse(gb.jn);
+      if (ai != null && bi != null) {
+        final c = ai.compareTo(bi);
+        if (c != 0) return c;
+      } else if (ai != null) {
+        return -1;
+      } else if (bi != null) {
+        return 1;
+      }
+      return ga.sn.compareTo(gb.sn);
+    });
+    final distinctJn = groups.values.map((g) => g.jn).toSet();
+    final singleDevice = distinctJn.length <= 1;
+    return orderKeys.map((k) {
+      final g = groups[k]!;
+      final devLabel = singleDevice
+          ? null
+          : (g.jn.isEmpty ? '장치' : '장치${g.jn}');
+      final snLabel = g.sn.isEmpty ? null : '#${g.sn}';
+      final pairs = g.pairs.map((p) {
+        final c = p.count.isEmpty ? '' : '기${p.count}';
+        final v = p.gain.isEmpty ? '' : '이득 ${p.gain}';
+        if (c.isEmpty && v.isEmpty) return '';
+        if (c.isEmpty) return v;
+        if (v.isEmpty) return c;
+        return '$c / $v';
+      }).where((s) => s.isNotEmpty).join(' · ');
+      final head = [devLabel, snLabel].whereType<String>().join(' · ');
+      if (head.isEmpty) return pairs;
+      if (pairs.isEmpty) return head;
+      return '$head  $pairs';
+    }).join('\n');
   }
 
   Widget _buildResultSection(Map<String, dynamic>? result, String callname) {
@@ -5778,5 +5877,20 @@ class _NavButton extends StatelessWidget {
       ),
     );
   }
+}
+
+// 안테나 그룹: (장치번호, 공중선일련번호) 단위로 (기, 이득) 짝 묶음
+class _SchedAntGroup {
+  final String jn;
+  final String sn;
+  final List<_SchedGainCount> pairs = [];
+  final Set<String> pairsKey = {};
+  _SchedAntGroup({required this.jn, required this.sn});
+}
+
+class _SchedGainCount {
+  final String gain;
+  final String count;
+  _SchedGainCount({required this.gain, required this.count});
 }
 
