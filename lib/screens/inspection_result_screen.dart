@@ -538,16 +538,6 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
 
   // ── 기본 정보 ───────────────────────────────────────────
 
-  /// 안테나 목록에서 key에 해당하는 값을 중복 제거 후 공백으로 연결
-  String _antennaField(List<dynamic> list, String key) {
-    final seen = <String>{};
-    final vals = list
-        .map((a) => (a as Map<String, dynamic>)[key]?.toString().trim() ?? '')
-        .where((v) => v.isNotEmpty && seen.add(v))
-        .toList();
-    return vals.join(' ');
-  }
-
   /// 장치번호별로 값을 묶어 "장치1: A · 장치2: B" 형태로 반환.
   /// - 같은 장치번호 안에서는 중복 제거 (같은 값이면 1번만 표시)
   /// - 장치가 1개뿐이면 라벨 생략하고 값만 반환 (기존 표시 유지)
@@ -593,6 +583,74 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
   String _typeApprovalNumbers(List<dynamic> list) =>
       _fieldByDevice(list, '형식검정번호', sep: '\n');
 
+  /// 공중선 요약: (장치번호, 공중선일련번호) 단위로 묶어
+  ///   "장치1 · #ANT001  기2 / 이득 13.5"
+  /// 형태로 한 줄씩 반환. 장치/공중선 단일이면 라벨 자동 축약.
+  String _antennaSummary(List<dynamic> list) {
+    // 그룹 키: (장치번호, 공중선일련번호)
+    final groups = <String, _AntGroup>{};
+    final orderKeys = <String>[];
+    for (final r in list) {
+      final m = r as Map<String, dynamic>;
+      final jn   = (m['장치번호']?.toString().trim() ?? '');
+      final sn   = (m['공중선일련번호']?.toString().trim() ?? '');
+      final gi   = (m['기']?.toString().trim() ?? '');
+      final gain = (m['이득']?.toString().trim() ?? '');
+      if (jn.isEmpty && sn.isEmpty && gi.isEmpty && gain.isEmpty) continue;
+      final key = '$jn|$sn';
+      final g = groups.putIfAbsent(key, () {
+        orderKeys.add(key);
+        return _AntGroup(jn: jn, sn: sn);
+      });
+      // 같은 (장치, 공중선)에 동일 (기, 이득) 짝은 중복 제거
+      final pair = '$gi|$gain';
+      if (!g.pairsKey.contains(pair)) {
+        g.pairsKey.add(pair);
+        g.pairs.add(_GainCount(gain: gain, count: gi));
+      }
+    }
+    if (groups.isEmpty) return '';
+    // 장치번호 숫자 오름차순
+    orderKeys.sort((a, b) {
+      final ga = groups[a]!, gb = groups[b]!;
+      final ai = int.tryParse(ga.jn);
+      final bi = int.tryParse(gb.jn);
+      if (ai != null && bi != null) {
+        final c = ai.compareTo(bi);
+        if (c != 0) return c;
+      } else if (ai != null) {
+        return -1;
+      } else if (bi != null) {
+        return 1;
+      }
+      return ga.sn.compareTo(gb.sn);
+    });
+
+    // 단일 장치 여부 — 라벨 축약 판단
+    final distinctJn = groups.values.map((g) => g.jn).toSet();
+    final singleDevice = distinctJn.length <= 1;
+
+    return orderKeys.map((k) {
+      final g = groups[k]!;
+      final devLabel = singleDevice
+          ? null
+          : (g.jn.isEmpty ? '장치' : '장치${g.jn}');
+      final snLabel = g.sn.isEmpty ? null : '#${g.sn}';
+      final pairs = g.pairs.map((p) {
+        final c = p.count.isEmpty ? '' : '기${p.count}';
+        final v = p.gain.isEmpty ? '' : '이득 ${p.gain}';
+        if (c.isEmpty && v.isEmpty) return '';
+        if (c.isEmpty) return v;
+        if (v.isEmpty) return c;
+        return '$c / $v';
+      }).where((s) => s.isNotEmpty).join(' · ');
+      final head = [devLabel, snLabel].whereType<String>().join(' · ');
+      if (head.isEmpty) return pairs;
+      if (pairs.isEmpty) return head;
+      return '$head  $pairs';
+    }).join('\n');
+  }
+
   String _fmtDate(String raw) {
     if (raw.length == 8 && RegExp(r'^\d{8}$').hasMatch(raw)) {
       return '${raw.substring(0, 4)}-${raw.substring(4, 6)}-${raw.substring(6, 8)}';
@@ -604,8 +662,8 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
       Map<String, dynamic>? target, Map<String, dynamic>? ds) {
     final antennaList = (ds?['안테나'] as List<dynamic>?) ?? [];
     final deviceList  = (ds?['장치']  as List<dynamic>?) ?? [];
-    final gain      = _antennaField(antennaList, '이득');
-    final antCount  = _antennaField(antennaList, '기');
+    // 공중선별 한 줄 요약: 장치 · #공중선  기N / 이득 X.X
+    final antennaSummary = _antennaSummary(antennaList);
     // 장치별 라벨링 — 컬럼명 변형(공중선주 설치형태명 / 공중선주설치형태명) 모두 시도
     String mountType = _fieldByDevice(antennaList, '공중선주 설치형태명');
     if (mountType.isEmpty) {
@@ -665,8 +723,7 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
           ),
         _infoRow('호출명칭',
             target?['호출명칭']?.toString() ?? widget.callname),
-        if (gain.isNotEmpty)      _infoRow('이득(dB)', gain),
-        if (antCount.isNotEmpty)  _infoRow('기수',     antCount),
+        if (antennaSummary.isNotEmpty) _infoRow('공중선', antennaSummary),
         if (mountType.isNotEmpty) _infoRow('설치대', mountType, badge: _changeBadge('설치형태')),
         if (_typeApprovalNumbers(deviceList).isNotEmpty)
           _infoRow('형식검정번호', _typeApprovalNumbers(deviceList), badge: _changeBadge('형식검정번호')),
@@ -1753,4 +1810,19 @@ class _RoadviewDialogState extends State<RoadviewDialog> {
       ),
     );
   }
+}
+
+// 안테나 그룹: (장치번호, 공중선일련번호) 단위로 (기, 이득) 짝 묶음
+class _AntGroup {
+  final String jn;
+  final String sn;
+  final List<_GainCount> pairs = [];
+  final Set<String> pairsKey = {};
+  _AntGroup({required this.jn, required this.sn});
+}
+
+class _GainCount {
+  final String gain;
+  final String count;
+  _GainCount({required this.gain, required this.count});
 }
