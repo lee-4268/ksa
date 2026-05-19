@@ -1410,7 +1410,8 @@ app.add_middleware(
     allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "Accept", "X-Admin-Key", "X-Filename", "X-Refreshed-Token"],
+    # X-Admin-Key 는 서버↔서버 부트스트랩 전용 — 브라우저(XSS 위험)에서 허용하지 않음
+    allow_headers=["Authorization", "Content-Type", "Accept", "X-Filename", "X-Refreshed-Token"],
     expose_headers=[
         "Content-Length",
         "Content-Disposition",
@@ -2716,7 +2717,7 @@ async def set_user_role(req: SetRoleRequest, request: Request):
 
     authorized = False
     caller_id = None
-    if ADMIN_BOOTSTRAP_KEY and admin_key == ADMIN_BOOTSTRAP_KEY:
+    if ADMIN_BOOTSTRAP_KEY and admin_key and _hmac_mod.compare_digest(admin_key, ADMIN_BOOTSTRAP_KEY):
         authorized = True
         logger.info(f"role 변경 (부트스트랩): {req.empno} → {req.role}")
     else:
@@ -10921,7 +10922,7 @@ async def azimuths_batch(request: Request):
             conn.close()
     except Exception as e:
         logger.warning(f"azimuths/batch 조회 실패: {e}")
-        raise HTTPException(status_code=500, detail=f"방위각 조회 실패: {e}")
+        raise HTTPException(status_code=500, detail="방위각 조회 실패")
 
     out = {}
     for z, by_key in result.items():
@@ -10966,7 +10967,7 @@ async def erp_ds_compare(request: Request):
         return result
     except Exception as e:
         logger.error(f"ERP-DS 비교 실패: {e}")
-        raise HTTPException(status_code=500, detail=f"비교 처리 중 오류: {e}")
+        raise HTTPException(status_code=500, detail="비교 처리 중 오류")
 
 
 def _resolve_inputs_to_zpwino(raw_list: list) -> tuple:
@@ -12854,6 +12855,11 @@ async def inspection_upload_raw(request: Request):
         raise HTTPException(403, "관리자/매니저만 가능")
 
     fname = request.headers.get("X-Filename", "inspection.xlsx")
+    # 경로 traversal/특수문자 차단: 파일명만 추출 후 안전한 문자만 허용
+    fname = os.path.basename(fname)  # ../ 제거
+    fname = re.sub(r"[^\w\-.]", "_", fname)  # 영숫자·점·하이픈·언더스코어만 유지
+    if not fname or fname.startswith(".") or len(fname) > 200:
+        fname = "inspection.xlsx"
     s3_key = f"{INSPECTION_S3_PREFIX}{fname}"
     s3 = get_s3_client()
     mp = s3.create_multipart_upload(Bucket=S3_BUCKET_NAME, Key=s3_key)
@@ -12879,7 +12885,8 @@ async def inspection_upload_raw(request: Request):
                                      UploadId=upload_id, MultipartUpload={"Parts": parts})
     except Exception as ex:
         s3.abort_multipart_upload(Bucket=S3_BUCKET_NAME, Key=s3_key, UploadId=upload_id)
-        raise HTTPException(500, f"업로드 실패: {ex}")
+        logger.error(f"inspection multipart upload 실패: {ex}")
+        raise HTTPException(500, "업로드 실패")
 
     return {"success": True, "s3Key": s3_key}
 
@@ -16608,7 +16615,8 @@ async def inspection_result_photo_data(request: Request, s3_key: str):
         data = await asyncio.to_thread(obj['Body'].read)
         return Response(content=data, media_type=content_type)
     except Exception as e:
-        raise HTTPException(404, f"사진을 찾을 수 없습니다: {e}")
+        logger.warning(f"inspection 사진 조회 실패: {e}")
+        raise HTTPException(404, "사진을 찾을 수 없습니다")
 
 @app.get("/inspection/my-list/weeks")
 async def inspection_my_list_weeks(request: Request, year: int, team: str = ""):
