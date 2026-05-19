@@ -1723,7 +1723,7 @@ async def predict_single(
 @app.post("/predict/ensemble", response_model=EnsemblePredictionResponse)
 async def predict_ensemble(
     files: List[UploadFile] = File(..., description="Multiple image files to classify"),
-    method: str = Query("mean", regex="^(mean|max|vote)$", description="Ensemble method"),
+    method: str = Query("mean", pattern="^(mean|max|vote)$", description="Ensemble method"),
     conf_threshold: float = Query(0.5, ge=0.0, le=1.0, description="Confidence threshold"),
     request: Request = None,
 ):
