@@ -19727,10 +19727,28 @@ async def community_upload_file(request: Request, file: UploadFile = File(...)):
     return {"url": s3_key, "filename": original_filename, "size": len(data), "ext": ext}
 
 
+def _safe_community_key(key: str, allowed_prefix: str) -> str:
+    """커뮤니티 S3 키 안전성 검증.
+
+    - 경로 traversal 차단 (`..`, 절대경로)
+    - prefix 화이트리스트로 다른 prefix(inspection/photos 등) 접근 차단
+    - prefix가 누락된 키는 자동 보정 (UUID 헥사 파일명만 들어온 경우 호환)
+    """
+    if not key or '..' in key or key.startswith('/'):
+        raise HTTPException(400, "잘못된 키")
+    if not key.startswith(allowed_prefix):
+        # 슬래시 없는 단순 파일명만 들어온 경우는 prefix 자동 보정
+        if '/' in key:
+            raise HTTPException(403, "허용되지 않은 경로")
+        key = f"{allowed_prefix}{key}"
+    return key
+
+
 @app.get("/community/files/{file_key:path}")
 async def community_serve_file(file_key: str, request: Request):
     """커뮤니티 첨부파일 다운로드 — S3에서 스트리밍"""
     await _verify_auth(request)
+    file_key = _safe_community_key(file_key, "community-files/")
     try:
         s3_client = get_s3_client()
         obj = s3_client.get_object(Bucket=S3_BUCKET_NAME, Key=file_key)
@@ -19745,6 +19763,8 @@ async def community_serve_file(file_key: str, request: Request):
             media_type=content_type,
             headers={'Content-Disposition': f'attachment; filename="{filename}"'},
         )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Community file serve failed: {e}")
         raise HTTPException(404, "파일을 찾을 수 없습니다")
@@ -19752,10 +19772,13 @@ async def community_serve_file(file_key: str, request: Request):
 
 @app.get("/community/images/{image_key:path}")
 async def community_serve_image(image_key: str):
-    """커뮤니티 이미지 조회 — S3에서 직접 스트리밍 (인증 불필요, UUID 키로 보호)"""
-    # image_key가 이미 community-images/ 포함이면 그대로, 아니면 추가
-    if not image_key.startswith("community-images/"):
-        image_key = f"community-images/{image_key}"
+    """커뮤니티 이미지 조회 — S3에서 직접 스트리밍.
+
+    <img src=...> 호환을 위해 인증 헤더 없이 동작.
+    대신 community-images/ prefix 화이트리스트로 IDOR 차단 + 경로 traversal 방어.
+    UUID 키 자체가 capability 토큰 역할.
+    """
+    image_key = _safe_community_key(image_key, "community-images/")
 
     ext = os.path.splitext(image_key)[1].lower()
     ct_map = {'.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png',
@@ -19767,9 +19790,11 @@ async def community_serve_image(image_key: str):
         obj = s3_client.get_object(Bucket=S3_BUCKET_NAME, Key=image_key)
         data = obj['Body'].read()
         return Response(content=data, media_type=content_type)
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Community image presign failed: {e}")
-        raise HTTPException(500, "이미지를 불러올 수 없습니다")
+        logger.error(f"Community image serve failed: {e}")
+        raise HTTPException(404, "이미지를 찾을 수 없습니다")
 
 
 # ── 공지사항 endpoints ──
