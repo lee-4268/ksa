@@ -2602,9 +2602,18 @@ async def get_user_by_empno(empno: str, request: Request = None):
     """
     사번으로 사용자 정보 조회 (DynamoDB)
 
-    기존 i-NET 사용자 테이블에서 조회 + kca-user-roles 자동 등록
+    권한 정책:
+    - 본인 조회: 모든 필드(이메일/전화 포함)
+    - 타인 조회: admin/manager 만 허용, 그 외 403
+      (PII 보호 — 사번 enumeration 으로 전 직원 연락처 수집 차단)
     """
-    await _verify_auth(request)
+    caller_empno = await _verify_auth(request)
+    is_self = (caller_empno == empno)
+    if not is_self:
+        caller_role = await asyncio.to_thread(_get_user_role_sync, caller_empno)
+        if caller_role not in {"admin", "manager"}:
+            raise HTTPException(403, "다른 사용자 정보는 관리자만 조회 가능")
+
     try:
         dynamodb = get_dynamodb_resource()
         table = dynamodb.Table(DYNAMODB_TABLES["users"])
@@ -2633,18 +2642,21 @@ async def get_user_by_empno(empno: str, request: Request = None):
         last_login = role_info["last_login"]
         is_dormant = role_info["is_dormant"]
 
-        return {
+        # 본인 또는 admin/manager 만 PII(email/phone) 노출
+        out = {
             "success": True,
             "empno": empno,
             "name": user.get("name"),
             "region": user.get("region"),
             "team": user.get("team"),
-            "email": user.get("email"),
-            "phone": user.get("phone_number"),
             "role": role,
             "last_login": last_login,
             "is_dormant": is_dormant,
         }
+        if is_self:
+            out["email"] = user.get("email")
+            out["phone"] = user.get("phone_number")
+        return out
     except ClientError as e:
         logger.error(f"DynamoDB error: {e}")
         # Fallback to JSON file
