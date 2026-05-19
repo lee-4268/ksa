@@ -724,11 +724,26 @@ DEV_LOGIN_ENABLED = os.environ.get("DEV_LOGIN_ENABLED", "0") == "1"
 _dev_users: dict = {}  # empno → {name, region, team, role} 메모리 캐시
 
 # ── HMAC 토큰 인증 ─────────────────────────────────────────
-AUTH_TOKEN_SECRET = os.environ.get("AUTH_TOKEN_SECRET", f"dev-fallback-{uuid.uuid4().hex}")
-AUTH_TOKEN_EXPIRY = 2 * 3600  # 2시간
+# APP_ENV/IS_PROD 는 아래에서 정의되므로 이 시점에는 환경변수만 직접 본다 (앞쪽 블록과 동일 로직)
+_is_prod_for_secret = os.environ.get("APP_ENV", "production").lower() in ("production", "prod")
 
-if AUTH_TOKEN_SECRET.startswith("dev-fallback-"):
-    logger.warning("AUTH_TOKEN_SECRET 환경변수 미설정 — 개발용 임시 키 사용 중 (운영 시 반드시 설정)")
+_raw_token_secret = os.environ.get("AUTH_TOKEN_SECRET")
+if _raw_token_secret:
+    AUTH_TOKEN_SECRET = _raw_token_secret
+else:
+    if _is_prod_for_secret:
+        # 운영 환경: 환경변수 누락 시 임시 키로 부팅하면 매 재시작마다 전 사용자 강제 로그아웃
+        # 침묵 fail 보다 부팅 자체를 막아 운영자가 즉시 인지하도록 fail-closed
+        raise RuntimeError(
+            "AUTH_TOKEN_SECRET 환경변수가 필수입니다. "
+            "/etc/systemd/system/kca-api.service 의 [Service] 에 "
+            "Environment=AUTH_TOKEN_SECRET=<32+ 글자 시크릿> 을 추가하세요."
+        )
+    # 개발 환경: 편의를 위해 임시 키 허용 (재시작마다 전 사용자 토큰 무효 — 의도된 동작)
+    AUTH_TOKEN_SECRET = f"dev-fallback-{uuid.uuid4().hex}"
+    logger.warning("AUTH_TOKEN_SECRET 환경변수 미설정 — 개발용 임시 키 사용 중")
+
+AUTH_TOKEN_EXPIRY = 2 * 3600  # 2시간
 
 
 # ── 비밀번호 해시 (PBKDF2-HMAC-SHA256, 표준 라이브러리) ─────
@@ -897,10 +912,26 @@ MAX_EXCEL_SIZE = 50 * 1024 * 1024    # 50MB
 MAX_DS_UPLOAD_SIZE = 200 * 1024 * 1024  # 200MB
 
 
+# X-Forwarded-For 신뢰 정책
+# - TRUST_PROXY=0 (기본, 안전): XFF 무시하고 request.client.host 만 사용.
+#                               EC2 가 인터넷에 직접 노출되어 신뢰 가능한 프록시가 없는 경우.
+# - TRUST_PROXY=1: XFF 의 첫 번째(가장 왼쪽) IP 를 client IP 로 사용.
+#                   AWS ALB / nginx 등이 client IP 를 XFF 의 맨 앞에 추가하는 표준 동작 전제.
+#                   ALB 가 EC2 8000 포트의 유일한 진입점일 때 권장.
+# 운영 시 EC2 systemd 의 Environment=TRUST_PROXY=1 추가 (ALB 사용 시)
+_TRUST_PROXY = os.environ.get("TRUST_PROXY", "0") == "1"
+
+
 def _get_client_ip(request: Request) -> str:
-    forwarded = request.headers.get("X-Forwarded-For", "")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
+    """공격자가 헤더를 위조해도 rate limit/감사 로그를 우회하지 못하도록
+    TRUST_PROXY 가 켜진 경우에만 XFF 헤더를 사용한다."""
+    if _TRUST_PROXY:
+        forwarded = request.headers.get("X-Forwarded-For", "")
+        if forwarded:
+            # AWS ALB / nginx 표준: 가장 왼쪽이 실제 client IP, 그 뒤가 proxy chain
+            first = forwarded.split(",")[0].strip()
+            if first:
+                return first
     return request.client.host if request.client else "unknown"
 
 
