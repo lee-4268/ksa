@@ -10050,6 +10050,174 @@ async def callname_download(process_id: str, request: Request):
 
 
 # ============================================================
+# 호출명칭 Sample 양식 (admin 업로드 → 모든 사용자 다운로드)
+# ============================================================
+CALLNAME_SAMPLE_PREFIX = "callname-sample/"
+CALLNAME_SAMPLE_MAX_SIZE = 20 * 1024 * 1024  # 20MB
+CALLNAME_SAMPLE_ALLOWED_EXTS = ("xlsx", "xls")
+
+
+@app.get("/callname/sample-template")
+async def callname_sample_template_list(request: Request):
+    """호출명칭 sample 양식 목록 조회 (모든 인증 사용자 가능)."""
+    await _verify_auth(request)
+    files = []
+    try:
+        resp = get_s3_client().list_objects_v2(
+            Bucket=S3_BUCKET_NAME, Prefix=CALLNAME_SAMPLE_PREFIX)
+        for obj in resp.get("Contents", []):
+            key = obj["Key"]
+            name = key[len(CALLNAME_SAMPLE_PREFIX):]
+            if not name:
+                continue
+            if not name.lower().endswith(CALLNAME_SAMPLE_ALLOWED_EXTS):
+                continue
+            files.append({
+                "name": name,
+                "size": obj.get("Size", 0),
+                "last_modified": obj["LastModified"].isoformat()
+                    if obj.get("LastModified") else None,
+            })
+    except Exception as e:
+        logger.error(f"호출명칭 sample 목록 조회 실패: {e}")
+        raise HTTPException(status_code=500, detail="목록 조회 실패")
+    files.sort(key=lambda x: x.get("last_modified") or "", reverse=True)
+    return {"files": files}
+
+
+@app.post("/callname/sample-template")
+async def callname_sample_template_upload(
+    request: Request,
+    file: UploadFile = File(...),
+):
+    """호출명칭 sample 양식 업로드 (admin 전용)."""
+    await _require_role(request, {"admin"})
+
+    raw_name = file.filename or ""
+    base_name = os.path.basename(raw_name)
+    if not base_name:
+        raise HTTPException(status_code=400, detail="파일명이 비어있습니다.")
+    ext = base_name.rsplit(".", 1)[-1].lower() if "." in base_name else ""
+    if ext not in CALLNAME_SAMPLE_ALLOWED_EXTS:
+        raise HTTPException(status_code=400, detail="xlsx 또는 xls 파일만 가능합니다.")
+
+    safe_name = re.sub(r"[^\w\-\.가-힣]", "_", base_name)
+    if not safe_name or safe_name.startswith("."):
+        raise HTTPException(status_code=400, detail="유효한 파일명이 아닙니다.")
+
+    total = 0
+    chunks: list = []
+    while True:
+        chunk = await file.read(2 * 1024 * 1024)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > CALLNAME_SAMPLE_MAX_SIZE:
+            raise HTTPException(status_code=413, detail="파일 크기 초과 (최대 20MB)")
+        chunks.append(chunk)
+    body_bytes = b"".join(chunks)
+
+    s3_key = f"{CALLNAME_SAMPLE_PREFIX}{safe_name}"
+    content_type = (
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        if ext == "xlsx" else "application/vnd.ms-excel"
+    )
+    try:
+        await asyncio.to_thread(
+            lambda: get_s3_client().put_object(
+                Bucket=S3_BUCKET_NAME, Key=s3_key,
+                Body=body_bytes, ContentType=content_type,
+            )
+        )
+    except Exception as e:
+        logger.error(f"호출명칭 sample 업로드 실패: {e}")
+        raise HTTPException(status_code=500, detail="업로드 실패")
+
+    try:
+        empno = await _verify_auth(request)
+        await asyncio.to_thread(
+            _record_audit_log_sync,
+            "upload", "callname_sample", safe_name, empno,
+            {"size": total},
+        )
+    except Exception:
+        pass
+
+    return {"success": True, "name": safe_name, "size": total}
+
+
+@app.get("/callname/sample-template/download")
+async def callname_sample_template_download(
+    request: Request,
+    name: str = Query(..., description="파일명"),
+):
+    """호출명칭 sample 양식 다운로드 (모든 인증 사용자 가능, presign URL)."""
+    await _verify_auth(request)
+    safe_name = os.path.basename(name or "")
+    if not safe_name or safe_name.startswith("."):
+        raise HTTPException(status_code=400, detail="유효한 파일명이 아닙니다.")
+    if not safe_name.lower().endswith(CALLNAME_SAMPLE_ALLOWED_EXTS):
+        raise HTTPException(status_code=400, detail="허용되지 않은 파일 형식")
+
+    s3_key = f"{CALLNAME_SAMPLE_PREFIX}{safe_name}"
+    s3 = get_s3_client()
+    try:
+        await asyncio.to_thread(
+            lambda: s3.head_object(Bucket=S3_BUCKET_NAME, Key=s3_key))
+    except Exception:
+        raise HTTPException(status_code=404, detail="파일 없음")
+
+    try:
+        from urllib.parse import quote
+        encoded = quote(safe_name, safe="")
+        url = s3.generate_presigned_url(
+            "get_object",
+            Params={
+                "Bucket": S3_BUCKET_NAME,
+                "Key": s3_key,
+                "ResponseContentDisposition":
+                    f"attachment; filename*=UTF-8''{encoded}",
+            },
+            ExpiresIn=600,
+        )
+        return {"url": url, "filename": safe_name}
+    except Exception as e:
+        logger.error(f"호출명칭 sample 다운로드 URL 생성 실패: {e}")
+        raise HTTPException(status_code=500, detail="다운로드 실패")
+
+
+@app.delete("/callname/sample-template")
+async def callname_sample_template_delete(
+    request: Request,
+    name: str = Query(..., description="파일명"),
+):
+    """호출명칭 sample 양식 삭제 (admin 전용)."""
+    empno = await _require_role(request, {"admin"})
+    safe_name = os.path.basename(name or "")
+    if not safe_name or safe_name.startswith("."):
+        raise HTTPException(status_code=400, detail="유효한 파일명이 아닙니다.")
+
+    s3_key = f"{CALLNAME_SAMPLE_PREFIX}{safe_name}"
+    try:
+        await asyncio.to_thread(
+            lambda: get_s3_client().delete_object(
+                Bucket=S3_BUCKET_NAME, Key=s3_key))
+    except Exception as e:
+        logger.error(f"호출명칭 sample 삭제 실패: {e}")
+        raise HTTPException(status_code=500, detail="삭제 실패")
+
+    try:
+        await asyncio.to_thread(
+            _record_audit_log_sync,
+            "delete", "callname_sample", safe_name, empno, None,
+        )
+    except Exception:
+        pass
+
+    return {"success": True}
+
+
+# ============================================================
 # 설치확인서 API
 # ============================================================
 

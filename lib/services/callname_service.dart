@@ -224,6 +224,67 @@ class CallnameService {
     }
   }
 
+  /// Sample 양식 목록 조회 (모든 사용자)
+  Future<List<Map<String, dynamic>>> listSampleTemplates() async {
+    final resp = await http
+        .get(Uri.parse('$_baseUrl/callname/sample-template'),
+            headers: _headers)
+        .timeout(_apiTimeout);
+    if (resp.statusCode != 200) {
+      throw Exception('샘플 양식 목록 조회 실패: ${resp.statusCode}');
+    }
+    final data = json.decode(utf8.decode(resp.bodyBytes));
+    return ((data['files'] as List?) ?? const [])
+        .cast<Map<String, dynamic>>();
+  }
+
+  /// Sample 양식 업로드 (admin 전용)
+  Future<void> uploadSampleTemplate(
+      Uint8List bytes, String filename) async {
+    final req = http.MultipartRequest(
+      'POST',
+      Uri.parse('$_baseUrl/callname/sample-template'),
+    )
+      ..headers['Authorization'] = 'Bearer ${_authToken ?? ''}'
+      ..files.add(http.MultipartFile.fromBytes('file', bytes,
+          filename: filename));
+    final streamed = await req.send().timeout(_uploadTimeout);
+    final body = await streamed.stream.toBytes();
+    if (streamed.statusCode != 200) {
+      throw Exception('샘플 양식 업로드 실패: ${utf8.decode(body)}');
+    }
+  }
+
+  /// Sample 양식 다운로드 URL 조회
+  Future<Map<String, dynamic>> getSampleTemplateDownloadUrl(
+      String name) async {
+    final resp = await http
+        .get(
+          Uri.parse('$_baseUrl/callname/sample-template/download')
+              .replace(queryParameters: {'name': name}),
+          headers: _headers,
+        )
+        .timeout(_apiTimeout);
+    if (resp.statusCode != 200) {
+      throw Exception('샘플 양식 다운로드 URL 조회 실패: ${resp.statusCode}');
+    }
+    return json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+  }
+
+  /// Sample 양식 삭제 (admin 전용)
+  Future<void> deleteSampleTemplate(String name) async {
+    final resp = await http
+        .delete(
+          Uri.parse('$_baseUrl/callname/sample-template')
+              .replace(queryParameters: {'name': name}),
+          headers: _headers,
+        )
+        .timeout(_apiTimeout);
+    if (resp.statusCode != 200) {
+      throw Exception('샘플 양식 삭제 실패: ${resp.statusCode}');
+    }
+  }
+
   /// 결과 다운로드 URL 조회
   Future<Map<String, dynamic>> getDownloadUrl(String processId) async {
     final resp = await http

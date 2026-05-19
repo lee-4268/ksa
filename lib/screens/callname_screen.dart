@@ -48,6 +48,11 @@ class _CallnameScreenState extends State<CallnameScreen> {
 
   Timer? _previewDebounce;
 
+  // Sample 양식
+  bool _loadingSamples = false;
+  List<Map<String, dynamic>> _sampleTemplates = [];
+  bool _samplesLoaded = false;
+
   // Step 2: 매칭
   bool _processing = false;
   String? _processId;
@@ -72,6 +77,100 @@ class _CallnameScreenState extends State<CallnameScreen> {
       _initialized = true;
       final token = context.read<AuthService>().authToken;
       _service.setAuthToken(token);
+      _loadSampleTemplates();
+    }
+  }
+
+  // ── Sample 양식 ──
+
+  Future<void> _loadSampleTemplates() async {
+    if (mounted) setState(() => _loadingSamples = true);
+    try {
+      final list = await _service.listSampleTemplates();
+      if (!mounted) return;
+      setState(() {
+        _sampleTemplates = list;
+        _samplesLoaded = true;
+        _loadingSamples = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _samplesLoaded = true;
+        _loadingSamples = false;
+      });
+    }
+  }
+
+  Future<void> _pickAndUploadSample() async {
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: ['xlsx', 'xls'],
+      withData: true,
+    );
+    if (result == null || result.files.isEmpty) return;
+    final file = result.files.first;
+    if (file.bytes == null) return;
+
+    final progress = ProgressDialog(context);
+    progress.show(message: '샘플 양식 업로드 중...');
+    try {
+      await _service.uploadSampleTemplate(
+        Uint8List.fromList(file.bytes!),
+        file.name,
+      );
+      await _loadSampleTemplates();
+      await progress.complete(message: '샘플 양식이 업로드되었습니다.');
+    } catch (e) {
+      await progress.error(message: '업로드 실패: $e');
+    }
+  }
+
+  Future<void> _downloadSample(String name) async {
+    try {
+      final data = await _service.getSampleTemplateDownloadUrl(name);
+      final url = data['url'] as String? ?? '';
+      final filename = data['filename'] as String? ?? name;
+      if (url.isNotEmpty) {
+        download_helper.openDownloadUrl(url, filename);
+      }
+    } catch (e) {
+      if (mounted) {
+        final d = ProgressDialog(context);
+        await d.error(message: '다운로드 실패: $e');
+      }
+    }
+  }
+
+  Future<void> _deleteSample(String name) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('샘플 양식 삭제'),
+        content: Text('"$name" 파일을 삭제하시겠습니까?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('취소'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: const Text('삭제'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+
+    final progress = ProgressDialog(context);
+    progress.show(message: '삭제 중...');
+    try {
+      await _service.deleteSampleTemplate(name);
+      await _loadSampleTemplates();
+      await progress.complete(message: '삭제되었습니다.');
+    } catch (e) {
+      await progress.error(message: '삭제 실패: $e');
     }
   }
 
@@ -364,7 +463,11 @@ class _CallnameScreenState extends State<CallnameScreen> {
               children: [
                 _buildStepIndicator(),
                 const SizedBox(height: 24),
-                if (_step == 0) _buildUploadStep(),
+                if (_step == 0) ...[
+                  _buildSampleTemplateCard(),
+                  const SizedBox(height: 16),
+                  _buildUploadStep(),
+                ],
                 if (_step == 1) _buildFilterStep(),
                 if (_step == 2) _buildProcessStep(),
               ],
@@ -427,6 +530,173 @@ class _CallnameScreenState extends State<CallnameScreen> {
         );
       }),
     );
+  }
+
+  // ── Sample 양식 카드 ──
+
+  Widget _buildSampleTemplateCard() {
+    final isAdmin = context.watch<AuthService>().isSuperAdmin;
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.description_outlined,
+                    color: _primary, size: 20),
+                const SizedBox(width: 8),
+                const Expanded(
+                  child: Text('샘플 양식',
+                      style: TextStyle(
+                          fontWeight: FontWeight.w600, fontSize: 15)),
+                ),
+                if (isAdmin)
+                  TextButton.icon(
+                    onPressed:
+                        _loadingSamples ? null : _pickAndUploadSample,
+                    icon: const Icon(Icons.upload, size: 16),
+                    label: const Text('양식 업로드'),
+                    style: TextButton.styleFrom(
+                      foregroundColor: _primary,
+                      visualDensity: VisualDensity.compact,
+                    ),
+                  )
+                else
+                  IconButton(
+                    onPressed:
+                        _loadingSamples ? null : _loadSampleTemplates,
+                    icon: const Icon(Icons.refresh, size: 18),
+                    tooltip: '새로고침',
+                    visualDensity: VisualDensity.compact,
+                  ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Text(
+              isAdmin
+                  ? '관리자가 업로드한 양식을 사용자가 다운받아 대상을 수기 입력 후 매칭에 사용합니다.'
+                  : '양식을 다운받아 대상을 수기 입력 후 매칭에 사용하세요.',
+              style:
+                  TextStyle(fontSize: 12, color: Colors.grey.shade600),
+            ),
+            const SizedBox(height: 12),
+            if (_loadingSamples && !_samplesLoaded)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 12),
+                child: Center(
+                  child: SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                ),
+              )
+            else if (_sampleTemplates.isEmpty)
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 12, vertical: 16),
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade50,
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(color: Colors.grey.shade200),
+                ),
+                child: Text(
+                  isAdmin
+                      ? '등록된 샘플 양식이 없습니다. 위 "양식 업로드" 버튼으로 업로드하세요.'
+                      : '등록된 샘플 양식이 없습니다. 관리자에게 문의하세요.',
+                  style: TextStyle(
+                      fontSize: 13, color: Colors.grey.shade600),
+                ),
+              )
+            else
+              Column(
+                children: _sampleTemplates
+                    .map((f) => _buildSampleRow(f, isAdmin))
+                    .toList(),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSampleRow(Map<String, dynamic> f, bool isAdmin) {
+    final name = f['name'] as String? ?? '';
+    final size = f['size'] as int? ?? 0;
+    final lastModified = f['last_modified'] as String?;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.grey.shade50,
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: Colors.grey.shade200),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.insert_drive_file_outlined,
+              size: 18, color: Colors.grey.shade600),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(name,
+                    style: const TextStyle(
+                        fontSize: 13, fontWeight: FontWeight.w500),
+                    overflow: TextOverflow.ellipsis),
+                const SizedBox(height: 2),
+                Text(
+                  '${_formatSize(size)}'
+                  '${lastModified != null ? ' · ${_formatDate(lastModified)}' : ''}',
+                  style: TextStyle(
+                      fontSize: 11, color: Colors.grey.shade600),
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            onPressed: () => _downloadSample(name),
+            icon: const Icon(Icons.download, size: 18),
+            tooltip: '다운로드',
+            visualDensity: VisualDensity.compact,
+          ),
+          if (isAdmin)
+            IconButton(
+              onPressed: () => _deleteSample(name),
+              icon: Icon(Icons.delete_outline,
+                  size: 18, color: Colors.red.shade400),
+              tooltip: '삭제',
+              visualDensity: VisualDensity.compact,
+            ),
+        ],
+      ),
+    );
+  }
+
+  String _formatSize(int bytes) {
+    if (bytes >= 1024 * 1024) {
+      return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+    }
+    if (bytes >= 1024) {
+      return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    }
+    return '$bytes B';
+  }
+
+  String _formatDate(String iso) {
+    try {
+      final dt = DateTime.parse(iso).toLocal();
+      final y = dt.year.toString().padLeft(4, '0');
+      final mo = dt.month.toString().padLeft(2, '0');
+      final d = dt.day.toString().padLeft(2, '0');
+      return '$y-$mo-$d';
+    } catch (_) {
+      return iso;
+    }
   }
 
   // ── Step 0: 업로드 UI ──

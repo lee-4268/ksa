@@ -115,6 +115,18 @@ CSV 업로드 → 분석(컬럼/건수) → 필터 설정 → 매칭 처리 → 
 - Access담당/품질개선팀 매핑
 - 컬럼-값 필터링
 
+### Sample 양식 (admin 업로드 → 모든 사용자 다운로드)
+| 메서드/경로 | 권한 | 용도 |
+|------|------|------|
+| `GET /callname/sample-template` | 인증 사용자 | 양식 목록 |
+| `POST /callname/sample-template` | admin만 | xlsx/xls 업로드 (최대 20MB) |
+| `GET /callname/sample-template/download?name=` | 인증 사용자 | presign URL 발급 |
+| `DELETE /callname/sample-template?name=` | admin만 | 삭제 |
+
+- S3 prefix: `callname-sample/`
+- 파일명 sanitize: `os.path.basename` + `[^\w\-\.가-힣]` → `_`
+- UI: 호출명칭 화면 Step 0(파일 업로드) 상단 카드. admin은 업로드/삭제 버튼 노출, 그 외는 다운로드만.
+
 ---
 
 ## 설치확인서
