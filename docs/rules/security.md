@@ -231,14 +231,13 @@ aws s3 ls s3://sko-kca-s3/backups/sqlite/ --recursive | tail -20
 
 | 등급 | 이슈 | 위치 | 조치 | 커밋 |
 |---|---|---|---|---|
-| **Critical** | `_AllowAllValidator` 로 게시판 HTML XSS — 모든 태그/속성 허용 → admin 공지에 onerror 페이로드 삽입 시 viewer 토큰 탈취 가능 | lib/widgets/rich_content_viewer.dart:9 | `_SafeContentValidator` 화이트리스트로 교체 (태그·속성·URL 스킴·CSS 위험 패턴 차단) | (이번) |
-| High | 보안 응답 헤더 4종 누락 (X-Content-Type-Options, X-Frame-Options, Referrer-Policy, HSTS) | main.py:1408 | `security_headers_middleware` 추가, HSTS 는 IS_PROD 일 때만 | (이번) |
+| **Critical** | `_AllowAllValidator` 로 게시판 HTML XSS — 모든 태그/속성 허용 → admin 공지에 onerror 페이로드 삽입 시 viewer 토큰 탈취 가능 | lib/widgets/rich_content_viewer.dart:9 | `_SafeContentValidator` 화이트리스트로 교체 (태그·속성·URL 스킴·CSS 위험 패턴 차단) | aa92340 |
+| High | 보안 응답 헤더 4종 누락 (X-Content-Type-Options, X-Frame-Options, Referrer-Policy, HSTS) | main.py:1408 | `security_headers_middleware` 추가, HSTS 는 IS_PROD 일 때만 | aa92340 |
+| High | `/inspection/schedules` 본부 격리 부재 | main.py:16520 | `_check_division_access` 헬퍼 + caller 본부 access 값 IN 필터. admin 은 무제약, member/manager 는 본인 본부만 | (이번) |
+| High | `/inspection/result` 본부 격리 부재 | main.py:16551 | 일정/대상의 access담당 ↔ caller 본부 비교, 불일치 시 403 | (이번) |
+| High | `/inspection/result/photo` 본부 격리 + 사이즈/확장자 검증 부재 | main.py:16654 | 본부 격리 + 확장자(jpg/jpeg/png/webp) + MAX_PHOTO_SIZE(10MB) 검증 | (이번) |
 
 ### 남은 검토 항목 (3차 식별, 추후 처리)
-
-- **3-1 (High)** `/inspection/result*` 본부 격리 부재 (main.py:16530, 16633) — 토큰 1개로 타 본부 검사결과 작성/덮어쓰기 가능
-- **3-2 (High)** `/inspection/schedules` access담당 격리 부재 (main.py:16499) — member 가 타 본부 일정 전체 열람
-- **3-3 (High)** 사진 업로드 사이즈/확장자 검증 부재 (main.py:16633) — S3 비용 공격
 - **3-4 (Medium)** 토큰 무효화 메커니즘 부재 — 비밀번호·role 변경 후 기존 토큰이 만료(2h)까지 유효
 - **3-5 (Medium)** 403 거부 로깅 부재 — 침해 시도 탐지 흔적 없음
 - **3-6 (Medium)** 워크플로우 자동전환에 `'admin'` 하드코딩 (main.py:16569) — member 도 INSPECTED 전환 가능

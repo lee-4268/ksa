@@ -225,6 +225,67 @@ _ACCESS_TO_DIVISION: dict = {
     '경남': 'gyeongnam', '서부': 'seobu',
 }
 
+# 같은 divisionId 에 속하는 access담당 값들 (수도권 4개 본부가 sudogwon 공유)
+_DIVISION_TO_ACCESS_LIST: dict[str, list[str]] = {}
+for _acc, _div in _ACCESS_TO_DIVISION.items():
+    _DIVISION_TO_ACCESS_LIST.setdefault(_div, []).append(_acc)
+
+
+def _user_region_to_access(region: str) -> str:
+    """DynamoDB 의 region 값 ('강남Access담당' 등) → access담당 키('강남') 변환."""
+    if not region:
+        return ''
+    return region.replace('Access담당', '').replace('본부', '').strip()
+
+
+def _caller_allowed_access_list(empno: str) -> list[str]:
+    """caller 의 본부에서 접근 가능한 access담당 값 목록 반환.
+
+    수도권 본부(강남/강북/경기/인천) 사용자는 4개 모두 접근 가능 (sudogwon 공유).
+    그 외 본부는 본인 본부만.
+    region 정보가 없으면 빈 리스트 반환.
+    """
+    info = _get_user_info_for_community(empno)
+    region = info.get('org') or ''
+    # _get_user_info_for_community 는 team 을 우선 반환하므로 team 이 비어있을 때만 region 가 들어옴
+    # region 전용 조회가 필요하면 직접 DynamoDB 조회 (아래)
+    try:
+        ddb = get_dynamodb_resource()
+        item = ddb.Table(DYNAMODB_TABLES["users"]).get_item(
+            Key={"user_id": empno},
+            ProjectionExpression="#r",
+            ExpressionAttributeNames={"#r": "region"},
+        ).get('Item') or {}
+        region = item.get('region') or region
+    except Exception:
+        pass
+    acc = _user_region_to_access(region)
+    div = _ACCESS_TO_DIVISION.get(acc, '')
+    if div and div in _DIVISION_TO_ACCESS_LIST:
+        return list(_DIVISION_TO_ACCESS_LIST[div])
+    # division 매핑 안 되면 본인 access 값만 (보수적)
+    return [acc] if acc else []
+
+
+async def _check_division_access(request: Request, target_access: str) -> tuple[str, str, list[str]]:
+    """본부 격리 검사.
+
+    Returns: (caller_empno, caller_role, allowed_access_list)
+
+    - admin: 모든 본부 허용
+    - manager/member: caller_allowed_access_list 에 target_access 가 포함되어야 함
+    - target_access 가 빈 문자열: member 는 allowed 의 첫 번째로 강제, admin/manager 는 통과(전체)
+    """
+    caller = await _verify_auth(request)
+    role = await asyncio.to_thread(_get_user_role_sync, caller)
+    if role == 'admin':
+        return caller, role, []  # 빈 리스트 = 제약 없음
+    allowed = await asyncio.to_thread(_caller_allowed_access_list, caller)
+    if target_access:
+        if target_access not in allowed:
+            raise HTTPException(403, "본인 본부 데이터만 접근 가능합니다")
+    return caller, role, allowed
+
 # DS 전파관리소 지역코드 → 회사 본부 매핑
 # 수도권(10) → 강남/강북/인천/경기 4개 본부 통합 저장
 # 충남(50)+충북(55) → 충청본부, 전남(30)+전북(70) → 서부본부
@@ -16521,8 +16582,14 @@ async def inspection_schedule_delete(year: int, license_no: str, request: Reques
 async def inspection_schedules_list(
     request: Request, year: int, access담당: str = "", workflow_status: str = ""
 ):
-    """일정 목록 조회 (팀별 + workflow_status 필터). Phase 4부터 needs_recheck, 검사결과status 함께 노출."""
-    await _verify_auth(request)
+    """일정 목록 조회 (팀별 + workflow_status 필터). Phase 4부터 needs_recheck, 검사결과status 함께 노출.
+
+    본부 격리:
+    - admin: 모든 본부 (제약 없음)
+    - manager/member: caller 본부의 access담당 값들만. 명시한 access담당이 본인 본부에 속하지 않으면 403.
+      미명시 시 caller 본부 access담당 목록으로 IN 필터 강제.
+    """
+    caller, role, allowed = await _check_division_access(request, access담당)
     def _read():
         c = sqlite3.connect(_INSP_DB, timeout=60); c.row_factory = sqlite3.Row
         wheres = ['s.year=?']
@@ -16530,6 +16597,11 @@ async def inspection_schedules_list(
         if access담당:
             wheres.append('s.access담당=?')
             params.append(access담당)
+        elif role != 'admin' and allowed:
+            # caller 본부 access담당 목록 강제 (IN 절)
+            placeholders = ','.join(['?'] * len(allowed))
+            wheres.append(f's.access담당 IN ({placeholders})')
+            params.extend(allowed)
         if workflow_status:
             wheres.append('s.workflow_status=?')
             params.append(workflow_status)
@@ -16556,13 +16628,40 @@ async def inspection_result_upsert(request: Request, req: InspectionResultReq):
     - schedule_pk = pk (year#허가번호 동일)
     - 검사일 입력 시 워크플로우 자동 전환 (SUBMITTED → INSPECTED, 가능한 경우)
     - status가 불합격/부적합이면 needs_recheck='1' (혁신팀이 재점검 일정을 수동 등록)
+
+    본부 격리: 대상 일정(pk)의 access담당이 caller 본부에 속해야 함.
+    admin 은 제외. 일정이 없는 경우(직접 결과만 입력)는 inspection_targets 의 access담당으로 fallback.
     """
     empno = await _verify_auth(request)
+    role = await asyncio.to_thread(_get_user_role_sync, empno)
+    pk = f"{req.year}#{req.허가번호}"
+    now = datetime.now(timezone.utc).isoformat()
+
+    # 본부 격리 (admin 외)
+    if role != 'admin':
+        def _resolve_target_access() -> str:
+            c = sqlite3.connect(_INSP_DB, timeout=10); c.row_factory = sqlite3.Row
+            try:
+                row = c.execute(
+                    'SELECT access담당 FROM inspection_schedules WHERE pk=?',
+                    (pk,)).fetchone()
+                if row and row['access담당']:
+                    return row['access담당']
+                row = c.execute(
+                    'SELECT access담당 FROM inspection_targets WHERE year=? AND 허가번호=?',
+                    (req.year, req.허가번호)).fetchone()
+                return (row['access담당'] if row else '') or ''
+            finally:
+                c.close()
+        target_access = await asyncio.to_thread(_resolve_target_access)
+        if target_access:
+            allowed = await asyncio.to_thread(_caller_allowed_access_list, empno)
+            if target_access not in allowed:
+                raise HTTPException(403, "본인 본부의 검사 결과만 입력 가능합니다")
+
     # 입력자 이름 조회
     user_info = await asyncio.to_thread(_get_user_info_for_community, empno)
     입력자_name = user_info.get("name", empno)
-    pk = f"{req.year}#{req.허가번호}"
-    now = datetime.now(timezone.utc).isoformat()
     # 재점검 플래그 판정 — 합격이 아니면(불합격/부적합 등) recheck
     needs_recheck = '1' if req.status.strip() not in ('합격', '') else '0'
 
@@ -16654,12 +16753,47 @@ async def inspection_station_add(request: Request, req: InspectionStationReq):
 @app.post("/inspection/result/photo")
 async def inspection_result_photo_upload(request: Request, year: int, 허가번호: str,
                                          file: UploadFile = File(...)):
-    """수검 결과 사진 업로드."""
+    """수검 결과 사진 업로드.
+
+    본부 격리: 일정 또는 target 의 access담당이 caller 본부에 속해야 함.
+    크기/확장자 검증: 10MB 이하 + jpg/jpeg/png/webp 만 허용.
+    """
     import json as _j
     empno = await _verify_auth(request)
+    role = await asyncio.to_thread(_get_user_role_sync, empno)
+
+    # 본부 격리
+    if role != 'admin':
+        def _resolve_target_access() -> str:
+            c = sqlite3.connect(_INSP_DB, timeout=10); c.row_factory = sqlite3.Row
+            pk_ = f"{year}#{허가번호}"
+            try:
+                row = c.execute('SELECT access담당 FROM inspection_schedules WHERE pk=?', (pk_,)).fetchone()
+                if row and row['access담당']:
+                    return row['access담당']
+                row = c.execute(
+                    'SELECT access담당 FROM inspection_targets WHERE year=? AND 허가번호=?',
+                    (year, 허가번호)).fetchone()
+                return (row['access담당'] if row else '') or ''
+            finally:
+                c.close()
+        target_access = await asyncio.to_thread(_resolve_target_access)
+        if target_access:
+            allowed = await asyncio.to_thread(_caller_allowed_access_list, empno)
+            if target_access not in allowed:
+                raise HTTPException(403, "본인 본부 사진만 업로드 가능합니다")
+
+    # 확장자 화이트리스트
+    allowed_ext = {'.jpg', '.jpeg', '.png', '.webp'}
     ext = os.path.splitext(file.filename or "photo.jpg")[1].lower() or ".jpg"
+    if ext not in allowed_ext:
+        raise HTTPException(400, f"허용되지 않는 형식입니다 ({ext}). jpg/jpeg/png/webp 만 가능.")
+
     s3_key = f"inspection/photos/{year}/{허가번호}/{uuid.uuid4()}{ext}"
     content = await file.read()
+    # 크기 검증 (MAX_PHOTO_SIZE = 10MB, main.py 상단 정의)
+    if len(content) > MAX_PHOTO_SIZE:
+        raise HTTPException(400, f"사진 크기가 {MAX_PHOTO_SIZE // (1024*1024)}MB 를 초과합니다")
     s3 = get_s3_client()
     s3.put_object(Bucket=S3_BUCKET_NAME, Key=s3_key, Body=content, ContentType=file.content_type or "image/jpeg")
 
