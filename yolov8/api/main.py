@@ -1437,6 +1437,27 @@ async def token_refresh_middleware(request: Request, call_next):
     return response
 
 
+@app.middleware("http")
+async def security_headers_middleware(request: Request, call_next):
+    """모든 응답에 표준 보안 헤더 주입 (XSS·clickjacking·MIME sniffing 등 방어).
+
+    - X-Content-Type-Options: 브라우저가 응답 Content-Type 을 무시하고 추측하지 못하게
+    - X-Frame-Options: <iframe> 안에 임베드 차단 (clickjacking)
+    - Referrer-Policy: 외부 사이트로 Referer 누설 최소화
+    - Strict-Transport-Security: HTTPS 강제 (운영에서만, HTTP 로 들어오면 의미 없음)
+    """
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "same-origin")
+    if IS_PROD:
+        response.headers.setdefault(
+            "Strict-Transport-Security",
+            "max-age=31536000; includeSubDomains",
+        )
+    return response
+
+
 # ============================================================
 # Model Loading
 # ============================================================

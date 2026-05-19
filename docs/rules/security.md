@@ -221,16 +221,33 @@ aws s3 ls s3://sko-kca-s3/backups/sqlite/ --recursive | tail -20
 
 | 등급 | 이슈 | 위치 | 조치 | 커밋 |
 |---|---|---|---|---|
-| Medium | `/callname/db-preview` detail=str(e) 잔존 (1차 누락분) | main.py:9015 | detail은 일반 메시지로 교체 | (이번) |
-| Medium | `/categories` / `/stations` IDOR — owner 격리 없음 | main.py:2149~2502 | `_require_owner_or_admin` / `_check_object_owner_or_admin` 헬퍼 도입, 11개 라우터에 적용 | (이번) |
-| Medium | `/inspection/target-review` 권한 게이트 누락 | main.py:14597 | admin/manager role 가드 추가 | (이번) |
+| Medium | `/callname/db-preview` detail=str(e) 잔존 (1차 누락분) | main.py:9015 | detail은 일반 메시지로 교체 | 6ef5c70 |
+| Medium | `/categories` / `/stations` IDOR — owner 격리 없음 | main.py:2149~2502 | `_require_owner_or_admin` / `_check_object_owner_or_admin` 헬퍼 도입, 11개 라우터에 적용 | 6ef5c70 |
+| Medium | `/inspection/target-review` 권한 게이트 누락 | main.py:14597 | admin/manager role 가드 추가 | 6ef5c70 |
 
-### 남은 검토 항목 (2차에서 추가로 식별)
+### 2026-05-19 3차 심층 재점검 (OWASP Top 10 2021)
 
-- **N-4** inspection multipart upload 누적 사이즈 한도 없음 (main.py:12891) — S3 비용 공격
+긴급 조치 완료:
+
+| 등급 | 이슈 | 위치 | 조치 | 커밋 |
+|---|---|---|---|---|
+| **Critical** | `_AllowAllValidator` 로 게시판 HTML XSS — 모든 태그/속성 허용 → admin 공지에 onerror 페이로드 삽입 시 viewer 토큰 탈취 가능 | lib/widgets/rich_content_viewer.dart:9 | `_SafeContentValidator` 화이트리스트로 교체 (태그·속성·URL 스킴·CSS 위험 패턴 차단) | (이번) |
+| High | 보안 응답 헤더 4종 누락 (X-Content-Type-Options, X-Frame-Options, Referrer-Policy, HSTS) | main.py:1408 | `security_headers_middleware` 추가, HSTS 는 IS_PROD 일 때만 | (이번) |
+
+### 남은 검토 항목 (3차 식별, 추후 처리)
+
+- **3-1 (High)** `/inspection/result*` 본부 격리 부재 (main.py:16530, 16633) — 토큰 1개로 타 본부 검사결과 작성/덮어쓰기 가능
+- **3-2 (High)** `/inspection/schedules` access담당 격리 부재 (main.py:16499) — member 가 타 본부 일정 전체 열람
+- **3-3 (High)** 사진 업로드 사이즈/확장자 검증 부재 (main.py:16633) — S3 비용 공격
+- **3-4 (Medium)** 토큰 무효화 메커니즘 부재 — 비밀번호·role 변경 후 기존 토큰이 만료(2h)까지 유효
+- **3-5 (Medium)** 403 거부 로깅 부재 — 침해 시도 탐지 흔적 없음
+- **3-6 (Medium)** 워크플로우 자동전환에 `'admin'` 하드코딩 (main.py:16569) — member 도 INSPECTED 전환 가능
+- **3-7 (Low)** Category/Station Create owner 클라이언트 지정 (mass assignment) — `_require_owner_or_admin` 이 차단하지만 모델 설계상 owner 는 caller 강제가 안전
+- **3-8 (Low)** requirements.txt `>=` 핀고정 부재 → pip-tools lock + pip-audit 권장
+- **N-4** inspection multipart upload 누적 사이즈 한도 없음 (main.py:12891)
 - **N-5** community upload 전체 메모리 적재 (main.py:19718, 19777) — OOM 가능
-- **N-6** `_verify_password` 헬퍼·`secret_password` 컬럼 죽은 코드 — 사용처 결정 후 삭제 or 검증 라우터 추가
-- 운영: 백업 실패 알림 부재, 감사 로그 90일 TTL, 토큰 무효화 메커니즘 부재, 의존성 취약점 스캐닝 부재
+- **N-6** `_verify_password` 헬퍼·`secret_password` 컬럼 죽은 코드
+- **운영**: 백업 실패 알림 부재, 감사 로그 90일 TTL, 의존성 스캐닝 부재
 
 ## 보안 작업 체크리스트 (새 라우터 추가 시)
 
