@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'app_loader.dart';
 
 /// 진행 중 + 완료 애니메이션 다이얼로그
 ///
@@ -142,13 +143,10 @@ class _ProgressContent extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const SizedBox(
-              width: 48,
-              height: 48,
-              child: CircularProgressIndicator(
-                strokeWidth: 3.5,
-                valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF2196F3)),
-              ),
+            const AppLoader(
+              dotSize: 12,
+              spacing: 10,
+              color: Color(0xFFE53935),
             ),
             const SizedBox(height: 18),
             Text(message,

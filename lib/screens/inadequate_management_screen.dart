@@ -6,6 +6,7 @@ import '../services/excel_export_stub.dart'
     if (dart.library.io) '../services/excel_export_mobile.dart'
     if (dart.library.html) '../services/excel_export_web.dart' as platform_export;
 import '../services/inspection_service.dart';
+import '../widgets/app_loader.dart';
 import '../widgets/progress_dialog.dart';
 
 /// 본부 → 팀 목록 매핑
@@ -258,9 +259,9 @@ class _InadequateManagementScreenState extends State<InadequateManagementScreen>
                   _buildUnifiedToolbar(), // 반응형 툴바 적용
                   const SizedBox(height: 16),
                   if (_loading)
-                    const Padding(
-                      padding: EdgeInsets.all(40.0),
-                      child: Center(child: CircularProgressIndicator(color: primaryColor)),
+                    Padding(
+                      padding: const EdgeInsets.all(40.0),
+                      child: AppLoader.centered(color: primaryColor),
                     )
                   else
                     _buildTable(),

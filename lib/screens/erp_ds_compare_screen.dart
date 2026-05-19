@@ -11,6 +11,7 @@ import '../services/excel_export_stub.dart'
     if (dart.library.io) '../services/excel_export_mobile.dart'
     if (dart.library.html) '../services/excel_export_web.dart' as platform_export;
 import '../services/kakao_geocoding_web.dart';
+import '../widgets/app_loader.dart';
 import '../widgets/progress_dialog.dart';
 import '../widgets/user_profile_button.dart';
 import 'inspection_result_screen.dart' show RoadviewDialog;
@@ -487,10 +488,9 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
             ),
             const SizedBox(height: 12),
             if (_loadingUploads)
-              const Padding(
-                padding: EdgeInsets.all(16),
-                child: Center(
-                    child: CircularProgressIndicator(strokeWidth: 2)),
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: AppLoader.centered(),
               )
             else if (_dsUploads.isEmpty)
               Container(

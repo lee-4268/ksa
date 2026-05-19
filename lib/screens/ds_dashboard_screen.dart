@@ -1796,7 +1796,7 @@ class _DsChangeHistoryBulkDialogState extends State<_DsChangeHistoryBulkDialog> 
           // 본문
           Expanded(
             child: _loading
-                ? const Center(child: CircularProgressIndicator(strokeWidth: 2))
+                ? AppLoader.centered()
                 : _uploads.isEmpty
                     ? Center(child: Text(
                         _searchTerm.isEmpty ? '변경 이력이 없습니다' : '검색 결과가 없습니다',

@@ -13,6 +13,7 @@ import 'services/team_context_service.dart';
 import 'services/admin_service.dart';
 import 'services/division_data_service.dart';
 import 'services/notification_service.dart';
+import 'widgets/app_loader.dart';
 import 'services/photo_storage_service.dart';
 
 // 모바일용 조건부 import
@@ -171,16 +172,9 @@ class _AuthWrapperState extends State<AuthWrapper> {
 
     // 초기화 중
     if (!authService.isInitialized) {
-      return const Scaffold(
+      return Scaffold(
         body: Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              CircularProgressIndicator(),
-              SizedBox(height: 16),
-              Text('로딩 중...'),
-            ],
-          ),
+          child: AppLoader(message: '로딩 중...'),
         ),
       );
     }

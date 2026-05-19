@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 
 import '../services/auth_service.dart';
 import '../services/callname_service.dart';
+import '../widgets/app_loader.dart';
 import '../widgets/progress_dialog.dart';
 import 'callname_download_stub.dart'
     if (dart.library.html) 'callname_download_web.dart' as download_helper;
@@ -716,13 +717,7 @@ class _CallnameScreenState extends State<CallnameScreen> {
                 style: TextStyle(color: Colors.grey.shade600, fontSize: 13)),
             const SizedBox(height: 20),
             if (_uploading)
-              const Column(
-                children: [
-                  CircularProgressIndicator(),
-                  SizedBox(height: 12),
-                  Text('파일 업로드 중...'),
-                ],
-              )
+              AppLoader(message: '파일 업로드 중...')
             else
               ElevatedButton.icon(
                 onPressed: _pickAndUpload,
@@ -1000,10 +995,10 @@ class _CallnameScreenState extends State<CallnameScreen> {
                     ],
                   )
                 : _loadingPreview
-                    ? const Center(
+                    ? Center(
                         child: Padding(
-                          padding: EdgeInsets.all(16),
-                          child: CircularProgressIndicator(),
+                          padding: const EdgeInsets.all(16),
+                          child: AppLoader(),
                         ),
                       )
                     : Row(

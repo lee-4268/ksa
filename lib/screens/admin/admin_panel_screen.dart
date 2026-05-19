@@ -2021,9 +2021,7 @@ class _MenuUsageStatsScreenState extends State<MenuUsageStatsScreen> {
         ],
       ),
       body: _loading
-          ? const Center(
-              child: CircularProgressIndicator(strokeWidth: 3, color: _menuColor),
-            )
+          ? AppLoader.centered(color: _menuColor)
           : RefreshIndicator(
               onRefresh: _load,
               color: _menuColor,

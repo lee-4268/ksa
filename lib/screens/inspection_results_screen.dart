@@ -9,6 +9,7 @@ import 'dart:html' as html;
 
 import '../services/auth_service.dart';
 import '../services/inspection_service.dart';
+import '../widgets/app_loader.dart';
 import '../widgets/progress_dialog.dart';
 import 'dashboard_screen.dart';
 
@@ -418,7 +419,7 @@ Future<void> _downloadExcel() async {
                     },
                   ),
                   if (weekLoading)
-                    const Center(child: Padding(padding: EdgeInsets.all(20), child: CircularProgressIndicator(strokeWidth: 2)))
+                    Center(child: Padding(padding: const EdgeInsets.all(20), child: AppLoader()))
                   else if (weekOptions.isEmpty)
                     Container(
                       width: double.infinity,
@@ -1027,9 +1028,7 @@ Future<void> _downloadExcel() async {
 
   Widget _buildBody() {
     if (_loading) {
-      return const Center(
-          child:
-              CircularProgressIndicator(color: _primary, strokeWidth: 2));
+      return AppLoader.centered(color: _primary);
     }
     if (_error != null) {
       return Center(
