@@ -12,6 +12,8 @@ frontend:
       commands:
         - flutter pub get
         - flutter build web --no-tree-shake-icons --dart-define=KAKAO_JS_KEY=$KAKAO_JS_KEY --dart-define=KAKAO_REST_KEY=$KAKAO_REST_KEY --dart-define=KAKAO_NATIVE_KEY=$KAKAO_NATIVE_KEY --dart-define=KMA_SERVICE_KEY=$KMA_SERVICE_KEY
+        # index.html 의 {{KAKAO_JS_KEY}} 자리표시자를 환경변수로 치환
+        - sed -i "s|{{KAKAO_JS_KEY}}|$KAKAO_JS_KEY|g" build/web/index.html
   artifacts:
     baseDirectory: build/web
     files:

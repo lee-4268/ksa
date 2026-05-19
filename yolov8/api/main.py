@@ -702,6 +702,23 @@ VALID_ROLES = {"admin", "manager", "member"}
 # 부트스트랩 키: 최초 admin 설정 시 사용 (환경변수 필수, 미설정 시 비활성화)
 ADMIN_BOOTSTRAP_KEY = os.environ.get("ADMIN_BOOTSTRAP_KEY")
 
+# ── 외부 API 키 (모두 환경변수에서 로드, 미설정 시 해당 기능 비활성화) ──
+# 운영: /etc/systemd/system/kca-api.service 의 Environment= 로 주입
+# 키 노출 시 즉시 폐기·재발급 후 환경변수만 갱신
+KAKAO_REST_KEY    = os.environ.get("KAKAO_REST_KEY", "")
+VWORLD_API_KEY    = os.environ.get("VWORLD_API_KEY", "")
+NAVER_CLIENT_ID   = os.environ.get("NAVER_CLIENT_ID", "")
+NAVER_CLIENT_SECRET = os.environ.get("NAVER_CLIENT_SECRET", "")
+
+for _envname, _envval in (
+    ("KAKAO_REST_KEY", KAKAO_REST_KEY),
+    ("VWORLD_API_KEY", VWORLD_API_KEY),
+    ("NAVER_CLIENT_ID", NAVER_CLIENT_ID),
+    ("NAVER_CLIENT_SECRET", NAVER_CLIENT_SECRET),
+):
+    if not _envval:
+        logger.warning(f"{_envname} 환경변수 미설정 — 해당 외부 API 기능이 동작하지 않습니다")
+
 # 개발용 테스트 로그인 활성화 (환경변수 DEV_LOGIN_ENABLED=1 로 활성화)
 DEV_LOGIN_ENABLED = os.environ.get("DEV_LOGIN_ENABLED", "0") == "1"
 _dev_users: dict = {}  # empno → {name, region, team, role} 메모리 캐시
@@ -13193,7 +13210,7 @@ async def inspection_staging_confirm(request: Request, req: InspStagingConfirmRe
 async def _auto_geocode_background(year: int):
     """confirm 후 자동으로 좌표 없는 항목 지오코딩 (백그라운드)."""
     try:
-        KAKAO_KEY = "cb3f4b95ada5f92fc3924b9685aec16b"
+        KAKAO_KEY = KAKAO_REST_KEY
         CONCURRENCY = 10
         import requests as _req
         from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -13244,7 +13261,7 @@ async def _auto_geocode_background(year: int):
                     result.append(c)
             return result
 
-        _VWORLD_KEY = '60301A2D-7EA7-3C05-9B4D-4BC523408605'
+        _VWORLD_KEY = VWORLD_API_KEY
 
         def _kakao_addr(query):
             try:
@@ -13288,8 +13305,8 @@ async def _auto_geocode_background(year: int):
             except Exception: pass
             return None
 
-        _NAVER_ID = 'x0a4aeu0l5'
-        _NAVER_SECRET = 't0yDP6Lbti6Ruplw5wfrYKwkPQS3fI806bRVzkBi'
+        _NAVER_ID = NAVER_CLIENT_ID
+        _NAVER_SECRET = NAVER_CLIENT_SECRET
 
         def _naver(query):
             try:
@@ -13551,7 +13568,7 @@ async def inspection_geocode_targets(request: Request, year: int):
     if not os.path.exists(_INSP_DB):
         raise HTTPException(400, "DB 없음")
 
-    KAKAO_KEY = "cb3f4b95ada5f92fc3924b9685aec16b"
+    KAKAO_KEY = KAKAO_REST_KEY
     CONCURRENCY = 10  # Kakao 10 req/s 제한
 
     # 1. 좌표 없는 항목 조회
@@ -13617,7 +13634,7 @@ async def inspection_geocode_targets(request: Request, year: int):
                 result.append(c)
         return result
 
-    VWORLD_KEY = '60301A2D-7EA7-3C05-9B4D-4BC523408605'
+    VWORLD_KEY = VWORLD_API_KEY
 
     def _call_kakao_addr(query: str):
         try:
@@ -13683,9 +13700,6 @@ async def inspection_geocode_targets(request: Request, year: int):
         except Exception:
             pass
         return None
-
-    NAVER_CLIENT_ID = 'x0a4aeu0l5'
-    NAVER_CLIENT_SECRET = 't0yDP6Lbti6Ruplw5wfrYKwkPQS3fI806bRVzkBi'
 
     def _call_naver(query: str):
         try:
@@ -14430,7 +14444,7 @@ def _geocode_target_sync(year: int, 허가번호: str):
         r = _req.get(
             'https://dapi.kakao.com/v2/local/search/address.json',
             params={'query': addr, 'size': 1},
-            headers={'Authorization': 'KakaoAK cb3f4b95ada5f92fc3924b9685aec16b'},
+            headers={'Authorization': f'KakaoAK {KAKAO_REST_KEY}'},
             timeout=5,
         )
         if r.status_code == 200:
