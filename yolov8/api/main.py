@@ -731,6 +731,36 @@ if AUTH_TOKEN_SECRET.startswith("dev-fallback-"):
     logger.warning("AUTH_TOKEN_SECRET 환경변수 미설정 — 개발용 임시 키 사용 중 (운영 시 반드시 설정)")
 
 
+# ── 비밀번호 해시 (PBKDF2-HMAC-SHA256, 표준 라이브러리) ─────
+# 형식: "pbkdf2_sha256$<iter>$<salt_hex>$<hash_hex>"
+_PBKDF2_ITER = 200_000
+
+
+def _hash_password(plain: str) -> str:
+    """평문 비밀번호를 PBKDF2-SHA256으로 해시화. 빈 문자열은 빈 문자열 반환."""
+    if not plain:
+        return ''
+    salt = os.urandom(16)
+    h = hashlib.pbkdf2_hmac('sha256', plain.encode('utf-8'), salt, _PBKDF2_ITER)
+    return f"pbkdf2_sha256${_PBKDF2_ITER}${salt.hex()}${h.hex()}"
+
+
+def _verify_password(plain: str, hashed: str) -> bool:
+    """저장된 해시와 평문을 비교. 잘못된 포맷이면 False."""
+    if not (plain and hashed):
+        return False
+    try:
+        scheme, iter_s, salt_hex, hash_hex = hashed.split('$')
+        if scheme != 'pbkdf2_sha256':
+            return False
+        salt = bytes.fromhex(salt_hex)
+        expected = bytes.fromhex(hash_hex)
+        actual = hashlib.pbkdf2_hmac('sha256', plain.encode('utf-8'), salt, int(iter_s))
+        return _hmac_mod.compare_digest(expected, actual)
+    except Exception:
+        return False
+
+
 def _generate_token(empno: str) -> str:
     """HMAC-SHA256 토큰 생성: base64url(empno:expiry:signature)"""
     expiry = int(_time_mod.time()) + AUTH_TOKEN_EXPIRY
@@ -19474,6 +19504,27 @@ def _init_community_db():
             conn.execute(f"ALTER TABLE notifications ADD COLUMN {col} TEXT DEFAULT {dflt}")
         except Exception:
             pass
+
+    # 평문 비밀번호 → PBKDF2 해시 마이그레이션 (1회성)
+    # 새 형식은 'pbkdf2_sha256$...'로 시작하므로 그 prefix가 아닌 비밀글 행만 변환.
+    try:
+        legacy = conn.execute(
+            "SELECT id, secret_password FROM requests "
+            "WHERE is_secret=1 AND secret_password != '' "
+            "AND secret_password NOT LIKE 'pbkdf2_sha256$%'"
+        ).fetchall()
+        if legacy:
+            for rid, plain in legacy:
+                new_h = _hash_password(plain)
+                conn.execute(
+                    "UPDATE requests SET secret_password=? WHERE id=?",
+                    (new_h, rid)
+                )
+            conn.commit()
+            logger.info(f"requests.secret_password 마이그레이션: {len(legacy)}건 평문 → PBKDF2 해시")
+    except Exception as _mige:
+        logger.warning(f"secret_password 마이그레이션 실패: {_mige}")
+
     conn.commit()
     conn.close()
 
@@ -19979,6 +20030,8 @@ async def list_requests(
                 if d["is_secret"] and d["author_empno"] != empno and role != "admin":
                     d["title"] = "비밀글입니다"
                     d["content"] = ""
+                # 비밀번호 해시는 절대 클라이언트로 노출 금지
+                d.pop("secret_password", None)
                 items.append(d)
             return {"requests": items, "total": total}
         finally:
@@ -20003,6 +20056,8 @@ async def get_request_detail(req_id: int, request: Request):
             d["is_mine"] = (d.get("author_empno") == empno)
             if d["is_secret"] and d["author_empno"] != empno and role != "admin":
                 raise HTTPException(403, "비밀글은 작성자와 관리자만 열람할 수 있습니다")
+            # 비밀번호 해시는 절대 클라이언트로 노출 금지
+            d.pop("secret_password", None)
             return d
         finally:
             conn.close()
@@ -20037,10 +20092,12 @@ async def create_request(body: RequestCreate, request: Request):
         conn = sqlite3.connect(_COMMUNITY_DB, timeout=30)
         conn.row_factory = sqlite3.Row
         try:
+            # 비밀글이면 비밀번호 PBKDF2 해시 저장, 아니면 빈 문자열
+            hashed_pw = _hash_password(body.secret_password) if body.is_secret else ''
             cur = conn.execute(
                 "INSERT INTO requests (title, content, is_secret, secret_password, author_empno, author_name, author_org, author_role, images, created_at, updated_at) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (body.title, body.content, 1 if body.is_secret else 0, body.secret_password, empno, user_info["name"], user_info["org"], role, json.dumps(body.images), now, now),
+                (body.title, body.content, 1 if body.is_secret else 0, hashed_pw, empno, user_info["name"], user_info["org"], role, json.dumps(body.images), now, now),
             )
             conn.commit()
             row = conn.execute("SELECT * FROM requests WHERE id = ?", (cur.lastrowid,)).fetchone()
