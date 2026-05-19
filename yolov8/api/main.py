@@ -7753,6 +7753,7 @@ def _cert_cache_force_rebuild():
 _SQLITE_BACKUP_DBS = [
     ("inspection", lambda: _INSP_DB),
     ("ds_detail",  lambda: _DS_DETAIL_DB),
+    ("community",  lambda: _COMMUNITY_DB),
 ]
 _SQLITE_BACKUP_RETAIN_DAYS = 7  # S3에 보관할 최대 일수
 
