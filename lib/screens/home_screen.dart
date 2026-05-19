@@ -307,7 +307,8 @@ final result = await showDialog<bool>(
       _MenuItem('설치확인서', Icons.description_outlined, const Color(0xFF06B6D4), description: '설치확인서 조회 및 관리'),
       _MenuItem('전산비교', Icons.compare_outlined, const Color(0xFF2563EB), description: 'ERP·DS 전산 데이터 비교'),
       _MenuItem('부적합 관리', Icons.warning_amber_outlined, const Color(0xFFE53935), description: '부적합 현황 관리'),
-      _MenuItem('변경개설신고', Icons.swap_horiz_outlined, const Color(0xFFE53935), description: '변경개설신고 파일 비교 및 적용'),
+      if (auth.isAdmin)
+        _MenuItem('변경개설신고', Icons.swap_horiz_outlined, const Color(0xFFE53935), description: '변경개설신고 파일 비교 및 적용'),
       _MenuItem('커뮤니티', Icons.forum_outlined, const Color(0xFFE53935), description: '공지사항 및 요청사항'),
       if (auth.isSuperAdmin)
         _MenuItem('관리자', Icons.settings_outlined, const Color(0xFF6366F1), description: '시스템 설정 및 사용자 관리'),

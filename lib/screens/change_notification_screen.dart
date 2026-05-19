@@ -259,6 +259,38 @@ class _ChangeNotificationScreenState extends State<ChangeNotificationScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // 변경개설신고는 admin/manager만 접근 가능 (member 차단)
+    final isAdmin = context.watch<AuthService>().isAdmin;
+    if (!isAdmin) {
+      return Scaffold(
+        backgroundColor: _bg,
+        body: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: const BoxDecoration(
+                  color: Color(0xFFFEF2F2),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.lock_outline_rounded,
+                    color: Color(0xFFEF4444), size: 28),
+              ),
+              const SizedBox(height: 12),
+              const Text('접근 권한이 없습니다',
+                  style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w800,
+                      color: _textPrimary)),
+              const SizedBox(height: 4),
+              const Text('변경개설신고는 관리자/매니저만 이용할 수 있습니다.',
+                  style: TextStyle(fontSize: 13, color: _textSecondary)),
+            ],
+          ),
+        ),
+      );
+    }
     return Scaffold(
       backgroundColor: _bg,
       body: Center(

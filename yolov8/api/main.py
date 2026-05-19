@@ -15237,9 +15237,12 @@ async def change_request_file(request: Request, req: ChangeRequestFileReq):
 
     - schedule의 모든 change_request status: REQUESTED → FILED
     - workflow_status: CHANGE_FILING → RE_CHECK
+    - 권한: admin/manager만 수행 가능 (member 차단)
     """
     empno = await _verify_auth(request)
     role = await asyncio.to_thread(_get_user_role_sync, empno)
+    if role not in {"admin", "manager"}:
+        raise HTTPException(403, "관리자/매니저만 가능")
     now = datetime.now(timezone.utc).isoformat()
 
     pks = list(req.schedule_pks) if req.schedule_pks else []
