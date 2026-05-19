@@ -7757,18 +7757,35 @@ _SQLITE_BACKUP_DBS = [
 _SQLITE_BACKUP_RETAIN_DAYS = 7  # S3에 보관할 최대 일수
 
 def _backup_sqlite_to_s3_sync():
-    """각 SQLite DB를 S3에 날짜별 백업. 7일치 초과 파일 자동 삭제."""
+    """각 SQLite DB를 S3에 날짜별 백업. 7일치 초과 파일 자동 삭제.
+
+    보안: /tmp 대신 격리된 디렉토리에 0600 권한으로 임시파일 생성.
+    PrivateTmp=true 가 systemd 에 설정되면 /tmp 도 서비스별 격리됨 (이중 방어).
+    """
     import sqlite3 as _sq3
+    import tempfile, stat
     from datetime import datetime, timezone, timedelta
     KST = timezone(timedelta(hours=9))
     date_str = datetime.now(KST).strftime("%Y-%m-%d")
     s3 = get_s3_client()
 
+    # 격리 디렉토리 우선 사용 (systemd RuntimeDirectory or StateDirectory),
+    # 없으면 tempfile.gettempdir() (PrivateTmp=true 가 켜져 있으면 안전)
+    backup_dir = os.environ.get("BACKUP_TMP_DIR", "")
+    if not backup_dir or not os.path.isdir(backup_dir):
+        backup_dir = tempfile.gettempdir()
+
     for name, path_fn in _SQLITE_BACKUP_DBS:
         db_path = path_fn()
         if not db_path or not os.path.exists(db_path):
             continue
-        tmp = f"/tmp/sqlite_backup_{name}_{date_str}.db"
+        # mkstemp 로 race-free 생성 + 0600 권한
+        fd, tmp = tempfile.mkstemp(dir=backup_dir, prefix=f"sqlite_backup_{name}_", suffix=".db")
+        os.close(fd)
+        try:
+            os.chmod(tmp, stat.S_IRUSR | stat.S_IWUSR)  # 0600
+        except Exception:
+            pass
         try:
             # SQLite backup API: WAL 모드에서도 일관된 스냅샷 보장
             src = _sq3.connect(db_path, timeout=30)
@@ -7799,7 +7816,10 @@ def _backup_sqlite_to_s3_sync():
             logger.error(f"SQLite 백업 실패 ({name}): {e}")
         finally:
             if os.path.exists(tmp):
-                os.remove(tmp)
+                try:
+                    os.remove(tmp)
+                except Exception as _re:
+                    logger.warning(f"백업 임시파일 정리 실패 {tmp}: {_re}")
 
 
 # ── 휴면계정 관리 ──────────────────────────────────────────────────────────────
