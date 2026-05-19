@@ -1342,13 +1342,26 @@ def load_users() -> Dict[str, dict]:
 # FastAPI App Initialization
 # ============================================================
 
+# 운영/개발 환경 구분 — 환경변수 미설정 시 운영(production)으로 간주(가장 안전한 기본값)
+# 개발 환경에서 /docs, /dev-login 등을 쓰려면 APP_ENV=dev 명시
+APP_ENV = os.environ.get("APP_ENV", "production").lower()
+IS_PROD = APP_ENV in ("production", "prod")
+
+# /docs, /redoc, /openapi.json — 운영에서는 모두 비공개화 (라우터 enumeration 차단)
+_docs_url = None if IS_PROD else "/docs"
+_redoc_url = None if IS_PROD else "/redoc"
+_openapi_url = None if IS_PROD else "/openapi.json"
+
 app = FastAPI(
     title="Tower Classification API",
     description="API for classifying tower/antenna installation types using YOLOv8",
     version="1.0.0",
-    docs_url="/docs",
-    redoc_url="/redoc"
+    docs_url=_docs_url,
+    redoc_url=_redoc_url,
+    openapi_url=_openapi_url,
 )
+
+logger.info(f"APP_ENV={APP_ENV} (IS_PROD={IS_PROD}) — /docs {'비공개' if IS_PROD else '공개'}")
 
 # CORS Configuration for Flutter Web/PWA
 # CORS_ALLOWED_ORIGINS 환경변수로 허용 도메인 관리 (쉼표 구분)
@@ -2037,9 +2050,16 @@ class DevLoginRequest(BaseModel):
 
 @app.post("/auth/dev-login")
 async def dev_login(req: DevLoginRequest):
-    """개발용 테스트 로그인 (SSO 인증 없이 임의 계정으로 토큰 발급)"""
+    """개발용 테스트 로그인 (SSO 인증 없이 임의 계정으로 토큰 발급).
+
+    정식 오픈 후에는 DEV_LOGIN_ENABLED=0 으로 비활성화하거나
+    APP_ENV=production 으로 두면 외부 노출이 차단된다.
+    """
     if not DEV_LOGIN_ENABLED:
         raise HTTPException(403, "개발 모드가 비활성화되어 있습니다")
+    # 운영 환경(APP_ENV=production)에서는 dev-login 라우터 자체를 사용 금지
+    if IS_PROD:
+        raise HTTPException(403, "운영 환경에서는 dev-login 사용 불가")
     if req.role not in VALID_ROLES:
         raise HTTPException(400, f"유효하지 않은 역할: {req.role}")
 
@@ -2066,8 +2086,15 @@ async def dev_login(req: DevLoginRequest):
 
 
 @app.get("/auth/dev-login/status")
-async def dev_login_status():
-    """개발 로그인 모드 활성화 여부 확인"""
+async def dev_login_status(request: Request):
+    """개발 로그인 모드 활성화 여부 확인.
+
+    무인증 노출 시 외부 스캐너가 dev-login 활성화 인스턴스를 골라낼 수 있어
+    여기서는 운영(IS_PROD) 환경이면 항상 enabled=false 만 반환해 외부 스캔을 차단.
+    개발 환경에서는 실제 값을 반환 (프론트의 자동 dev-login 모드 토글이 필요).
+    """
+    if IS_PROD:
+        return {"enabled": False}
     return {"enabled": DEV_LOGIN_ENABLED}
 
 
