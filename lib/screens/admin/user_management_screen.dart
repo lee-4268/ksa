@@ -536,8 +536,8 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
         itemCount: displayedUsers.length + (_hasMore ? 1 : 0),
         itemBuilder: (context, index) {
           if (index == displayedUsers.length) {
-            return const Padding(
-              padding: EdgeInsets.all(16),
+            return Padding(
+              padding: const EdgeInsets.all(16),
               child: AppLoader.centered(),
             );
           }

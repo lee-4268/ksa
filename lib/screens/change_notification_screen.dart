@@ -433,8 +433,8 @@ class _ChangeNotificationScreenState extends State<ChangeNotificationScreen> {
 
   Widget _buildRequestsView() {
     if (_loadingRequests) {
-      return const Padding(
-        padding: EdgeInsets.all(40),
+      return Padding(
+        padding: const EdgeInsets.all(40),
         child: AppLoader.centered(),
       );
     }
