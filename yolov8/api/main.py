@@ -2146,10 +2146,37 @@ async def list_users_count(request: Request = None):
 # DynamoDB CRUD Endpoints - Categories
 # ============================================================
 
+async def _require_owner_or_admin(request: Request, owner: str) -> str:
+    """카테고리/스테이션 소유자 격리 헬퍼.
+
+    - 본인(caller_empno == owner) → 통과
+    - admin → 통과 (인사/관리 목적)
+    - 그 외 → 403
+    """
+    caller = await _verify_auth(request)
+    if caller == owner:
+        return caller
+    role = await asyncio.to_thread(_get_user_role_sync, caller)
+    if role == "admin":
+        return caller
+    raise HTTPException(403, "본인 소유 데이터만 접근 가능합니다")
+
+
+async def _check_object_owner_or_admin(request: Request, owner_field: str, db_owner: str) -> str:
+    """이미 저장된 객체(category/station)의 owner와 caller를 비교."""
+    caller = await _verify_auth(request)
+    if caller == db_owner:
+        return caller
+    role = await asyncio.to_thread(_get_user_role_sync, caller)
+    if role == "admin":
+        return caller
+    raise HTTPException(403, f"{owner_field} 소유자만 접근 가능합니다")
+
+
 @app.post("/categories")
 async def create_category(category: CategoryCreate, request: Request):
-    """카테고리 생성"""
-    await _verify_auth(request)
+    """카테고리 생성 — 본인 owner 또는 admin"""
+    await _require_owner_or_admin(request, category.owner)
     try:
         dynamodb = get_dynamodb_resource()
         table = dynamodb.Table(DYNAMODB_TABLES["categories"])
@@ -2175,8 +2202,8 @@ async def create_category(category: CategoryCreate, request: Request):
 
 @app.get("/categories")
 async def list_categories(owner: str = Query(..., description="소유자 사번"), request: Request = None):
-    """카테고리 목록 조회 (owner 필터)"""
-    await _verify_auth(request)
+    """카테고리 목록 조회 — 본인 owner 또는 admin"""
+    await _require_owner_or_admin(request, owner)
     try:
         dynamodb = get_dynamodb_resource()
         table = dynamodb.Table(DYNAMODB_TABLES["categories"])
@@ -2208,8 +2235,7 @@ async def list_categories(owner: str = Query(..., description="소유자 사번"
 
 @app.get("/categories/{category_id}")
 async def get_category(category_id: str, request: Request = None):
-    """카테고리 단일 조회"""
-    await _verify_auth(request)
+    """카테고리 단일 조회 — 객체 owner 또는 admin"""
     try:
         dynamodb = get_dynamodb_resource()
         table = dynamodb.Table(DYNAMODB_TABLES["categories"])
@@ -2218,9 +2244,13 @@ async def get_category(category_id: str, request: Request = None):
         item = response.get("Item")
 
         if not item:
+            await _verify_auth(request)  # 존재 여부조차 무인증으로 노출하지 않음
             raise HTTPException(status_code=404, detail="Category not found")
 
+        await _check_object_owner_or_admin(request, "카테고리", str(item.get("owner") or ""))
         return {"success": True, "category": decimal_to_native(item)}
+    except HTTPException:
+        raise
     except ClientError as e:
         logger.error(f"DynamoDB error: {e}")
         raise HTTPException(status_code=500, detail="서버 내부 오류")
@@ -2228,11 +2258,16 @@ async def get_category(category_id: str, request: Request = None):
 
 @app.put("/categories/{category_id}")
 async def update_category(category_id: str, request: Request, name: str = None, originalExcelKey: str = None):
-    """카테고리 업데이트"""
-    await _verify_auth(request)
+    """카테고리 업데이트 — 객체 owner 또는 admin"""
     try:
         dynamodb = get_dynamodb_resource()
         table = dynamodb.Table(DYNAMODB_TABLES["categories"])
+
+        existing = table.get_item(Key={"id": category_id}).get("Item")
+        if not existing:
+            await _verify_auth(request)
+            raise HTTPException(status_code=404, detail="Category not found")
+        await _check_object_owner_or_admin(request, "카테고리", str(existing.get("owner") or ""))
 
         update_expr = "SET updatedAt = :now"
         expr_values = {":now": datetime.now(timezone.utc).isoformat()}
@@ -2256,6 +2291,8 @@ async def update_category(category_id: str, request: Request, name: str = None, 
         response = table.update_item(**update_kwargs)
 
         return {"success": True, "category": decimal_to_native(response.get("Attributes"))}
+    except HTTPException:
+        raise
     except ClientError as e:
         logger.error(f"DynamoDB error: {e}")
         raise HTTPException(status_code=500, detail="서버 내부 오류")
@@ -2263,15 +2300,22 @@ async def update_category(category_id: str, request: Request, name: str = None, 
 
 @app.delete("/categories/{category_id}")
 async def delete_category(category_id: str, request: Request = None):
-    """카테고리 삭제"""
-    await _verify_auth(request)
+    """카테고리 삭제 — 객체 owner 또는 admin"""
     try:
         dynamodb = get_dynamodb_resource()
         table = dynamodb.Table(DYNAMODB_TABLES["categories"])
 
+        existing = table.get_item(Key={"id": category_id}).get("Item")
+        if not existing:
+            await _verify_auth(request)
+            raise HTTPException(status_code=404, detail="Category not found")
+        await _check_object_owner_or_admin(request, "카테고리", str(existing.get("owner") or ""))
+
         table.delete_item(Key={"id": category_id})
 
         return {"success": True, "message": "Category deleted"}
+    except HTTPException:
+        raise
     except ClientError as e:
         logger.error(f"DynamoDB error: {e}")
         raise HTTPException(status_code=500, detail="서버 내부 오류")
@@ -2283,8 +2327,8 @@ async def delete_category(category_id: str, request: Request = None):
 
 @app.post("/stations")
 async def create_station(station: StationCreate, request: Request):
-    """무선국 생성"""
-    await _verify_auth(request)
+    """무선국 생성 — 본인 owner 또는 admin"""
+    await _require_owner_or_admin(request, station.owner)
     try:
         dynamodb = get_dynamodb_resource()
         table = dynamodb.Table(DYNAMODB_TABLES["stations"])
@@ -2331,8 +2375,8 @@ async def list_stations(
     categoryId: str = Query(None, description="카테고리 ID (선택)"),
     request: Request = None,
 ):
-    """무선국 목록 조회"""
-    await _verify_auth(request)
+    """무선국 목록 조회 — 본인 owner 또는 admin"""
+    await _require_owner_or_admin(request, owner)
     try:
         dynamodb = get_dynamodb_resource()
         table = dynamodb.Table(DYNAMODB_TABLES["stations"])
@@ -2370,8 +2414,7 @@ async def list_stations(
 
 @app.get("/stations/{station_id}")
 async def get_station(station_id: str, request: Request = None):
-    """무선국 단일 조회"""
-    await _verify_auth(request)
+    """무선국 단일 조회 — 객체 owner 또는 admin"""
     try:
         dynamodb = get_dynamodb_resource()
         table = dynamodb.Table(DYNAMODB_TABLES["stations"])
@@ -2380,9 +2423,13 @@ async def get_station(station_id: str, request: Request = None):
         item = response.get("Item")
 
         if not item:
+            await _verify_auth(request)
             raise HTTPException(status_code=404, detail="Station not found")
 
+        await _check_object_owner_or_admin(request, "스테이션", str(item.get("owner") or ""))
         return {"success": True, "station": decimal_to_native(item)}
+    except HTTPException:
+        raise
     except ClientError as e:
         logger.error(f"DynamoDB error: {e}")
         raise HTTPException(status_code=500, detail="서버 내부 오류")
@@ -2390,11 +2437,16 @@ async def get_station(station_id: str, request: Request = None):
 
 @app.put("/stations/{station_id}")
 async def update_station(station_id: str, station: StationUpdate, request: Request = None):
-    """무선국 업데이트"""
-    await _verify_auth(request)
+    """무선국 업데이트 — 객체 owner 또는 admin"""
     try:
         dynamodb = get_dynamodb_resource()
         table = dynamodb.Table(DYNAMODB_TABLES["stations"])
+
+        existing = table.get_item(Key={"id": station_id}).get("Item")
+        if not existing:
+            await _verify_auth(request)
+            raise HTTPException(status_code=404, detail="Station not found")
+        await _check_object_owner_or_admin(request, "스테이션", str(existing.get("owner") or ""))
 
         update_expr = "SET updatedAt = :now"
         expr_values = {":now": datetime.now(timezone.utc).isoformat()}
@@ -2429,6 +2481,8 @@ async def update_station(station_id: str, station: StationUpdate, request: Reque
         response = table.update_item(**update_kwargs)
 
         return {"success": True, "station": decimal_to_native(response.get("Attributes"))}
+    except HTTPException:
+        raise
     except ClientError as e:
         logger.error(f"DynamoDB error: {e}")
         raise HTTPException(status_code=500, detail="서버 내부 오류")
@@ -2436,15 +2490,22 @@ async def update_station(station_id: str, station: StationUpdate, request: Reque
 
 @app.delete("/stations/{station_id}")
 async def delete_station(station_id: str, request: Request = None):
-    """무선국 삭제"""
-    await _verify_auth(request)
+    """무선국 삭제 — 객체 owner 또는 admin"""
     try:
         dynamodb = get_dynamodb_resource()
         table = dynamodb.Table(DYNAMODB_TABLES["stations"])
 
+        existing = table.get_item(Key={"id": station_id}).get("Item")
+        if not existing:
+            await _verify_auth(request)
+            raise HTTPException(status_code=404, detail="Station not found")
+        await _check_object_owner_or_admin(request, "스테이션", str(existing.get("owner") or ""))
+
         table.delete_item(Key={"id": station_id})
 
         return {"success": True, "message": "Station deleted"}
+    except HTTPException:
+        raise
     except ClientError as e:
         logger.error(f"DynamoDB error: {e}")
         raise HTTPException(status_code=500, detail="서버 내부 오류")
@@ -9013,7 +9074,7 @@ async def callname_db_preview(request: Request, limit: int = Query(50, ge=1, le=
             })
     except Exception as e:
         logger.error(f"호출명칭 DB 미리보기 실패: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="호출명칭 DB 미리보기 실패")
     return {"files": result_files}
 
 
@@ -14535,8 +14596,11 @@ async def inspection_detail(request: Request, year: int, 허가번호: str):
 
 @app.patch("/inspection/target-review")
 async def inspection_target_review(request: Request, year: int, 허가번호: str, 시기조정: str = ""):
-    """수검 검토 결과(시기조정) 업데이트."""
-    await _verify_auth(request)
+    """수검 검토 결과(시기조정) 업데이트 — admin/manager 만 허용."""
+    empno = await _verify_auth(request)
+    role = await asyncio.to_thread(_get_user_role_sync, empno)
+    if role not in {"admin", "manager"}:
+        raise HTTPException(403, "관리자/매니저만 가능")
     if not os.path.exists(_INSP_DB):
         raise HTTPException(404, "수검 데이터 없음")
     def _update():

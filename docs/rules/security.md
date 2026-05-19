@@ -213,6 +213,25 @@ aws s3 ls s3://sko-kca-s3/backups/sqlite/ --recursive | tail -20
 - **#6** SQLite DB 파일을 `/var/lib/kca-api/db/`로 이동 + systemd `ProtectSystem=full` `ProtectHome=true` 적용
 - 추후 가능: presigned URL 도입(community 이미지), 감사 로그 90일 이상 보존, dev-login 폐기
 
+### 2026-05-19 2차 재점검 (추가 조치)
+
+1차 조치 검증 결과: 16건 중 14건 양호 · 1건 부분(detail 잔존 1곳) · 1건 부분(비밀번호 검증 헬퍼가 죽은 코드). 회귀 없음.
+
+신규 발견·조치 (Medium):
+
+| 등급 | 이슈 | 위치 | 조치 | 커밋 |
+|---|---|---|---|---|
+| Medium | `/callname/db-preview` detail=str(e) 잔존 (1차 누락분) | main.py:9015 | detail은 일반 메시지로 교체 | (이번) |
+| Medium | `/categories` / `/stations` IDOR — owner 격리 없음 | main.py:2149~2502 | `_require_owner_or_admin` / `_check_object_owner_or_admin` 헬퍼 도입, 11개 라우터에 적용 | (이번) |
+| Medium | `/inspection/target-review` 권한 게이트 누락 | main.py:14597 | admin/manager role 가드 추가 | (이번) |
+
+### 남은 검토 항목 (2차에서 추가로 식별)
+
+- **N-4** inspection multipart upload 누적 사이즈 한도 없음 (main.py:12891) — S3 비용 공격
+- **N-5** community upload 전체 메모리 적재 (main.py:19718, 19777) — OOM 가능
+- **N-6** `_verify_password` 헬퍼·`secret_password` 컬럼 죽은 코드 — 사용처 결정 후 삭제 or 검증 라우터 추가
+- 운영: 백업 실패 알림 부재, 감사 로그 90일 TTL, 토큰 무효화 메커니즘 부재, 의존성 취약점 스캐닝 부재
+
 ## 보안 작업 체크리스트 (새 라우터 추가 시)
 
 ```
