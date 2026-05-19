@@ -12,6 +12,7 @@
 | DS/호출명칭/설치확인서 | `docs/rules/data-domain.md` |
 | DS xlsx 빌드/다운로드/CORS | `docs/rules/ds-xlsx-pipeline.md` |
 | 인증/권한 관련 | `docs/rules/auth-and-roles.md` |
+| 보안/시크릿/환경변수/백업 | `docs/rules/security.md` |
 | 구조/배포/DB | `docs/rules/architecture.md` |
 
 ## 핵심 규칙 (항상 적용)
@@ -23,7 +24,7 @@
 
 ### 커밋 규칙
 - 한글 커밋 메시지, 변경 내용 요약
-- `Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>` 포함
+- `Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>` 포함
 
 ### 에러 처리
 - Flutter: `IntrinsicHeight` + `SingleChildScrollView(horizontal)` 조합 사용 금지 (render box size 에러)
@@ -34,3 +35,12 @@
 - 프론트: `flutter build web` → AWS Amplify 자동 배포 (git push)
 - 백엔드: EC2 직접 배포, `sudo systemctl restart kca-api`
 - 환경변수는 systemd 서비스 파일에 설정 (`/etc/systemd/system/kca-api.service`)
+
+### 보안 (항상 준수)
+- 외부 API 키·시크릿·DB 비밀번호는 절대 코드에 하드코딩하지 말 것 → `os.environ.get()`
+- 새 라우터는 반드시 `await _verify_auth(request)` + 필요 시 admin/manager role 게이트
+- 사용자 입력 → SQL: `?` 파라미터 바인딩만 사용. f-string으로 값 삽입 금지
+- 사용자 입력 → 파일/S3 키: `os.path.basename` + sanitize + prefix 화이트리스트
+- 응답 dict에 `secret_password`, 내부 ID, PII가 들어가지 않는지 확인
+- HTTPException detail에 `str(e)` 노출 금지, 상세는 `logger`로만
+- 자세한 보안 정책·점검 이력은 `docs/rules/security.md` 참조

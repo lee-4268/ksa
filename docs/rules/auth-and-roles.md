@@ -1,5 +1,7 @@
 # Auth & Roles (인증/권한)
 
+> 시크릿 정책·보안 점검 이력·운영 환경변수 전체 목록은 [security.md](./security.md) 참조.
+
 ## 인증 흐름
 
 ### 일반 로그인 (SSO)
@@ -11,21 +13,25 @@
 
 ### 개발용 테스트 로그인
 ```
-POST /auth/dev-login (DEV_LOGIN_ENABLED=1 필요)
+POST /auth/dev-login (DEV_LOGIN_ENABLED=1 + APP_ENV=dev 둘 다 필요)
 → SSO 인증 없이 임의 계정으로 토큰 발급
 → _dev_users 메모리 캐시에 저장
 → /users/{empno}, /inspection/my-list 등에서 fallback으로 사용
 ```
 
-활성화: systemd 서비스 파일에 `Environment=DEV_LOGIN_ENABLED=1`
+활성화: systemd 서비스 파일에 `Environment=APP_ENV=dev` + `Environment=DEV_LOGIN_ENABLED=1`
+
+**운영 차단**: `APP_ENV=production`이면 (또는 미설정 — 기본값) `/auth/dev-login`은 403, `/auth/dev-login/status`는 항상 `{enabled: false}` 반환. 외부 스캐너가 dev-login 활성 인스턴스를 식별하지 못하도록 차단.
 
 ### 토큰 구조
 ```
-base64url(empno:expiry_unix:hmac_sha256(SECRET, empno:expiry_unix))
+base64url(empno:expiry_unix:hmac_sha256(AUTH_TOKEN_SECRET, empno:expiry_unix))
 ```
 - 유효기간: 2시간
 - 잔여 1시간 미만 → 응답 헤더에 새 토큰 자동 발급
 - Flutter 측에서 자동 갱신 처리
+- 검증은 `hmac.compare_digest`로 상수시간 비교
+- `AUTH_TOKEN_SECRET`은 운영(APP_ENV=production)에서 미설정 시 RuntimeError로 부팅 차단 (fail-closed)
 
 ## 역할 체계
 
@@ -56,6 +62,12 @@ auth.isSuperAdmin    // admin
 auth.isDivisionAdmin // admin || manager
 // 메뉴: _isAdmin = auth.isSuperAdmin || auth.isDivisionAdmin
 ```
+
+### 사용자 PII 조회 정책 (/users/{empno})
+- **본인 조회** (`caller_empno == empno`): 모든 필드 (name, region, team, **email, phone**, role, last_login, is_dormant)
+- **타인 조회** (admin/manager만): name, region, team, role 등 — **email/phone 응답에서 제외**
+- 일반 member가 타인 사번 조회 → 403 (사번 enumeration으로 전 직원 연락처 수집 차단)
+- 관리자 패널 전체 사용자 목록은 별도 라우터 `/admin/users` 사용
 
 ## 본부 매핑
 

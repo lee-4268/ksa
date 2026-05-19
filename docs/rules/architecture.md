@@ -98,6 +98,27 @@ cert(zpwino, zpwina, zpwiadr, zpcode, zpcname, eqp_type, ...)
 - 설치확인서 조회 + 장비타입간소화 5단계 fallback에 사용
 - 서버 시작 시 빌드, 완료 전까지 xlsx 빌드 시작 안 함
 
+## SQLite: community.db
+
+```sql
+notices(id, title, content, division, author_*, view_count, created_at, ...)
+requests(id, title, content, status, is_secret, secret_password, author_*, ...)
+  -- secret_password 는 PBKDF2-SHA256 해시 형식 (security.md 참조)
+comments(id, request_id, content, author_*, parent_id, ...)  -- parent_id 로 대댓글
+notifications(id, user_empno, type, title, body, related_pk, sub_type, ...)
+```
+- 공지/요청/댓글/알림 통합
+- Phase 5 워크플로우 알림이 `notifications`에 적재
+
+## SQLite 자동 백업 (S3)
+
+- 매일 03:00 KST `_sqlite_backup_daily_scheduler`
+- 대상: `inspection`, `ds_detail`, `community` 3개 DB
+- 경로: `s3://sko-kca-s3/backups/sqlite/{name}/YYYY-MM-DD.db`
+- 보관: 최근 7일 (그 이전 자동 삭제)
+- 임시파일은 `tempfile.mkstemp(dir=BACKUP_TMP_DIR)`로 0600 권한 격리
+- 복구 절차: [rules/security.md](./security.md#백업복구) 참조
+
 ## DynamoDB 테이블
 
 | 테이블 | PK | 용도 |
@@ -143,16 +164,46 @@ journalctl -u kca-api --no-pager -n 80
 ```
 
 ### 환경변수 (systemd 서비스 파일)
+
+> 보안 관련 환경변수 전체 정책과 운영 가이드는 [rules/security.md](./security.md) 참조.
+
 ```ini
 # /etc/systemd/system/kca-api.service [Service] 섹션
-Environment=AUTH_TOKEN_SECRET=...
-Environment=ADMIN_BOOTSTRAP_KEY=...
+
+# 인증·환경 (필수)
+Environment=AUTH_TOKEN_SECRET=...      # openssl rand -hex 32. 미설정 시 production 부팅 차단
+Environment=ADMIN_BOOTSTRAP_KEY=...    # 최초 admin 등록용
+Environment=APP_ENV=production         # /docs·dev-login 외부 노출 차단 (또는 dev)
+Environment=TRUST_PROXY=1              # ALB/nginx 뒤일 때 XFF 첫 IP 신뢰
+
+# 외부 API 키 (미설정 시 해당 기능만 비활성, 부팅은 됨)
+Environment=KAKAO_REST_KEY=...
+Environment=VWORLD_API_KEY=...
+Environment=NAVER_CLIENT_ID=...
+Environment=NAVER_CLIENT_SECRET=...
+
+# 스토리지
 Environment=S3_BUCKET_NAME=sko-kca-s3
-Environment=DEV_LOGIN_ENABLED=1        # 개발 모드 (dev-login 활성화)
-Environment=SES_FROM_EMAIL=...         # 휴면 예고 메일 발신 주소 (AWS SES 검증 필요)
-Environment=DORMANT_DAYS=30            # 휴면 기준일 (기본 30)
-Environment=SERVICE_URL=https://...    # 메일 본문 링크용 서비스 URL
+Environment=BACKUP_TMP_DIR=/run/kca-api   # RuntimeDirectory 와 함께 사용
+
+# 휴면계정 / 메일
+Environment=SES_FROM_EMAIL=...
+Environment=DORMANT_DAYS=30
+Environment=SERVICE_URL=https://ksa.skons.net
+
+# 개발 전용 (운영에선 설정 안 함)
+# Environment=DEV_LOGIN_ENABLED=1
 ```
+
+### systemd 보안 강화 옵션
+```ini
+[Service]
+PrivateTmp=true              # /tmp 격리
+NoNewPrivileges=true         # 권한 상승 차단
+RuntimeDirectory=kca-api     # /run/kca-api 자동 관리
+# ProtectSystem=full, ProtectHome=true 은 venv·DB 가 /home/ubuntu/ 에 있어 부팅 실패 — 미적용
+```
+
 변경 후: `sudo systemctl daemon-reload && sudo systemctl restart kca-api`
 
 ## 플랫폼별 조건부 컴파일
