@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/auth_service.dart';
 import '../services/ds_data_service.dart';
+import '../widgets/app_loader.dart';
 
 /// DS 데이터 조회 화면 - 시트별 탭 + 데이터 테이블 + 서버 검색 + 페이징
 class DsDataScreen extends StatefulWidget {
@@ -335,7 +336,7 @@ class _DsDataScreenState extends State<DsDataScreen> with SingleTickerProviderSt
     final data = _sheetCache[cacheKey];
 
     if (data == null || data.isLoading) {
-      return const Center(child: CircularProgressIndicator());
+      return AppLoader.centered();
     }
 
     if (data.error != null) {

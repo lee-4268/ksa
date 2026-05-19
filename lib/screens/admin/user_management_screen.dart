@@ -4,6 +4,7 @@ import '../../services/auth_service.dart';
 import '../../services/admin_service.dart';
 import '../../services/team_context_service.dart';
 import '../../widgets/progress_dialog.dart';
+import '../../widgets/app_loader.dart';
 
 /// 사용자 관리 화면 (필터링, 검색, 권한 설정)
 class UserManagementScreen extends StatefulWidget {
@@ -231,7 +232,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
           // 사용자 목록
           Expanded(
             child: _isLoading
-                ? const Center(child: CircularProgressIndicator())
+                ? AppLoader.centered()
                 : _errorMessage != null
                     ? _buildErrorView()
                     : _filteredUsers.isEmpty
@@ -537,7 +538,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
           if (index == displayedUsers.length) {
             return const Padding(
               padding: EdgeInsets.all(16),
-              child: Center(child: CircularProgressIndicator()),
+              child: AppLoader.centered(),
             );
           }
           return _buildUserCard(displayedUsers[index]);

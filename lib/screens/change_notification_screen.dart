@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 import '../services/auth_service.dart';
 import '../services/inspection_service.dart';
 import '../widgets/progress_dialog.dart';
+import '../widgets/app_loader.dart';
 
 class ChangeNotificationScreen extends StatefulWidget {
   const ChangeNotificationScreen({super.key});
@@ -434,7 +435,7 @@ class _ChangeNotificationScreenState extends State<ChangeNotificationScreen> {
     if (_loadingRequests) {
       return const Padding(
         padding: EdgeInsets.all(40),
-        child: Center(child: CircularProgressIndicator()),
+        child: AppLoader.centered(),
       );
     }
     if (_changeRequests.isEmpty) {

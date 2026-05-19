@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/auth_service.dart';
 import '../services/inspection_service.dart';
+import '../widgets/app_loader.dart';
 import '../widgets/progress_dialog.dart';
 import 'inspection_result_screen.dart';
 // ignore: avoid_web_libraries_in_flutter
@@ -2339,7 +2340,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
   // ── 데이터 탭 ─────────────────────────────────────────
 
   Widget _buildDataTab() {
-    if (_loading) return const Center(child: CircularProgressIndicator());
+    if (_loading) return AppLoader.centered();
     if (_error != null) return Center(child: Text('오류: $_error', style: const TextStyle(color: Colors.red)));
     if (_items.isEmpty) {
       return Center(
@@ -3080,7 +3081,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
 
   Widget _buildMatrixTab() {
     if (_loading) {
-      return const Center(child: CircularProgressIndicator());
+      return AppLoader.centered();
     }
 
     return SingleChildScrollView(
@@ -3851,7 +3852,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
         boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.08), blurRadius: 16, offset: const Offset(-4, 0))],
       ),
       child: _detailLoading
-          ? const Center(child: CircularProgressIndicator())
+          ? AppLoader.centered()
           : _detailData == null
               ? const Center(child: Text('데이터 없음', style: TextStyle(color: Colors.black38)))
               : _buildDetailContent(),
@@ -5168,7 +5169,7 @@ class _InspectionReportDialogState extends State<_InspectionReportDialog> {
                   const Divider(height: 1),
                   Expanded(
                     child: _loading
-                        ? const Center(child: CircularProgressIndicator())
+                        ? AppLoader.centered()
                         : _candidates.isEmpty
                             ? Center(child: Text('필터 결과 없음 — [적용] 클릭',
                                 style: TextStyle(fontSize: 12, color: Colors.grey.shade400)))
@@ -5688,7 +5689,7 @@ class _AddFromStagingDialogState extends State<_AddFromStagingDialog> {
                   const Divider(height: 1),
                   Expanded(
                     child: _loading
-                        ? const Center(child: CircularProgressIndicator())
+                        ? AppLoader.centered()
                         : _candidates.isEmpty
                             ? Center(child: Text('결과 없음',
                                 style: TextStyle(fontSize: 12, color: Colors.grey.shade400)))

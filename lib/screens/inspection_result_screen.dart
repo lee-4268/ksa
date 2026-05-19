@@ -9,6 +9,7 @@ import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/auth_service.dart';
 import '../services/inspection_service.dart';
+import '../widgets/app_loader.dart';
 import '../services/kakao_geocoding_web.dart';
 import 'tower_classification_screen.dart';
 import '../widgets/progress_dialog.dart';
@@ -289,7 +290,7 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
   Widget build(BuildContext context) {
     if (widget.isSheet) {
       return _loading
-          ? const Center(child: CircularProgressIndicator())
+          ? AppLoader.centered()
           : _error != null
               ? Center(child: Text('오류: $_error', style: const TextStyle(color: Colors.red)))
               : _buildLayout();
@@ -298,7 +299,7 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
       backgroundColor: Colors.white,
       body: SafeArea(
         child: _loading
-            ? const Center(child: CircularProgressIndicator())
+            ? AppLoader.centered()
             : _error != null
                 ? Center(
                     child: Text('오류: $_error',

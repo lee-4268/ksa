@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/inspection_service.dart';
+import 'app_loader.dart';
 
 /// 로그인 직후 알림 팝업을 띄울지 결정.
 /// - 안 읽음 > 0 이고 오늘 '보지 않기' 플래그가 없으면 표시.
@@ -318,7 +319,7 @@ class _NotificationPanelState extends State<NotificationPanel> {
           ),
           Expanded(
             child: _loading
-                ? const Center(child: CircularProgressIndicator())
+                ? AppLoader.centered()
                 : _items.isEmpty
                     ? Center(
                         child: Column(mainAxisSize: MainAxisSize.min, children: [

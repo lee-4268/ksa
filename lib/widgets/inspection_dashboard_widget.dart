@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../services/inspection_service.dart';
+import 'app_loader.dart';
 
 /// 홈 화면 "내 할 일" 대시보드 섹션.
 /// 역할별로 자동 분기: admin=전사 / manager=자기 본부 / member=자기 본부+팀
@@ -76,8 +77,7 @@ class _InspectionDashboardWidgetState extends State<InspectionDashboardWidget> {
       ),
       padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
       child: _loading
-          ? const SizedBox(
-              height: 100, child: Center(child: CircularProgressIndicator()))
+          ? SizedBox(height: 100, child: AppLoader.centered())
           : _error != null
               ? _buildError()
               : _buildContent(),

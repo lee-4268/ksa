@@ -10,6 +10,7 @@ import '../services/auth_service.dart';
 import '../services/ds_data_service.dart';
 import '../services/ds_upload_service.dart';
 import '../services/inspection_service.dart';
+import '../widgets/app_loader.dart';
 import '../services/ds_export_service_stub.dart'
     if (dart.library.html) '../services/ds_export_service_web.dart' as platform_export;
 import 'ds_data_screen.dart';
@@ -350,7 +351,7 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
     return Scaffold(
       backgroundColor: const Color(0xFFFAFAFB),
       body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
+          ? AppLoader.centered()
           : _error != null
               ? _buildErrorView()
               : RefreshIndicator(
@@ -1060,7 +1061,7 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (_) => const Center(child: CircularProgressIndicator()),
+      builder: (_) => AppLoader.centered(),
     );
 
     final svc = InspectionService()
@@ -1270,7 +1271,7 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (_) => const Center(child: CircularProgressIndicator()),
+      builder: (_) => AppLoader.centered(),
     );
     try {
       final result = await svc.applyPartialDsUpdate(Uint8List.fromList(bytes), f.name,

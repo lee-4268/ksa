@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 import '../services/auth_service.dart';
 import '../services/community_service.dart';
 import '../widgets/progress_dialog.dart';
+import '../widgets/app_loader.dart';
 
 /// 요청사항 게시판 화면
 class RequestBoardScreen extends StatefulWidget {
@@ -538,7 +539,7 @@ class _RequestBoardScreenState extends State<RequestBoardScreen> {
     return Material(
       color: Colors.transparent,
       child: _loading
-          ? const Center(child: CircularProgressIndicator())
+          ? AppLoader.centered()
           : _buildBody(),
     );
   }

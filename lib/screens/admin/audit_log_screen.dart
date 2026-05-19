@@ -5,6 +5,7 @@ import 'package:intl/intl.dart';
 import '../../services/auth_service.dart';
 import '../../services/audit_service.dart';
 import '../../widgets/progress_dialog.dart';
+import '../../widgets/app_loader.dart';
 
 /// 감사 로그 화면
 class AuditLogScreen extends StatefulWidget {
@@ -235,7 +236,7 @@ class _AuditLogScreenState extends State<AuditLogScreen> {
         ],
       ),
       body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
+          ? AppLoader.centered()
           : _logs.isEmpty
               ? Center(
                   child: Column(

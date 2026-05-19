@@ -9,6 +9,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../services/auth_service.dart';
+import '../../widgets/app_loader.dart';
 import '../../services/callname_service.dart';
 import '../../services/ds_data_service.dart';
 import '../../services/inspection_service.dart';
@@ -706,7 +707,7 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (_) => const Center(child: CircularProgressIndicator()),
+      builder: (_) => AppLoader.centered(),
     );
 
     try {
