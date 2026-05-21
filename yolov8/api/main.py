@@ -20071,22 +20071,43 @@ async def admin_sisl_photos_import(request: Request, file: UploadFile = File(...
     return {"success": True, "filename": upload_filename, **result}
 
 
+# 검사 주기 기준 기본 노출 범위 (현재 시점 기준 최근 N년)
+_SISL_DEFAULT_YEARS_BACK = 3
+
+
+def _sisl_upload_date_cutoff(years_back: int) -> int:
+    """현재일에서 years_back 년 전을 YYYYMMDD 정수로 반환.
+    years_back <= 0 이면 0 반환 (필터 없음 의미).
+    """
+    if years_back <= 0:
+        return 0
+    from datetime import datetime, timezone, timedelta
+    KST = timezone(timedelta(hours=9))
+    cutoff = datetime.now(KST) - timedelta(days=365 * years_back)
+    return int(cutoff.strftime("%Y%m%d"))
+
+
 @app.get("/sisl-photos")
 async def sisl_photos_list(
     request: Request,
     neos_code: str = Query("", description="공대 (NeOSCode) — 빈 값이면 빈 결과"),
     reg_cls: int = Query(0, description="RegClsCode 필터 (0 이면 전체)"),
+    years_back: int = Query(_SISL_DEFAULT_YEARS_BACK,
+        description="현재일 기준 최근 N년치만 반환 (0 이면 전체). 기본 3."),
     limit: int = Query(500, ge=1, le=2000),
 ):
     """공대(neos_code) 기준 SKO-OCEAN 사진 메타 조회.
 
     각 항목에 완성된 URL 포함. 사내망 브라우저는 그 URL 을 <img src> 에 그대로 사용.
     외부망에서는 URL 도메인 자체가 안 풀려서 이미지가 깨지지만, 메타데이터는 정상 응답.
+    기본 노출 범위는 검사 주기와 일치하는 최근 3년 (롤링).
     """
     await _verify_auth(request)
     neos = (neos_code or '').strip()
     if not neos:
         return {"items": [], "total": 0}
+
+    cutoff = _sisl_upload_date_cutoff(years_back)
 
     def _read() -> list:
         conn = sqlite3.connect(_SISL_PHOTO_DB, timeout=30)
@@ -20097,6 +20118,9 @@ async def sisl_photos_list(
             if reg_cls:
                 wheres.append('reg_cls=?')
                 params.append(reg_cls)
+            if cutoff > 0:
+                wheres.append('upload_date >= ?')
+                params.append(cutoff)
             sql = (
                 f"SELECT neos_code, guid, reg_cls, file_path, upload_date "
                 f"FROM sisl_photo WHERE {' AND '.join(wheres)} "
