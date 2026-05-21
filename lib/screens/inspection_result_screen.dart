@@ -2169,82 +2169,115 @@ class _SislPhotoViewerState extends State<_SislPhotoViewer> {
   Widget build(BuildContext context) {
     final item = widget.items[_idx];
     final rotation = _rotations[_idx] ?? 0;
+    final hasPrev = _idx > 0;
+    final hasNext = _idx < widget.items.length - 1;
     return Dialog(
       insetPadding: const EdgeInsets.all(16),
       backgroundColor: Colors.transparent,
-      child: Column(mainAxisSize: MainAxisSize.min, children: [
-        // 상단 헤더
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          decoration: BoxDecoration(
-            color: Colors.black.withValues(alpha: 0.75),
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
-          ),
-          child: Row(children: [
-            Text('${_idx + 1} / ${widget.items.length}',
-                style: const TextStyle(color: Colors.white, fontSize: 13)),
-            const SizedBox(width: 12),
-            Flexible(
-              child: Text('${_fmt(item['upload_date'])} · 분류 ${item['reg_cls']}',
-                  style: const TextStyle(color: Colors.white70, fontSize: 12),
-                  overflow: TextOverflow.ellipsis),
+      child: Stack(children: [
+        // 본문: 이미지 + 하단 액션
+        Column(mainAxisSize: MainAxisSize.min, children: [
+          Flexible(
+            child: Container(
+              color: Colors.black,
+              child: PageView.builder(
+                controller: _ctrl,
+                itemCount: widget.items.length,
+                onPageChanged: (i) => setState(() => _idx = i),
+                itemBuilder: (_, i) {
+                  final url = (widget.items[i]['url'] ?? '').toString();
+                  _ensureSislImageRegistered(url, fit: 'contain');
+                  final viewType = '${_viewTypeForUrl(url)}-ct';
+                  final rot = _rotations[i] ?? 0;
+                  return InteractiveViewer(
+                    transformationController: _txCtrl(i),
+                    minScale: 0.5,
+                    maxScale: 5.0,
+                    child: RotatedBox(
+                      quarterTurns: rot,
+                      child: HtmlElementView(viewType: viewType),
+                    ),
+                  );
+                },
+              ),
             ),
-            const Spacer(),
-            IconButton(
+          ),
+          // 하단 액션 바
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: 0.75),
+              borderRadius: const BorderRadius.vertical(bottom: Radius.circular(12)),
+            ),
+            child: Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
+              _viewerAction(icon: Icons.rotate_left, tooltip: '왼쪽으로 회전', onTap: _rotateLeft),
+              _viewerAction(icon: Icons.rotate_right, tooltip: '오른쪽으로 회전', onTap: _rotateRight),
+              _viewerAction(icon: Icons.zoom_in, tooltip: '확대', onTap: _zoomIn),
+              _viewerAction(icon: Icons.zoom_out, tooltip: '축소', onTap: _zoomOut),
+              _viewerAction(icon: Icons.restore, tooltip: '원래대로', onTap: _resetTransform),
+              _viewerAction(icon: Icons.download_rounded, tooltip: '다운로드', onTap: _downloadCurrent),
+              if (rotation != 0)
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                  child: Text('${rotation * 90}°',
+                      style: const TextStyle(color: Colors.white70, fontSize: 11)),
+                ),
+            ]),
+          ),
+        ]),
+        // 좌상단 정보 칩
+        Positioned(
+          left: 12, top: 12,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: 0.6),
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              Text('${_idx + 1} / ${widget.items.length}',
+                  style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600)),
+              const SizedBox(width: 8),
+              Text('${_fmt(item['upload_date'])} · 분류 ${item['reg_cls']}',
+                  style: const TextStyle(color: Colors.white70, fontSize: 11)),
+            ]),
+          ),
+        ),
+        // 우상단 닫기 버튼 — 뷰어의 가장 바깥 우상단
+        Positioned(
+          right: 8, top: 8,
+          child: Material(
+            color: Colors.black.withValues(alpha: 0.6),
+            shape: const CircleBorder(),
+            child: IconButton(
               tooltip: '닫기',
               icon: const Icon(Icons.close, color: Colors.white),
               onPressed: () => Navigator.pop(context),
             ),
-          ]),
-        ),
-        // 이미지 영역
-        Flexible(
-          child: Container(
-            color: Colors.black,
-            child: PageView.builder(
-              controller: _ctrl,
-              itemCount: widget.items.length,
-              onPageChanged: (i) => setState(() => _idx = i),
-              itemBuilder: (_, i) {
-                final url = (widget.items[i]['url'] ?? '').toString();
-                _ensureSislImageRegistered(url, fit: 'contain');
-                final viewType = '${_viewTypeForUrl(url)}-ct';
-                final rot = _rotations[i] ?? 0;
-                return InteractiveViewer(
-                  transformationController: _txCtrl(i),
-                  minScale: 0.5,
-                  maxScale: 5.0,
-                  child: RotatedBox(
-                    quarterTurns: rot,
-                    child: HtmlElementView(viewType: viewType),
-                  ),
-                );
-              },
-            ),
           ),
         ),
-        // 하단 액션 바
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-          decoration: BoxDecoration(
-            color: Colors.black.withValues(alpha: 0.75),
-            borderRadius: const BorderRadius.vertical(bottom: Radius.circular(12)),
+        // 좌측 이전 화살표
+        if (hasPrev)
+          Positioned(
+            left: 8, top: 0, bottom: 0,
+            child: Center(child: _navArrow(
+              icon: Icons.chevron_left,
+              tooltip: '이전 사진',
+              onTap: () => _ctrl.animateToPage(_idx - 1,
+                  duration: const Duration(milliseconds: 200), curve: Curves.easeOut),
+            )),
           ),
-          child: Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
-            _viewerAction(icon: Icons.rotate_left, tooltip: '왼쪽으로 회전', onTap: _rotateLeft),
-            _viewerAction(icon: Icons.rotate_right, tooltip: '오른쪽으로 회전', onTap: _rotateRight),
-            _viewerAction(icon: Icons.zoom_in, tooltip: '확대', onTap: _zoomIn),
-            _viewerAction(icon: Icons.zoom_out, tooltip: '축소', onTap: _zoomOut),
-            _viewerAction(icon: Icons.restore, tooltip: '원래대로', onTap: _resetTransform),
-            _viewerAction(icon: Icons.download_rounded, tooltip: '다운로드', onTap: _downloadCurrent),
-            if (rotation != 0)
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 4),
-                child: Text('${rotation * 90}°',
-                    style: const TextStyle(color: Colors.white70, fontSize: 11)),
-              ),
-          ]),
-        ),
+        // 우측 다음 화살표
+        if (hasNext)
+          Positioned(
+            right: 8, top: 0, bottom: 0,
+            child: Center(child: _navArrow(
+              icon: Icons.chevron_right,
+              tooltip: '다음 사진',
+              onTap: () => _ctrl.animateToPage(_idx + 1,
+                  duration: const Duration(milliseconds: 200), curve: Curves.easeOut),
+            )),
+          ),
       ]),
     );
   }
@@ -2255,6 +2288,18 @@ class _SislPhotoViewerState extends State<_SislPhotoViewer> {
       icon: Icon(icon, color: Colors.white, size: 22),
       onPressed: onTap,
       visualDensity: VisualDensity.compact,
+    );
+  }
+
+  Widget _navArrow({required IconData icon, required String tooltip, required VoidCallback onTap}) {
+    return Material(
+      color: Colors.black.withValues(alpha: 0.5),
+      shape: const CircleBorder(),
+      child: IconButton(
+        tooltip: tooltip,
+        icon: Icon(icon, color: Colors.white, size: 32),
+        onPressed: onTap,
+      ),
     );
   }
 }

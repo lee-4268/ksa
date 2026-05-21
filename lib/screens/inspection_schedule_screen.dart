@@ -6216,91 +6216,133 @@ class _SchedSislPhotoViewerState extends State<_SchedSislPhotoViewer> {
   Widget build(BuildContext context) {
     final item = widget.items[_idx];
     final rotation = _rotations[_idx] ?? 0;
+    final hasPrev = _idx > 0;
+    final hasNext = _idx < widget.items.length - 1;
     return Dialog(
       insetPadding: const EdgeInsets.all(16),
       backgroundColor: Colors.transparent,
-      child: Column(mainAxisSize: MainAxisSize.min, children: [
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          decoration: BoxDecoration(
-            color: Colors.black.withValues(alpha: 0.75),
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
-          ),
-          child: Row(children: [
-            Text('${_idx + 1} / ${widget.items.length}',
-                style: const TextStyle(color: Colors.white, fontSize: 13)),
-            const SizedBox(width: 12),
-            Flexible(
-              child: Text('${_fmt(item['upload_date'])} · 분류 ${item['reg_cls']}',
-                  style: const TextStyle(color: Colors.white70, fontSize: 12),
-                  overflow: TextOverflow.ellipsis),
+      child: Stack(children: [
+        Column(mainAxisSize: MainAxisSize.min, children: [
+          Flexible(
+            child: Container(
+              color: Colors.black,
+              child: PageView.builder(
+                controller: _ctrl,
+                itemCount: widget.items.length,
+                onPageChanged: (i) => setState(() => _idx = i),
+                itemBuilder: (_, i) {
+                  final url = (widget.items[i]['url'] ?? '').toString();
+                  _ensureSchedSislRegistered(url, fit: 'contain');
+                  final viewType = '${_schedViewType(url)}-ct';
+                  final rot = _rotations[i] ?? 0;
+                  return InteractiveViewer(
+                    transformationController: _txCtrl(i),
+                    minScale: 0.5,
+                    maxScale: 5.0,
+                    child: RotatedBox(
+                      quarterTurns: rot,
+                      child: HtmlElementView(viewType: viewType),
+                    ),
+                  );
+                },
+              ),
             ),
-            const Spacer(),
-            IconButton(
+          ),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: 0.75),
+              borderRadius: const BorderRadius.vertical(bottom: Radius.circular(12)),
+            ),
+            child: Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
+              IconButton(tooltip: '왼쪽으로 회전',
+                  icon: const Icon(Icons.rotate_left, color: Colors.white, size: 22),
+                  onPressed: _rotateLeft, visualDensity: VisualDensity.compact),
+              IconButton(tooltip: '오른쪽으로 회전',
+                  icon: const Icon(Icons.rotate_right, color: Colors.white, size: 22),
+                  onPressed: _rotateRight, visualDensity: VisualDensity.compact),
+              IconButton(tooltip: '확대',
+                  icon: const Icon(Icons.zoom_in, color: Colors.white, size: 22),
+                  onPressed: _zoomIn, visualDensity: VisualDensity.compact),
+              IconButton(tooltip: '축소',
+                  icon: const Icon(Icons.zoom_out, color: Colors.white, size: 22),
+                  onPressed: _zoomOut, visualDensity: VisualDensity.compact),
+              IconButton(tooltip: '원래대로',
+                  icon: const Icon(Icons.restore, color: Colors.white, size: 22),
+                  onPressed: _resetTransform, visualDensity: VisualDensity.compact),
+              IconButton(tooltip: '다운로드',
+                  icon: const Icon(Icons.download_rounded, color: Colors.white, size: 22),
+                  onPressed: _downloadCurrent, visualDensity: VisualDensity.compact),
+              if (rotation != 0)
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                  child: Text('${rotation * 90}°',
+                      style: const TextStyle(color: Colors.white70, fontSize: 11)),
+                ),
+            ]),
+          ),
+        ]),
+        // 좌상단 정보 칩
+        Positioned(
+          left: 12, top: 12,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: 0.6),
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              Text('${_idx + 1} / ${widget.items.length}',
+                  style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600)),
+              const SizedBox(width: 8),
+              Text('${_fmt(item['upload_date'])} · 분류 ${item['reg_cls']}',
+                  style: const TextStyle(color: Colors.white70, fontSize: 11)),
+            ]),
+          ),
+        ),
+        // 우상단 닫기
+        Positioned(
+          right: 8, top: 8,
+          child: Material(
+            color: Colors.black.withValues(alpha: 0.6),
+            shape: const CircleBorder(),
+            child: IconButton(
               tooltip: '닫기',
               icon: const Icon(Icons.close, color: Colors.white),
               onPressed: () => Navigator.pop(context),
             ),
-          ]),
-        ),
-        Flexible(
-          child: Container(
-            color: Colors.black,
-            child: PageView.builder(
-              controller: _ctrl,
-              itemCount: widget.items.length,
-              onPageChanged: (i) => setState(() => _idx = i),
-              itemBuilder: (_, i) {
-                final url = (widget.items[i]['url'] ?? '').toString();
-                _ensureSchedSislRegistered(url, fit: 'contain');
-                final viewType = '${_schedViewType(url)}-ct';
-                final rot = _rotations[i] ?? 0;
-                return InteractiveViewer(
-                  transformationController: _txCtrl(i),
-                  minScale: 0.5,
-                  maxScale: 5.0,
-                  child: RotatedBox(
-                    quarterTurns: rot,
-                    child: HtmlElementView(viewType: viewType),
-                  ),
-                );
-              },
-            ),
           ),
         ),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-          decoration: BoxDecoration(
-            color: Colors.black.withValues(alpha: 0.75),
-            borderRadius: const BorderRadius.vertical(bottom: Radius.circular(12)),
-          ),
-          child: Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
-            IconButton(tooltip: '왼쪽으로 회전',
-                icon: const Icon(Icons.rotate_left, color: Colors.white, size: 22),
-                onPressed: _rotateLeft, visualDensity: VisualDensity.compact),
-            IconButton(tooltip: '오른쪽으로 회전',
-                icon: const Icon(Icons.rotate_right, color: Colors.white, size: 22),
-                onPressed: _rotateRight, visualDensity: VisualDensity.compact),
-            IconButton(tooltip: '확대',
-                icon: const Icon(Icons.zoom_in, color: Colors.white, size: 22),
-                onPressed: _zoomIn, visualDensity: VisualDensity.compact),
-            IconButton(tooltip: '축소',
-                icon: const Icon(Icons.zoom_out, color: Colors.white, size: 22),
-                onPressed: _zoomOut, visualDensity: VisualDensity.compact),
-            IconButton(tooltip: '원래대로',
-                icon: const Icon(Icons.restore, color: Colors.white, size: 22),
-                onPressed: _resetTransform, visualDensity: VisualDensity.compact),
-            IconButton(tooltip: '다운로드',
-                icon: const Icon(Icons.download_rounded, color: Colors.white, size: 22),
-                onPressed: _downloadCurrent, visualDensity: VisualDensity.compact),
-            if (rotation != 0)
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 4),
-                child: Text('${rotation * 90}°',
-                    style: const TextStyle(color: Colors.white70, fontSize: 11)),
+        // 이전 화살표
+        if (hasPrev)
+          Positioned(
+            left: 8, top: 0, bottom: 0,
+            child: Center(child: Material(
+              color: Colors.black.withValues(alpha: 0.5),
+              shape: const CircleBorder(),
+              child: IconButton(
+                tooltip: '이전 사진',
+                icon: const Icon(Icons.chevron_left, color: Colors.white, size: 32),
+                onPressed: () => _ctrl.animateToPage(_idx - 1,
+                    duration: const Duration(milliseconds: 200), curve: Curves.easeOut),
               ),
-          ]),
-        ),
+            )),
+          ),
+        // 다음 화살표
+        if (hasNext)
+          Positioned(
+            right: 8, top: 0, bottom: 0,
+            child: Center(child: Material(
+              color: Colors.black.withValues(alpha: 0.5),
+              shape: const CircleBorder(),
+              child: IconButton(
+                tooltip: '다음 사진',
+                icon: const Icon(Icons.chevron_right, color: Colors.white, size: 32),
+                onPressed: () => _ctrl.animateToPage(_idx + 1,
+                    duration: const Duration(milliseconds: 200), curve: Curves.easeOut),
+              ),
+            )),
+          ),
       ]),
     );
   }
