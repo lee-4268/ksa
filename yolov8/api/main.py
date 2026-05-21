@@ -19392,11 +19392,26 @@ async def document_change_notification(request: Request, file1: UploadFile = Fil
 
             def _parse_install_type(text):
                 raw = _extract_after_colon(text)
-                code = 설치형태_MAP.get(raw, '')
+                # 1) 정확 매칭 (공백 정리 포함)
+                raw_clean = raw.strip()
+                code = 설치형태_MAP.get(raw_clean, '')
                 if not code:
+                    raw_compact = ''.join(raw_clean.split())  # 공백 제거 후 재시도
                     for k, c in 설치형태_MAP.items():
-                        if k in raw or raw in k:
+                        if ''.join(k.split()) == raw_compact:
                             code = c
+                            break
+                # 2) "복합형"이 입력에 있으면 무조건 21 (가장 구체적/명시적)
+                #    "복합형" 글자가 들어간 입력에 "원폴"이 함께 있어도 복합형이 우선
+                if not code and '복합형' in raw_clean:
+                    code = '21'
+                # 3) 부분일치 fallback — 단, 키 길이 긴 순서로 정렬해 더 구체적인 키 우선
+                #    (예: '원폴(건물)'이 '원폴'보다 우선)
+                if not code:
+                    sorted_keys = sorted(설치형태_MAP.keys(), key=len, reverse=True)
+                    for k in sorted_keys:
+                        if k in raw_clean or raw_clean in k:
+                            code = 설치형태_MAP[k]
                             break
                 return {'sheet': '안테나', 'col': 28, 'value': code or raw, 'type': '설치형태'}
 
