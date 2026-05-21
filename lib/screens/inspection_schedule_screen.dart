@@ -10,6 +10,7 @@ import '../widgets/progress_dialog.dart';
 import 'inspection_result_screen.dart';
 // ignore: avoid_web_libraries_in_flutter
 import 'dart:html' as html;
+import 'dart:ui_web' as ui_web;
 
 // 워크플로우 상태 전체 토큰 (대시보드 → 일정화면 상태칩과 동일 코드)
 // 'RECHECK' 토큰은 별도로 재점검 토글을 활성화하는 특수 값
@@ -175,6 +176,11 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
   Map<String, dynamic>? _detailData;
   String? _detailLicenseNo;
   bool _detailLoading = false;
+
+  // SKO-OCEAN 시설점검 사진 (공대 기준)
+  List<Map<String, dynamic>> _sislPhotos = [];
+  bool _sislLoading = false;
+  String? _sislNeosKey;
 
   // 권한 캐시 (build 중 context.read 반복 방지)
   late bool _isAdmin;
@@ -486,14 +492,59 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
   }
 
   Future<void> _loadDetail(String licenseNo) async {
-    setState(() { _detailLoading = true; _detailData = null; _detailLicenseNo = licenseNo; });
+    setState(() {
+      _detailLoading = true;
+      _detailData = null;
+      _detailLicenseNo = licenseNo;
+      _sislPhotos = [];
+      _sislNeosKey = null;
+    });
     try {
       final data = await _svc.getDetail(_year, licenseNo);
       if (!mounted) return;
       setState(() { _detailData = data; _detailLoading = false; });
+      // 사진은 메인 로드 끝나면 백그라운드 트리거
+      _maybeLoadSislPhotos();
     } catch (_) {
       if (!mounted) return;
       setState(() => _detailLoading = false);
+    }
+  }
+
+  /// 공대(NeOSCode) 추출 — target 우선, fallback 으로 callname_list 의 zpkcode.
+  String _extractNeosCode() {
+    final target = _detailData?['target'] as Map<String, dynamic>?;
+    final fromTarget = (target?['공대'] ?? '').toString().trim();
+    if (fromTarget.isNotEmpty) return fromTarget;
+    final cl = _detailData?['callname_list'];
+    if (cl is List) {
+      for (final e in cl) {
+        if (e is Map) {
+          final v = (e['zpkcode'] ?? e['공대'] ?? '').toString().trim();
+          if (v.isNotEmpty) return v;
+        }
+      }
+    }
+    return '';
+  }
+
+  Future<void> _maybeLoadSislPhotos() async {
+    final neos = _extractNeosCode();
+    if (neos.isEmpty) {
+      setState(() { _sislPhotos = []; _sislNeosKey = null; });
+      return;
+    }
+    if (_sislNeosKey == neos) return;
+    _sislNeosKey = neos;
+    setState(() => _sislLoading = true);
+    try {
+      final items = await _svc.listSislPhotos(neosCode: neos);
+      if (!mounted) return;
+      setState(() => _sislPhotos = items);
+    } catch (_) {
+      if (mounted) setState(() => _sislPhotos = []);
+    } finally {
+      if (mounted) setState(() => _sislLoading = false);
     }
   }
 
@@ -4052,6 +4103,9 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
               ];
             }(),
 
+            // SKO-OCEAN 시설점검 사진 (사내망에서만 표시)
+            ..._buildSislPhotoSection(),
+
             const SizedBox(height: 16),
             _sectionHeader('수검 일정', Icons.calendar_month, _blue),
             if (schedule != null) ...[
@@ -4151,6 +4205,78 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(color: _blue.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(6)),
       child: Text(label, style: TextStyle(fontSize: 11, color: _blue)),
+    );
+  }
+
+  // SKO-OCEAN 사진 섹션. 로딩 중·사진 있을 때만 노출. 빈 응답은 카드 자체 숨김.
+  List<Widget> _buildSislPhotoSection() {
+    if (!_sislLoading && _sislPhotos.isEmpty) return const [];
+    return [
+      const SizedBox(height: 16),
+      Row(children: [
+        _sectionHeader('현장 점검 사진 (SKO-OCEAN)', Icons.photo_library_outlined, const Color(0xFF06B6D4)),
+        if (_sislPhotos.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 10, left: 4),
+            child: Text('${_sislPhotos.length}장',
+                style: TextStyle(fontSize: 11, color: Colors.grey.shade500)),
+          ),
+      ]),
+      if (_sislLoading)
+        const Padding(
+          padding: EdgeInsets.symmetric(vertical: 16),
+          child: Center(child: SizedBox(width: 20, height: 20,
+              child: CircularProgressIndicator(strokeWidth: 2))),
+        )
+      else ...[
+        Padding(
+          padding: const EdgeInsets.only(bottom: 6),
+          child: Row(children: [
+            Icon(Icons.info_outline, size: 11, color: Colors.grey.shade500),
+            const SizedBox(width: 3),
+            Text('사진은 사내망에서만 표시됩니다',
+                style: TextStyle(fontSize: 10, color: Colors.grey.shade500)),
+          ]),
+        ),
+        LayoutBuilder(builder: (ctx, c) {
+          final cols = c.maxWidth >= 360 ? 3 : 2;
+          return GridView.builder(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: cols,
+              mainAxisSpacing: 4,
+              crossAxisSpacing: 4,
+              childAspectRatio: 1.0,
+            ),
+            itemCount: _sislPhotos.length,
+            itemBuilder: (_, i) {
+              final p = _sislPhotos[i];
+              final url = (p['url'] ?? '').toString();
+              final dt = (p['upload_date'] ?? '').toString();
+              final label = dt.length == 8
+                  ? '${dt.substring(0,4)}-${dt.substring(4,6)}-${dt.substring(6,8)}'
+                  : dt;
+              return _SchedSislPhotoTile(
+                url: url,
+                label: label,
+                onTap: () => _showSchedSislPhotoViewer(i),
+              );
+            },
+          );
+        }),
+      ],
+    ];
+  }
+
+  void _showSchedSislPhotoViewer(int initialIndex) {
+    showDialog(
+      context: context,
+      barrierColor: Colors.black87,
+      builder: (ctx) => _SchedSislPhotoViewer(
+        items: _sislPhotos,
+        initialIndex: initialIndex,
+      ),
     );
   }
 
@@ -5893,5 +6019,169 @@ class _SchedGainCount {
   final String gain;
   final String count;
   _SchedGainCount({required this.gain, required this.count});
+}
+
+// SKO-OCEAN 사진 platform view 캐시 (inspection_schedule 화면 전용 namespace)
+final Set<String> _schedSislRegistered = <String>{};
+
+String _schedViewType(String url) {
+  final last = url.split('/').last;
+  return 'sched-sisl-${last.replaceAll(RegExp(r'[^A-Za-z0-9-]'), '')}';
+}
+
+void _ensureSchedSislRegistered(String url, {String fit = 'cover'}) {
+  final viewType = _schedViewType(url) + (fit == 'cover' ? '-cv' : '-ct');
+  if (_schedSislRegistered.contains(viewType)) return;
+  _schedSislRegistered.add(viewType);
+  ui_web.platformViewRegistry.registerViewFactory(viewType, (int _) {
+    final wrap = html.DivElement()
+      ..style.width = '100%'
+      ..style.height = '100%'
+      ..style.overflow = 'hidden'
+      ..style.backgroundColor = '#F3F4F6';
+    final img = html.ImageElement()
+      ..src = url
+      ..style.width = '100%'
+      ..style.height = '100%'
+      ..style.objectFit = fit
+      ..style.display = 'block';
+    img.onError.listen((_) {
+      img.remove();
+      final ph = html.DivElement()
+        ..style.width = '100%'
+        ..style.height = '100%'
+        ..style.display = 'flex'
+        ..style.alignItems = 'center'
+        ..style.justifyContent = 'center'
+        ..style.color = '#9CA3AF'
+        ..innerHtml = '<svg width="26" height="26" viewBox="0 0 24 24" fill="currentColor">'
+            '<path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/>'
+            '</svg>';
+      wrap.append(ph);
+    });
+    wrap.append(img);
+    return wrap;
+  });
+}
+
+class _SchedSislPhotoTile extends StatelessWidget {
+  final String url;
+  final String label;
+  final VoidCallback onTap;
+  const _SchedSislPhotoTile({required this.url, required this.label, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    _ensureSchedSislRegistered(url, fit: 'cover');
+    final viewType = '${_schedViewType(url)}-cv';
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(6),
+      child: Stack(fit: StackFit.expand, children: [
+        ClipRRect(
+          borderRadius: BorderRadius.circular(6),
+          child: HtmlElementView(viewType: viewType),
+        ),
+        if (label.isNotEmpty)
+          Positioned(
+            left: 0, right: 0, bottom: 0,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.55),
+                borderRadius: const BorderRadius.vertical(bottom: Radius.circular(6)),
+              ),
+              child: Text(label,
+                  style: const TextStyle(color: Colors.white, fontSize: 9),
+                  textAlign: TextAlign.center,
+                  maxLines: 1, overflow: TextOverflow.ellipsis),
+            ),
+          ),
+      ]),
+    );
+  }
+}
+
+class _SchedSislPhotoViewer extends StatefulWidget {
+  final List<Map<String, dynamic>> items;
+  final int initialIndex;
+  const _SchedSislPhotoViewer({required this.items, required this.initialIndex});
+
+  @override
+  State<_SchedSislPhotoViewer> createState() => _SchedSislPhotoViewerState();
+}
+
+class _SchedSislPhotoViewerState extends State<_SchedSislPhotoViewer> {
+  late final PageController _ctrl;
+  late int _idx;
+
+  @override
+  void initState() {
+    super.initState();
+    _idx = widget.initialIndex;
+    _ctrl = PageController(initialPage: _idx);
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  String _fmt(dynamic raw) {
+    final s = (raw ?? '').toString();
+    if (s.length == 8) {
+      return '${s.substring(0,4)}-${s.substring(4,6)}-${s.substring(6,8)}';
+    }
+    return s;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final item = widget.items[_idx];
+    return Dialog(
+      insetPadding: const EdgeInsets.all(16),
+      backgroundColor: Colors.transparent,
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.7),
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
+          ),
+          child: Row(children: [
+            Text('${_idx + 1} / ${widget.items.length}',
+                style: const TextStyle(color: Colors.white, fontSize: 13)),
+            const SizedBox(width: 12),
+            Text('${_fmt(item['upload_date'])} · 분류 ${item['reg_cls']}',
+                style: const TextStyle(color: Colors.white70, fontSize: 12)),
+            const Spacer(),
+            IconButton(
+              icon: const Icon(Icons.close, color: Colors.white),
+              onPressed: () => Navigator.pop(context),
+            ),
+          ]),
+        ),
+        Flexible(
+          child: Container(
+            color: Colors.black,
+            child: PageView.builder(
+              controller: _ctrl,
+              itemCount: widget.items.length,
+              onPageChanged: (i) => setState(() => _idx = i),
+              itemBuilder: (_, i) {
+                final url = (widget.items[i]['url'] ?? '').toString();
+                _ensureSchedSislRegistered(url, fit: 'contain');
+                final viewType = '${_schedViewType(url)}-ct';
+                return InteractiveViewer(
+                  child: HtmlElementView(viewType: viewType),
+                );
+              },
+            ),
+          ),
+        ),
+      ]),
+    );
+  }
 }
 

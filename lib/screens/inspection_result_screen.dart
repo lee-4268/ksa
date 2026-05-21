@@ -822,31 +822,40 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
                   child: Text('등록된 시설점검 사진이 없습니다.',
                       style: TextStyle(fontSize: 13, color: Colors.grey.shade500)),
                 )
-              : LayoutBuilder(builder: (ctx, c) {
-                  // 반응형 그리드: 너비 480+ 4열 / 320+ 3열 / 그 외 2열
-                  final cols = c.maxWidth >= 480 ? 4 : (c.maxWidth >= 320 ? 3 : 2);
-                  return GridView.builder(
-                    shrinkWrap: true,
-                    physics: const NeverScrollableScrollPhysics(),
-                    gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                      crossAxisCount: cols,
-                      mainAxisSpacing: 6,
-                      crossAxisSpacing: 6,
-                      childAspectRatio: 1.0,
-                    ),
-                    itemCount: _sislPhotos.length,
-                    itemBuilder: (_, i) {
-                      final p = _sislPhotos[i];
-                      final url = (p['url'] ?? '').toString();
-                      final dt = _fmtSislDate(p['upload_date']);
-                      return _SislPhotoTile(
-                        url: url,
-                        label: dt,
-                        onTap: () => _showSislPhotoViewer(i),
-                      );
-                    },
-                  );
-                }),
+              : Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Row(children: [
+                    Icon(Icons.info_outline, size: 12, color: Colors.grey.shade500),
+                    const SizedBox(width: 4),
+                    Text('사진은 사내망에서만 표시됩니다',
+                        style: TextStyle(fontSize: 11, color: Colors.grey.shade500)),
+                  ]),
+                  const SizedBox(height: 10),
+                  LayoutBuilder(builder: (ctx, c) {
+                    // 반응형 그리드: 너비 480+ 4열 / 320+ 3열 / 그 외 2열
+                    final cols = c.maxWidth >= 480 ? 4 : (c.maxWidth >= 320 ? 3 : 2);
+                    return GridView.builder(
+                      shrinkWrap: true,
+                      physics: const NeverScrollableScrollPhysics(),
+                      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: cols,
+                        mainAxisSpacing: 6,
+                        crossAxisSpacing: 6,
+                        childAspectRatio: 1.0,
+                      ),
+                      itemCount: _sislPhotos.length,
+                      itemBuilder: (_, i) {
+                        final p = _sislPhotos[i];
+                        final url = (p['url'] ?? '').toString();
+                        final dt = _fmtSislDate(p['upload_date']);
+                        return _SislPhotoTile(
+                          url: url,
+                          label: dt,
+                          onTap: () => _showSislPhotoViewer(i),
+                        );
+                      },
+                    );
+                  }),
+                ]),
     );
   }
 
