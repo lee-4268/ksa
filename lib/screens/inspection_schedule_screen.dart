@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:typed_data';
 import 'package:archive/archive.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:provider/provider.dart';
 import '../services/auth_service.dart';
 import '../services/inspection_service.dart';
@@ -6080,7 +6081,11 @@ class _SchedSislPhotoTile extends StatelessWidget {
       child: Stack(fit: StackFit.expand, children: [
         ClipRRect(
           borderRadius: BorderRadius.circular(6),
-          child: HtmlElementView(viewType: viewType),
+          child: HtmlElementView(
+            viewType: viewType,
+            // platform view 가 클릭을 흡수하지 않게 하여 InkWell.onTap 으로 통과
+            hitTestBehavior: PlatformViewHitTestBehavior.transparent,
+          ),
         ),
         if (label.isNotEmpty)
           Positioned(

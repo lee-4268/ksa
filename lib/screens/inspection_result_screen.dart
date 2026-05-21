@@ -5,6 +5,7 @@ import 'dart:html' as html;
 import 'dart:ui_web' as ui_web;
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/auth_service.dart';
@@ -2022,7 +2023,11 @@ class _SislPhotoTile extends StatelessWidget {
       child: Stack(fit: StackFit.expand, children: [
         ClipRRect(
           borderRadius: BorderRadius.circular(8),
-          child: HtmlElementView(viewType: viewType),
+          child: HtmlElementView(
+            viewType: viewType,
+            // platform view 가 클릭을 흡수하지 않게 하여 InkWell.onTap 으로 통과
+            hitTestBehavior: PlatformViewHitTestBehavior.transparent,
+          ),
         ),
         if (label.isNotEmpty)
           Positioned(
