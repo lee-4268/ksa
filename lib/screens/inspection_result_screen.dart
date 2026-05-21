@@ -56,6 +56,11 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
   bool _photoLoading = false;
   String _pendingReview = '';
 
+  // SKO-OCEAN 시설점검 사진 (공대 기준 메타 + URL)
+  List<Map<String, dynamic>> _sislPhotos = [];
+  bool _sislLoading = false;
+  String? _sislNeosKey;  // 마지막으로 조회한 공대값 (중복 호출 방지)
+
   // 글자 크기 조절
   static const double _minScale = 0.8;
   static const double _maxScale = 1.6;
@@ -116,6 +121,46 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
       if (raw is List) {
         _photos = raw.map((k) => <String, dynamic>{'s3Key': k.toString()}).toList();
       }
+    }
+    // SKO-OCEAN 시설점검 사진 로드 트리거 (공대 기준)
+    _maybeLoadSislPhotos();
+  }
+
+  /// 공대(NeOSCode) 추출 — target 우선, 없으면 callname_list 의 첫 항목에서
+  String _extractNeosCode() {
+    final target = _data?['target'] as Map<String, dynamic>?;
+    final fromTarget = (target?['공대'] ?? '').toString().trim();
+    if (fromTarget.isNotEmpty) return fromTarget;
+    final cl = _data?['callname_list'];
+    if (cl is List) {
+      for (final e in cl) {
+        if (e is Map) {
+          final v = (e['zpkcode'] ?? e['공대'] ?? '').toString().trim();
+          if (v.isNotEmpty) return v;
+        }
+      }
+    }
+    return '';
+  }
+
+  Future<void> _maybeLoadSislPhotos() async {
+    final neos = _extractNeosCode();
+    if (neos.isEmpty) {
+      setState(() { _sislPhotos = []; _sislNeosKey = null; });
+      return;
+    }
+    if (_sislNeosKey == neos) return;  // 같은 공대면 재요청 안 함
+    _sislNeosKey = neos;
+    setState(() => _sislLoading = true);
+    try {
+      final items = await _svc.listSislPhotos(neosCode: neos);
+      if (!mounted) return;
+      setState(() => _sislPhotos = items);
+    } catch (_) {
+      // 조회 실패는 조용히 무시 (메인 데이터에 영향 X)
+      if (mounted) setState(() => _sislPhotos = []);
+    } finally {
+      if (mounted) setState(() => _sislLoading = false);
     }
   }
 
@@ -342,6 +387,10 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
             if (_dsChanges.isNotEmpty) ...[
               const SizedBox(height: 12),
               _buildDsChangesCard(),
+            ],
+            if (_sislLoading || _sislPhotos.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              _buildSislPhotosCard(),
             ],
             const SizedBox(height: 12),
             _buildTowerTypeCard(),
@@ -740,6 +789,75 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
         if ((_data?['result']?['입력자'] ?? '').toString().isNotEmpty)
           _infoRow('입회자', _data!['result']['입력자'].toString()),
       ]),
+    );
+  }
+
+  // ── SKO-OCEAN 시설점검 사진 ──────────────────────────────
+  // 외부 시스템(SKO-OCEAN) 업로드 사진 메타. 이미지 자체는 사내망의
+  // static-int.skons.co.kr 호스트에서 서빙되므로 사내망에서만 표시됨.
+
+  String _fmtSislDate(dynamic raw) {
+    final s = (raw ?? '').toString();
+    if (s.length == 8) {
+      return '${s.substring(0,4)}-${s.substring(4,6)}-${s.substring(6,8)}';
+    }
+    return s;
+  }
+
+  Widget _buildSislPhotosCard() {
+    return _card(
+      title: '현장 점검 사진 (SKO-OCEAN)',
+      subtitle: _sislPhotos.isEmpty ? null : '${_sislPhotos.length}장',
+      icon: Icons.photo_library_outlined,
+      iconColor: const Color(0xFF06B6D4),
+      child: _sislLoading
+          ? const Padding(
+              padding: EdgeInsets.symmetric(vertical: 24),
+              child: Center(child: SizedBox(width: 24, height: 24,
+                  child: CircularProgressIndicator(strokeWidth: 2))),
+            )
+          : _sislPhotos.isEmpty
+              ? Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  child: Text('등록된 시설점검 사진이 없습니다.',
+                      style: TextStyle(fontSize: 13, color: Colors.grey.shade500)),
+                )
+              : LayoutBuilder(builder: (ctx, c) {
+                  // 반응형 그리드: 너비 480+ 4열 / 320+ 3열 / 그 외 2열
+                  final cols = c.maxWidth >= 480 ? 4 : (c.maxWidth >= 320 ? 3 : 2);
+                  return GridView.builder(
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: cols,
+                      mainAxisSpacing: 6,
+                      crossAxisSpacing: 6,
+                      childAspectRatio: 1.0,
+                    ),
+                    itemCount: _sislPhotos.length,
+                    itemBuilder: (_, i) {
+                      final p = _sislPhotos[i];
+                      final url = (p['url'] ?? '').toString();
+                      final dt = _fmtSislDate(p['upload_date']);
+                      return _SislPhotoTile(
+                        url: url,
+                        label: dt,
+                        onTap: () => _showSislPhotoViewer(i),
+                      );
+                    },
+                  );
+                }),
+    );
+  }
+
+  void _showSislPhotoViewer(int initialIndex) {
+    showDialog(
+      context: context,
+      barrierColor: Colors.black87,
+      builder: (ctx) => _SislPhotoViewer(
+        items: _sislPhotos,
+        initialIndex: initialIndex,
+      ),
     );
   }
 
@@ -1827,4 +1945,159 @@ class _GainCount {
   final String gain;
   final String count;
   _GainCount({required this.gain, required this.count});
+}
+
+/// SKO-OCEAN 사진 썸네일 타일. 사내망에서만 로드되며 외부망에선 회색 placeholder.
+class _SislPhotoTile extends StatelessWidget {
+  final String url;
+  final String label;
+  final VoidCallback onTap;
+  const _SislPhotoTile({required this.url, required this.label, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(8),
+      child: Stack(fit: StackFit.expand, children: [
+        ClipRRect(
+          borderRadius: BorderRadius.circular(8),
+          child: Image.network(
+            url,
+            fit: BoxFit.cover,
+            loadingBuilder: (_, child, prog) => prog == null
+                ? child
+                : Container(
+                    color: Colors.grey.shade100,
+                    child: const Center(child: SizedBox(width: 20, height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2))),
+                  ),
+            errorBuilder: (_, __, ___) => Container(
+              color: Colors.grey.shade100,
+              child: const Center(
+                child: Icon(Icons.image_not_supported_outlined,
+                    color: Colors.grey, size: 28),
+              ),
+            ),
+          ),
+        ),
+        if (label.isNotEmpty)
+          Positioned(
+            left: 0, right: 0, bottom: 0,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.55),
+                borderRadius: const BorderRadius.vertical(bottom: Radius.circular(8)),
+              ),
+              child: Text(label,
+                  style: const TextStyle(color: Colors.white, fontSize: 10),
+                  textAlign: TextAlign.center,
+                  maxLines: 1, overflow: TextOverflow.ellipsis),
+            ),
+          ),
+      ]),
+    );
+  }
+}
+
+/// SKO-OCEAN 사진 확대 뷰어 (좌우 스와이프).
+class _SislPhotoViewer extends StatefulWidget {
+  final List<Map<String, dynamic>> items;
+  final int initialIndex;
+  const _SislPhotoViewer({required this.items, required this.initialIndex});
+
+  @override
+  State<_SislPhotoViewer> createState() => _SislPhotoViewerState();
+}
+
+class _SislPhotoViewerState extends State<_SislPhotoViewer> {
+  late final PageController _ctrl;
+  late int _idx;
+
+  @override
+  void initState() {
+    super.initState();
+    _idx = widget.initialIndex;
+    _ctrl = PageController(initialPage: _idx);
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  String _fmt(dynamic raw) {
+    final s = (raw ?? '').toString();
+    if (s.length == 8) {
+      return '${s.substring(0,4)}-${s.substring(4,6)}-${s.substring(6,8)}';
+    }
+    return s;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final item = widget.items[_idx];
+    return Dialog(
+      insetPadding: const EdgeInsets.all(16),
+      backgroundColor: Colors.transparent,
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.7),
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
+          ),
+          child: Row(children: [
+            Text('${_idx + 1} / ${widget.items.length}',
+                style: const TextStyle(color: Colors.white, fontSize: 13)),
+            const SizedBox(width: 12),
+            Text('${_fmt(item['upload_date'])} · 분류 ${item['reg_cls']}',
+                style: const TextStyle(color: Colors.white70, fontSize: 12)),
+            const Spacer(),
+            IconButton(
+              icon: const Icon(Icons.close, color: Colors.white),
+              onPressed: () => Navigator.pop(context),
+            ),
+          ]),
+        ),
+        Flexible(
+          child: Container(
+            color: Colors.black,
+            child: PageView.builder(
+              controller: _ctrl,
+              itemCount: widget.items.length,
+              onPageChanged: (i) => setState(() => _idx = i),
+              itemBuilder: (_, i) {
+                final url = (widget.items[i]['url'] ?? '').toString();
+                return InteractiveViewer(
+                  child: Center(
+                    child: Image.network(
+                      url,
+                      fit: BoxFit.contain,
+                      loadingBuilder: (_, child, prog) => prog == null
+                          ? child
+                          : const Center(child: CircularProgressIndicator(color: Colors.white)),
+                      errorBuilder: (_, __, ___) => Container(
+                        padding: const EdgeInsets.all(24),
+                        child: const Column(mainAxisSize: MainAxisSize.min, children: [
+                          Icon(Icons.image_not_supported_outlined,
+                              color: Colors.white54, size: 56),
+                          SizedBox(height: 8),
+                          Text('이미지를 불러올 수 없습니다.\n사내망에서만 접근 가능합니다.',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(color: Colors.white70, fontSize: 13)),
+                        ]),
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ),
+      ]),
+    );
+  }
 }
