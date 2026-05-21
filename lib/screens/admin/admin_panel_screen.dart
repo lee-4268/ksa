@@ -55,6 +55,12 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
   List<DsUploadInfo> _dsUploads = [];
   bool _dsDetailBuilding = false;
 
+  // SKO-OCEAN sisl_photo 임포트
+  bool _sislImporting = false;
+  String _sislStage = '';
+  Map<String, dynamic>? _sislStats;
+  bool _sislStatsLoading = false;
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
@@ -67,6 +73,55 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
       _loadDbStatus();
       _loadKcaMeta();
       _loadDsUploads();
+      _loadSislStats();
+    }
+  }
+
+  Future<void> _loadSislStats() async {
+    if (_sislStatsLoading) return;
+    setState(() => _sislStatsLoading = true);
+    try {
+      final stats = await _inspSvc.getSislPhotoStats();
+      if (mounted) setState(() => _sislStats = stats);
+    } catch (_) {
+      // 통계 조회 실패는 무시 (아직 임포트 안 된 상태일 수 있음)
+    } finally {
+      if (mounted) setState(() => _sislStatsLoading = false);
+    }
+  }
+
+  Future<void> _importSislPhotos() async {
+    if (_sislImporting) return;
+    final result = await _pickXlsxFile();
+    if (!mounted) return;
+    if (result == null) return;
+
+    setState(() {
+      _sislImporting = true;
+      _sislStage = '업로드 중... (수 분 소요)';
+    });
+    try {
+      final res = await _inspSvc.importSislPhotos(result.bytes, result.name);
+      if (!mounted) return;
+      final total = res['total'] ?? 0;
+      final inserted = res['inserted'] ?? 0;
+      final updated = res['updated'] ?? 0;
+      final skipped = res['skipped'] ?? 0;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('SISL 사진 임포트 완료 — 총 $total건 (신규 $inserted · 갱신 $updated · 스킵 $skipped)'),
+      ));
+      await _loadSislStats();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('SISL 임포트 실패: $e'),
+        backgroundColor: Colors.red,
+      ));
+    } finally {
+      if (mounted) setState(() {
+        _sislImporting = false;
+        _sislStage = '';
+      });
     }
   }
 
@@ -820,6 +875,10 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
           if (authService.isAdmin)
             _buildDsDetailCard(),
 
+          // SKO-OCEAN 시설점검 사진 메타 임포트 (최고 관리자만)
+          if (authService.userRole == AppUserRole.superAdmin)
+            _buildSislImportCard(),
+
           // 호출명칭 DB 관리 (최고 관리자만)
           if (authService.userRole == AppUserRole.superAdmin)
             _buildCallnameDbCard(),
@@ -967,6 +1026,112 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
               ],
           ],
         ),
+    );
+  }
+
+  Widget _buildSislImportCard() {
+    final total = (_sislStats?['total'] as int?) ?? 0;
+    final uniqNeos = (_sislStats?['unique_neos'] as int?) ?? 0;
+    final dateMin = _sislStats?['date_min'];
+    final dateMax = _sislStats?['date_max'];
+    final recent = List<Map<String, dynamic>>.from(_sislStats?['recent_imports'] ?? const []);
+    final lastImport = recent.isNotEmpty ? recent.first : null;
+
+    String fmtDate(dynamic d) {
+      if (d == null) return '-';
+      final s = d.toString();
+      if (s.length == 8) return '${s.substring(0,4)}-${s.substring(4,6)}-${s.substring(6,8)}';
+      return s;
+    }
+
+    String fmtNumber(int n) =>
+        n.toString().replaceAllMapped(RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'), (m) => '${m[1]},');
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 8, offset: const Offset(0, 2))],
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Container(
+            width: 48, height: 48,
+            decoration: BoxDecoration(
+              color: const Color(0xFF06B6D4).withValues(alpha: 0.10),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: const Icon(Icons.photo_library_outlined, color: Color(0xFF06B6D4)),
+          ),
+          const SizedBox(width: 12),
+          const Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('SKO-OCEAN 시설점검 사진 메타',
+                  style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
+              SizedBox(height: 2),
+              Text('sisl_db 엑셀로 사진 UUID 목록 갱신',
+                  style: TextStyle(color: Colors.grey, fontSize: 13)),
+            ]),
+          ),
+        ]),
+        if (total > 0) ...[
+          const SizedBox(height: 10),
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 2),
+            child: Row(children: [
+              Icon(Icons.check_circle_outline, size: 14, color: Colors.green.shade600),
+              const SizedBox(width: 6),
+              Text(
+                '총 ${fmtNumber(total)}건 · 고유 공대 ${fmtNumber(uniqNeos)}개 · ${fmtDate(dateMin)} ~ ${fmtDate(dateMax)}',
+                style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
+              ),
+            ]),
+          ),
+          if (lastImport != null)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 2),
+              child: Row(children: [
+                Icon(Icons.history, size: 14, color: Colors.grey.shade500),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    '최근: ${lastImport['filename'] ?? '-'} · ${fmtNumber((lastImport['total_rows'] as int?) ?? 0)}건 by ${lastImport['imported_by'] ?? '-'}',
+                    style: TextStyle(fontSize: 11, color: Colors.grey.shade500),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ]),
+            ),
+        ],
+        const SizedBox(height: 12),
+        if (_sislImporting)
+          Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(4),
+              child: const LinearProgressIndicator(
+                minHeight: 6,
+                backgroundColor: Color(0xFFE0F7FA),
+                valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF06B6D4)),
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(_sislStage, style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+          ])
+        else
+          ElevatedButton.icon(
+            onPressed: _importSislPhotos,
+            icon: const Icon(Icons.upload_file, size: 18),
+            label: Text(total == 0 ? 'sisl_db Excel 임포트' : '재 임포트'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF06B6D4),
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              minimumSize: const Size(double.infinity, 44),
+            ),
+          ),
+      ]),
     );
   }
 

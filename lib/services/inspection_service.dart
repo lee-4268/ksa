@@ -548,6 +548,57 @@ class InspectionService {
     return body;
   }
 
+  // ── SKO-OCEAN sisl_photo ─────────────────────────────────
+
+  /// SKO-OCEAN sisl_db 엑셀 임포트 (admin 전용).
+  /// 응답: { success, filename, total, inserted, updated, skipped }
+  Future<Map<String, dynamic>> importSislPhotos(Uint8List bytes, String filename) async {
+    final uri = Uri.parse('$_baseUrl/admin/sisl-photos/import');
+    final req = http.MultipartRequest('POST', uri)
+      ..headers['Authorization'] = 'Bearer ${_authToken ?? ''}'
+      ..files.add(http.MultipartFile.fromBytes('file', bytes, filename: filename));
+    final streamed = await req.send().timeout(_uploadTimeout);
+    final body = json.decode(utf8.decode(await streamed.stream.toBytes())) as Map<String, dynamic>;
+    if (streamed.statusCode != 200) {
+      throw Exception(body['detail'] ?? 'SISL 임포트 실패');
+    }
+    return body;
+  }
+
+  /// SKO-OCEAN sisl_photo 통계 (admin/manager).
+  /// 응답: { total, unique_neos, date_min, date_max, by_reg_cls[], recent_imports[] }
+  Future<Map<String, dynamic>> getSislPhotoStats() async {
+    final resp = await http.get(
+      Uri.parse('$_baseUrl/sisl-photos/stats'),
+      headers: _headers,
+    ).timeout(_apiTimeout);
+    if (resp.statusCode != 200) {
+      throw Exception('SISL 통계 조회 실패');
+    }
+    return json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+  }
+
+  /// 공대(neos_code) 기준 SKO-OCEAN 사진 메타 조회.
+  /// 각 항목에 완성된 url 필드 포함.
+  Future<List<Map<String, dynamic>>> listSislPhotos({
+    required String neosCode,
+    int regCls = 0,
+    int limit = 500,
+  }) async {
+    if (neosCode.isEmpty) return const [];
+    final uri = Uri.parse('$_baseUrl/sisl-photos').replace(queryParameters: {
+      'neos_code': neosCode,
+      if (regCls > 0) 'reg_cls': '$regCls',
+      'limit': '$limit',
+    });
+    final resp = await http.get(uri, headers: _headers).timeout(_apiTimeout);
+    if (resp.statusCode != 200) {
+      throw Exception('SISL 사진 조회 실패');
+    }
+    final body = json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+    return List<Map<String, dynamic>>.from(body['items'] ?? const []);
+  }
+
   // ── Result ───────────────────────────────────────────────
 
   Future<void> upsertResult(Map<String, dynamic> data) async {
