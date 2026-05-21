@@ -2057,6 +2057,10 @@ class _SislPhotoViewer extends StatefulWidget {
 class _SislPhotoViewerState extends State<_SislPhotoViewer> {
   late final PageController _ctrl;
   late int _idx;
+  // 페이지별 90° 단위 회전 카운트 (0~3). 페이지 이동해도 각자 유지.
+  final Map<int, int> _rotations = {};
+  // 페이지별 InteractiveViewer 트랜스폼 (확대/축소 버튼용).
+  final Map<int, TransformationController> _transforms = {};
 
   @override
   void initState() {
@@ -2068,7 +2072,52 @@ class _SislPhotoViewerState extends State<_SislPhotoViewer> {
   @override
   void dispose() {
     _ctrl.dispose();
+    for (final t in _transforms.values) {
+      t.dispose();
+    }
     super.dispose();
+  }
+
+  TransformationController _txCtrl(int i) =>
+      _transforms.putIfAbsent(i, () => TransformationController());
+
+  void _rotateLeft() {
+    setState(() {
+      _rotations[_idx] = ((_rotations[_idx] ?? 0) - 1) % 4;
+      if ((_rotations[_idx] ?? 0) < 0) _rotations[_idx] = _rotations[_idx]! + 4;
+    });
+  }
+
+  void _rotateRight() {
+    setState(() {
+      _rotations[_idx] = ((_rotations[_idx] ?? 0) + 1) % 4;
+    });
+  }
+
+  void _zoomIn() {
+    final t = _txCtrl(_idx);
+    final m = t.value.clone();
+    final cur = m.getMaxScaleOnAxis();
+    if (cur >= 5.0) return;
+    m.scaleByDouble(1.4, 1.4, 1.0, 1.0);
+    t.value = m;
+  }
+
+  void _zoomOut() {
+    final t = _txCtrl(_idx);
+    final m = t.value.clone();
+    final cur = m.getMaxScaleOnAxis();
+    if (cur <= 0.5) return;
+    final s = 1 / 1.4;
+    m.scaleByDouble(s, s, 1.0, 1.0);
+    t.value = m;
+  }
+
+  void _resetTransform() {
+    setState(() {
+      _txCtrl(_idx).value = Matrix4.identity();
+      _rotations[_idx] = 0;
+    });
   }
 
   String _fmt(dynamic raw) {
@@ -2079,32 +2128,71 @@ class _SislPhotoViewerState extends State<_SislPhotoViewer> {
     return s;
   }
 
+  /// 사진 1장을 새 탭/창에서 다운로드.
+  /// 브라우저 다운로드 다이얼로그 트리거를 위해 <a download> 사용.
+  /// CORS 때문에 fetch→Blob 방식은 막힐 수 있어, 가장 단순한 anchor download.
+  /// 같은 출처 정책상 'download' attribute 가 무시되고 이동만 되는 경우도 있지만,
+  /// 그래도 새 탭에서 우클릭 저장으로 fallback 가능.
+  void _downloadCurrent() {
+    final item = widget.items[_idx];
+    final url = (item['url'] ?? '').toString();
+    if (url.isEmpty) return;
+    final neos = (item['neos_code'] ?? '').toString();
+    final dt = (item['upload_date'] ?? '').toString();
+    final guid = (item['guid'] ?? '').toString();
+    // 확장자 추출 (없으면 jpg)
+    var ext = '.jpg';
+    final lastDot = url.lastIndexOf('.');
+    final lastSlash = url.lastIndexOf('/');
+    if (lastDot > lastSlash) {
+      final e = url.substring(lastDot).toLowerCase();
+      if (e.length <= 5 && RegExp(r'^\.[a-z0-9]+$').hasMatch(e)) ext = e;
+    }
+    final fname = '${neos.isEmpty ? "sisl" : neos}_${dt.isEmpty ? "" : "${dt}_"}$guid$ext';
+
+    final anchor = html.AnchorElement(href: url)
+      ..download = fname
+      ..target = '_blank'
+      ..rel = 'noopener'
+      ..style.display = 'none';
+    html.document.body?.append(anchor);
+    anchor.click();
+    anchor.remove();
+  }
+
   @override
   Widget build(BuildContext context) {
     final item = widget.items[_idx];
+    final rotation = _rotations[_idx] ?? 0;
     return Dialog(
       insetPadding: const EdgeInsets.all(16),
       backgroundColor: Colors.transparent,
       child: Column(mainAxisSize: MainAxisSize.min, children: [
+        // 상단 헤더
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           decoration: BoxDecoration(
-            color: Colors.black.withValues(alpha: 0.7),
+            color: Colors.black.withValues(alpha: 0.75),
             borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
           ),
           child: Row(children: [
             Text('${_idx + 1} / ${widget.items.length}',
                 style: const TextStyle(color: Colors.white, fontSize: 13)),
             const SizedBox(width: 12),
-            Text('${_fmt(item['upload_date'])} · 분류 ${item['reg_cls']}',
-                style: const TextStyle(color: Colors.white70, fontSize: 12)),
+            Flexible(
+              child: Text('${_fmt(item['upload_date'])} · 분류 ${item['reg_cls']}',
+                  style: const TextStyle(color: Colors.white70, fontSize: 12),
+                  overflow: TextOverflow.ellipsis),
+            ),
             const Spacer(),
             IconButton(
+              tooltip: '닫기',
               icon: const Icon(Icons.close, color: Colors.white),
               onPressed: () => Navigator.pop(context),
             ),
           ]),
         ),
+        // 이미지 영역
         Flexible(
           child: Container(
             color: Colors.black,
@@ -2116,14 +2204,52 @@ class _SislPhotoViewerState extends State<_SislPhotoViewer> {
                 final url = (widget.items[i]['url'] ?? '').toString();
                 _ensureSislImageRegistered(url, fit: 'contain');
                 final viewType = '${_viewTypeForUrl(url)}-ct';
+                final rot = _rotations[i] ?? 0;
                 return InteractiveViewer(
-                  child: HtmlElementView(viewType: viewType),
+                  transformationController: _txCtrl(i),
+                  minScale: 0.5,
+                  maxScale: 5.0,
+                  child: RotatedBox(
+                    quarterTurns: rot,
+                    child: HtmlElementView(viewType: viewType),
+                  ),
                 );
               },
             ),
           ),
         ),
+        // 하단 액션 바
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.75),
+            borderRadius: const BorderRadius.vertical(bottom: Radius.circular(12)),
+          ),
+          child: Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
+            _viewerAction(icon: Icons.rotate_left, tooltip: '왼쪽으로 회전', onTap: _rotateLeft),
+            _viewerAction(icon: Icons.rotate_right, tooltip: '오른쪽으로 회전', onTap: _rotateRight),
+            _viewerAction(icon: Icons.zoom_in, tooltip: '확대', onTap: _zoomIn),
+            _viewerAction(icon: Icons.zoom_out, tooltip: '축소', onTap: _zoomOut),
+            _viewerAction(icon: Icons.restore, tooltip: '원래대로', onTap: _resetTransform),
+            _viewerAction(icon: Icons.download_rounded, tooltip: '다운로드', onTap: _downloadCurrent),
+            if (rotation != 0)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 4),
+                child: Text('${rotation * 90}°',
+                    style: const TextStyle(color: Colors.white70, fontSize: 11)),
+              ),
+          ]),
+        ),
       ]),
+    );
+  }
+
+  Widget _viewerAction({required IconData icon, required String tooltip, required VoidCallback onTap}) {
+    return IconButton(
+      tooltip: tooltip,
+      icon: Icon(icon, color: Colors.white, size: 22),
+      onPressed: onTap,
+      visualDensity: VisualDensity.compact,
     );
   }
 }

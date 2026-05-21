@@ -6114,6 +6114,8 @@ class _SchedSislPhotoViewer extends StatefulWidget {
 class _SchedSislPhotoViewerState extends State<_SchedSislPhotoViewer> {
   late final PageController _ctrl;
   late int _idx;
+  final Map<int, int> _rotations = {};
+  final Map<int, TransformationController> _transforms = {};
 
   @override
   void initState() {
@@ -6125,7 +6127,50 @@ class _SchedSislPhotoViewerState extends State<_SchedSislPhotoViewer> {
   @override
   void dispose() {
     _ctrl.dispose();
+    for (final t in _transforms.values) {
+      t.dispose();
+    }
     super.dispose();
+  }
+
+  TransformationController _txCtrl(int i) =>
+      _transforms.putIfAbsent(i, () => TransformationController());
+
+  void _rotateLeft() {
+    setState(() {
+      _rotations[_idx] = ((_rotations[_idx] ?? 0) - 1) % 4;
+      if ((_rotations[_idx] ?? 0) < 0) _rotations[_idx] = _rotations[_idx]! + 4;
+    });
+  }
+
+  void _rotateRight() {
+    setState(() {
+      _rotations[_idx] = ((_rotations[_idx] ?? 0) + 1) % 4;
+    });
+  }
+
+  void _zoomIn() {
+    final t = _txCtrl(_idx);
+    final m = t.value.clone();
+    if (m.getMaxScaleOnAxis() >= 5.0) return;
+    m.scaleByDouble(1.4, 1.4, 1.0, 1.0);
+    t.value = m;
+  }
+
+  void _zoomOut() {
+    final t = _txCtrl(_idx);
+    final m = t.value.clone();
+    if (m.getMaxScaleOnAxis() <= 0.5) return;
+    final s = 1 / 1.4;
+    m.scaleByDouble(s, s, 1.0, 1.0);
+    t.value = m;
+  }
+
+  void _resetTransform() {
+    setState(() {
+      _txCtrl(_idx).value = Matrix4.identity();
+      _rotations[_idx] = 0;
+    });
   }
 
   String _fmt(dynamic raw) {
@@ -6136,9 +6181,36 @@ class _SchedSislPhotoViewerState extends State<_SchedSislPhotoViewer> {
     return s;
   }
 
+  void _downloadCurrent() {
+    final item = widget.items[_idx];
+    final url = (item['url'] ?? '').toString();
+    if (url.isEmpty) return;
+    final neos = (item['neos_code'] ?? '').toString();
+    final dt = (item['upload_date'] ?? '').toString();
+    final guid = (item['guid'] ?? '').toString();
+    var ext = '.jpg';
+    final lastDot = url.lastIndexOf('.');
+    final lastSlash = url.lastIndexOf('/');
+    if (lastDot > lastSlash) {
+      final e = url.substring(lastDot).toLowerCase();
+      if (e.length <= 5 && RegExp(r'^\.[a-z0-9]+$').hasMatch(e)) ext = e;
+    }
+    final fname = '${neos.isEmpty ? "sisl" : neos}_${dt.isEmpty ? "" : "${dt}_"}$guid$ext';
+
+    final anchor = html.AnchorElement(href: url)
+      ..download = fname
+      ..target = '_blank'
+      ..rel = 'noopener'
+      ..style.display = 'none';
+    html.document.body?.append(anchor);
+    anchor.click();
+    anchor.remove();
+  }
+
   @override
   Widget build(BuildContext context) {
     final item = widget.items[_idx];
+    final rotation = _rotations[_idx] ?? 0;
     return Dialog(
       insetPadding: const EdgeInsets.all(16),
       backgroundColor: Colors.transparent,
@@ -6146,17 +6218,21 @@ class _SchedSislPhotoViewerState extends State<_SchedSislPhotoViewer> {
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           decoration: BoxDecoration(
-            color: Colors.black.withValues(alpha: 0.7),
+            color: Colors.black.withValues(alpha: 0.75),
             borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
           ),
           child: Row(children: [
             Text('${_idx + 1} / ${widget.items.length}',
                 style: const TextStyle(color: Colors.white, fontSize: 13)),
             const SizedBox(width: 12),
-            Text('${_fmt(item['upload_date'])} · 분류 ${item['reg_cls']}',
-                style: const TextStyle(color: Colors.white70, fontSize: 12)),
+            Flexible(
+              child: Text('${_fmt(item['upload_date'])} · 분류 ${item['reg_cls']}',
+                  style: const TextStyle(color: Colors.white70, fontSize: 12),
+                  overflow: TextOverflow.ellipsis),
+            ),
             const Spacer(),
             IconButton(
+              tooltip: '닫기',
               icon: const Icon(Icons.close, color: Colors.white),
               onPressed: () => Navigator.pop(context),
             ),
@@ -6173,12 +6249,52 @@ class _SchedSislPhotoViewerState extends State<_SchedSislPhotoViewer> {
                 final url = (widget.items[i]['url'] ?? '').toString();
                 _ensureSchedSislRegistered(url, fit: 'contain');
                 final viewType = '${_schedViewType(url)}-ct';
+                final rot = _rotations[i] ?? 0;
                 return InteractiveViewer(
-                  child: HtmlElementView(viewType: viewType),
+                  transformationController: _txCtrl(i),
+                  minScale: 0.5,
+                  maxScale: 5.0,
+                  child: RotatedBox(
+                    quarterTurns: rot,
+                    child: HtmlElementView(viewType: viewType),
+                  ),
                 );
               },
             ),
           ),
+        ),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.75),
+            borderRadius: const BorderRadius.vertical(bottom: Radius.circular(12)),
+          ),
+          child: Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
+            IconButton(tooltip: '왼쪽으로 회전',
+                icon: const Icon(Icons.rotate_left, color: Colors.white, size: 22),
+                onPressed: _rotateLeft, visualDensity: VisualDensity.compact),
+            IconButton(tooltip: '오른쪽으로 회전',
+                icon: const Icon(Icons.rotate_right, color: Colors.white, size: 22),
+                onPressed: _rotateRight, visualDensity: VisualDensity.compact),
+            IconButton(tooltip: '확대',
+                icon: const Icon(Icons.zoom_in, color: Colors.white, size: 22),
+                onPressed: _zoomIn, visualDensity: VisualDensity.compact),
+            IconButton(tooltip: '축소',
+                icon: const Icon(Icons.zoom_out, color: Colors.white, size: 22),
+                onPressed: _zoomOut, visualDensity: VisualDensity.compact),
+            IconButton(tooltip: '원래대로',
+                icon: const Icon(Icons.restore, color: Colors.white, size: 22),
+                onPressed: _resetTransform, visualDensity: VisualDensity.compact),
+            IconButton(tooltip: '다운로드',
+                icon: const Icon(Icons.download_rounded, color: Colors.white, size: 22),
+                onPressed: _downloadCurrent, visualDensity: VisualDensity.compact),
+            if (rotation != 0)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 4),
+                child: Text('${rotation * 90}°',
+                    style: const TextStyle(color: Colors.white70, fontSize: 11)),
+              ),
+          ]),
         ),
       ]),
     );
