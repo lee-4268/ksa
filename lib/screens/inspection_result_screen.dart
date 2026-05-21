@@ -1947,7 +1947,56 @@ class _GainCount {
   _GainCount({required this.gain, required this.count});
 }
 
-/// SKO-OCEAN 사진 썸네일 타일. 사내망에서만 로드되며 외부망에선 회색 placeholder.
+/// 같은 URL 은 같은 viewType 을 공유 — 중복 등록 방지용 전역 캐시.
+final Set<String> _sislRegisteredViewTypes = <String>{};
+
+/// URL 을 안전한 viewType ID 로 변환 (영숫자/하이픈만 남김).
+String _viewTypeForUrl(String url) {
+  // URL 의 마지막 path segment (UUID) 만 사용 — 충분히 unique
+  final last = url.split('/').last;
+  final cleaned = last.replaceAll(RegExp(r'[^A-Za-z0-9-]'), '');
+  return 'sisl-img-$cleaned';
+}
+
+/// HTML <img> 태그를 platform view 로 등록.
+/// fit: 'cover' 또는 'contain'.
+void _ensureSislImageRegistered(String url, {String fit = 'cover'}) {
+  final viewType = _viewTypeForUrl(url) + (fit == 'cover' ? '-cv' : '-ct');
+  if (_sislRegisteredViewTypes.contains(viewType)) return;
+  _sislRegisteredViewTypes.add(viewType);
+  ui_web.platformViewRegistry.registerViewFactory(viewType, (int _) {
+    final wrap = html.DivElement()
+      ..style.width = '100%'
+      ..style.height = '100%'
+      ..style.overflow = 'hidden'
+      ..style.backgroundColor = '#F3F4F6';
+    final img = html.ImageElement()
+      ..src = url
+      ..style.width = '100%'
+      ..style.height = '100%'
+      ..style.objectFit = fit
+      ..style.display = 'block';
+    // 로드 실패 시 placeholder 아이콘 SVG 로 대체
+    img.onError.listen((_) {
+      img.remove();
+      final placeholder = html.DivElement()
+        ..style.width = '100%'
+        ..style.height = '100%'
+        ..style.display = 'flex'
+        ..style.alignItems = 'center'
+        ..style.justifyContent = 'center'
+        ..style.color = '#9CA3AF'
+        ..innerHtml = '<svg width="32" height="32" viewBox="0 0 24 24" fill="currentColor">'
+            '<path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/>'
+            '</svg>';
+      wrap.append(placeholder);
+    });
+    wrap.append(img);
+    return wrap;
+  });
+}
+
+/// SKO-OCEAN 사진 썸네일 타일. HTML <img> 기반(CORS 우회).
 class _SislPhotoTile extends StatelessWidget {
   final String url;
   final String label;
@@ -1956,30 +2005,15 @@ class _SislPhotoTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    _ensureSislImageRegistered(url, fit: 'cover');
+    final viewType = '${_viewTypeForUrl(url)}-cv';
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(8),
       child: Stack(fit: StackFit.expand, children: [
         ClipRRect(
           borderRadius: BorderRadius.circular(8),
-          child: Image.network(
-            url,
-            fit: BoxFit.cover,
-            loadingBuilder: (_, child, prog) => prog == null
-                ? child
-                : Container(
-                    color: Colors.grey.shade100,
-                    child: const Center(child: SizedBox(width: 20, height: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2))),
-                  ),
-            errorBuilder: (_, __, ___) => Container(
-              color: Colors.grey.shade100,
-              child: const Center(
-                child: Icon(Icons.image_not_supported_outlined,
-                    color: Colors.grey, size: 28),
-              ),
-            ),
-          ),
+          child: HtmlElementView(viewType: viewType),
         ),
         if (label.isNotEmpty)
           Positioned(
@@ -2071,27 +2105,10 @@ class _SislPhotoViewerState extends State<_SislPhotoViewer> {
               onPageChanged: (i) => setState(() => _idx = i),
               itemBuilder: (_, i) {
                 final url = (widget.items[i]['url'] ?? '').toString();
+                _ensureSislImageRegistered(url, fit: 'contain');
+                final viewType = '${_viewTypeForUrl(url)}-ct';
                 return InteractiveViewer(
-                  child: Center(
-                    child: Image.network(
-                      url,
-                      fit: BoxFit.contain,
-                      loadingBuilder: (_, child, prog) => prog == null
-                          ? child
-                          : const Center(child: CircularProgressIndicator(color: Colors.white)),
-                      errorBuilder: (_, __, ___) => Container(
-                        padding: const EdgeInsets.all(24),
-                        child: const Column(mainAxisSize: MainAxisSize.min, children: [
-                          Icon(Icons.image_not_supported_outlined,
-                              color: Colors.white54, size: 56),
-                          SizedBox(height: 8),
-                          Text('이미지를 불러올 수 없습니다.\n사내망에서만 접근 가능합니다.',
-                              textAlign: TextAlign.center,
-                              style: TextStyle(color: Colors.white70, fontSize: 13)),
-                        ]),
-                      ),
-                    ),
-                  ),
+                  child: HtmlElementView(viewType: viewType),
                 );
               },
             ),
