@@ -1606,9 +1606,28 @@ async def startup_event():
 # ============================================================
 
 def validate_image(file: UploadFile) -> bool:
-    """Validate uploaded file is an image"""
+    """Validate uploaded file is an image (확장자 검사)"""
     ext = Path(file.filename).suffix.lower()
     return ext in ALLOWED_EXTENSIONS
+
+
+_IMAGE_MAGIC: list[tuple[bytes, int]] = [
+    (b'\xff\xd8\xff', 0),           # JPEG
+    (b'\x89PNG\r\n\x1a\n', 0),      # PNG
+    (b'BM', 0),                     # BMP
+    (b'RIFF', 0),                   # WEBP (추가로 8~11바이트 'WEBP' 확인)
+]
+
+def validate_image_bytes(content: bytes) -> bool:
+    """업로드된 파일 실제 내용의 이미지 시그니처(magic bytes) 검증."""
+    if len(content) < 12:
+        return False
+    for magic, offset in _IMAGE_MAGIC:
+        if content[offset:offset + len(magic)] == magic:
+            if magic == b'RIFF':
+                return content[8:12] == b'WEBP'
+            return True
+    return False
 
 
 async def save_upload_file(file: UploadFile) -> Path:
@@ -2605,10 +2624,10 @@ async def upload_photo(
     request: Request = None,
 ):
     """사진 S3 업로드"""
-    await _verify_auth(request)
+    await _require_owner_or_admin(request, owner)
 
     if not validate_image(file):
-        raise HTTPException(status_code=400, detail="Invalid image format")
+        raise HTTPException(status_code=400, detail="이미지 형식이 올바르지 않습니다")
 
     try:
         s3_client = get_s3_client()
@@ -2620,6 +2639,8 @@ async def upload_photo(
         content = await file.read()
         if len(content) > MAX_PHOTO_SIZE:
             raise HTTPException(status_code=400, detail=f"파일 크기 초과 (최대 {MAX_PHOTO_SIZE // 1024 // 1024}MB)")
+        if not validate_image_bytes(content):
+            raise HTTPException(status_code=400, detail="이미지 형식이 올바르지 않습니다")
         s3_client.put_object(
             Bucket=S3_BUCKET_NAME,
             Key=s3_key,
@@ -2641,10 +2662,10 @@ async def upload_excel(
     request: Request = None,
 ):
     """원본 Excel S3 업로드"""
-    await _verify_auth(request)
+    await _require_owner_or_admin(request, owner)
 
-    if not file.filename.endswith(('.xlsx', '.xls')):
-        raise HTTPException(status_code=400, detail="Invalid Excel format")
+    if not file.filename.lower().endswith(('.xlsx', '.xls')):
+        raise HTTPException(status_code=400, detail="엑셀 파일(.xlsx, .xls)만 업로드 가능합니다")
 
     try:
         s3_client = get_s3_client()
@@ -2656,6 +2677,9 @@ async def upload_excel(
         content = await file.read()
         if len(content) > MAX_EXCEL_SIZE:
             raise HTTPException(status_code=400, detail=f"파일 크기 초과 (최대 {MAX_EXCEL_SIZE // 1024 // 1024}MB)")
+        # XLSX: PK\x03\x04 (ZIP), XLS: OLE2 compound document \xd0\xcf\x11\xe0
+        if len(content) >= 8 and content[:4] not in (b'PK\x03\x04', b'\xd0\xcf\x11\xe0'):
+            raise HTTPException(status_code=400, detail="엑셀 파일 형식이 올바르지 않습니다")
         s3_client.put_object(
             Bucket=S3_BUCKET_NAME,
             Key=s3_key,
@@ -10449,7 +10473,7 @@ async def cert_generate(request: Request):
         )
     except Exception as e:
         logger.error(f"설치확인서 생성 실패: {e}")
-        raise HTTPException(status_code=500, detail=f"생성 실패: {str(e)}")
+        raise HTTPException(status_code=500, detail="설치확인서 생성 중 오류가 발생했습니다")
 
 
 @app.post("/cert/batch/lookup")
@@ -15982,7 +16006,7 @@ async def ds_preview_partial_update(request: Request, file: UploadFile = File(..
         try:
             wb = _xlrd.open_workbook(file_contents=file_bytes)
         except Exception as e:
-            raise HTTPException(400, f"xls 파싱 실패: {e}")
+            raise HTTPException(400, "파일 파싱에 실패했습니다. 올바른 XLS 형식인지 확인하세요")
 
         def _norm_hn(val):
             if isinstance(val, float) and val == int(val):
@@ -16413,7 +16437,7 @@ async def ds_apply_partial_update(request: Request, file: UploadFile = File(...)
         try:
             wb = _xlrd.open_workbook(file_contents=file_bytes)
         except Exception as e:
-            raise HTTPException(400, f"xls 파싱 실패: {e}")
+            raise HTTPException(400, "파일 파싱에 실패했습니다. 올바른 XLS 형식인지 확인하세요")
 
         def _norm_hn(val):
             if isinstance(val, float) and val == int(val):
@@ -19254,7 +19278,8 @@ async def inspection_results_export_xlsx(request: Request, req: InspectionResult
     try:
         data = await asyncio.to_thread(_build)
     except ValueError as e:
-        raise HTTPException(404, str(e))
+        logger.warning(f"inspection_results xlsx 빌드 실패: {e}")
+        raise HTTPException(404, "수검 결과 데이터를 조회할 수 없습니다")
 
     filename = f"inspection_results_{req.year}.xlsx"
     from urllib.parse import quote as _q
@@ -19752,7 +19777,8 @@ async def document_change_notification(request: Request, file1: UploadFile = Fil
     try:
         result = await asyncio.to_thread(_process)
     except ValueError as e:
-        raise HTTPException(400, str(e))
+        logger.warning(f"DS 변경 비교 처리 실패: {e}")
+        raise HTTPException(400, "파일 비교 처리에 실패했습니다. 파일 형식을 확인하세요")
 
     from fastapi.responses import JSONResponse as _JSONResponse
     return _JSONResponse(content=result)
@@ -21607,7 +21633,8 @@ async def inadequate_export_xlsx(
     try:
         data = await asyncio.to_thread(_build)
     except ValueError as e:
-        raise HTTPException(404, str(e))
+        logger.warning(f"DS 변경이력 xlsx 빌드 실패: {e}")
+        raise HTTPException(404, "변경이력 데이터를 조회할 수 없습니다")
 
     suffix_parts = [p for p in [region, team, str(year)] if p]
     filename = f"부적합관리_{'_'.join(suffix_parts)}.xlsx"
