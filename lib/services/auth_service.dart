@@ -27,6 +27,11 @@ class AuthService extends ChangeNotifier {
   String _userRoleStr = 'member'; // "admin", "manager", "member"
   String? _authToken; // 서버 발급 HMAC 토큰
 
+  // OTP 2차 인증 상태
+  bool _awaitingOtp = false;
+  String? _preAuthToken;
+  String? _maskedPhone;
+
   /// 세션 타임아웃 (1시간 — 보안 정책)
   static const Duration sessionTimeout = Duration(hours: 1);
 
@@ -51,6 +56,10 @@ class AuthService extends ChangeNotifier {
   bool get isSignedIn => _isSignedIn;
   String? get errorMessage => _errorMessage;
   bool get isInitialized => _isInitialized;
+
+  // OTP 2차 인증 getter
+  bool get awaitingOtp => _awaitingOtp;
+  String? get maskedPhone => _maskedPhone;
 
   // 토큰
   String? get authToken => _authToken;
@@ -210,30 +219,36 @@ class AuthService extends ChangeNotifier {
         final data = jsonDecode(response.body) as Map<String, dynamic>;
         final result = data['result'] as String?;
 
-        if (result == 'ok') {
-          // 2. SSO 인증 성공 → 토큰 저장 + 즉시 로그인 상태 반영
+        if (result == 'otp_required') {
+          // 2차 인증 필요 → OTP 대기 상태로 전환
+          _preAuthToken = data['pre_auth_token'] as String?;
+          _maskedPhone  = data['masked_phone']   as String?;
+          _awaitingOtp  = true;
+          _userId       = username.toUpperCase(); // verifyOtp() 에서 사번 사용
+          _isLoading    = false;
+          notifyListeners();
+          return true; // 화면은 awaitingOtp를 보고 OTP 입력 UI 표시
+
+        } else if (result == 'ok') {
+          // SSO 인증 성공 → 토큰 저장 + 즉시 로그인 상태 반영
           final normalizedId = username.toUpperCase();
-          _authToken = data['token'] as String?;
-          _isSignedIn = true;
-          _userId = normalizedId;
-          _userName = normalizedId; // 임시로 사번 표시
-          _isLoading = false;
+          _authToken   = data['token'] as String?;
+          _isSignedIn  = true;
+          _userId      = normalizedId;
+          _userName    = normalizedId;
+          _awaitingOtp = false;
+          _preAuthToken = null;
+          _maskedPhone  = null;
+          _isLoading    = false;
 
           debugPrint('로그인 성공: $_userId, isSignedIn=$_isSignedIn');
-
-          // 즉시 UI 갱신
           notifyListeners();
-
-          // 웹 환경에서 확실한 UI 업데이트를 위해 다음 프레임에서 한 번 더 알림
           Future.microtask(() => notifyListeners());
-
           _saveLoginState();
           _startSessionTimerBackground();
-
-          // 3. 사용자 상세 정보 비동기 조회 (화면 전환 후 백그라운드)
           _lookupAndUpdateUserInfo(normalizedId);
-
           return true;
+
         } else {
           _errorMessage = '아이디 또는 비밀번호가 올바르지 않습니다.';
           debugPrint('SSO 인증 실패: result=$result');
@@ -377,6 +392,111 @@ class AuthService extends ChangeNotifier {
     }
   }
 
+  /// OTP 검증 → 최종 로그인 완료
+  Future<bool> verifyOtp(String otp) async {
+    if (_preAuthToken == null) {
+      _errorMessage = '인증 세션이 유효하지 않습니다. 다시 로그인해주세요.';
+      notifyListeners();
+      return false;
+    }
+
+    _isLoading = true;
+    _errorMessage = null;
+    notifyListeners();
+
+    try {
+      final response = await http.post(
+        Uri.parse('$_loginUrl/auth/verify-otp'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'pre_auth_token': _preAuthToken,
+          'otp': otp.trim(),
+        }),
+      );
+
+      debugPrint('OTP 검증 응답 [${response.statusCode}]: ${response.body}');
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body) as Map<String, dynamic>;
+        if (data['result'] == 'ok') {
+          final token = data['token'] as String?;
+          final empno = _userId ?? '';
+          _authToken    = token;
+          _isSignedIn   = true;
+          _awaitingOtp  = false;
+          _preAuthToken = null;
+          _maskedPhone  = null;
+          _isLoading    = false;
+          notifyListeners();
+          Future.microtask(() => notifyListeners());
+          _saveLoginState();
+          _startSessionTimerBackground();
+          if (empno.isNotEmpty) _lookupAndUpdateUserInfo(empno);
+          return true;
+        }
+      } else if (response.statusCode == 401 || response.statusCode == 400) {
+        final data = jsonDecode(response.body) as Map<String, dynamic>?;
+        _errorMessage = (data?['detail'] as String?) ?? '인증번호가 올바르지 않습니다.';
+      } else if (response.statusCode >= 500) {
+        _errorMessage = '서버 오류가 발생했습니다. 잠시 후 다시 시도해주세요.';
+      } else {
+        _errorMessage = 'OTP 검증 오류 (${response.statusCode})';
+      }
+    } catch (e) {
+      debugPrint('OTP 검증 예외: $e');
+      _errorMessage = '네트워크 연결을 확인해주세요.';
+    }
+
+    _isLoading = false;
+    notifyListeners();
+    return false;
+  }
+
+  /// OTP 재발송
+  Future<bool> resendOtp() async {
+    if (_preAuthToken == null) {
+      _errorMessage = '인증 세션이 유효하지 않습니다. 다시 로그인해주세요.';
+      notifyListeners();
+      return false;
+    }
+
+    _isLoading = true;
+    _errorMessage = null;
+    notifyListeners();
+
+    try {
+      final response = await http.post(
+        Uri.parse('$_loginUrl/auth/resend-otp'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'pre_auth_token': _preAuthToken}),
+      );
+
+      debugPrint('OTP 재발송 응답 [${response.statusCode}]: ${response.body}');
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body) as Map<String, dynamic>;
+        if (data['result'] == 'ok') {
+          _maskedPhone = data['masked_phone'] as String? ?? _maskedPhone;
+          _isLoading   = false;
+          notifyListeners();
+          return true;
+        }
+      } else if (response.statusCode == 429) {
+        _errorMessage = '재발송 횟수를 초과했습니다. 잠시 후 다시 시도해주세요.';
+      } else {
+        final data = jsonDecode(response.body) as Map<String, dynamic>?;
+        _errorMessage = (data?['detail'] as String?) ?? 'OTP 재발송에 실패했습니다.';
+      }
+    } catch (e) {
+      debugPrint('OTP 재발송 예외: $e');
+      _errorMessage = '네트워크 연결을 확인해주세요.';
+    }
+
+    _isLoading = false;
+    notifyListeners();
+    return false;
+  }
+
   /// 로그아웃: 서버 토큰 블랙리스트 등록 후 로컬 상태 초기화
   Future<void> signOut() async {
     _stopSessionTimer();
@@ -394,15 +514,18 @@ class AuthService extends ChangeNotifier {
       }
     }
 
-    _isSignedIn = false;
+    _isSignedIn   = false;
     _isSessionExpired = false;
-    _isLoading = false;
-    _userId = null;
-    _userName = null;
+    _isLoading    = false;
+    _awaitingOtp  = false;
+    _preAuthToken = null;
+    _maskedPhone  = null;
+    _userId       = null;
+    _userName     = null;
     _userDepartment = null;
-    _userTeam = null;
-    _userRoleStr = 'member';
-    _authToken = null;
+    _userTeam     = null;
+    _userRoleStr  = 'member';
+    _authToken    = null;
 
     notifyListeners();
 

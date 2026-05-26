@@ -68,6 +68,25 @@ try:
 except ImportError:
     HAS_PSUTIL = False
 
+# SMS 2차 인증 — sms-sender-v2 Celery 클라이언트 (선택적)
+SMS_BROKER_URL    = os.environ.get("SMS_BROKER_URL", "")     # amqp://user:pass@host:5672
+SMS_SENDER_NUMBER = os.environ.get("SMS_SENDER_NUMBER", "")  # 발신번호
+HAS_SMS = False
+_sms_app = None
+try:
+    if SMS_BROKER_URL:
+        from celery import Celery as _Celery
+        _sms_app = _Celery("ksa_sms_client", broker=SMS_BROKER_URL,
+                           backend="rpc://", set_as_current=False)
+        HAS_SMS = True
+        logging.info("SMS Celery 클라이언트 초기화 완료")
+    else:
+        logging.warning("SMS_BROKER_URL 미설정 — SMS 2차 인증 개발모드 (OTP 로그 출력)")
+except ImportError:
+    logging.warning("celery 패키지 없음 — pip install celery[rabbitmq]")
+except Exception as _e:
+    logging.warning(f"SMS Celery 초기화 실패: {_e}")
+
 MEMORY_THRESHOLD_PCT = 80  # 메모리 사용률 이 이상이면 무거운 작업 차단 (2GB RAM 기준)
 
 def _log_mem(label: str):
@@ -894,6 +913,53 @@ def _blacklist_token(token: str) -> None:
     except Exception:
         pass
 
+
+# ── SMS OTP 2차 인증 저장소 ──
+_pre_auth_store: dict[str, dict] = {}  # {pre_auth_token: {empno, otp, expiry, attempts, phone}}
+_sms_rate_store: dict[str, list]  = {}  # {empno: [timestamps]}
+PRE_AUTH_EXPIRY = 5 * 60   # 5분
+OTP_MAX_ATTEMPTS = 5
+SMS_RATE_MAX    = 3         # 10분 내 최대 발송 횟수
+SMS_RATE_WINDOW = 10 * 60  # 10분
+
+import re as _re_phone, secrets as _secrets_mod
+
+def _is_valid_phone(phone: str) -> bool:
+    if not phone: return False
+    clean = phone.replace('-', '').replace(' ', '')
+    return bool(_re_phone.match(r'^01[0-9]\d{7,8}$', clean))
+
+def _mask_phone(phone: str) -> str:
+    clean = phone.replace('-', '').replace(' ', '')
+    if len(clean) == 11: return f"{clean[:3]}-****-{clean[7:]}"
+    if len(clean) == 10: return f"{clean[:3]}-***-{clean[6:]}"
+    return "***-****-****"
+
+def _get_user_phone_sync(empno: str) -> str | None:
+    """DynamoDB Users 테이블에서 phone_number 조회."""
+    try:
+        ddb = get_dynamodb_resource()
+        tbl = ddb.Table(DYNAMODB_TABLES["users"])
+        resp = tbl.get_item(Key={"user_id": empno})
+        item = resp.get("Item") or tbl.get_item(Key={"user_id": empno.upper()}).get("Item")
+        return (item or {}).get("phone_number") or None
+    except Exception as e:
+        logger.warning(f"phone_number 조회 실패 ({empno}): {e}")
+        return None
+
+def _send_otp_sync(phone: str, empno: str) -> str:
+    """OTP 6자리 생성 + sms-sender-v2 Celery로 SMS 발송. OTP 반환."""
+    otp = str(_secrets_mod.randbelow(1_000_000)).zfill(6)
+    msg = f"[SKO 무선국] 인증번호: {otp} (5분 이내 입력)"
+    clean_phone = phone.replace('-', '').replace(' ', '')
+    if HAS_SMS and SMS_SENDER_NUMBER:
+        _sms_app.send_task('send_sms.sending_sms',
+                           args=(clean_phone, msg, SMS_SENDER_NUMBER, 'sms'))
+        logger.info(f"OTP SMS 발송 완료: empno={empno}, phone={_mask_phone(phone)}")
+    else:
+        # 개발환경: 콘솔 출력 (운영 배포 전 반드시 SMS_BROKER_URL 설정 필요)
+        logger.info(f"[DEV-OTP] empno={empno} phone={_mask_phone(phone)} OTP={otp}")
+    return otp
 
 # ── 일일 접속자 카운트 (메모리 기반) ──
 _daily_visitors: set = set()
@@ -2154,6 +2220,69 @@ async def get_feedback_stats(request: Request = None):
 SSO_LOGIN_URL = "https://auth.skons.net/accounts/sko/sso/login/"
 
 
+class OtpVerifyRequest(BaseModel):
+    pre_auth_token: str
+    otp: str
+
+class OtpResendRequest(BaseModel):
+    pre_auth_token: str
+
+@app.post("/auth/verify-otp")
+async def auth_verify_otp(req: OtpVerifyRequest, request: Request):
+    """OTP 검증 → 정식 인증 토큰 발급."""
+    _check_rate_limit(request, "verify_otp", 10, 60)
+    entry = _pre_auth_store.get(req.pre_auth_token)
+    if not entry:
+        raise HTTPException(401, "인증 세션이 유효하지 않습니다. 다시 로그인해주세요")
+    now = _time_mod.time()
+    if now > entry["expiry"]:
+        _pre_auth_store.pop(req.pre_auth_token, None)
+        raise HTTPException(401, "인증 시간이 만료되었습니다. 다시 로그인해주세요")
+    entry["attempts"] += 1
+    if entry["attempts"] > OTP_MAX_ATTEMPTS:
+        _pre_auth_store.pop(req.pre_auth_token, None)
+        raise HTTPException(401, "인증 시도 횟수를 초과했습니다. 다시 로그인해주세요")
+    if not _hmac_mod.compare_digest(req.otp.strip(), entry["otp"]):
+        remaining = OTP_MAX_ATTEMPTS - entry["attempts"]
+        raise HTTPException(401, f"인증번호가 올바르지 않습니다 (남은 시도: {remaining}회)")
+    # 검증 성공
+    empno = entry["empno"]
+    _pre_auth_store.pop(req.pre_auth_token, None)
+    token = _generate_token(empno)
+    await asyncio.to_thread(_update_last_login, empno)
+    logger.info(f"OTP 인증 성공: empno={empno}")
+    return JSONResponse(status_code=200,
+                        content={"result": "ok", "token": token, "expiresIn": AUTH_TOKEN_EXPIRY})
+
+
+@app.post("/auth/resend-otp")
+async def auth_resend_otp(req: OtpResendRequest, request: Request):
+    """OTP 재발송."""
+    _check_rate_limit(request, "resend_otp", 5, 60)
+    entry = _pre_auth_store.get(req.pre_auth_token)
+    if not entry:
+        raise HTTPException(401, "인증 세션이 유효하지 않습니다. 다시 로그인해주세요")
+    now = _time_mod.time()
+    if now > entry["expiry"]:
+        _pre_auth_store.pop(req.pre_auth_token, None)
+        raise HTTPException(401, "인증 시간이 만료되었습니다. 다시 로그인해주세요")
+    empno, phone = entry["empno"], entry["phone"]
+    rate_ts = [t for t in _sms_rate_store.get(empno, []) if now - t < SMS_RATE_WINDOW]
+    if len(rate_ts) >= SMS_RATE_MAX:
+        raise HTTPException(429, f"SMS 발송 횟수를 초과했습니다. {SMS_RATE_WINDOW // 60}분 후 재시도하세요")
+    rate_ts.append(now)
+    _sms_rate_store[empno] = rate_ts
+    try:
+        otp = await asyncio.to_thread(_send_otp_sync, phone, empno)
+        entry["otp"] = otp
+        entry["attempts"] = 0
+        entry["expiry"] = now + PRE_AUTH_EXPIRY
+    except Exception as e:
+        logger.error(f"OTP 재발송 실패: {e}")
+        raise HTTPException(503, "SMS 발송에 실패했습니다. 잠시 후 다시 시도하세요")
+    return {"result": "ok", "masked_phone": _mask_phone(phone), "expires_in": PRE_AUTH_EXPIRY}
+
+
 @app.post("/auth/logout")
 async def auth_logout(request: Request):
     """로그아웃: 현재 토큰을 서버 블랙리스트에 등록하여 즉시 무효화."""
@@ -2194,12 +2323,46 @@ async def proxy_sso_login(req: LoginRequest, request: Request):
                     status_code=403,
                     content={"result": "fail", "message": "휴면 계정입니다. 관리자에게 문의하거나 이메일 인증을 진행해 주세요."},
                 )
-            token = _generate_token(username)
             await asyncio.to_thread(_ensure_user_in_roles_sync, username)
-            await asyncio.to_thread(_update_last_login, username)
+
+            # ── 2차 SMS OTP 인증 ────────────────────────────────────
+            phone = await asyncio.to_thread(_get_user_phone_sync, username)
+            if not _is_valid_phone(phone or ""):
+                return JSONResponse(
+                    status_code=403,
+                    content={"result": "fail",
+                             "message": "등록된 휴대폰 번호가 없습니다. 관리자에게 문의하세요."},
+                )
+            # SMS 발송 횟수 제한 (10분 내 3회)
+            now = _time_mod.time()
+            rate_ts = [t for t in _sms_rate_store.get(username, []) if now - t < SMS_RATE_WINDOW]
+            if len(rate_ts) >= SMS_RATE_MAX:
+                return JSONResponse(
+                    status_code=429,
+                    content={"result": "fail",
+                             "message": f"SMS 발송 횟수를 초과했습니다. {SMS_RATE_WINDOW // 60}분 후 재시도하세요."},
+                )
+            rate_ts.append(now)
+            _sms_rate_store[username] = rate_ts
+
+            try:
+                otp = await asyncio.to_thread(_send_otp_sync, phone, username)
+            except Exception as e:
+                logger.error(f"OTP SMS 발송 실패: {e}")
+                return JSONResponse(
+                    status_code=503,
+                    content={"result": "fail", "message": "SMS 발송에 실패했습니다. 잠시 후 다시 시도하세요."},
+                )
+
+            pre_auth_token = _secrets_mod.token_urlsafe(32)
+            _pre_auth_store[pre_auth_token] = {
+                "empno": username, "otp": otp, "phone": phone,
+                "expiry": now + PRE_AUTH_EXPIRY, "attempts": 0,
+            }
             return JSONResponse(
                 status_code=200,
-                content={**sso_data, "token": token, "expiresIn": AUTH_TOKEN_EXPIRY},
+                content={"result": "otp_required", "pre_auth_token": pre_auth_token,
+                         "masked_phone": _mask_phone(phone), "expires_in": PRE_AUTH_EXPIRY},
             )
 
         return JSONResponse(status_code=response.status_code, content=sso_data)
