@@ -69,19 +69,23 @@ except ImportError:
     HAS_PSUTIL = False
 
 # SMS 2차 인증 — sms-sender-v2 Celery 클라이언트 (선택적)
-SMS_BROKER_URL    = os.environ.get("SMS_BROKER_URL", "")     # amqp://user:pass@host:5672
-SMS_SENDER_NUMBER = os.environ.get("SMS_SENDER_NUMBER", "")  # 발신번호
+# 환경변수로만 설정 — 기본값 하드코딩 없음
+SMS_BROKER_HOST     = os.environ.get("SMS_BROKER_HOST", "")
+SMS_BROKER_PORT     = os.environ.get("SMS_BROKER_PORT", "5672")
+SMS_BROKER_USER     = os.environ.get("SMS_BROKER_USER", "")
+SMS_BROKER_PASSWORD = os.environ.get("SMS_BROKER_PASSWORD", "")
+SMS_SENDER_NUMBER   = os.environ.get("SMS_SENDER_NUMBER", "")
 HAS_SMS = False
 _sms_app = None
 try:
-    if SMS_BROKER_URL:
+    if SMS_BROKER_HOST and SMS_BROKER_USER and SMS_BROKER_PASSWORD:
         from celery import Celery as _Celery
-        _sms_app = _Celery("ksa_sms_client", broker=SMS_BROKER_URL,
-                           backend="rpc://", set_as_current=False)
+        _broker_url = f"amqp://{SMS_BROKER_USER}:{SMS_BROKER_PASSWORD}@{SMS_BROKER_HOST}:{SMS_BROKER_PORT}"
+        _sms_app = _Celery("ksa_sms_client", broker=_broker_url, set_as_current=False)
         HAS_SMS = True
         logging.info("SMS Celery 클라이언트 초기화 완료")
     else:
-        logging.warning("SMS_BROKER_URL 미설정 — SMS 2차 인증 개발모드 (OTP 로그 출력)")
+        logging.warning("SMS_BROKER_HOST/USER/PASSWORD 미설정 — SMS 2차 인증 개발모드 (OTP 로그 출력)")
 except ImportError:
     logging.warning("celery 패키지 없음 — pip install celery[rabbitmq]")
 except Exception as _e:
