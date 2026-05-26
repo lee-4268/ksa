@@ -804,7 +804,7 @@ else:
     AUTH_TOKEN_SECRET = f"dev-fallback-{uuid.uuid4().hex}"
     logger.warning("AUTH_TOKEN_SECRET 환경변수 미설정 — 개발용 임시 키 사용 중")
 
-AUTH_TOKEN_EXPIRY = 2 * 3600  # 2시간
+AUTH_TOKEN_EXPIRY = 1 * 3600  # 1시간 (보안 정책: 대내 시스템 최대 60분)
 
 
 # ── 비밀번호 해시 (PBKDF2-HMAC-SHA256, 표준 라이브러리) ─────
@@ -849,7 +849,7 @@ def _generate_token(empno: str) -> str:
 
 
 def _verify_token(token: str) -> str | None:
-    """토큰 검증 → empno 반환. 무효/만료 시 None."""
+    """토큰 검증 → empno 반환. 무효/만료/블랙리스트 시 None."""
     try:
         decoded = base64.urlsafe_b64decode(token.encode()).decode()
         parts = decoded.split(":")
@@ -864,9 +864,35 @@ def _verify_token(token: str) -> str | None:
         ).hexdigest()
         if not _hmac_mod.compare_digest(sig, expected):
             return None
+        # 블랙리스트 확인 (로그아웃된 토큰)
+        if sig in _token_blacklist:
+            return None
         return empno
     except Exception:
         return None
+
+
+# ── 토큰 블랙리스트 (로그아웃된 토큰 서버사이드 무효화) ──
+# {sig: expiry_timestamp} — 만료된 항목은 자동 정리
+_token_blacklist: dict[str, int] = {}
+
+def _blacklist_token(token: str) -> None:
+    """토큰을 블랙리스트에 추가하고, 만료된 항목 정리."""
+    try:
+        decoded = base64.urlsafe_b64decode(token.encode()).decode()
+        parts = decoded.split(":")
+        if len(parts) == 3:
+            _, expiry_str, sig = parts
+            expiry = int(expiry_str)
+            now = int(_time_mod.time())
+            if expiry > now:  # 아직 유효한 토큰만 블랙리스트 등록
+                _token_blacklist[sig] = expiry
+            # 만료된 항목 정리 (메모리 누수 방지)
+            expired_sigs = [s for s, e in _token_blacklist.items() if e <= now]
+            for s in expired_sigs:
+                _token_blacklist.pop(s, None)
+    except Exception:
+        pass
 
 
 # ── 일일 접속자 카운트 (메모리 기반) ──
@@ -1502,15 +1528,24 @@ async def token_refresh_middleware(request: Request, call_next):
 async def security_headers_middleware(request: Request, call_next):
     """모든 응답에 표준 보안 헤더 주입 (XSS·clickjacking·MIME sniffing 등 방어).
 
-    - X-Content-Type-Options: 브라우저가 응답 Content-Type 을 무시하고 추측하지 못하게
-    - X-Frame-Options: <iframe> 안에 임베드 차단 (clickjacking)
+    - X-Content-Type-Options: MIME sniffing 차단
+    - X-Frame-Options: clickjacking 차단
     - Referrer-Policy: 외부 사이트로 Referer 누설 최소화
-    - Strict-Transport-Security: HTTPS 강제 (운영에서만, HTTP 로 들어오면 의미 없음)
+    - Content-Security-Policy: XSS 인라인 스크립트 실행 차단
+    - Strict-Transport-Security: HTTPS 강제 (운영에서만)
+    - Server 헤더 제거: 서버 기술스택 노출 차단
     """
     response = await call_next(request)
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("X-Frame-Options", "DENY")
     response.headers.setdefault("Referrer-Policy", "same-origin")
+    response.headers.setdefault(
+        "Content-Security-Policy",
+        "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://dapi.kakao.com https://*.kakao.com; "
+        "style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; connect-src 'self' https:; frame-ancestors 'none';",
+    )
+    # 서버 기술스택 노출 차단 (uvicorn 기본 헤더 덮어쓰기)
+    response.headers["Server"] = "KSA"
     if IS_PROD:
         response.headers.setdefault(
             "Strict-Transport-Security",
@@ -2117,6 +2152,15 @@ async def get_feedback_stats(request: Request = None):
 # ============================================================
 
 SSO_LOGIN_URL = "https://auth.skons.net/accounts/sko/sso/login/"
+
+
+@app.post("/auth/logout")
+async def auth_logout(request: Request):
+    """로그아웃: 현재 토큰을 서버 블랙리스트에 등록하여 즉시 무효화."""
+    token = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+    if token:
+        _blacklist_token(token)
+    return {"success": True}
 
 
 @app.post("/auth/refresh")

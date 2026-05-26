@@ -27,8 +27,8 @@ class AuthService extends ChangeNotifier {
   String _userRoleStr = 'member'; // "admin", "manager", "member"
   String? _authToken; // 서버 발급 HMAC 토큰
 
-  /// 세션 타임아웃 (2시간)
-  static const Duration sessionTimeout = Duration(hours: 2);
+  /// 세션 타임아웃 (1시간 — 보안 정책)
+  static const Duration sessionTimeout = Duration(hours: 1);
 
   /// SharedPreferences 키
   static const String _sessionExpiryKey = 'session_expiry_time';
@@ -377,9 +377,22 @@ class AuthService extends ChangeNotifier {
     }
   }
 
-  /// 로그아웃
+  /// 로그아웃: 서버 토큰 블랙리스트 등록 후 로컬 상태 초기화
   Future<void> signOut() async {
     _stopSessionTimer();
+
+    // 서버사이드 토큰 무효화 (블랙리스트 등록)
+    final token = _authToken;
+    if (token != null && token.isNotEmpty) {
+      try {
+        await http.post(
+          Uri.parse('$_loginUrl/auth/logout'),
+          headers: {'Authorization': 'Bearer $token'},
+        ).timeout(const Duration(seconds: 5));
+      } catch (_) {
+        // 네트워크 오류 시 클라이언트 로그아웃만 진행
+      }
+    }
 
     _isSignedIn = false;
     _isSessionExpired = false;
