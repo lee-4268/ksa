@@ -54,7 +54,7 @@ from urllib.parse import quote
 import boto3
 from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
-from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from core.auth import (
@@ -82,6 +82,11 @@ from core.config import (
 )
 from core.db import get_s3_client, get_dynamodb_resource, get_dynamodb_client
 from core.utils import _check_memory, _log_mem, _release_memory
+from pydantic import BaseModel
+from schemas.models import (
+    DsUploadInit, DsUploadChunk, DsUploadFinalize,
+    DsEnqueueRequest, DsEnqueueMultiRequest,
+)
 
 try:
     import psutil
