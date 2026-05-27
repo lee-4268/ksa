@@ -4,6 +4,7 @@ import '../services/auth_service.dart';
 import '../services/inspection_service.dart';
 import '../widgets/sisl_photo_widgets.dart';
 import '../widgets/progress_dialog.dart';
+import '../widgets/app_loader.dart';
 
 /// 시설물 사진 검색 — SKO-OCEAN 사진을 본부/팀/국소명/주소로 검색.
 /// 좌측: 추출 국소 목록(통시·공대코드 + 이미지 건수) / 우측: 사진 그리드.
@@ -142,7 +143,7 @@ class _SislPhotoSearchScreenState extends State<SislPhotoSearchScreen> {
           _buildSearchBar(),
           Expanded(
             child: _searching
-                ? const Center(child: CircularProgressIndicator())
+                ? AppLoader.centered(message: '사진을 검색하는 중...')
                 : !_searched
                     ? _buildEmptyHint()
                     : _groups.isEmpty
@@ -167,8 +168,7 @@ class _SislPhotoSearchScreenState extends State<SislPhotoSearchScreen> {
       child: _optionsLoading
           ? const SizedBox(
               height: 40,
-              child: Center(child: SizedBox(width: 20, height: 20,
-                  child: CircularProgressIndicator(strokeWidth: 2))),
+              child: Center(child: AppLoader(dotSize: 6, spacing: 5)),
             )
           : LayoutBuilder(builder: (ctx, c) {
               final wide = c.maxWidth >= 900;
