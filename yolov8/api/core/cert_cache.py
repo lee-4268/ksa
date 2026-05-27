@@ -182,7 +182,7 @@ def _cert_lookup_cached(query: str) -> dict:
         return {}
     _cert_cache_load()
     q = query.strip()
-    cols = ["zpwino", "zpwina", "zpwiadr", "zpcode", "area_hdofc_nm", "ons_team_nm", "zpirty3", "eqp_ser_no"]
+    cols = ["zpwino", "zpwina", "zpwiadr", "zpcode", "zpkcode", "area_hdofc_nm", "ons_team_nm", "zpirty3", "eqp_ser_no"]
     try:
         conn = sqlite3.connect(_cert_cache_db_path)
         conn.row_factory = sqlite3.Row

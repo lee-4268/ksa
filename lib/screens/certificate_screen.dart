@@ -8,6 +8,7 @@ import 'package:file_picker/file_picker.dart';
 import '../services/auth_service.dart';
 import '../services/certificate_service.dart';
 import '../widgets/progress_dialog.dart';
+import '../widgets/sisl_photo_widgets.dart';
 import 'certificate_download_stub.dart'
     if (dart.library.html) 'certificate_download_web.dart' as dl;
 
@@ -129,6 +130,9 @@ class _IndividualTabState extends State<_IndividualTab>
   final List<Uint8List> _photoBytes = [];
   final List<String> _photoNames = [];
 
+  // 조회된 공대코드 (시설물 사진 조회용 — lookup 응답의 zpkcode)
+  String _neosCode = '';
+
   // 미리보기 탭
   int _previewTab = 0; // 0: 설치확인서, 1: 현장사진
 
@@ -171,10 +175,12 @@ class _IndividualTabState extends State<_IndividualTab>
         _zpwinoCtrl.text = res['zpwino'] ?? '';
         _zpwinaCtrl.text = res['zpwina'] ?? '';
         _addressCtrl.text = res['zpwiadr'] ?? '';
+        _neosCode = (res['zpkcode'] ?? '').toString().trim();
         final frame = _mapAntennaFrame(res['zpirty3'] ?? '');
         _antennaFrameType = _antennaFrameOptions.contains(frame) ? frame : '-';
         _lookupError = null;
       } else {
+        _neosCode = '';
         _lookupError = '조회 결과가 없습니다.';
       }
     } catch (e) {
@@ -254,6 +260,32 @@ class _IndividualTabState extends State<_IndividualTab>
       _photoBytes.removeAt(index);
       _photoNames.removeAt(index);
     });
+  }
+
+  /// 시설물(SKO-OCEAN) 사진 팝업 — 허가번호 조회로 얻은 공대 기준 조회.
+  /// 사내망 CORS 차단으로 바이트 자동삽입은 불가 → 사진을 보여주고 다운로드하게 함.
+  /// 다운로드한 파일은 사용자가 현장사진 칸을 클릭해 직접 업로드.
+  Future<void> _openSislPhotoPicker() async {
+    if (_neosCode.isEmpty) return;
+    final dialog = ProgressDialog(context);
+    dialog.show(message: '시설물 사진 조회 중...');
+    List<Map<String, dynamic>> items;
+    try {
+      items = await widget.service.listSislPhotos(_neosCode);
+      dialog.dismiss();
+    } catch (e) {
+      await dialog.error(message: '시설물 사진 조회 실패');
+      return;
+    }
+    if (!mounted) return;
+    if (items.isEmpty) {
+      await ProgressDialog(context).error(message: '등록된 시설물 사진이\n없습니다');
+      return;
+    }
+    showDialog(
+      context: context,
+      builder: (_) => _SislPickerDialog(items: items),
+    );
   }
 
   String _bytesToBase64DataUrl(Uint8List bytes) {
@@ -545,7 +577,25 @@ class _IndividualTabState extends State<_IndividualTab>
           ),
           const SizedBox(height: 16),
 
-          _formLabel('현장사진 (최대 8장)'),
+          Row(
+            children: [
+              _formLabel('현장사진 (최대 8장)'),
+              const Spacer(),
+              if (_neosCode.isNotEmpty)
+                OutlinedButton.icon(
+                  onPressed: _openSislPhotoPicker,
+                  icon: const Icon(Icons.photo_library_outlined, size: 16),
+                  label: const Text('시설물 사진 불러오기', style: TextStyle(fontSize: 12)),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: const Color(0xFF06B6D4),
+                    side: const BorderSide(color: Color(0xFF06B6D4)),
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                    visualDensity: VisualDensity.compact,
+                  ),
+                ),
+            ],
+          ),
           const SizedBox(height: 8),
           GridView.builder(
             shrinkWrap: true,
@@ -1355,5 +1405,85 @@ class _BatchTabState extends State<_BatchTab>
       decoration: InputDecoration(labelText: label, hintText: hint, isDense: true, contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
         focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: _themeColor, width: 1.5)))));
+  }
+}
+
+/// 시설물(SKO-OCEAN) 사진 선택 팝업.
+/// 사내망 CORS 차단으로 사진 바이트를 직접 가져올 수 없어, 사진을 보여주고
+/// 다운로드만 제공한다. 사용자는 다운로드한 파일을 현장사진 칸에 직접 업로드한다.
+class _SislPickerDialog extends StatelessWidget {
+  final List<Map<String, dynamic>> items;
+  const _SislPickerDialog({required this.items});
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      insetPadding: const EdgeInsets.all(24),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 720, maxHeight: 620),
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(children: [
+              const Icon(Icons.photo_library_outlined, color: Color(0xFF06B6D4), size: 20),
+              const SizedBox(width: 8),
+              Text('시설물 사진 (${items.length}장)',
+                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+              const Spacer(),
+              IconButton(
+                icon: const Icon(Icons.close, size: 20),
+                onPressed: () => Navigator.pop(context),
+                visualDensity: VisualDensity.compact,
+              ),
+            ]),
+            const SizedBox(height: 6),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFF7ED),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: const Color(0xFFFFE0B2)),
+              ),
+              child: const Text(
+                '사진을 클릭하면 크게 보기·다운로드할 수 있습니다. 보안 정책상 자동 첨부가 불가하여, '
+                '다운로드한 사진을 위 현장사진 칸을 클릭해 업로드해주세요.',
+                style: TextStyle(fontSize: 12, color: Color(0xFF9A6A2C), height: 1.4),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Expanded(
+              child: LayoutBuilder(builder: (ctx, c) {
+                final cols = c.maxWidth >= 560 ? 4 : (c.maxWidth >= 360 ? 3 : 2);
+                return GridView.builder(
+                  gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: cols,
+                    mainAxisSpacing: 8,
+                    crossAxisSpacing: 8,
+                    childAspectRatio: 1,
+                  ),
+                  itemCount: items.length,
+                  itemBuilder: (_, i) {
+                    final p = items[i];
+                    final url = (p['url'] ?? '').toString();
+                    final dt = fmtSislDate(p['upload_date']);
+                    return SislPhotoTile(
+                      url: url,
+                      label: dt,
+                      onTap: () => showDialog(
+                        context: context,
+                        barrierColor: Colors.black87,
+                        builder: (_) => SislPhotoViewer(items: items, initialIndex: i),
+                      ),
+                    );
+                  },
+                );
+              }),
+            ),
+          ]),
+        ),
+      ),
+    );
   }
 }

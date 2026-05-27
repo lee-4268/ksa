@@ -40,6 +40,22 @@ class CertificateService {
     return json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
   }
 
+  /// 공대(neos_code) 기준 SKO-OCEAN 시설물 사진 메타 조회 (각 항목에 url 포함).
+  Future<List<Map<String, dynamic>>> listSislPhotos(String neosCode,
+      {int limit = 500}) async {
+    if (neosCode.isEmpty) return const [];
+    final uri = Uri.parse('$_baseUrl/sisl-photos').replace(queryParameters: {
+      'neos_code': neosCode,
+      'limit': '$limit',
+    });
+    final resp = await http.get(uri, headers: _headers).timeout(_apiTimeout);
+    if (resp.statusCode != 200) {
+      throw Exception('시설물 사진 조회 실패');
+    }
+    final body = json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+    return List<Map<String, dynamic>>.from(body['items'] ?? const []);
+  }
+
   /// 개별 설치확인서 생성 (PDF/HWPX) → 바이너리 반환
   Future<Uint8List> generate({
     required Map<String, dynamic> formData,
