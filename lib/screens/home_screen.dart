@@ -19,6 +19,7 @@ import 'change_notification_screen.dart';
 import 'inspection_schedule_screen.dart';
 import 'inspection_my_list_screen.dart';
 import 'inspection_results_screen.dart';
+import 'sisl_photo_search_screen.dart';
 import 'community_screen.dart';
 import '../services/community_service.dart';
 import '../services/notification_service.dart';
@@ -305,6 +306,7 @@ final result = await showDialog<bool>(
       _MenuItem('DS 병합', Icons.merge_outlined, const Color(0xFFF59E0B), description: 'DS 데이터 병합 처리'),
       _MenuItem('호출명칭', Icons.sync_alt_outlined, const Color(0xFFEF4444), description: '호출명칭 검색 및 비교'),
       _MenuItem('설치확인서', Icons.description_outlined, const Color(0xFF06B6D4), description: '설치확인서 조회 및 관리'),
+      _MenuItem('시설물 사진', Icons.image_search_outlined, const Color(0xFF06B6D4), description: '시설물 점검 사진 검색'),
       _MenuItem('전산비교', Icons.compare_outlined, const Color(0xFF2563EB), description: 'ERP·DS 전산 데이터 비교'),
       _MenuItem('부적합 관리', Icons.warning_amber_outlined, const Color(0xFFE53935), description: '부적합 현황 관리'),
       if (auth.isAdmin)
@@ -319,7 +321,7 @@ final result = await showDialog<bool>(
   static const _menuGroups = [
     _MenuGroup('수검 관리', Icons.map_outlined, Color(0xFF3B82F6), ['실적 관리', '일정 및 통계', '현장 수검 Map']),
     _MenuGroup('허가현황 관리', Icons.storage_outlined, Color(0xFF8B5CF6), ['DS 데이터', 'DS 병합']),
-    _MenuGroup('서류 관리', Icons.folder_outlined, Color(0xFFEF4444), ['호출명칭', '설치확인서', '전산비교', '부적합 관리', '변경개설신고']),
+    _MenuGroup('서류 관리', Icons.folder_outlined, Color(0xFFEF4444), ['호출명칭', '설치확인서', '시설물 사진', '전산비교', '부적합 관리', '변경개설신고']),
   ];
 
   Widget _buildPage(int index, AuthService auth) {
@@ -362,6 +364,7 @@ final result = await showDialog<bool>(
       case 'DS 병합': return const DsMergeScreen();
       case '호출명칭': return const CallnameScreen();
       case '설치확인서': return const CertificateScreen();
+      case '시설물 사진': return const SislPhotoSearchScreen();
       case '전산비교': {
         final data = _pendingCompare;
         _pendingCompare = null;

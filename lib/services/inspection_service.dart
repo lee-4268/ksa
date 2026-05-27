@@ -599,6 +599,42 @@ class InspectionService {
     return List<Map<String, dynamic>>.from(body['items'] ?? const []);
   }
 
+  /// 본부→팀 매핑 (cert 캐시 distinct). 응답: { '경기Access담당': ['평택품질개선팀', ...], ... }
+  Future<Map<String, List<String>>> getSislFilterOptions() async {
+    final resp = await http.get(
+      Uri.parse('$_baseUrl/sisl-photos/filter-options'),
+      headers: _headers,
+    ).timeout(_apiTimeout);
+    if (resp.statusCode != 200) {
+      throw Exception('필터 옵션 조회 실패');
+    }
+    final body = json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+    final org = (body['org'] as Map?) ?? const {};
+    return org.map((k, v) =>
+        MapEntry('$k', List<String>.from((v as List?) ?? const [])));
+  }
+
+  /// 본부·팀·국소명·주소로 cert 조인 검색 → 국소(공대)별 사진 그룹.
+  /// 응답: { groups: [{neos_code, 통시코드, 국소명, 주소, 본부, 팀, photo_count, photos[]}], total_neos, total_photos }
+  Future<Map<String, dynamic>> searchSislPhotos({
+    String hdqt = '',
+    String team = '',
+    String facility = '',
+    String address = '',
+  }) async {
+    final uri = Uri.parse('$_baseUrl/sisl-photos/search').replace(queryParameters: {
+      if (hdqt.isNotEmpty) 'hdqt': hdqt,
+      if (team.isNotEmpty) 'team': team,
+      if (facility.isNotEmpty) 'facility': facility,
+      if (address.isNotEmpty) 'address': address,
+    });
+    final resp = await http.get(uri, headers: _headers).timeout(_apiTimeout);
+    if (resp.statusCode != 200) {
+      throw Exception('시설물 사진 검색 실패');
+    }
+    return json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+  }
+
   // ── Result ───────────────────────────────────────────────
 
   Future<void> upsertResult(Map<String, dynamic> data) async {
