@@ -130,9 +130,8 @@ class _IndividualTabState extends State<_IndividualTab>
   final List<Uint8List> _photoBytes = [];
   final List<String> _photoNames = [];
 
-  // 조회된 공대코드 + 통합시설명칭 (시설물 사진 조회/폴더명용 — lookup 응답)
+  // 조회된 공대코드 (시설물 사진 조회용 — lookup 응답의 zpkcode)
   String _neosCode = '';
-  String _facilityName = '';
 
   // 미리보기 탭
   int _previewTab = 0; // 0: 설치확인서, 1: 현장사진
@@ -177,13 +176,11 @@ class _IndividualTabState extends State<_IndividualTab>
         _zpwinaCtrl.text = res['zpwina'] ?? '';
         _addressCtrl.text = res['zpwiadr'] ?? '';
         _neosCode = (res['zpkcode'] ?? '').toString().trim();
-        _facilityName = (res['zpcname'] ?? '').toString().trim();
         final frame = _mapAntennaFrame(res['zpirty3'] ?? '');
         _antennaFrameType = _antennaFrameOptions.contains(frame) ? frame : '-';
         _lookupError = null;
       } else {
         _neosCode = '';
-        _facilityName = '';
         _lookupError = '조회 결과가 없습니다.';
       }
     } catch (e) {
@@ -285,10 +282,9 @@ class _IndividualTabState extends State<_IndividualTab>
       await ProgressDialog(context).error(message: '등록된 시설물 사진이\n없습니다');
       return;
     }
-    final folderName = _facilityName.isNotEmpty ? _facilityName : _neosCode;
     showDialog(
       context: context,
-      builder: (_) => _SislPickerDialog(items: items, folderName: folderName),
+      builder: (_) => _SislPickerDialog(items: items),
     );
   }
 
@@ -1417,8 +1413,7 @@ class _BatchTabState extends State<_BatchTab>
 /// 다운로드만 제공한다. 사용자는 다운로드한 파일을 현장사진 칸에 직접 업로드한다.
 class _SislPickerDialog extends StatelessWidget {
   final List<Map<String, dynamic>> items;
-  final String folderName;
-  const _SislPickerDialog({required this.items, this.folderName = ''});
+  const _SislPickerDialog({required this.items});
 
   @override
   Widget build(BuildContext context) {
@@ -1437,9 +1432,9 @@ class _SislPickerDialog extends StatelessWidget {
                   style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
               const Spacer(),
               OutlinedButton.icon(
-                onPressed: () => downloadSislPhotosBatch(items, folderName),
-                icon: const Icon(Icons.download, size: 16),
-                label: const Text('전체 다운로드', style: TextStyle(fontSize: 12)),
+                onPressed: () => openSislPhotosNewTab(items),
+                icon: const Icon(Icons.open_in_new, size: 16),
+                label: const Text('전체 새 탭으로 열기', style: TextStyle(fontSize: 12)),
                 style: OutlinedButton.styleFrom(
                   foregroundColor: const Color(0xFF06B6D4),
                   side: const BorderSide(color: Color(0xFF06B6D4)),
@@ -1464,10 +1459,11 @@ class _SislPickerDialog extends StatelessWidget {
                 borderRadius: BorderRadius.circular(8),
                 border: Border.all(color: const Color(0xFFFFE0B2)),
               ),
-              child: Text(
-                "'전체 다운로드'를 누르면 ${folderName.isEmpty ? '국소' : "'$folderName'"} 폴더로 일괄 저장됩니다. "
-                '보안 정책상 사진을 바로 첨부할 수 없어, 다운로드한 사진을 위 현장사진 칸을 클릭해 업로드해주세요.',
-                style: const TextStyle(fontSize: 12, color: Color(0xFF9A6A2C), height: 1.4),
+              child: const Text(
+                '보안 정책상 사진을 바로 첨부·저장할 수 없습니다. 사진을 클릭하거나 '
+                "'전체 새 탭으로 열기'로 새 탭에서 연 뒤, 우클릭 → 이미지 저장으로 받아 "
+                '위 현장사진 칸을 클릭해 업로드해주세요.',
+                style: TextStyle(fontSize: 12, color: Color(0xFF9A6A2C), height: 1.4),
               ),
             ),
             const SizedBox(height: 12),

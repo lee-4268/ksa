@@ -55,57 +55,22 @@ void _ensureSislImageRegistered(String url, {String fit = 'cover'}) {
   });
 }
 
-/// 파일/폴더명에 못 쓰는 문자 제거 (윈도/맥 공통 금지문자 + 공백 정리).
-String sanitizeSislName(String name) {
-  var s = name.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_').trim();
-  s = s.replaceAll(RegExp(r'\s+'), ' ');
-  return s.isEmpty ? 'sisl' : s;
-}
-
-/// URL 의 확장자 추출 (없으면 .jpg).
-String _sislExt(String url) {
-  final lastDot = url.lastIndexOf('.');
-  final lastSlash = url.lastIndexOf('/');
-  if (lastDot > lastSlash) {
-    final e = url.substring(lastDot).toLowerCase();
-    if (e.length <= 5 && RegExp(r'^\.[a-z0-9]+$').hasMatch(e)) return e;
-  }
-  return '.jpg';
-}
-
-/// 시설물 사진 1장 다운로드. folderName 이 있으면 zip 폴더 구조 대신
-/// 파일명 prefix(폴더명/) 로 사용해 같은 국소 사진이 묶이도록 함.
-/// (사내망 CORS 차단으로 fetch→Blob 불가하여 <a download> 직접 방식)
-void downloadSislPhoto(Map<String, dynamic> item, {String folderName = '', int seq = 0}) {
+/// 시설물 사진 1장을 새 탭으로 열기.
+/// 사내망 사진은 cross-origin(CORS 미허용)이라 브라우저가 <a download> 의 파일명을
+/// 무시하고 새 탭 이동만 됨 → 사용자가 새 탭에서 우클릭 저장하도록 함.
+void downloadSislPhoto(Map<String, dynamic> item) {
   final url = (item['url'] ?? '').toString();
   if (url.isEmpty) return;
-  final neos = (item['neos_code'] ?? '').toString();
-  final dt = (item['upload_date'] ?? '').toString();
-  final guid = (item['guid'] ?? '').toString();
-  final ext = _sislExt(url);
-  final base = '${neos.isEmpty ? "sisl" : neos}_${dt.isEmpty ? "" : "${dt}_"}$guid$ext';
-  // folderName 이 있으면 'folderName/순번_base' — 브라우저가 다운로드 폴더 하위에 폴더 생성
-  final fname = folderName.isEmpty
-      ? base
-      : '${sanitizeSislName(folderName)}/${seq > 0 ? "${seq.toString().padLeft(2, '0')}_" : ""}$base';
-
-  final anchor = html.AnchorElement(href: url)
-    ..download = fname
-    ..target = '_blank'
-    ..rel = 'noopener'
-    ..style.display = 'none';
-  html.document.body?.append(anchor);
-  anchor.click();
-  anchor.remove();
+  html.window.open(url, '_blank');
 }
 
-/// 시설물 사진 일괄 다운로드 — 각 사진을 folderName 폴더 하위로 순차 저장.
-/// 브라우저 다중 다운로드 차단을 피하려 사진마다 약간의 간격(250ms)을 둠.
-Future<void> downloadSislPhotosBatch(
-    List<Map<String, dynamic>> items, String folderName) async {
-  for (var i = 0; i < items.length; i++) {
-    downloadSislPhoto(items[i], folderName: folderName, seq: i + 1);
-    await Future.delayed(const Duration(milliseconds: 250));
+/// 시설물 사진 여러 장을 새 탭으로 일괄 열기 (각 100ms 간격 — 팝업 차단 완화).
+Future<void> openSislPhotosNewTab(List<Map<String, dynamic>> items) async {
+  for (final it in items) {
+    final url = (it['url'] ?? '').toString();
+    if (url.isEmpty) continue;
+    html.window.open(url, '_blank');
+    await Future.delayed(const Duration(milliseconds: 100));
   }
 }
 
@@ -292,7 +257,7 @@ class _SislPhotoViewerState extends State<SislPhotoViewer> {
               _viewerAction(icon: Icons.zoom_in, tooltip: '확대', onTap: _zoomIn),
               _viewerAction(icon: Icons.zoom_out, tooltip: '축소', onTap: _zoomOut),
               _viewerAction(icon: Icons.restore, tooltip: '원래대로', onTap: _resetTransform),
-              _viewerAction(icon: Icons.download_rounded, tooltip: '다운로드', onTap: _downloadCurrent),
+              _viewerAction(icon: Icons.open_in_new, tooltip: '새 탭으로 열기 (우클릭 저장)', onTap: _downloadCurrent),
               if (rotation != 0)
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 4),
