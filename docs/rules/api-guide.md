@@ -2,19 +2,22 @@
 
 ## 서버 정보
 - URL: `https://api-sko-kca.skons.net`
-- 프레임워크: FastAPI + Uvicorn
-- 소스: `yolov8/api/main.py` (단일 파일, 13000+ 줄)
+- 프레임워크: FastAPI + Uvicorn (포트 8000, `--workers 1`)
+- 소스: `yolov8/api/` 모듈 구조 — `main.py`(엔트리) + `core/` + `routers/`(18개) + `schemas/`
+  (2026.05 리팩토링 전까지는 단일 `main.py` 13000줄이었음)
 - 서비스: `systemctl restart kca-api`
 
 ## EC2 배포 방식
-프론트는 git push → Amplify 자동 빌드. 백엔드는 GitHub API로 단일 파일 pull:
+프론트는 git push → Amplify 자동 빌드.
+
+백엔드는 **모듈 구조라 단일 파일 pull 불가** → tarball 배포 스크립트 사용:
 ```bash
-curl -H "Authorization: token {token}" \
-  -H "Accept: application/vnd.github.v3.raw" \
-  -o /home/ubuntu/kca-api/main.py \
-  "https://api.github.com/repos/T-O-Mega/KCA/contents/yolov8/api/main.py" \
-  && sudo systemctl restart kca-api
+export GITHUB_TOKEN={token}
+bash /home/ubuntu/deploy_backend.sh --restart   # --pip: requirements 바뀌면 추가
 ```
+- 스크립트 자체는 최초 1회 Contents API 로 받음 (`scripts/deploy_backend.sh`)
+- 받아오는 것: `main.py`, `requirements.txt`, `core/`, `routers/`, `schemas/` (DB·로그·venv 보존)
+- 상세: [rules/architecture.md](./architecture.md#백엔드-ec2--tarball-배포-스크립트-202605-리팩토링-이후) 참조
 
 ## 인증 방식
 
@@ -123,6 +126,18 @@ Authorization: Bearer {base64url(empno:expiry:hmac_sha256)}
 |--------|------|------|
 | GET | `/cert/lookup` | 허가번호/호출명칭 조회 |
 | POST | `/cert/generate` | 설치확인서 생성 (PDF/HWPX) |
+
+### 시설물 사진 (SKO-OCEAN) — `routers/sisl_photos.py`
+| Method | Path | 권한 | 설명 |
+|--------|------|------|------|
+| POST | `/admin/sisl-photos/import` | admin | sisl_db 엑셀 임포트 |
+| GET | `/sisl-photos?neos_code=` | 인증 | 공대 기준 사진 메타 (롤링 3년 기본) |
+| GET | `/sisl-photos/stats` | admin/manager | 임포트 통계 |
+| GET | `/sisl-photos/filter-options` | 인증 | 본부→팀 매핑 (cert distinct) |
+| GET | `/sisl-photos/search?hdqt=&team=&facility=&address=` | 인증 | cert 조인 → 공대별 사진 그룹 |
+- 사진 메타는 `sisl_photo.db`(공대코드만 보유), 검색 조건(본부/팀/국소명/주소)은 `cert_cache.db` 와 조인
+- 이미지 자체는 사내망 `static-int.skons.co.kr` 에서 서빙 → 사내망에서만 표시
+- 상세: [rules/data-domain.md](./data-domain.md#시설물-사진-검색-sko-ocean)
 
 ### 커뮤니티
 | Method | Path | 설명 |

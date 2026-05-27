@@ -8,7 +8,7 @@
 - 프론트(Flutter Web)에 서버 사이드 시크릿 노출 금지 — Flutter Web은 모든 코드가 클라이언트에 노출됨
 
 ### 환경변수로 관리 (백엔드)
-백엔드 `main.py`의 모든 외부 자격증명은 `os.environ.get()`으로 로드. 운영은 systemd service 파일의 `Environment=` 지시자로 주입.
+백엔드의 모든 외부 자격증명은 `os.environ.get()`으로 로드(현재 위치: `core/config.py`. 2026.05 리팩토링 전엔 main.py). 운영은 systemd service 파일의 `Environment=` 지시자로 주입.
 
 위치: `/etc/systemd/system/kca-api.service` (또는 `override.conf`)
 
@@ -142,7 +142,7 @@ base64url(empno:expiry_unix:hmac_sha256(AUTH_TOKEN_SECRET, empno:expiry_unix))
 
 ### SQLite 자동 백업 (S3)
 - 매일 03:00 KST 실행 (`_sqlite_backup_daily_scheduler`)
-- 대상: `inspection`, `ds_detail`, `community` 3개 DB
+- 대상: `inspection`, `ds_detail`, `community`, `sisl_photo` 4개 DB
 - S3 경로: `s3://sko-kca-s3/backups/sqlite/{name}/YYYY-MM-DD.db`
 - 보관: 최근 7일, 그 이전 자동 삭제
 - 임시파일: `tempfile.mkstemp(dir=BACKUP_TMP_DIR)`, 권한 0600

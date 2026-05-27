@@ -23,11 +23,24 @@ lib/
 │   └── admin/       # 관리자 전용 화면 (3개)
 └── widgets/         # 공통 위젯 (지도, 프로그레스 다이얼로그 등)
 
-yolov8/api/
-└── main.py          # FastAPI 백엔드 (120+ 엔드포인트, 단일 파일)
+yolov8/api/          # FastAPI 백엔드 (모듈 구조 — 2026.05 리팩토링)
+├── main.py          # 앱 초기화 + 라우터 등록 (슬림 엔트리포인트, ~670줄)
+├── core/            # 공유 유틸 (config, auth, db, s3, sms, utils, model,
+│                    #            cert_cache, inspection_db)
+├── schemas/         # Pydantic 모델 (models.py)
+└── routers/         # 18개 도메인 라우터 (auth, users, predict, categories,
+                     #   stations, storage, ds, callname, cert, inspection,
+                     #   inspection_results, community, document, change_request,
+                     #   inadequate, route_basket, admin, sisl_photos)
 
 docs/rules/          # 작업별 참조 문서 (이 폴더)
 ```
+
+> **백엔드 코드 추가 규칙** (리팩토링 이후)
+> - 엔드포인트 추가 → 해당 `routers/*.py` 에 `@router.get/post` 추가 (없으면 새 라우터 만들고 `main.py` 에 `include_router`)
+> - 공유 유틸 → `core/*.py`
+> - Pydantic 모델 → `schemas/models.py` (라우터에서 쓰면 반드시 import — 누락 시 모듈 로드 NameError)
+> - 환경변수 → `core/config.py` 에 `os.environ.get()`
 
 ## DB 스키마 (SQLite: inspection.db)
 
@@ -91,12 +104,16 @@ meta TEXT    -- JSON (호출명칭, 허가번호, from_status, to_status)
 ## SQLite: cert_cache.db
 
 ```sql
-cert(zpwino, zpwina, zpwiadr, zpcode, zpcname, eqp_type, ...)
--- 인덱스: zpwino, zpwina, zpwiadr
+cert(zpwino, zpwina, zpwiadr, zpcode, zpkcode, zpcname,
+     area_hdofc_nm, ons_team_nm, eqp_type, ...)
+-- 인덱스: zpwino, zpwina, zpwiadr, zpcode
 ```
-- S3 CSV에서 주기적 빌드 (TTL 기반)
+- S3 CSV에서 주기적 빌드 (TTL 기반). 코드 위치: `core/cert_cache.py`
 - 설치확인서 조회 + 장비타입간소화 5단계 fallback에 사용
 - 서버 시작 시 빌드, 완료 전까지 xlsx 빌드 시작 안 함
+- 주요 컬럼: `zpcode`=통시코드, `zpkcode`=공대코드, `zpcname`=국소명, `zpwiadr`=주소,
+  `area_hdofc_nm`=본부(예 '경기Access담당'), `ons_team_nm`=팀(예 '평택품질개선팀')
+  → 시설물 사진 검색(`/sisl-photos/search`)이 이 컬럼들로 조인
 
 ## SQLite: community.db
 
@@ -113,7 +130,7 @@ notifications(id, user_empno, type, title, body, related_pk, sub_type, ...)
 ## SQLite 자동 백업 (S3)
 
 - 매일 03:00 KST `_sqlite_backup_daily_scheduler`
-- 대상: `inspection`, `ds_detail`, `community` 3개 DB
+- 대상: `inspection`, `ds_detail`, `community`, `sisl_photo` 4개 DB
 - 경로: `s3://sko-kca-s3/backups/sqlite/{name}/YYYY-MM-DD.db`
 - 보관: 최근 7일 (그 이전 자동 삭제)
 - 임시파일은 `tempfile.mkstemp(dir=BACKUP_TMP_DIR)`로 0600 권한 격리
@@ -151,17 +168,35 @@ ds-exports/      # DS 빌드된 xlsx 캐시
 git push origin main  # → Amplify 자동 빌드/배포
 ```
 
-### 백엔드 (EC2) — GitHub API 직접 다운로드 방식
+### 백엔드 (EC2) — tarball 배포 스크립트 (2026.05 리팩토링 이후)
+
+백엔드가 단일 `main.py` → 모듈 구조(`core/` `routers/` `schemas/`)로 바뀌어,
+**단일 파일 curl 방식은 더 이상 사용 불가**. 저장소 tarball 을 받아 코드 폴더만 복사하는
+`scripts/deploy_backend.sh` 사용 (DB·로그·venv 는 건드리지 않음).
+
 ```bash
+# 최초 1회: 스크립트만 받기 (기존 Contents API 방식)
 curl -H "Authorization: token {token}" \
   -H "Accept: application/vnd.github.v3.raw" \
-  -o /home/ubuntu/kca-api/main.py \
-  "https://api.github.com/repos/T-O-Mega/KCA/contents/yolov8/api/main.py" \
-  && sudo systemctl restart kca-api
+  -o /home/ubuntu/deploy_backend.sh \
+  "https://api.github.com/repos/T-O-Mega/KCA/contents/scripts/deploy_backend.sh"
 
-# 로그 확인
-journalctl -u kca-api --no-pager -n 80
+# 배포
+export GITHUB_TOKEN={token}                     # 기존 배포 토큰
+bash /home/ubuntu/deploy_backend.sh --restart   # 코드 받기 + 재시작 + 로그 출력
+#   --pip  옵션: requirements 바뀐 경우 pip install 까지 수행
 ```
+
+- 스크립트가 받아오는 것: `main.py`, `requirements.txt`(저장소 `yolov8/requirements.txt`), `core/`, `routers/`, `schemas/`
+- 받기 전 기존 `main.py` 를 `main.py.bak.<날짜시각>` 으로 자동 백업 (롤백용 명령도 종료 시 출력)
+- 운영 디렉터리 `/home/ubuntu/kca-api/` 는 git 저장소가 아님 (DB·로그·venv·코드가 한 폴더에 평면 배치)
+
+```bash
+# 로그 확인 (모듈 로드 NameError 등은 재시작 직후 여기 찍힘)
+systemctl status kca-api --no-pager | head -8
+journalctl -u kca-api --since "30 sec ago" --no-pager | tail -40
+```
+정상 기동 신호: `Application startup complete` + `systemctl status` 가 `active (running)`.
 
 ### 환경변수 (systemd 서비스 파일)
 
@@ -215,10 +250,10 @@ RuntimeDirectory=kca-api     # /run/kca-api 자동 관리
 ## 백그라운드 태스크 구조
 
 ```
-서버 시작
-├── cert_cache 빌드 (asyncio.to_thread)     → _cert_cache_db_path 설정
-├── _job_worker_loop (asyncio.create_task)  → DS 잡 큐 순차 처리 (싱글턴)
-└── _xlsx_build_worker (create_task, 지연)  → xlsx 빌드 큐 처리
+서버 시작 (main.py startup)
+├── cert_cache 빌드 (core/cert_cache.py)     → _cert_cache_db_path 설정
+├── _job_worker_loop (routers/ds.py)         → DS 잡 큐 순차 처리 (싱글턴)
+└── _xlsx_build_worker (routers/ds.py, 지연) → xlsx 빌드 큐 처리
      └── cert_cache 완료 후 시작 (GIL 경합 방지)
 ```
 

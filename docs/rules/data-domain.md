@@ -168,7 +168,7 @@ CSV 업로드 → 분석(컬럼/건수) → 필터 설정 → 매칭 처리 → 
 
 ### 딕셔너리 (`_EQP_TYPE_SIMPLIFY`)
 - 280+ 장비타입 → 30+ 간소화 카테고리
-- 위치: `main.py` 상단 (line 256~540)
+- 위치: `core/config.py` (리팩토링 전 main.py 상단)
 
 ### 주요 카테고리
 ```
@@ -180,3 +180,42 @@ RO-DUO, OR-DUO, LR-DUO, WLME, ...
 ### 키워드 기반 fallback (`_EQP_KEYWORD_RULES`)
 - 딕셔너리 매칭 실패 시 장비명에 포함된 키워드로 분류
 - 구체적인 키워드 우선 (GIRO > IRO, ARRU > RRU)
+
+---
+
+## 시설물 사진 검색 (SKO-OCEAN)
+
+외부 시스템(SKO-OCEAN)에서 업로드된 시설점검 사진을 본부/팀/국소명/주소로 검색.
+
+### 파일
+| 구분 | 파일 |
+|------|------|
+| 화면 | `lib/screens/sisl_photo_search_screen.dart` (Ocean 2-pane: 좌 국소목록 / 우 사진그리드) |
+| 공용 위젯 | `lib/widgets/sisl_photo_widgets.dart` (`SislPhotoTile`/`SislPhotoViewer`, HTML img 기반 CORS 우회) |
+| 서비스 | `lib/services/inspection_service.dart` (`getSislFilterOptions`/`searchSislPhotos`) |
+| 백엔드 | `yolov8/api/routers/sisl_photos.py` |
+
+### 데이터 모델 / 조인
+- `sisl_photo.db` 는 **공대코드(neos_code)·분류(reg_cls)·업로드일자·guid·file_path** 만 보유
+- 본부/팀/국소명/주소는 `cert_cache.db` 와 조인 (조인키: `sisl_photo.neos_code` = `cert.zpkcode`)
+
+| 검색 조건 | cert 컬럼 |
+|-----------|-----------|
+| 본부 (드롭다운) | `area_hdofc_nm` distinct (예 '경기Access담당') |
+| 팀 (드롭다운, 본부 종속) | `ons_team_nm` distinct (예 '평택품질개선팀') |
+| 국소명 (입력) | `zpcname` LIKE |
+| 주소 (입력) | `zpwiadr` LIKE |
+| → 결과 국소 | `zpkcode`(공대) + `zpcode`(통시) + 국소명 + 주소 |
+
+### 흐름
+```
+filter-options → 본부/팀 드롭다운 채움
+→ search(본부·팀·국소명·주소) → cert 에서 매칭 공대 추출
+→ 그 공대들로 sisl_photo 조회(롤링 3년) → 국소별 사진 그룹 반환
+→ 좌측 국소 선택 시 우측 그리드 필터, 사진 클릭 시 SislPhotoViewer
+```
+
+### 주의
+- 이미지는 사내망 `static-int.skons.co.kr` 에서 서빙 → **사내망에서만 표시**, 외부망은 메타만 정상
+- 검색은 조건이 모두 비면 빈 결과 반환 (전체 스캔 방지), `?` 바인딩 + LIKE escape
+- 권한: 모든 로그인 사용자 (메뉴 위치: 서류 관리 그룹)

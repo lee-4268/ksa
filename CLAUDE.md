@@ -9,7 +9,7 @@
 | UI 수정/추가 | `docs/rules/ui-patterns.md` |
 | 백엔드 API 수정 | `docs/rules/api-guide.md` + 해당 도메인 문서 |
 | 검사/실적 관련 | `docs/rules/inspection-domain.md` |
-| DS/호출명칭/설치확인서 | `docs/rules/data-domain.md` |
+| DS/호출명칭/설치확인서/시설물 사진 | `docs/rules/data-domain.md` |
 | DS xlsx 빌드/다운로드/CORS | `docs/rules/ds-xlsx-pipeline.md` |
 | 인증/권한 관련 | `docs/rules/auth-and-roles.md` |
 | 보안/시크릿/환경변수/백업 | `docs/rules/security.md` |
@@ -33,7 +33,8 @@
 
 ### 배포
 - 프론트: `flutter build web` → AWS Amplify 자동 배포 (git push)
-- 백엔드: EC2 직접 배포, `sudo systemctl restart kca-api`
+- 백엔드: `yolov8/api/` 모듈 구조 (main.py + core/ + routers/ + schemas/). 2026.05 리팩토링으로 단일 main.py curl 배포는 폐기 → EC2에서 `scripts/deploy_backend.sh` (tarball) 사용. 상세 `docs/rules/architecture.md`
+- 백엔드 코드 추가 시: 엔드포인트→`routers/*.py`, 유틸→`core/*.py`, 모델→`schemas/models.py`(라우터에서 쓰면 반드시 import)
 - 환경변수는 systemd 서비스 파일에 설정 (`/etc/systemd/system/kca-api.service`)
 
 ### 보안 (항상 준수)
