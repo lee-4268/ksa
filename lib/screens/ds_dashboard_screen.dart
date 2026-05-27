@@ -1281,11 +1281,16 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
       final applied = result['applied'] ?? 0;
       final matched = result['matched_changes'] ?? 0;
       final done = (result['schedule_done'] as List?)?.length ?? 0;
+      final warnings = (result['warnings'] as List?)?.map((e) => e.toString()).toList() ?? const [];
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text('패치 $applied/$matched건 · 점검완료 자동 전환 $done건'),
         backgroundColor: const Color(0xFF1A8754),
         duration: const Duration(seconds: 5),
       ));
+      // 신고-반영 불일치 경고가 있으면 별도 다이얼로그로 명확히 안내 (적용은 이미 완료됨)
+      if (warnings.isNotEmpty) {
+        _showApplyWarnings(warnings);
+      }
       _loadChangeHistoryCount();
     } catch (e) {
       if (!mounted) return;
@@ -1294,6 +1299,46 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
         content: Text('적용 실패: $e'), backgroundColor: Colors.red,
       ));
     }
+  }
+
+  void _showApplyWarnings(List<String> warnings) {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: Colors.white,
+        surfaceTintColor: Colors.transparent,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        title: Row(children: const [
+          Icon(Icons.warning_amber_rounded, color: Color(0xFFFFA726), size: 22),
+          SizedBox(width: 8),
+          Text('신고-반영 불일치', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+        ]),
+        content: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 420, maxHeight: 360),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('적용은 완료되었으나, 신고 내용과 업로드 파일이 일치하지 않는 항목이 있습니다. 확인하세요.',
+                    style: TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
+                const SizedBox(height: 12),
+                ...warnings.map((w) => Padding(
+                      padding: const EdgeInsets.only(bottom: 6),
+                      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        const Text('• ', style: TextStyle(color: Color(0xFFFFA726))),
+                        Expanded(child: Text(w, style: const TextStyle(fontSize: 13, color: Color(0xFF374151)))),
+                      ]),
+                    )),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('확인')),
+        ],
+      ),
+    );
   }
 
   String _formatTime(String isoTime) {

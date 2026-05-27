@@ -4903,7 +4903,9 @@ async def ds_apply_partial_update(request: Request, file: UploadFile = File(...)
 
         if 장치_si >= 0:
             ws = wb.sheet_by_index(장치_si)
-            jn_col  = _find_col(ws, '장치번호'); jn_col  = jn_col  if jn_col  >= 0 else 3
+            jn_col  = _find_col(ws, '장치번호')
+            if jn_col < 0:
+                raise HTTPException(400, "장치 시트에 '장치번호' 컬럼이 없습니다. 올바른 DS 양식인지 확인하세요")
             sn_col  = _find_col(ws, '일련번호'); sn_col  = sn_col  if sn_col  >= 0 else 8
             형식_col = _find_col(ws, '형식검정번호'); 형식_col = 형식_col if 형식_col >= 0 else 11
 
@@ -4931,6 +4933,8 @@ async def ds_apply_partial_update(request: Request, file: UploadFile = File(...)
             if 설치형태_col < 0: 설치형태_col = _find_col(ws, '설치형태')
             if 설치형태_col < 0: 설치형태_col = 28
             jn_col_a = _find_col(ws, '장치번호')
+            if jn_col_a < 0:
+                raise HTTPException(400, "안테나 시트에 '장치번호' 컬럼이 없습니다. 올바른 DS 양식인지 확인하세요")
 
             for ri in range(1, ws.nrows):
                 hn = _norm_hn(ws.cell_value(ri, 0))
@@ -5103,6 +5107,26 @@ async def ds_apply_partial_update(request: Request, file: UploadFile = File(...)
         ).fetchall()
         crs = [dict(r) for r in crs]
 
+        # ── 신고-반영 정합성 검증 (경고만, 적용은 그대로 진행) ──
+        # 신고된 장치 단위 변경: 일련번호/형식검정번호 = device_data 와 동일 키 (허가번호,장치번호)
+        #                        설치형태 = antenna_data 와 동일 키
+        warnings: list[str] = []
+        device_changed_keys = set(device_data.keys()) | set(antenna_data.keys())  # (hn, jn)
+        reported_device_keys: set[tuple[str, str]] = set()
+        for cr in crs:
+            if cr.get('field') in ('일련번호', '형식검정번호', '설치형태'):
+                hn_c = (cr.get('허가번호') or '').replace('-', '').strip()
+                jn_c = (cr.get('장치번호') or '').strip()
+                reported_device_keys.add((hn_c, jn_c))
+        # 신고됐는데 파일에 해당 장치 행이 없음 (신고한 장치가 반영 누락)
+        for (hn_r, jn_r) in sorted(reported_device_keys):
+            if (hn_r, jn_r) not in device_changed_keys:
+                warnings.append(f"신고된 장치(허가 {hn_r} / 장치 {jn_r or '미지정'})가 업로드 파일에 없습니다")
+        # 파일엔 있는데 신고 안 된 장치 (신고 없이 다른 장치가 포함됨)
+        for (hn_f, jn_f) in sorted(device_changed_keys):
+            if hn_f in license_set and (hn_f, jn_f) not in reported_device_keys:
+                warnings.append(f"신고되지 않은 장치(허가 {hn_f} / 장치 {jn_f or '미지정'})가 파일에 포함되어 있습니다")
+
         now = datetime.now(timezone.utc).isoformat()
         applied_cr_ids = [cr['id'] for cr in crs]
         if applied_cr_ids:
@@ -5146,6 +5170,7 @@ async def ds_apply_partial_update(request: Request, file: UploadFile = File(...)
             "matched_changes": len(crs),
             "applied": updated_count,
             "schedule_done": schedule_done,
+            "warnings": warnings,
         }
 
     result = await asyncio.to_thread(_process)
