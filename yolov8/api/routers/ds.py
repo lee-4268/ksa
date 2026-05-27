@@ -59,6 +59,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from core.auth import (
     _verify_auth,
+    _verify_token,
     _get_user_role_sync,
     _require_role,
     _check_division_access,
@@ -81,7 +82,8 @@ from core.config import (
     _DS_DETAIL_DB,
 )
 from core.db import get_s3_client, get_dynamodb_resource, get_dynamodb_client
-from core.utils import _check_memory, _log_mem, _release_memory
+from core.s3 import _validate_s3_key
+from core.utils import _check_memory, _log_mem, _release_memory, decimal_to_native
 from pydantic import BaseModel
 from schemas.models import (
     DsUploadInit, DsUploadChunk, DsUploadFinalize,
