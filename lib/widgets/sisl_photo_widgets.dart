@@ -55,6 +55,60 @@ void _ensureSislImageRegistered(String url, {String fit = 'cover'}) {
   });
 }
 
+/// 파일/폴더명에 못 쓰는 문자 제거 (윈도/맥 공통 금지문자 + 공백 정리).
+String sanitizeSislName(String name) {
+  var s = name.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_').trim();
+  s = s.replaceAll(RegExp(r'\s+'), ' ');
+  return s.isEmpty ? 'sisl' : s;
+}
+
+/// URL 의 확장자 추출 (없으면 .jpg).
+String _sislExt(String url) {
+  final lastDot = url.lastIndexOf('.');
+  final lastSlash = url.lastIndexOf('/');
+  if (lastDot > lastSlash) {
+    final e = url.substring(lastDot).toLowerCase();
+    if (e.length <= 5 && RegExp(r'^\.[a-z0-9]+$').hasMatch(e)) return e;
+  }
+  return '.jpg';
+}
+
+/// 시설물 사진 1장 다운로드. folderName 이 있으면 zip 폴더 구조 대신
+/// 파일명 prefix(폴더명/) 로 사용해 같은 국소 사진이 묶이도록 함.
+/// (사내망 CORS 차단으로 fetch→Blob 불가하여 <a download> 직접 방식)
+void downloadSislPhoto(Map<String, dynamic> item, {String folderName = '', int seq = 0}) {
+  final url = (item['url'] ?? '').toString();
+  if (url.isEmpty) return;
+  final neos = (item['neos_code'] ?? '').toString();
+  final dt = (item['upload_date'] ?? '').toString();
+  final guid = (item['guid'] ?? '').toString();
+  final ext = _sislExt(url);
+  final base = '${neos.isEmpty ? "sisl" : neos}_${dt.isEmpty ? "" : "${dt}_"}$guid$ext';
+  // folderName 이 있으면 'folderName/순번_base' — 브라우저가 다운로드 폴더 하위에 폴더 생성
+  final fname = folderName.isEmpty
+      ? base
+      : '${sanitizeSislName(folderName)}/${seq > 0 ? "${seq.toString().padLeft(2, '0')}_" : ""}$base';
+
+  final anchor = html.AnchorElement(href: url)
+    ..download = fname
+    ..target = '_blank'
+    ..rel = 'noopener'
+    ..style.display = 'none';
+  html.document.body?.append(anchor);
+  anchor.click();
+  anchor.remove();
+}
+
+/// 시설물 사진 일괄 다운로드 — 각 사진을 folderName 폴더 하위로 순차 저장.
+/// 브라우저 다중 다운로드 차단을 피하려 사진마다 약간의 간격(250ms)을 둠.
+Future<void> downloadSislPhotosBatch(
+    List<Map<String, dynamic>> items, String folderName) async {
+  for (var i = 0; i < items.length; i++) {
+    downloadSislPhoto(items[i], folderName: folderName, seq: i + 1);
+    await Future.delayed(const Duration(milliseconds: 250));
+  }
+}
+
 /// upload_date(YYYYMMDD 정수/문자) → 'YYYY-MM-DD' 포맷.
 String fmtSislDate(dynamic raw) {
   final s = (raw ?? '').toString();
@@ -185,37 +239,8 @@ class _SislPhotoViewerState extends State<SislPhotoViewer> {
 
   String _fmt(dynamic raw) => fmtSislDate(raw);
 
-  /// 사진 1장을 새 탭/창에서 다운로드.
-  /// 브라우저 다운로드 다이얼로그 트리거를 위해 <a download> 사용.
-  /// CORS 때문에 fetch→Blob 방식은 막힐 수 있어, 가장 단순한 anchor download.
-  /// 같은 출처 정책상 'download' attribute 가 무시되고 이동만 되는 경우도 있지만,
-  /// 그래도 새 탭에서 우클릭 저장으로 fallback 가능.
-  void _downloadCurrent() {
-    final item = widget.items[_idx];
-    final url = (item['url'] ?? '').toString();
-    if (url.isEmpty) return;
-    final neos = (item['neos_code'] ?? '').toString();
-    final dt = (item['upload_date'] ?? '').toString();
-    final guid = (item['guid'] ?? '').toString();
-    // 확장자 추출 (없으면 jpg)
-    var ext = '.jpg';
-    final lastDot = url.lastIndexOf('.');
-    final lastSlash = url.lastIndexOf('/');
-    if (lastDot > lastSlash) {
-      final e = url.substring(lastDot).toLowerCase();
-      if (e.length <= 5 && RegExp(r'^\.[a-z0-9]+$').hasMatch(e)) ext = e;
-    }
-    final fname = '${neos.isEmpty ? "sisl" : neos}_${dt.isEmpty ? "" : "${dt}_"}$guid$ext';
-
-    final anchor = html.AnchorElement(href: url)
-      ..download = fname
-      ..target = '_blank'
-      ..rel = 'noopener'
-      ..style.display = 'none';
-    html.document.body?.append(anchor);
-    anchor.click();
-    anchor.remove();
-  }
+  /// 현재 사진 1장 다운로드 (공용 함수 사용).
+  void _downloadCurrent() => downloadSislPhoto(widget.items[_idx]);
 
   @override
   Widget build(BuildContext context) {
