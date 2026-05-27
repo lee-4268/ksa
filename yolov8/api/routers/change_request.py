@@ -309,7 +309,7 @@ async def change_request_generate_form(
     wb = xlwt.Workbook(encoding='utf-8')
     ws = wb.add_sheet(sheet_name)
 
-    col_widths = [947, 5401, 4915, 13952, 13952, 13952, 1331, 1331, 2304, 3379, 1689]
+    col_widths = [947, 5401, 4915, 2304, 13952, 13952, 13952, 1331, 1331, 2304, 3379, 1689]
     for ci, w in enumerate(col_widths):
         ws.col(ci).width = w
 
@@ -365,7 +365,7 @@ async def change_request_generate_form(
     ws.row(2).height_mismatch = True; ws.row(2).height = 348
 
     ws.write(0, 0, '○ 무선국 변경개설신고', style_title)
-    headers = ['순\n번', '호출명칭', '허가번호', '변경내역', '변경전', '변경후',
+    headers = ['순\n번', '호출명칭', '허가번호', '장치', '변경내역', '변경전', '변경후',
                '위도', '경도', '준공기한', '심의차수', '허가\n종류']
     for ci, h in enumerate(headers):
         ws.write_merge(1, 2, ci, ci, h, style_header)
@@ -381,17 +381,20 @@ async def change_request_generate_form(
         변경내역 = _WF_CHANGE_LABEL.get(field, field)
         변경전 = _wf_format_change_value(field, it.get('before_value', ''))
         변경후 = _wf_format_change_value(field, it.get('after_value', ''))
+        # 장치번호는 장치 단위 변경(일련번호/형식검정번호)에만 의미 — 그 외 항목은 빈 칸
+        장치 = (it.get('장치번호') or '').strip() if field in WF_CHANGE_DEVICE_FIELDS else ''
         ws.write(ri, 0, idx + 1, style_data)
         ws.write(ri, 1, 호출명칭, style_data)
         ws.write(ri, 2, 허가번호, style_data)
-        ws.write(ri, 3, 변경내역, style_data_yellow)
-        ws.write(ri, 4, 변경전, style_data)
-        ws.write(ri, 5, 변경후, style_data)
-        ws.write(ri, 6, '기존동일', style_data)
-        ws.write(ri, 7, '', style_data)
+        ws.write(ri, 3, 장치, style_data)
+        ws.write(ri, 4, 변경내역, style_data_yellow)
+        ws.write(ri, 5, 변경전, style_data)
+        ws.write(ri, 6, 변경후, style_data)
+        ws.write(ri, 7, '기존동일', style_data)
         ws.write(ri, 8, '', style_data)
         ws.write(ri, 9, '', style_data)
-        ws.write(ri, 10, '운용', style_data)
+        ws.write(ri, 10, '', style_data)
+        ws.write(ri, 11, '운용', style_data)
 
     buf = io.BytesIO()
     wb.save(buf)
