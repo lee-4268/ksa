@@ -70,3 +70,8 @@ amplifytools.xcconfig
 **.sample
 #amplify-do-not-edit-end
 .claude/settings.local.json
+
+# 백엔드 런타임 SQLite DB (EC2 로컬 데이터 — 코드와 함께 배포 금지)
+yolov8/api/*.db
+yolov8/api/*.db-wal
+yolov8/api/*.db-shm
