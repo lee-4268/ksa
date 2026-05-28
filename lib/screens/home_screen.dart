@@ -514,7 +514,10 @@ final result = await showDialog<bool>(
     return AnimatedContainer(
       duration: const Duration(milliseconds: 200),
       width: _sidebarCollapsed ? 64 : _sidebarWidth,
-      decoration: const BoxDecoration(color: _surface),
+      decoration: const BoxDecoration(
+        color: _surface,
+        border: Border(right: BorderSide(color: _border)),
+      ),
       child: _buildSidebarContent(auth, items),
     );
   }
@@ -573,7 +576,7 @@ final result = await showDialog<bool>(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         const Text('SKO 무선국', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: _textPrimary, letterSpacing: 0.3)),
-                        Text('무선국 정기검사 관리', style: TextStyle(fontSize: 9, color: Colors.grey.shade500, fontWeight: FontWeight.w400)),
+                        const Text('무선국 정기검사 관리', style: TextStyle(fontSize: 9, color: Color(0xFF9CA3AF), fontWeight: FontWeight.w400)),
                       ],
                     ),
                   ),
@@ -671,36 +674,51 @@ final result = await showDialog<bool>(
     final isSelected = _selectedIndex == i;
     return Padding(
       padding: const EdgeInsets.only(bottom: 2),
-      child: Material(
-        color: isSelected ? item.color.withValues(alpha: 0.08) : Colors.transparent,
-        borderRadius: BorderRadius.circular(8),
-        child: InkWell(
-          onTap: () {
-            setState(() => _selectedIndex = i);
-            _logMenuAccess(item.title);
-            if (inDrawer) Navigator.pop(context);
-          },
-          borderRadius: BorderRadius.circular(8),
-          hoverColor: const Color(0xFFF3F4F6),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
-            child: Row(
-              children: [
-                Icon(item.icon, size: 18, color: isSelected ? item.color : _textSecondary),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(item.title,
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: isSelected ? FontWeight.w600 : FontWeight.w500,
-                      color: isSelected ? item.color : const Color(0xFF374151),
+      child: Stack(
+        children: [
+          Material(
+            color: isSelected ? item.color.withValues(alpha: 0.08) : Colors.transparent,
+            borderRadius: BorderRadius.circular(8),
+            child: InkWell(
+              onTap: () {
+                setState(() => _selectedIndex = i);
+                _logMenuAccess(item.title);
+                if (inDrawer) Navigator.pop(context);
+              },
+              borderRadius: BorderRadius.circular(8),
+              hoverColor: const Color(0xFFF3F4F6),
+              child: Padding(
+                padding: const EdgeInsets.only(left: 14, right: 10, top: 9, bottom: 9),
+                child: Row(
+                  children: [
+                    Icon(item.icon, size: 18, color: isSelected ? item.color : _textSecondary),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(item.title,
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: isSelected ? FontWeight.w600 : FontWeight.w500,
+                          color: isSelected ? item.color : const Color(0xFF374151),
+                        ),
+                      ),
                     ),
-                  ),
+                  ],
                 ),
-              ],
+              ),
             ),
           ),
-        ),
+          if (isSelected)
+            Positioned(
+              left: 0, top: 4, bottom: 4,
+              child: Container(
+                width: 3,
+                decoration: BoxDecoration(
+                  color: item.color,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }
@@ -746,29 +764,44 @@ final result = await showDialog<bool>(
             final isSelected = _selectedIndex == idx;
             return Align(
               alignment: Alignment.centerLeft,
-              child: Material(
-                color: isSelected ? item.color.withValues(alpha: 0.08) : Colors.transparent,
-                borderRadius: BorderRadius.circular(6),
-                child: InkWell(
-                  onTap: () {
-                    setState(() => _selectedIndex = idx);
-                    _logMenuAccess(item.title);
-                    if (inDrawer) Navigator.pop(context);
-                  },
-                  borderRadius: BorderRadius.circular(6),
-                  hoverColor: const Color(0xFFF3F4F6),
-                  child: Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.only(left: 38, top: 7, bottom: 7, right: 10),
-                    child: Text(item.title,
-                      style: TextStyle(
-                        fontSize: 12.5,
-                        fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
-                        color: isSelected ? item.color : const Color(0xFF4B5563),
+              child: Stack(
+                children: [
+                  Material(
+                    color: isSelected ? item.color.withValues(alpha: 0.08) : Colors.transparent,
+                    borderRadius: BorderRadius.circular(6),
+                    child: InkWell(
+                      onTap: () {
+                        setState(() => _selectedIndex = idx);
+                        _logMenuAccess(item.title);
+                        if (inDrawer) Navigator.pop(context);
+                      },
+                      borderRadius: BorderRadius.circular(6),
+                      hoverColor: const Color(0xFFF3F4F6),
+                      child: Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.only(left: 42, top: 7, bottom: 7, right: 10),
+                        child: Text(item.title,
+                          style: TextStyle(
+                            fontSize: 12.5,
+                            fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
+                            color: isSelected ? item.color : const Color(0xFF4B5563),
+                          ),
+                        ),
                       ),
                     ),
                   ),
-                ),
+                  if (isSelected)
+                    Positioned(
+                      left: 0, top: 3, bottom: 3,
+                      child: Container(
+                        width: 3,
+                        decoration: BoxDecoration(
+                          color: item.color,
+                          borderRadius: BorderRadius.circular(2),
+                        ),
+                      ),
+                    ),
+                ],
               ),
             );
           }).toList(),
@@ -822,9 +855,9 @@ final result = await showDialog<bool>(
           const SizedBox(height: 6),
           Row(
             children: [
-              Icon(Icons.timer_outlined, size: 12, color: remaining < 30 ? Colors.orange : Colors.grey.shade400),
+              Icon(Icons.timer_outlined, size: 12, color: remaining < 30 ? const Color(0xFFF59E0B) : const Color(0xFFD1D5DB)),
               const SizedBox(width: 4),
-              Text(timeText, style: TextStyle(fontSize: 10, color: remaining < 30 ? Colors.orange : _textSecondary)),
+              Text(timeText, style: TextStyle(fontSize: 10, color: remaining < 30 ? const Color(0xFFF59E0B) : _textSecondary)),
               const Spacer(),
               InkWell(
                 onTap: () { auth.extendSession(); setState(() {}); },

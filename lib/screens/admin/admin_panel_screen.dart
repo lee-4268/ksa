@@ -282,8 +282,8 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 8, offset: const Offset(0, 2))],
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFE5E7EB)),
       ),
       child: Row(children: [
         Container(
@@ -300,8 +300,8 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
             const Text('DS Detail 재빌드',
                 style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
             const SizedBox(height: 2),
-            Text('설치장소 등 신규 필드 반영',
-                style: TextStyle(fontSize: 12, color: Colors.grey.shade500)),
+            const Text('설치장소 등 신규 필드 반영',
+                style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF))),
           ]),
         ),
         const SizedBox(width: 8),
@@ -810,11 +810,15 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
           const SizedBox(height: 24),
 
           // 메뉴 섹션
-          const Padding(
-            padding: EdgeInsets.only(left: 4, bottom: 10),
-            child: Text('관리 메뉴',
-                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700,
-                    color: Color(0xFF6B7280), letterSpacing: 0.6)),
+          Padding(
+            padding: const EdgeInsets.only(left: 2, bottom: 10),
+            child: Row(children: [
+              Container(width: 3, height: 14, decoration: BoxDecoration(color: const Color(0xFFE53935), borderRadius: BorderRadius.circular(2))),
+              const SizedBox(width: 8),
+              const Text('관리 메뉴',
+                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700,
+                      color: Color(0xFF374151), letterSpacing: 0.4)),
+            ]),
           ),
 
           // 사용자 관리 (권한 설정)
@@ -893,29 +897,29 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 8, offset: const Offset(0, 2))],
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFE5E7EB)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(children: [
             Container(
-              width: 48, height: 48,
+              width: 44, height: 44,
               decoration: BoxDecoration(
-                color: const Color(0xFFE53935).withValues(alpha: 0.10),
-                borderRadius: BorderRadius.circular(12),
+                color: const Color(0xFFE53935).withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(10),
               ),
-              child: const Icon(Icons.upload_file_rounded, color: Color(0xFFE53935)),
+              child: const Icon(Icons.upload_file_rounded, color: Color(0xFFE53935), size: 20),
               ),
               const SizedBox(width: 12),
               const Expanded(
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   Text('KCA 수검대상 Import',
-                      style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
+                      style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14, color: Color(0xFF111827))),
                   SizedBox(height: 2),
                   Text('정기검사 대상 Excel 파일 업로드',
-                      style: TextStyle(color: Colors.grey, fontSize: 13)),
+                      style: TextStyle(color: Color(0xFF6B7280), fontSize: 12)),
                 ]),
               ),
             ]),
@@ -924,15 +928,15 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
               ..._kcaMeta.map((m) => Padding(
                 padding: const EdgeInsets.symmetric(vertical: 2),
                 child: Row(children: [
-                  Icon(Icons.check_circle_outline, size: 14, color: Colors.green.shade600),
+                  const Icon(Icons.check_circle_outline, size: 14, color: Color(0xFF059669)),
                   const SizedBox(width: 6),
                   Text(
                     '${m['year']}년 — ${((m['total_skt'] as int? ?? 0) + (m['total_sheet1'] as int? ?? 0)).toString().replaceAllMapped(RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'), (x) => '${x[1]},')}행'
                     ' (정기 ${m['total_skt'] ?? 0} / 시기조정 ${m['total_sheet1'] ?? 0})',
-                    style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
+                    style: const TextStyle(fontSize: 12, color: Color(0xFF374151)),
                   ),
                   const SizedBox(width: 8),
-                  Text(m['imported_by'] ?? '', style: TextStyle(fontSize: 11, color: Colors.grey.shade500)),
+                  Text(m['imported_by'] ?? '', style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF))),
                 ]),
               )),
             ],
@@ -944,12 +948,12 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
                   child: LinearProgressIndicator(
                     value: _kcaProgress > 0 ? _kcaProgress : null,
                     minHeight: 6,
-                    backgroundColor: Colors.red.shade100,
+                    backgroundColor: const Color(0xFFFEE2E2),
                     valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFFE53935)),
                   ),
                 ),
                 const SizedBox(height: 6),
-                Text(_kcaStage, style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+                Text(_kcaStage, style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
               ])
             else
               Row(children: [
@@ -1052,27 +1056,27 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 8, offset: const Offset(0, 2))],
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFE5E7EB)),
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
           Container(
-            width: 48, height: 48,
+            width: 44, height: 44,
             decoration: BoxDecoration(
-              color: const Color(0xFF06B6D4).withValues(alpha: 0.10),
-              borderRadius: BorderRadius.circular(12),
+              color: const Color(0xFF06B6D4).withValues(alpha: 0.08),
+              borderRadius: BorderRadius.circular(10),
             ),
-            child: const Icon(Icons.photo_library_outlined, color: Color(0xFF06B6D4)),
+            child: const Icon(Icons.photo_library_outlined, color: Color(0xFF06B6D4), size: 20),
           ),
           const SizedBox(width: 12),
           const Expanded(
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Text('SKO-OCEAN 시설점검 사진 메타',
-                  style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
+                  style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14, color: Color(0xFF111827))),
               SizedBox(height: 2),
               Text('sisl_db 엑셀로 사진 UUID 목록 갱신',
-                  style: TextStyle(color: Colors.grey, fontSize: 13)),
+                  style: TextStyle(color: Color(0xFF6B7280), fontSize: 12)),
             ]),
           ),
         ]),
@@ -1081,11 +1085,11 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 2),
             child: Row(children: [
-              Icon(Icons.check_circle_outline, size: 14, color: Colors.green.shade600),
+              const Icon(Icons.check_circle_outline, size: 14, color: Color(0xFF059669)),
               const SizedBox(width: 6),
               Text(
                 '총 ${fmtNumber(total)}건 · 고유 공대 ${fmtNumber(uniqNeos)}개 · ${fmtDate(dateMin)} ~ ${fmtDate(dateMax)}',
-                style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
+                style: const TextStyle(fontSize: 12, color: Color(0xFF374151)),
               ),
             ]),
           ),
@@ -1093,12 +1097,12 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 2),
               child: Row(children: [
-                Icon(Icons.history, size: 14, color: Colors.grey.shade500),
+                const Icon(Icons.history, size: 14, color: Color(0xFF9CA3AF)),
                 const SizedBox(width: 6),
                 Expanded(
                   child: Text(
                     '최근: ${lastImport['filename'] ?? '-'} · ${fmtNumber((lastImport['total_rows'] as int?) ?? 0)}건 by ${lastImport['imported_by'] ?? '-'}',
-                    style: TextStyle(fontSize: 11, color: Colors.grey.shade500),
+                    style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF)),
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),
@@ -1117,7 +1121,7 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
               ),
             ),
             const SizedBox(height: 6),
-            Text(_sislStage, style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+            Text(_sislStage, style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
           ])
         else
           ElevatedButton.icon(
@@ -1141,8 +1145,8 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 8, offset: const Offset(0, 2))],
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFE5E7EB)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1150,13 +1154,13 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
           Row(
             children: [
               Container(
-                width: 48,
-                height: 48,
+                width: 44,
+                height: 44,
                 decoration: BoxDecoration(
-                  color: Colors.orange.withValues(alpha: 0.10),
-                  borderRadius: BorderRadius.circular(12),
+                  color: const Color(0xFFF59E0B).withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(10),
                 ),
-                child: const Icon(Icons.storage_rounded, color: Colors.orange),
+                child: const Icon(Icons.storage_rounded, color: Color(0xFFF59E0B), size: 20),
               ),
                 const SizedBox(width: 12),
                 Expanded(
@@ -1164,11 +1168,11 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       const Text('호출명칭 DB 관리',
-                          style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
+                          style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14, color: Color(0xFF111827))),
                       const SizedBox(height: 2),
                       Text(
                         _dbStatusText ?? '로딩 중...',
-                        style: TextStyle(color: Colors.grey.shade600, fontSize: 13),
+                        style: const TextStyle(color: Color(0xFF6B7280), fontSize: 12),
                       ),
                     ],
                   ),
@@ -1185,18 +1189,18 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
                   padding: const EdgeInsets.symmetric(vertical: 2),
                   child: Row(
                     children: [
-                      Icon(Icons.description_outlined, size: 14, color: Colors.grey.shade500),
+                      const Icon(Icons.description_outlined, size: 14, color: Color(0xFF9CA3AF)),
                       const SizedBox(width: 6),
                       Expanded(
                         child: Text(
                           name,
-                          style: TextStyle(fontSize: 11, color: Colors.grey.shade700),
+                          style: const TextStyle(fontSize: 11, color: Color(0xFF374151)),
                           overflow: TextOverflow.ellipsis,
                         ),
                       ),
                       Text(
                         _formatBytes(size),
-                        style: TextStyle(fontSize: 11, color: Colors.grey.shade500),
+                        style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF)),
                       ),
                     ],
                   ),
@@ -1204,9 +1208,9 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
               })),
             ],
             const SizedBox(height: 12),
-            Text(
+            const Text(
               '호출명칭 매칭에 사용되는 DB 파일을 업데이트합니다.\nCSV/Excel 파일을 업로드할 수 있습니다.',
-              style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
+              style: TextStyle(color: Color(0xFF6B7280), fontSize: 12),
             ),
             const SizedBox(height: 12),
             if (_dbUploading)
@@ -1217,14 +1221,14 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
                     child: LinearProgressIndicator(
                       value: _uploadProgress > 0 ? _uploadProgress : null,
                       minHeight: 6,
-                      backgroundColor: Colors.orange.shade100,
-                      valueColor: AlwaysStoppedAnimation<Color>(Colors.orange.shade600),
+                      backgroundColor: const Color(0xFFFEF3C7),
+                      valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFFF59E0B)),
                     ),
                   ),
                   const SizedBox(height: 8),
                   Text(
                     _uploadStage,
-                    style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                    style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
                   ),
                 ],
               )
@@ -1282,17 +1286,17 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(20),
-        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.06), blurRadius: 12, offset: const Offset(0, 2))],
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFFE5E7EB)),
       ),
       child: Row(children: [
         Container(
-          width: 56, height: 56,
+          width: 52, height: 52,
           decoration: BoxDecoration(
-            color: const Color(0xFFE53935).withValues(alpha: 0.10),
+            color: const Color(0xFFE53935).withValues(alpha: 0.08),
             shape: BoxShape.circle,
           ),
-          child: const Icon(Icons.admin_panel_settings_rounded, size: 28, color: Color(0xFFE53935)),
+          child: const Icon(Icons.admin_panel_settings_rounded, size: 26, color: Color(0xFFE53935)),
         ),
         const SizedBox(width: 16),
         Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -1338,24 +1342,24 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(12),
-          boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 12, offset: const Offset(0, 2))],
+          border: Border.all(color: const Color(0xFFE5E7EB)),
         ),
         child: Row(children: [
           Container(
-            width: 46, height: 46,
+            width: 44, height: 44,
             decoration: BoxDecoration(
-              color: iconColor.withValues(alpha: 0.10),
-              borderRadius: BorderRadius.circular(12),
+              color: iconColor.withValues(alpha: 0.08),
+              borderRadius: BorderRadius.circular(10),
             ),
-            child: Icon(icon, color: iconColor, size: 22),
+            child: Icon(icon, color: iconColor, size: 20),
           ),
           const SizedBox(width: 14),
           Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(title, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+            Text(title, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
             const SizedBox(height: 2),
-            Text(subtitle, style: const TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
+            Text(subtitle, style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
           ])),
-          Icon(Icons.chevron_right_rounded, color: Colors.grey.shade300, size: 20),
+          const Icon(Icons.chevron_right_rounded, color: Color(0xFFD1D5DB), size: 18),
         ]),
       ),
     );
