@@ -800,6 +800,7 @@ class _InadequateManagementScreenState extends State<InadequateManagementScreen>
         child: SingleChildScrollView(
           scrollDirection: Axis.horizontal,
           child: DataTable(
+            showCheckboxColumn: false,
             headingRowColor: WidgetStateProperty.all(const Color(0xFFF3F4F6)),
             headingTextStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Color(0xFF374151)),
             dataTextStyle: const TextStyle(fontSize: 13, color: Color(0xFF111827)),
@@ -841,12 +842,14 @@ class _InadequateManagementScreenState extends State<InadequateManagementScreen>
               final item = entry.value;
               final id = item['id'] as int;
               final checked = _checkedIds.contains(id);
-              
+
               return DataRow(
                 color: WidgetStateProperty.resolveWith<Color?>((states) {
+                  if (states.contains(WidgetState.hovered)) return primaryColor.withValues(alpha: 0.04);
                   if (checked) return primaryColor.withValues(alpha: 0.08);
                   return index.isEven ? Colors.white : const Color(0xFFFAFAFA);
                 }),
+                onSelectChanged: (_) => _showEditDialog(item),
                 cells: [
                   if (_isAdmin)
                     DataCell(
@@ -859,6 +862,10 @@ class _InadequateManagementScreenState extends State<InadequateManagementScreen>
                           else _checkedIds.remove(id);
                         }),
                       ),
+                      onTap: () => setState(() {
+                        if (checked) { _checkedIds.remove(id); }
+                        else { _checkedIds.add(id); }
+                      }),
                     ),
                   DataCell(Text(_str(item, 'region').isNotEmpty ? _str(item, 'region') : _str(item, 'skt본부'), overflow: TextOverflow.ellipsis)),
                   DataCell(Text(_str(item, 'ons팀'), overflow: TextOverflow.ellipsis)),
@@ -869,10 +876,7 @@ class _InadequateManagementScreenState extends State<InadequateManagementScreen>
                   DataCell(_buildDeadlineCell(item)),
                   DataCell(ConstrainedBox(constraints: const BoxConstraints(maxWidth: 160), child: Text(_str(item, '불합격내용'), overflow: TextOverflow.ellipsis))),
                   DataCell(ConstrainedBox(constraints: const BoxConstraints(maxWidth: 200), child: Text(_str(item, '불합격상세'), overflow: TextOverflow.ellipsis, style: const TextStyle(color: Color(0xFF6B7280))))),
-                  DataCell(
-                    _buildStatusChip(_str(item, 'status')),
-                    onTap: _isAdmin ? () => _showEditDialog(item) : null,
-                  ),
+                  DataCell(_buildStatusChip(_str(item, 'status'))),
                   DataCell(Text(_str(item, '심의차수'), style: const TextStyle(fontWeight: FontWeight.w500))),
                 ],
               );
@@ -960,49 +964,51 @@ class _InadequateManagementScreenState extends State<InadequateManagementScreen>
 
   Widget _buildBulkActionBar() {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-      decoration: BoxDecoration(
-        color: primaryColor.withValues(alpha: 0.08),
-        border: const Border(
-          bottom: BorderSide(color: Color(0xFFE5E7EB)),
+      height: 48,
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      decoration: const BoxDecoration(
+        color: Color(0xFFF8FAFF),
+        border: Border(
+          top: BorderSide(color: Color(0xFFDDE3F0)),
+          bottom: BorderSide(color: Color(0xFFDDE3F0)),
         ),
       ),
-      child: Wrap(
-        spacing: 12,
-        runSpacing: 8,
-        crossAxisAlignment: WrapCrossAlignment.center,
+      child: Row(
         children: [
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
             decoration: BoxDecoration(
-              color: primaryColor,
-              borderRadius: BorderRadius.circular(20),
+              color: primaryColor.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(4),
             ),
             child: Text(
-              '${_checkedIds.length}건 선택됨',
-              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.white),
+              '${_checkedIds.length}건',
+              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: primaryColor),
             ),
           ),
-          ElevatedButton.icon(
+          const SizedBox(width: 8),
+          Text(
+            '선택됨',
+            style: const TextStyle(fontSize: 13, color: Color(0xFF374151), fontWeight: FontWeight.w500),
+          ),
+          const Spacer(),
+          TextButton.icon(
             onPressed: _showBulkEditDialog,
-            icon: const Icon(Icons.edit_outlined, size: 16),
-            label: const Text('일괄 처리'),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: primaryColor,
-              foregroundColor: Colors.white,
-              elevation: 0,
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-              textStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            icon: Icon(Icons.edit_outlined, size: 14, color: primaryColor),
+            label: Text('일괄 처리', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: primaryColor)),
+            style: TextButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              backgroundColor: primaryColor.withValues(alpha: 0.08),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
             ),
           ),
-          TextButton(
+          const SizedBox(width: 4),
+          IconButton(
             onPressed: () => setState(() => _checkedIds.clear()),
-            style: TextButton.styleFrom(
-              foregroundColor: const Color(0xFF6B7280),
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            ),
-            child: const Text('선택 해제', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500)),
+            icon: const Icon(Icons.close, size: 16, color: Color(0xFF9CA3AF)),
+            tooltip: '선택 해제',
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
           ),
         ],
       ),
