@@ -81,6 +81,7 @@ from core.config import (
     _INSP_DB,
     _DS_DETAIL_DB,
 )
+from botocore.config import Config as _BotoConfig
 from core.db import get_s3_client, get_dynamodb_resource, get_dynamodb_client
 from core.s3 import _validate_s3_key
 import core.cert_cache as _cert_cache_mod
