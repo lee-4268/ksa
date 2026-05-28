@@ -504,7 +504,7 @@ class _CallnameScreenState extends State<CallnameScreen> {
           Row(children: [
             Icon(Icons.info_outline, color: Colors.blue.shade400, size: 20),
             const SizedBox(width: 8),
-            const Text('호출명칭 매칭이란?',
+            const Text('매뉴얼',
                 style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
           ]),
           const SizedBox(height: 8),
@@ -515,8 +515,8 @@ class _CallnameScreenState extends State<CallnameScreen> {
               borderRadius: BorderRadius.circular(8),
             ),
             child: const Text(
-              '정기검사 대상 Excel 파일을 업로드하면, 파일 내 무선국 정보를 KSA DB와 자동 매칭하여 '
-              '최신 호출명칭·통시구분 등을 채워 넣은 결과 파일을 다운로드할 수 있습니다.',
+              'Sample Excel 파일을 기반으로 작성된 자료를 업로드하면, 파일 내 무선국 정보를 ERP와 자동 매칭하여 '
+              '최신 통합시설코드를 채워 넣은 결과 파일을 다운로드할 수 있습니다.',
               style: TextStyle(fontSize: 13, color: Color(0xFF374151), height: 1.6),
             ),
           ),
