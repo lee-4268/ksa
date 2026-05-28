@@ -137,6 +137,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
   // 테이블 정렬
   int? _sortColIdx;
   bool _sortAsc = true;
+  int? _hoveredSchedRow;
 
   void _onScheduleSort(int si, bool asc) {
     final col = _kInspCols.firstWhere((c) => c.si == si,
@@ -2471,8 +2472,8 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                 child: Column(
                   children: [
                     Container(
-                      height: 44,
-                      color: _primary.withValues(alpha: 0.12),
+                      height: 48,
+                      color: const Color(0xFFF3F4F6),
                       child: SingleChildScrollView(
                         controller: _hdrHorizCtrl,
                         scrollDirection: Axis.horizontal,
@@ -2858,18 +2859,16 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
   // ── 커스텀 테이블 헤더 ────────────────────────────────────
   Widget _buildCustomHeader(double scale) {
     const hStyle = TextStyle(
-        fontSize: 12, fontWeight: FontWeight.w700, color: Colors.black87);
+        fontSize: 13, fontWeight: FontWeight.bold, color: Color(0xFF374151));
     final visibleCols =
         _kInspCols.where((c) => !_hiddenCols.contains(c.key)).toList();
     return Row(
-      children: visibleCols.asMap().entries.map((e) {
-        final isLast = e.key == visibleCols.length - 1;
-        final col = e.value;
+      children: visibleCols.map((col) {
         final w = (_colWidths[col.key] ?? col.w) * scale;
         final isSorted = _sortColIdx == col.si && col.si > 0;
         return SizedBox(
           width: w,
-          height: 44,
+          height: 48,
           child: Stack(
             children: [
               if (col.key == '__chk')
@@ -2882,8 +2881,8 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                       : null,
                   child: Container(
                     width: w,
-                    height: 44,
-                    padding: const EdgeInsets.only(left: 8, right: 16),
+                    height: 48,
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
                     alignment: Alignment.centerLeft,
                     child: Row(
                       children: [
@@ -2891,28 +2890,19 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                           child: Text(col.label, style: hStyle,
                               overflow: TextOverflow.ellipsis),
                         ),
-                        if (isSorted) ...[
-                          const SizedBox(width: 2),
-                          Icon(
-                            _sortAsc
-                                ? Icons.arrow_upward
-                                : Icons.arrow_downward,
-                            size: 11,
-                            color: _primary,
-                          ),
-                        ],
+                        const SizedBox(width: 2),
+                        Icon(
+                          isSorted
+                              ? (_sortAsc
+                                  ? Icons.arrow_upward_rounded
+                                  : Icons.arrow_downward_rounded)
+                              : Icons.unfold_more_rounded,
+                          size: 13,
+                          color: isSorted ? _primary : const Color(0xFFD1D5DB),
+                        ),
                       ],
                     ),
                   ),
-                ),
-              // 컬럼 구분선 (우측)
-              if (!isLast)
-                Positioned(
-                  right: 8,
-                  top: 10,
-                  bottom: 10,
-                  child: Container(
-                      width: 1, color: const Color(0xFFD1D5DB)),
                 ),
               // 열 너비 조절 핸들
               if (col.key != '__chk')
@@ -2991,29 +2981,37 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     final licenseNo = '${item['허가번호'] ?? ''}';
     final isSelected = _detailLicenseNo == licenseNo;
     final isChecked = _selectedLicenseNos.contains(licenseNo);
+    final hovered = _hoveredSchedRow == idx;
     final visibleCols =
         _kInspCols.where((c) => !_hiddenCols.contains(c.key)).toList();
+
+    Color rowColor() {
+      if (isSelected) return _primary.withValues(alpha: 0.06);
+      if (hovered) return _primary.withValues(alpha: 0.04);
+      return idx.isEven ? const Color(0xFFFAFAFA) : Colors.white;
+    }
+
     return MouseRegion(
       cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hoveredSchedRow = idx),
+      onExit: (_) { if (_hoveredSchedRow == idx) setState(() => _hoveredSchedRow = null); },
       child: GestureDetector(
         onTap: () => _loadDetail(licenseNo),
         child: Container(
-          height: 44,
+          height: 48,
           decoration: BoxDecoration(
-            color: isSelected
-                ? _primary.withValues(alpha: 0.06)
-                : (idx.isEven ? const Color(0xFFFAFAFB) : Colors.white),
+            color: rowColor(),
             border: const Border(
-                bottom: BorderSide(color: Color(0xFFE5E7EB), width: 0.5)),
+                bottom: BorderSide(color: Color(0xFFF0F0F0), width: 0.5)),
           ),
           child: Row(
             children: visibleCols.map((col) {
               final w = (_colWidths[col.key] ?? col.w) * scale;
               return SizedBox(
                 width: w,
-                height: 44,
+                height: 48,
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
                   child: ClipRect(
                     child: OverflowBox(
                       minHeight: 0,
@@ -3034,7 +3032,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
 
   Widget _buildCellContent(String key, Map<String, dynamic> item,
       String licenseNo, bool isChecked) {
-    const cs = TextStyle(fontSize: 12, color: Color(0xFF374151));
+    const cs = TextStyle(fontSize: 13, color: Color(0xFF111827));
     switch (key) {
       case '__chk':
         return _buildRowCheckbox(item, licenseNo, isChecked);
