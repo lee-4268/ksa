@@ -269,7 +269,7 @@ async def sisl_photos_filter_options(request: Request):
         _VALID_HDQT = {'강남', '강북', '경기', '인천', '강원', '충청', '경북', '경남', '서부'}
         org: dict = {}
         for hdqt, team in rows:
-            h = (hdqt or '').strip()
+            h = (hdqt or '').strip().replace('본부', '').strip()
             if not h or h not in _VALID_HDQT:
                 continue
             org.setdefault(h, [])
