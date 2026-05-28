@@ -217,12 +217,19 @@ class _InspectionDashboardWidgetState extends State<InspectionDashboardWidget> {
                   ),
                 ]),
               ),
-              // 아이템 목록
-              ...deadlineItems.asMap().entries.map((e) => Column(children: [
-                if (e.key > 0)
-                  const Divider(height: 1, thickness: 1, color: Color(0xFFE5E7EB)),
-                _DeadlineRow(item: e.value),
-              ])),
+              // 아이템 목록 (최대 5줄, 초과 시 스크롤)
+              SizedBox(
+                height: deadlineItems.length > 5 ? 5 * 52.0 + 4 : deadlineItems.length * 52.0 + (deadlineItems.length - 1).toDouble(),
+                child: ListView.separated(
+                  physics: deadlineItems.length > 5
+                      ? const ClampingScrollPhysics()
+                      : const NeverScrollableScrollPhysics(),
+                  itemCount: deadlineItems.length,
+                  separatorBuilder: (_, _) =>
+                      const Divider(height: 1, thickness: 1, color: Color(0xFFE5E7EB)),
+                  itemBuilder: (_, i) => _DeadlineRow(item: deadlineItems[i]),
+                ),
+              ),
             ],
           ),
         ),
