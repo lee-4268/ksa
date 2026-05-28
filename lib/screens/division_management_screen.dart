@@ -53,7 +53,7 @@ class _DivisionManagementScreenState extends State<DivisionManagementScreen>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFFAFAFB),
+      backgroundColor: const Color(0xFFF5F6FA),
       body: Consumer<DivisionDataService>(
         builder: (context, service, _) {
           if (service.isLoading) {
@@ -87,9 +87,15 @@ class _DivisionManagementScreenState extends State<DivisionManagementScreen>
   PreferredSizeWidget _buildAppBar() {
     return AppBar(
       backgroundColor: Colors.white,
+      foregroundColor: const Color(0xFF111827),
       elevation: 0,
+      surfaceTintColor: Colors.transparent,
+      bottom: const PreferredSize(
+        preferredSize: Size.fromHeight(1),
+        child: Divider(height: 1, color: Color(0xFFE5E7EB)),
+      ),
       leading: IconButton(
-        icon: const Icon(Icons.arrow_back, color: Colors.black87),
+        icon: const Icon(Icons.arrow_back, color: Color(0xFF111827)),
         onPressed: () => Navigator.pop(context),
       ),
       title: Consumer<DivisionDataService>(
@@ -102,9 +108,10 @@ class _DivisionManagementScreenState extends State<DivisionManagementScreen>
               Text(
                 '${service.currentDivisionName ?? ''} 전체 대상 관리',
                 style: const TextStyle(
-                  color: Colors.black87,
-                  fontSize: 18,
+                  color: Color(0xFF111827),
+                  fontSize: 17,
                   fontWeight: FontWeight.w600,
+                  letterSpacing: -0.2,
                 ),
               ),
             ],
@@ -176,11 +183,11 @@ class _DivisionManagementScreenState extends State<DivisionManagementScreen>
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(12),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.05),
-            blurRadius: 10,
+            blurRadius: 12,
             offset: const Offset(0, 2),
           ),
         ],

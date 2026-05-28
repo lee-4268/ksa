@@ -18,7 +18,7 @@ class SislPhotoSearchScreen extends StatefulWidget {
 class _SislPhotoSearchScreenState extends State<SislPhotoSearchScreen> {
   static const _primary = Color(0xFFE53935);
   static const _border = Color(0xFFE5E7EB);
-  static const _bg = Color(0xFFFAFAFB);
+  static const _bg = Color(0xFFF5F6FA);
   static const _textPrimary = Color(0xFF111827);
   static const _textSecondary = Color(0xFF6B7280);
 

@@ -562,7 +562,7 @@ Future<void> _downloadExcel() async {
   @override
   Widget build(BuildContext context) {
     return Container(
-      color: const Color(0xFFFAFAFB),
+      color: const Color(0xFFF5F6FA),
       child: Column(
         children: [
           _buildHeader(),
@@ -659,6 +659,25 @@ Future<void> _downloadExcel() async {
     );
   }
 
+  // ── 최근 업로드 배지 ──
+
+  Widget _buildLastUploadBadge() {
+    final lastUpload = (_dashboard['last_upload'] as String? ?? '').trim();
+    if (lastUpload.isEmpty) return const SizedBox.shrink();
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const Icon(Icons.upload_file_outlined, size: 13, color: Color(0xFF9CA3AF)),
+        const SizedBox(width: 4),
+        Text(
+          '최근 업로드: $lastUpload',
+          style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+        ),
+        const SizedBox(width: 12),
+      ],
+    );
+  }
+
   // ── 상단 헤더 ──
 
   Widget _buildHeader() {
@@ -672,7 +691,19 @@ Future<void> _downloadExcel() async {
         ),
         child: Row(
           children: [
+            Container(
+              width: 3,
+              height: 18,
+              decoration: BoxDecoration(
+                color: _primary,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const SizedBox(width: 10),
+            const Text('실적 관리',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: Color(0xFF111827))),
             const Spacer(),
+            _buildLastUploadBadge(),
             if (_isAdmin) ...[
               _uploading
                   ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
@@ -774,7 +805,6 @@ Future<void> _downloadExcel() async {
   Widget _summaryCard(
       String label, String value, IconData icon, Color color, {String? target}) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
@@ -782,70 +812,82 @@ Future<void> _downloadExcel() async {
         boxShadow: [
           BoxShadow(
               color: Colors.black.withValues(alpha: 0.04),
-              blurRadius: 6,
+              blurRadius: 10,
               offset: const Offset(0, 2)),
         ],
       ),
-      child: Row(
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: color.withValues(alpha: 0.1),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Icon(icon, size: 20, color: color),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+          // 컬러 상단 스트라이프
+          Container(height: 3, color: color),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            child: Row(
               children: [
-                Wrap(
-                  spacing: 4,
-                  runSpacing: 2,
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  children: [
-                    Text(label,
-                        style: const TextStyle(
-                            fontSize: 11,
-                            color: Color(0xFF6B7280),
-                            fontWeight: FontWeight.w500)),
-                    if (target != null)
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFF3F4F6),
-                          borderRadius: BorderRadius.circular(4),
-                          border: Border.all(color: const Color(0xFFD1D5DB)),
-                        ),
-                        child: Text(target,
-                            style: const TextStyle(
-                                fontSize: 9,
-                                fontWeight: FontWeight.w600,
-                                color: Color(0xFF6B7280))),
-                      ),
-                  ],
-                ),
-                const SizedBox(height: 2),
-                AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 400),
-                  transitionBuilder: (child, anim) => FadeTransition(
-                    opacity: anim,
-                    child: SlideTransition(
-                      position: Tween<Offset>(
-                        begin: const Offset(0, 0.3),
-                        end: Offset.zero,
-                      ).animate(anim),
-                      child: child,
-                    ),
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: color.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(8),
                   ),
-                  child: Text(value,
-                      key: ValueKey(value),
-                      style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w700,
-                          color: color)),
+                  child: Icon(icon, size: 20, color: color),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Wrap(
+                        spacing: 4,
+                        runSpacing: 2,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        children: [
+                          Text(label,
+                              style: const TextStyle(
+                                  fontSize: 11,
+                                  color: Color(0xFF6B7280),
+                                  fontWeight: FontWeight.w500)),
+                          if (target != null)
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFF3F4F6),
+                                borderRadius: BorderRadius.circular(4),
+                                border: Border.all(color: const Color(0xFFD1D5DB)),
+                              ),
+                              child: Text(target,
+                                  style: const TextStyle(
+                                      fontSize: 9,
+                                      fontWeight: FontWeight.w600,
+                                      color: Color(0xFF6B7280))),
+                            ),
+                        ],
+                      ),
+                      const SizedBox(height: 2),
+                      AnimatedSwitcher(
+                        duration: const Duration(milliseconds: 400),
+                        transitionBuilder: (child, anim) => FadeTransition(
+                          opacity: anim,
+                          child: SlideTransition(
+                            position: Tween<Offset>(
+                              begin: const Offset(0, 0.3),
+                              end: Offset.zero,
+                            ).animate(anim),
+                            child: child,
+                          ),
+                        ),
+                        child: Text(value,
+                            key: ValueKey(value),
+                            style: TextStyle(
+                                fontSize: 20,
+                                fontWeight: FontWeight.w800,
+                                color: color,
+                                letterSpacing: -0.5)),
+                      ),
+                    ],
+                  ),
                 ),
               ],
             ),
@@ -880,11 +922,20 @@ Future<void> _downloadExcel() async {
           // 타이틀
           Row(
             children: [
-              Icon(Icons.summarize, size: 18, color: _orange),
+              Container(
+                width: 3,
+                height: 18,
+                decoration: BoxDecoration(
+                  color: _orange,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Icon(Icons.summarize, size: 16, color: _orange),
               const SizedBox(width: 6),
               const Text('현황 리포트',
                   style: TextStyle(
-                      fontSize: 16,
+                      fontSize: 15,
                       fontWeight: FontWeight.w700,
                       color: Color(0xFF111827))),
             ],
@@ -1192,8 +1243,17 @@ Future<void> _downloadExcel() async {
         children: [
           Row(
             children: [
-              Icon(icon, size: 16, color: iconColor),
-              const SizedBox(width: 6),
+              Container(
+                width: 3,
+                height: 16,
+                decoration: BoxDecoration(
+                  color: iconColor,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Icon(icon, size: 15, color: iconColor),
+              const SizedBox(width: 5),
               Text(title,
                   style: const TextStyle(
                       fontSize: 14,
@@ -2101,7 +2161,7 @@ Future<void> _downloadExcel() async {
         height: 200,
         padding: const EdgeInsets.all(10),
         decoration: BoxDecoration(
-          color: const Color(0xFFFAFAFB),
+          color: const Color(0xFFF5F6FA),
           borderRadius: BorderRadius.circular(8),
           border: Border.all(color: const Color(0xFFE5E7EB)),
         ),

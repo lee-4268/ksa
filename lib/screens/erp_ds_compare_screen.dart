@@ -265,7 +265,7 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFFAFAFB),
+      backgroundColor: const Color(0xFFF5F6FA),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(20),
         child: _step == 0
@@ -283,9 +283,15 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
   PreferredSizeWidget _buildAppBar() {
     return AppBar(
       backgroundColor: Colors.white,
+      foregroundColor: const Color(0xFF111827),
       elevation: 0,
+      surfaceTintColor: Colors.transparent,
+      bottom: const PreferredSize(
+        preferredSize: Size.fromHeight(1),
+        child: Divider(height: 1, color: Color(0xFFE5E7EB)),
+      ),
       leading: IconButton(
-        icon: const Icon(Icons.arrow_back, color: Colors.black87),
+        icon: const Icon(Icons.arrow_back, color: Color(0xFF111827)),
         onPressed: () => Navigator.pop(context),
       ),
       title: Row(
@@ -307,9 +313,10 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
           const Text(
             '전산자료 비교',
             style: TextStyle(
-              color: Colors.black87,
-              fontSize: 18,
+              color: Color(0xFF111827),
+              fontSize: 17,
               fontWeight: FontWeight.w600,
+              letterSpacing: -0.2,
             ),
           ),
         ],
@@ -496,9 +503,8 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
               Container(
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
-                  color: Colors.grey.shade50,
+                  color: const Color(0xFFF5F6FA),
                   borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: Colors.grey.shade200),
                 ),
                 child: Row(
                   children: [
@@ -1871,9 +1877,8 @@ class _TowerMismatchModalState extends State<TowerMismatchModal> {
                 width: double.infinity,
                 padding: const EdgeInsets.all(14),
                 decoration: BoxDecoration(
-                  color: Colors.grey.shade50,
+                  color: const Color(0xFFF5F6FA),
                   borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: Colors.grey.shade200),
                 ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -2266,7 +2271,7 @@ class _ChangeRequestDialogState extends State<_ChangeRequestDialog> {
       margin: const EdgeInsets.only(bottom: 12),
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: const Color(0xFFFAFAFB),
+        color: const Color(0xFFF5F6FA),
         borderRadius: BorderRadius.circular(14),
         border: Border.all(color: const Color(0xFFE5E7EB)),
       ),

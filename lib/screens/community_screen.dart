@@ -24,7 +24,7 @@ class CommunityScreen extends StatefulWidget {
 
 class _CommunityScreenState extends State<CommunityScreen> {
   static const _primary = Color(0xFFE53935);
-  static const _bg = Color(0xFFFAFAFB);
+  static const _bg = Color(0xFFF5F6FA);
   static const _border = Color(0xFFE5E7EB);
 
   final _svc = CommunityService();
@@ -273,7 +273,13 @@ class _CommunityScreenState extends State<CommunityScreen> {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: _border),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.05),
+            blurRadius: 12,
+            offset: const Offset(0, 2),
+          ),
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,

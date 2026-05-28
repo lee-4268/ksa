@@ -325,12 +325,12 @@ class _DashboardScreenState extends State<DashboardScreen>
       padding: EdgeInsets.all(compact ? 14 : 20),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(12),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: 0.04),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
+            color: Colors.black.withValues(alpha: 0.05),
+            blurRadius: 12,
+            offset: const Offset(0, 2),
           ),
         ],
       ),
@@ -356,15 +356,15 @@ class _DashboardScreenState extends State<DashboardScreen>
             style: TextStyle(
               fontSize: compact ? 22 : 28,
               fontWeight: FontWeight.bold,
-              color: Colors.grey.shade800,
+              color: const Color(0xFF111827),
             ),
           ),
           const SizedBox(height: 4),
           Text(
             title,
-            style: TextStyle(
-              fontSize: compact ? 12 : 14,
-              color: Colors.grey.shade600,
+            style: const TextStyle(
+              fontSize: 13,
+              color: Color(0xFF6B7280),
             ),
           ),
         ],
@@ -378,12 +378,12 @@ class _DashboardScreenState extends State<DashboardScreen>
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(12),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: 0.04),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
+            color: Colors.black.withValues(alpha: 0.05),
+            blurRadius: 12,
+            offset: const Offset(0, 2),
           ),
         ],
       ),
@@ -521,12 +521,12 @@ class _DashboardScreenState extends State<DashboardScreen>
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(12),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: 0.04),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
+            color: Colors.black.withValues(alpha: 0.05),
+            blurRadius: 12,
+            offset: const Offset(0, 2),
           ),
         ],
       ),
@@ -637,18 +637,18 @@ class _DashboardScreenState extends State<DashboardScreen>
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       decoration: BoxDecoration(
-        color: Colors.grey.shade50,
+        color: const Color(0xFFF5F6FA),
         borderRadius: BorderRadius.circular(10),
       ),
       child: Row(
         children: [
-          Icon(icon, size: 20, color: color ?? Colors.grey.shade600),
+          Icon(icon, size: 20, color: color ?? const Color(0xFF6B7280)),
           const SizedBox(width: 12),
           Text(
             label,
-            style: TextStyle(
+            style: const TextStyle(
               fontSize: 14,
-              color: Colors.grey.shade700,
+              color: Color(0xFF6B7280),
             ),
           ),
           const Spacer(),
@@ -657,7 +657,7 @@ class _DashboardScreenState extends State<DashboardScreen>
             style: TextStyle(
               fontSize: 16,
               fontWeight: FontWeight.bold,
-              color: color ?? Colors.grey.shade800,
+              color: color ?? const Color(0xFF111827),
             ),
           ),
         ],
@@ -696,7 +696,7 @@ class _DashboardScreenState extends State<DashboardScreen>
       child: Container(
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
-          color: Colors.grey.shade50,
+          color: const Color(0xFFF5F6FA),
           borderRadius: BorderRadius.circular(10),
           border: Border.all(
             color: _selectedRegion == entry.key

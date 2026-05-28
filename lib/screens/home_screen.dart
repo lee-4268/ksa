@@ -38,7 +38,7 @@ class _HomeScreenState extends State<HomeScreen> {
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
 
   // 디자인 토큰
-  static const _bg = Color(0xFFFAFAFB);
+  static const _bg = Color(0xFFF5F6FA);
   static const _surface = Colors.white;
   static const _border = Color(0xFFE5E7EB);
   static const _textPrimary = Color(0xFF111827);
@@ -431,15 +431,24 @@ final result = await showDialog<bool>(
                         children: [
                           if (isWide)
                             Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 10),
                               decoration: const BoxDecoration(
                                 color: _surface,
                                 border: Border(bottom: BorderSide(color: _border)),
                               ),
                               child: Row(
                                 children: [
+                                  Container(
+                                    width: 3,
+                                    height: 18,
+                                    decoration: BoxDecoration(
+                                      color: items[_selectedIndex].color,
+                                      borderRadius: BorderRadius.circular(2),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 10),
                                   Text(items[_selectedIndex].title,
-                                      style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w600, color: _textPrimary)),
+                                      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: _textPrimary)),
                                   const Spacer(),
                                   _buildUserChip(auth),
                                 ],
@@ -531,10 +540,21 @@ final result = await showDialog<bool>(
                 },
                 borderRadius: BorderRadius.circular(9),
                 child: Container(
-                  padding: const EdgeInsets.all(7),
+                  padding: const EdgeInsets.all(8),
                   decoration: BoxDecoration(
-                    color: _accent,
+                    gradient: const LinearGradient(
+                      colors: [Color(0xFFE53935), Color(0xFFC62828)],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
                     borderRadius: BorderRadius.circular(9),
+                    boxShadow: [
+                      BoxShadow(
+                        color: const Color(0xFFE53935).withValues(alpha: 0.3),
+                        blurRadius: 8,
+                        offset: const Offset(0, 2),
+                      ),
+                    ],
                   ),
                   child: const Icon(Icons.cell_tower, color: Colors.white, size: 18),
                 ),
@@ -549,7 +569,13 @@ final result = await showDialog<bool>(
                       if (inDrawer) Navigator.pop(context);
                     },
                     borderRadius: BorderRadius.circular(4),
-                    child: const Text('SKO 무선국', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: _textPrimary, letterSpacing: 0.5)),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text('SKO 무선국', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: _textPrimary, letterSpacing: 0.3)),
+                        Text('무선국 정기검사 관리', style: TextStyle(fontSize: 9, color: Colors.grey.shade500, fontWeight: FontWeight.w400)),
+                      ],
+                    ),
                   ),
                 ),
                 InkWell(
@@ -1177,7 +1203,7 @@ class _HomeContentState extends State<_HomeContent> {
                   // 인사 배너
                   Container(
                     width: double.infinity,
-                    padding: const EdgeInsets.all(28),
+                    padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 24),
                     decoration: BoxDecoration(
                       gradient: const LinearGradient(
                         colors: [Color(0xFF1E293B), Color(0xFF334155)],
@@ -1186,15 +1212,29 @@ class _HomeContentState extends State<_HomeContent> {
                       ),
                       borderRadius: BorderRadius.circular(16),
                     ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                    child: Row(
                       children: [
-                        Text('안녕하세요, $name님',
-                            style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w700, color: Colors.white)),
-                        const SizedBox(height: 8),
-                        Text(
-                          '${now.year}년 ${now.month}월 ${now.day}일 ($weekday)${_weatherText()}',
-                          style: TextStyle(fontSize: 14, color: Colors.white.withValues(alpha: 0.7), height: 1.5),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text('안녕하세요, $name님 👋',
+                                  style: const TextStyle(fontSize: 21, fontWeight: FontWeight.w700, color: Colors.white, letterSpacing: -0.3)),
+                              const SizedBox(height: 6),
+                              Text(
+                                '${now.year}년 ${now.month}월 ${now.day}일 ($weekday)${_weatherText()}',
+                                style: TextStyle(fontSize: 13, color: Colors.white.withValues(alpha: 0.82), height: 1.5),
+                              ),
+                            ],
+                          ),
+                        ),
+                        Container(
+                          padding: const EdgeInsets.all(14),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withValues(alpha: 0.15),
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                          child: const Icon(Icons.cell_tower, color: Colors.white, size: 30),
                         ),
                       ],
                     ),
@@ -1239,11 +1279,27 @@ class _HomeContentState extends State<_HomeContent> {
                   ),
                   const SizedBox(height: 20),
 
-                  const Text('바로가기',
-                      style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+                  Row(
+                    children: [
+                      Container(
+                        width: 3,
+                        height: 18,
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFE53935),
+                          borderRadius: BorderRadius.circular(2),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      const Text('바로가기',
+                          style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+                    ],
+                  ),
                   const SizedBox(height: 4),
-                  const Text('자주 사용하는 기능에 빠르게 접근하세요.',
-                      style: TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
+                  const Padding(
+                    padding: EdgeInsets.only(left: 13),
+                    child: Text('자주 사용하는 기능에 빠르게 접근하세요.',
+                        style: TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
+                  ),
                   const SizedBox(height: 16),
 
                   // 카드 캐러셀 (PageView 애니메이션)
@@ -1346,19 +1402,31 @@ class _HomeContentState extends State<_HomeContent> {
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
-        color: Colors.white,
+        gradient: const LinearGradient(
+          colors: [Color(0xFFEFF6FF), Color(0xFFDBEAFE)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFFE5E7EB)),
+        border: Border.all(color: const Color(0xFFBFDBFE)),
       ),
       child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(Icons.people_outline, size: 28, color: Colors.blue.shade400),
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: const Color(0xFF3B82F6).withValues(alpha: 0.15),
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(Icons.people_outline, size: 24, color: Color(0xFF2563EB)),
+          ),
           const SizedBox(height: 10),
           Text('$_dailyVisitors',
-              style: TextStyle(fontSize: 28, fontWeight: FontWeight.w700, color: Colors.blue.shade600)),
-          const SizedBox(height: 4),
-          Text('오늘 접속자',
-              style: TextStyle(fontSize: 12, color: Colors.grey.shade500)),
+              style: const TextStyle(fontSize: 30, fontWeight: FontWeight.w800, color: Color(0xFF1D4ED8), letterSpacing: -1)),
+          const SizedBox(height: 2),
+          const Text('오늘 접속자',
+              style: TextStyle(fontSize: 12, color: Color(0xFF3B82F6), fontWeight: FontWeight.w500)),
         ],
       ),
     );
@@ -1388,10 +1456,19 @@ class _HomeContentState extends State<_HomeContent> {
                 GestureDetector(
                   onTap: () => widget.onNavigate(commIdx()),
                   child: Row(children: [
+                    Container(
+                      width: 3,
+                      height: 16,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFE53935),
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
                     const Text('커뮤니티',
                         style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
                     const SizedBox(width: 4),
-                    Icon(Icons.arrow_forward_ios, size: 12, color: Colors.grey.shade400),
+                    Icon(Icons.arrow_forward_ios, size: 11, color: Colors.grey.shade400),
                   ]),
                 ),
                 const SizedBox(width: 16),
@@ -1466,18 +1543,19 @@ class _HomeContentState extends State<_HomeContent> {
           _loadComm();
         }
       },
-      child: Container(
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
         decoration: BoxDecoration(
-          color: selected ? const Color(0xFF1E293B) : Colors.transparent,
+          color: selected ? const Color(0xFFE53935) : Colors.transparent,
           borderRadius: BorderRadius.circular(6),
-          border: selected ? null : Border.all(color: Colors.grey.shade300),
+          border: selected ? null : Border.all(color: const Color(0xFFE5E7EB)),
         ),
         child: Text(label,
             style: TextStyle(
               fontSize: 12,
-              fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
-              color: selected ? Colors.white : Colors.grey.shade600,
+              fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+              color: selected ? Colors.white : const Color(0xFF6B7280),
             )),
       ),
     );
@@ -1495,40 +1573,53 @@ class _HomeContentState extends State<_HomeContent> {
 
   Widget _buildCarouselCard(_MenuItem item, VoidCallback onTap) {
     return Material(
-      color: Colors.transparent,
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(10),
       child: InkWell(
         onTap: onTap,
         borderRadius: BorderRadius.circular(10),
-        hoverColor: const Color(0xFFF3F4F6),
+        hoverColor: item.color.withValues(alpha: 0.04),
         child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 8),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(10),
             border: Border.all(color: const Color(0xFFE5E7EB)),
           ),
+          clipBehavior: Clip.antiAlias,
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: item.color.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(10),
+              // 컬러 상단 인디케이터
+              Container(height: 3, color: item.color),
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: item.color.withValues(alpha: 0.1),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Icon(item.icon, size: 22, color: item.color),
+                      ),
+                      const SizedBox(height: 9),
+                      Text(item.title,
+                          style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: Color(0xFF111827)),
+                          textAlign: TextAlign.center),
+                      if (item.description.isNotEmpty) ...[
+                        const SizedBox(height: 3),
+                        Text(item.description,
+                            style: const TextStyle(fontSize: 10, color: Color(0xFF9CA3AF)),
+                            textAlign: TextAlign.center,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis),
+                      ],
+                    ],
+                  ),
                 ),
-                child: Icon(item.icon, size: 22, color: item.color),
               ),
-              const SizedBox(height: 10),
-              Text(item.title,
-                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF111827)),
-                  textAlign: TextAlign.center),
-              if (item.description.isNotEmpty) ...[
-                const SizedBox(height: 4),
-                Text(item.description,
-                    style: const TextStyle(fontSize: 10, color: Color(0xFF9CA3AF)),
-                    textAlign: TextAlign.center,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis),
-              ],
             ],
           ),
         ),

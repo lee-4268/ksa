@@ -430,25 +430,25 @@ class _NoticeBoardScreenState extends State<NoticeBoardScreen> {
               height: 38,
               child: TextField(
                 controller: _searchCtrl,
-                style: const TextStyle(fontSize: 14),
+                style: const TextStyle(fontSize: 13),
                 decoration: InputDecoration(
                   hintText: '검색어 입력',
-                  hintStyle: TextStyle(fontSize: 13, color: Colors.grey.shade400),
-                  prefixIcon: Icon(Icons.search, size: 18, color: Colors.grey.shade500),
+                  hintStyle: const TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)),
+                  prefixIcon: const Icon(Icons.search, size: 18, color: Color(0xFF9CA3AF)),
                   contentPadding: const EdgeInsets.symmetric(vertical: 0, horizontal: 12),
                   filled: true,
-                  fillColor: Colors.white,
+                  fillColor: const Color(0xFFF5F6FA),
                   border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(6),
-                    borderSide: BorderSide(color: Colors.grey.shade300),
+                    borderRadius: BorderRadius.circular(8),
+                    borderSide: const BorderSide(color: Color(0xFFE5E7EB)),
                   ),
                   enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(6),
-                    borderSide: BorderSide(color: Colors.grey.shade300),
+                    borderRadius: BorderRadius.circular(8),
+                    borderSide: const BorderSide(color: Color(0xFFE5E7EB)),
                   ),
                   focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(6),
-                    borderSide: const BorderSide(color: _primary),
+                    borderRadius: BorderRadius.circular(8),
+                    borderSide: const BorderSide(color: _primary, width: 1.5),
                   ),
                 ),
                 onSubmitted: (_) {
@@ -458,7 +458,7 @@ class _NoticeBoardScreenState extends State<NoticeBoardScreen> {
                 },
               ),
             ),
-            
+
             if (canWrite) ...[
               const SizedBox(width: 8),
               SizedBox(
@@ -468,9 +468,9 @@ class _NoticeBoardScreenState extends State<NoticeBoardScreen> {
                   icon: const Icon(Icons.edit_outlined, size: 16),
                   label: const Text('글쓰기', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF111827), // 세련된 블랙 톤 강조색
+                    backgroundColor: _primary,
                     foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                     elevation: 0,
                     padding: const EdgeInsets.symmetric(horizontal: 16),
                   ),
@@ -541,8 +541,14 @@ class _NoticeBoardScreenState extends State<NoticeBoardScreen> {
         width: double.infinity,
         decoration: BoxDecoration(
           color: Colors.white,
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: Colors.grey.shade200),
+          borderRadius: BorderRadius.circular(12),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.05),
+              blurRadius: 12,
+              offset: const Offset(0, 2),
+            ),
+          ],
         ),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -567,16 +573,22 @@ class _NoticeBoardScreenState extends State<NoticeBoardScreen> {
     return Container(
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: Colors.grey.shade300),
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.05),
+            blurRadius: 12,
+            offset: const Offset(0, 2),
+          ),
+        ],
       ),
       child: Column(
         children: [
           // 테이블 헤더
           Container(
-            decoration: BoxDecoration(
-              color: Colors.grey.shade50,
-              borderRadius: const BorderRadius.vertical(top: Radius.circular(8)),
+            decoration: const BoxDecoration(
+              color: Color(0xFFF9FAFB),
+              borderRadius: BorderRadius.vertical(top: Radius.circular(12)),
             ),
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
             child: Row(

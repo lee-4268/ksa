@@ -801,7 +801,7 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
     final authService = context.watch<AuthService>();
 
     return Scaffold(
-      backgroundColor: const Color(0xFFFAFAFB),
+      backgroundColor: const Color(0xFFF5F6FA),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
@@ -1329,15 +1329,16 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
     required String subtitle,
     required VoidCallback onTap,
   }) {
-    return GestureDetector(
+    return InkWell(
       onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
       child: Container(
         margin: const EdgeInsets.only(bottom: 10),
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         decoration: BoxDecoration(
           color: Colors.white,
-          borderRadius: BorderRadius.circular(16),
-          boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 8, offset: const Offset(0, 2))],
+          borderRadius: BorderRadius.circular(12),
+          boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 12, offset: const Offset(0, 2))],
         ),
         child: Row(children: [
           Container(

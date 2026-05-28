@@ -35,7 +35,7 @@ class _InadequateManagementScreenState extends State<InadequateManagementScreen>
   static const Color primaryColor = Color(0xFFE53935);
   static const Color _border = Color(0xFFE5E7EB);
   static const Color _surfaceColor = Colors.white;
-  static const Color _bgColor = Color(0xFFF4F5F7);
+  static const Color _bgColor = Color(0xFFF5F6FA);
 
   late final InspectionService _svc;
   late bool _isAdmin;

@@ -63,7 +63,7 @@ class _DsMergeScreenState extends State<DsMergeScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFFAFAFB),
+      backgroundColor: const Color(0xFFF5F6FA),
       body: Center(
         child: SingleChildScrollView(
           child: Container(
@@ -119,8 +119,14 @@ class _DsMergeScreenState extends State<DsMergeScreen> {
       width: double.infinity,
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.grey.shade200),
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.05),
+            blurRadius: 12,
+            offset: const Offset(0, 2),
+          ),
+        ],
       ),
       padding: const EdgeInsets.all(20),
       child: Column(
@@ -248,20 +254,21 @@ class _DsMergeScreenState extends State<DsMergeScreen> {
   Widget _buildActionButton() {
     return SizedBox(
       width: double.infinity,
-      height: 52,
+      height: 48,
       child: ElevatedButton.icon(
         onPressed: _isProcessing ? null : _startMerge,
         icon: Icon(_isProcessing ? Icons.hourglass_top : Icons.upload_file),
         label: Text(
           _isProcessing ? '병합 진행 중...' : 'ZIP 파일 선택 및 병합 시작',
-          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
         ),
         style: ElevatedButton.styleFrom(
           backgroundColor: _primaryColor,
           foregroundColor: Colors.white,
-          disabledBackgroundColor: Colors.grey.shade300,
+          elevation: 0,
+          disabledBackgroundColor: const Color(0xFFE5E7EB),
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
+            borderRadius: BorderRadius.circular(10),
           ),
         ),
       ),

@@ -19,10 +19,10 @@ class ChangeNotificationScreen extends StatefulWidget {
 
 class _ChangeNotificationScreenState extends State<ChangeNotificationScreen> {
   static const _primary = Color(0xFFE53935);
-  static const _blue = Color(0xFF1E88E5);
+  static const _blue = Color(0xFF3B82F6);
   static const _border = Color(0xFFE5E7EB);
   static const _surface = Colors.white;
-  static const _bg = Color(0xFFF4F5F7);
+  static const _bg = Color(0xFFF5F6FA);
   static const _textPrimary = Color(0xFF111827);
   static const _textSecondary = Color(0xFF6B7280);
 

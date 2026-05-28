@@ -208,12 +208,13 @@ class _DsDataScreenState extends State<DsDataScreen> with SingleTickerProviderSt
         : widget.importDate;
 
     return Scaffold(
-      backgroundColor: Colors.grey.shade50,
+      backgroundColor: const Color(0xFFF5F6FA),
       appBar: AppBar(
         title: Text('${widget.divisionName} $formattedDate'),
         backgroundColor: Colors.white,
-        foregroundColor: Colors.black87,
+        foregroundColor: const Color(0xFF111827),
         elevation: 0,
+        surfaceTintColor: Colors.transparent,
         bottom: _sheetNames.length > 1
             ? TabBar(
                 controller: _tabController,
@@ -246,7 +247,10 @@ class _DsDataScreenState extends State<DsDataScreen> with SingleTickerProviderSt
                   );
                 }).toList(),
               )
-            : null,
+            : const PreferredSize(
+                preferredSize: Size.fromHeight(1),
+                child: Divider(height: 1, color: Color(0xFFE5E7EB)),
+              ),
       ),
       body: _sheetNames.isEmpty
           ? const Center(child: Text('시트 데이터가 없습니다'))

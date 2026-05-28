@@ -25,7 +25,7 @@ class _CertificateScreenState extends State<CertificateScreen>
   late TabController _tabController;
   final _service = CertificateService();
 
-  static const _themeColor = Color(0xFF00838F);
+  static const _themeColor = Color(0xFF3B82F6);
 
   @override
   void initState() {
@@ -48,7 +48,7 @@ class _CertificateScreenState extends State<CertificateScreen>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFFAFAFB),
+      backgroundColor: const Color(0xFFF5F6FA),
       body: Column(
         children: [
           Container(
@@ -56,8 +56,11 @@ class _CertificateScreenState extends State<CertificateScreen>
             child: TabBar(
               controller: _tabController,
               labelColor: _themeColor,
-              unselectedLabelColor: Colors.grey,
+              unselectedLabelColor: const Color(0xFF9CA3AF),
               indicatorColor: _themeColor,
+              indicatorWeight: 2,
+              labelStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+              unselectedLabelStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
               tabs: const [Tab(text: '개별 생성'), Tab(text: '일괄 생성')],
             ),
           ),

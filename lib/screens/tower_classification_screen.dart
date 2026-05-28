@@ -109,11 +109,14 @@ class _TowerClassificationScreenState extends State<TowerClassificationScreen>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: const Color(0xFFF5F6FA),
       appBar: AppBar(
         backgroundColor: Colors.white,
+        foregroundColor: const Color(0xFF111827),
         elevation: 0,
+        surfaceTintColor: Colors.transparent,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: Colors.black87),
+          icon: const Icon(Icons.arrow_back, color: Color(0xFF111827)),
           onPressed: () => Navigator.pop(context),
         ),
         title: Column(
@@ -122,16 +125,17 @@ class _TowerClassificationScreenState extends State<TowerClassificationScreen>
             const Text(
               '철탑형태 분류',
               style: TextStyle(
-                color: Colors.black87,
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
+                color: Color(0xFF111827),
+                fontSize: 17,
+                fontWeight: FontWeight.w600,
+                letterSpacing: -0.2,
               ),
             ),
             if (widget.stationName != null)
               Text(
                 widget.stationName!,
-                style: TextStyle(
-                  color: Colors.grey[600],
+                style: const TextStyle(
+                  color: Color(0xFF6B7280),
                   fontSize: 12,
                 ),
               ),
@@ -207,7 +211,7 @@ class _TowerClassificationScreenState extends State<TowerClassificationScreen>
   /// 단일 이미지 탭
   Widget _buildSingleImageTab() {
     return Container(
-      color: const Color(0xFFF5F5F5),
+      color: const Color(0xFFF5F6FA),
       child: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
         child: Column(
@@ -256,7 +260,7 @@ class _TowerClassificationScreenState extends State<TowerClassificationScreen>
   /// 앙상블 탭
   Widget _buildEnsembleTab() {
     return Container(
-      color: const Color(0xFFF5F5F5),
+      color: const Color(0xFFF5F6FA),
       child: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
         child: Column(

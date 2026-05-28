@@ -800,7 +800,23 @@ def _irr_dashboard_calc_sync(year: int, region: str = "", month: str = ""):
             "미이행": max(0, target_전체 - t_수검),
         }
 
-        return {"regions": result_regions, "total": total, "target": target}
+        # 최근 업로드 일시 (연도 기준)
+        last_upload = ""
+        try:
+            row = conn.execute(
+                'SELECT MAX(uploaded_at) FROM inspection_results_raw WHERE year=?', [year]
+            ).fetchone()
+            if row and row[0]:
+                last_upload = row[0][:10]  # "YYYY-MM-DD"
+            elif result_regions:
+                # uploaded_at 없는 구 데이터 → DB 파일 수정 시각으로 폴백
+                import datetime as _dt
+                mtime = os.path.getmtime(_INSP_DB)
+                last_upload = _dt.datetime.fromtimestamp(mtime).strftime('%Y-%m-%d')
+        except Exception:
+            pass
+
+        return {"regions": result_regions, "total": total, "target": target, "last_upload": last_upload}
     finally:
         conn.close()
 

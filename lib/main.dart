@@ -15,6 +15,7 @@ import 'services/division_data_service.dart';
 import 'services/notification_service.dart';
 import 'widgets/app_loader.dart';
 import 'services/photo_storage_service.dart';
+import 'theme/app_theme.dart';
 
 // 모바일용 조건부 import
 import 'main_init_stub.dart' if (dart.library.io) 'main_init_mobile.dart'
@@ -63,47 +64,7 @@ class MyApp extends StatelessWidget {
       child: MaterialApp(
         title: '무선국 수검 시스템',
         debugShowCheckedModeBanner: false,
-        theme: ThemeData(
-          colorScheme: ColorScheme.fromSeed(
-            seedColor: const Color(0xFFE53935),
-            brightness: Brightness.light,
-          ),
-          useMaterial3: true,
-          fontFamily: 'SamsungOne',
-          scaffoldBackgroundColor: Colors.white,
-          appBarTheme: const AppBarTheme(
-            centerTitle: true,
-            backgroundColor: Colors.white,
-            foregroundColor: Colors.black87,
-            elevation: 0,
-            scrolledUnderElevation: 0,
-            surfaceTintColor: Colors.transparent,
-          ),
-          dialogTheme: const DialogThemeData(
-            backgroundColor: Colors.white,
-            surfaceTintColor: Colors.transparent,
-          ),
-          dropdownMenuTheme: const DropdownMenuThemeData(
-            textStyle: TextStyle(fontFamily: 'SamsungOne'),
-          ),
-          cardTheme: CardThemeData(
-            elevation: 0,
-            color: Colors.white,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(16),
-              side: BorderSide(color: Colors.grey.shade200),
-            ),
-          ),
-          elevatedButtonTheme: ElevatedButtonThemeData(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFFE53935),
-              foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
-            ),
-          ),
-        ),
+        theme: AppTheme.buildTheme(),
         home: const AuthWrapper(),
       ),
     );

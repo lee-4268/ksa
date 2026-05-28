@@ -210,10 +210,26 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: const Color(0xFFF5F6FA),
       appBar: AppBar(
-        title: const Text('사용자 관리'),
-        backgroundColor: const Color(0xFFE53935),
-        foregroundColor: Colors.white,
+        title: const Text(
+          '사용자 관리',
+          style: TextStyle(
+            fontSize: 17,
+            fontWeight: FontWeight.w600,
+            color: Color(0xFF111827),
+            letterSpacing: -0.2,
+          ),
+        ),
+        backgroundColor: Colors.white,
+        foregroundColor: const Color(0xFF111827),
+        elevation: 0,
+        surfaceTintColor: Colors.transparent,
+        iconTheme: const IconThemeData(color: Color(0xFF111827)),
+        bottom: const PreferredSize(
+          preferredSize: Size.fromHeight(1),
+          child: Divider(height: 1, color: Color(0xFFE5E7EB)),
+        ),
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh),
@@ -251,28 +267,28 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      decoration: BoxDecoration(
-        color: Colors.grey.shade50,
-        border: Border(bottom: BorderSide(color: Colors.grey.shade200)),
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        border: Border(bottom: BorderSide(color: Color(0xFFE5E7EB))),
       ),
       child: Column(
         children: [
           // 검색창
           Container(
             decoration: BoxDecoration(
-              color: Colors.white,
+              color: const Color(0xFFF5F6FA),
               borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: Colors.grey.shade300),
+              border: Border.all(color: const Color(0xFFE5E7EB)),
             ),
             child: TextField(
               controller: _searchController,
               decoration: InputDecoration(
                 hintText: '이름 또는 사번으로 검색',
-                hintStyle: TextStyle(fontSize: 14, color: Colors.grey.shade400),
-                prefixIcon: Icon(Icons.search, size: 20, color: Colors.grey.shade500),
+                hintStyle: const TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)),
+                prefixIcon: const Icon(Icons.search, size: 18, color: Color(0xFF9CA3AF)),
                 suffixIcon: _searchController.text.isNotEmpty
                     ? IconButton(
-                        icon: Icon(Icons.clear, size: 18, color: Colors.grey.shade500),
+                        icon: const Icon(Icons.clear, size: 18, color: Color(0xFF9CA3AF)),
                         onPressed: () {
                           _searchController.clear();
                           _applyFilters();
@@ -282,7 +298,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                 border: InputBorder.none,
                 contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
               ),
-              style: const TextStyle(fontSize: 14),
+              style: const TextStyle(fontSize: 13),
               onChanged: _onSearchChanged,
             ),
           ),

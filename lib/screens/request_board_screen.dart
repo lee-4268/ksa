@@ -23,7 +23,7 @@ enum _ViewMode { list, detail, write }
 
 class _RequestBoardScreenState extends State<RequestBoardScreen> {
   static const _primaryColor = Color(0xFFE53935);
-  static const _darkBtnColor = Color(0xFF111827); // 세련된 블랙 톤 강조색
+  static const _darkBtnColor = Color(0xFFE53935);
 
   final _svc = CommunityService();
 

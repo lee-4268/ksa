@@ -1708,16 +1708,22 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFFAFAFB),
+      backgroundColor: const Color(0xFFF5F6FA),
       body: Column(
         children: [
           Container(
-            color: Colors.white,
+            decoration: const BoxDecoration(
+              color: Colors.white,
+              boxShadow: [BoxShadow(color: Color(0x08000000), blurRadius: 4, offset: Offset(0, 2))],
+            ),
             child: TabBar(
               controller: _tabCtrl,
               labelColor: _primary,
-              unselectedLabelColor: Colors.grey,
+              unselectedLabelColor: Color(0xFF9CA3AF),
               indicatorColor: _primary,
+              indicatorWeight: 2.5,
+              labelStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+              unselectedLabelStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
               tabs: const [Tab(text: '수검 대상 현황'), Tab(text: '매트릭스')],
             ),
           ),
@@ -1768,6 +1774,26 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // 필터 헤더
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: Row(
+              children: [
+                Container(
+                  width: 3,
+                  height: 16,
+                  decoration: BoxDecoration(
+                    color: _primary,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                const Icon(Icons.tune_rounded, size: 14, color: Color(0xFF6B7280)),
+                const SizedBox(width: 4),
+                const Text('필터 및 검색', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF374151))),
+              ],
+            ),
+          ),
           // Row 1: 연도, 시트, 검색창, 총건수, 일괄등록 버튼
           Wrap(
             spacing: 10,
@@ -2397,14 +2423,21 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     if (_items.isEmpty) {
       return Center(
         child: Column(mainAxisSize: MainAxisSize.min, children: [
-          Icon(Icons.search_off_rounded, size: 40, color: Colors.grey.shade300),
-          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(
+              color: const Color(0xFFF3F4F6),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(Icons.search_off_rounded, size: 36, color: Colors.grey.shade400),
+          ),
+          const SizedBox(height: 16),
           Text('$_year년 $_sheet 데이터 없음',
               textAlign: TextAlign.center,
-              style: TextStyle(color: Colors.grey.shade400, fontSize: 14)),
-          const SizedBox(height: 4),
+              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: Color(0xFF374151))),
+          const SizedBox(height: 6),
           Text(_hasActiveFilters ? '필터 조건을 변경하거나 초기화하세요' : '관리자 패널에서 KCA 파일을 Import하세요',
-              style: TextStyle(color: Colors.grey.shade400, fontSize: 12)),
+              style: const TextStyle(color: Color(0xFF9CA3AF), fontSize: 13)),
         ]),
       );
     }
@@ -3900,14 +3933,22 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
       width: 380,
       decoration: BoxDecoration(
         color: Colors.white,
-        border: Border(left: BorderSide(color: const Color(0xFFE5E7EB))),
+        border: const Border(left: BorderSide(color: Color(0xFFE5E7EB))),
         boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.08), blurRadius: 16, offset: const Offset(-4, 0))],
       ),
-      child: _detailLoading
-          ? AppLoader.centered()
-          : _detailData == null
-              ? const Center(child: Text('데이터 없음', style: TextStyle(color: Colors.black38)))
-              : _buildDetailContent(),
+      child: Column(
+        children: [
+          // 상단 액센트 스트라이프
+          Container(height: 3, color: _primary),
+          Expanded(
+            child: _detailLoading
+                ? AppLoader.centered()
+                : _detailData == null
+                    ? const Center(child: Text('데이터 없음', style: TextStyle(color: Colors.black38)))
+                    : _buildDetailContent(),
+          ),
+        ],
+      ),
     );
   }
 
@@ -3955,33 +3996,47 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
 
     return Column(children: [
       Container(
-        padding: const EdgeInsets.fromLTRB(16, 16, 8, 12),
+        padding: const EdgeInsets.fromLTRB(16, 14, 8, 12),
+        decoration: const BoxDecoration(
+          color: Color(0xFFFAFAFB),
+          border: Border(bottom: BorderSide(color: Color(0xFFE5E7EB))),
+        ),
         child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Expanded(
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(callname, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+              Text(callname, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
               if (stationName.isNotEmpty && stationName != callname)
-                Text(stationName, style: const TextStyle(fontSize: 11, color: Colors.black45)),
+                Padding(
+                  padding: const EdgeInsets.only(top: 2),
+                  child: Text(stationName, style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF))),
+                ),
               if (schedule != null) ...[
-                const SizedBox(height: 4),
+                const SizedBox(height: 6),
                 _scheduleTag(schedule),
               ],
             ]),
           ),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-            decoration: BoxDecoration(
-                color: statusColor.withValues(alpha: 0.12),
-                borderRadius: BorderRadius.circular(8)),
-            child: Text(statusText, style: TextStyle(fontSize: 12, color: statusColor, fontWeight: FontWeight.w600)),
-          ),
-          IconButton(
-            icon: const Icon(Icons.close, size: 18),
-            onPressed: () => setState(() { _detailData = null; _detailLicenseNo = null; }),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              IconButton(
+                icon: const Icon(Icons.close, size: 18),
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                onPressed: () => setState(() { _detailData = null; _detailLicenseNo = null; }),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                    color: statusColor.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: statusColor.withValues(alpha: 0.3))),
+                child: Text(statusText, style: TextStyle(fontSize: 11, color: statusColor, fontWeight: FontWeight.w700)),
+              ),
+            ],
           ),
         ]),
       ),
-      Divider(height: 1, color: Colors.grey.shade100),
       Expanded(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(16),
@@ -4299,10 +4354,17 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
   Widget _infoRow(String label, String value) {
     if (value.isEmpty) return const SizedBox.shrink();
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
+      padding: const EdgeInsets.symmetric(vertical: 3),
       child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        SizedBox(width: 90, child: Text(label, style: TextStyle(fontSize: 13, color: Colors.grey.shade600))),
-        Expanded(child: Text(value, style: const TextStyle(fontSize: 13))),
+        SizedBox(
+          width: 70,
+          child: Text(label,
+              style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF), fontWeight: FontWeight.w500)),
+        ),
+        Expanded(
+          child: Text(value,
+              style: const TextStyle(fontSize: 12.5, color: Color(0xFF111827), height: 1.4)),
+        ),
       ]),
     );
   }
