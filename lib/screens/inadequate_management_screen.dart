@@ -67,6 +67,7 @@ class _InadequateManagementScreenState extends State<InadequateManagementScreen>
   final Set<int> _checkedIds = {};
   String? _sortColumn;
   bool _sortAsc = true;
+  int? _hoveredRowIndex;
 
   String _searchField = 'callname'; 
   String _searchValues = ''; 
@@ -787,6 +788,11 @@ class _InadequateManagementScreenState extends State<InadequateManagementScreen>
       );
     }
 
+    // flex weights (11 columns, total = 15.0)
+    const colWeights = [0.8, 1.0, 1.5, 1.6, 2.4, 1.1, 1.1, 1.8, 2.2, 1.0, 0.5];
+    const totalWeight = 15.0;
+    const checkboxW = 44.0;
+
     return Padding(
       padding: EdgeInsets.symmetric(horizontal: isMobile ? 16 : 20),
       child: Container(
@@ -799,94 +805,157 @@ class _InadequateManagementScreenState extends State<InadequateManagementScreen>
           ],
         ),
         clipBehavior: Clip.antiAlias,
-        child: SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: DataTable(
-            showCheckboxColumn: false,
-            headingRowColor: WidgetStateProperty.all(const Color(0xFFF3F4F6)),
-            headingTextStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Color(0xFF374151)),
-            dataTextStyle: const TextStyle(fontSize: 13, color: Color(0xFF111827)),
-            columnSpacing: 20,
-            horizontalMargin: 16,
-            dataRowMinHeight: 48,
-            dataRowMaxHeight: 52,
-            dividerThickness: 0.5,
-            sortColumnIndex: _sortColumn != null
-                ? _columns.indexWhere((c) => c.$2 == _sortColumn) + (_isAdmin ? 1 : 0)
-                : null,
-            sortAscending: _sortAsc,
-            columns: [
-              if (_isAdmin)
-                DataColumn(
-                  label: Checkbox(
-                    tristate: true,
-                    value: _checkedIds.isEmpty ? false : _checkedIds.length == _items.length ? true : null,
-                    activeColor: primaryColor,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
-                    onChanged: (v) {
-                      setState(() {
-                        if (v == true) {
-                          _checkedIds.addAll(_items.map((e) => e['id'] as int));
-                        } else {
-                          _checkedIds.clear();
-                        }
-                      });
-                    },
-                  ),
-                ),
-              ..._columns.map((c) => DataColumn(
-                label: Text(c.$1),
-                onSort: (i, asc) => _onSort(c.$2),
-              )),
-            ],
-            rows: _items.asMap().entries.map((entry) {
-              final index = entry.key;
-              final item = entry.value;
-              final id = item['id'] as int;
-              final checked = _checkedIds.contains(id);
+        child: LayoutBuilder(builder: (_, cst) {
+          final tableW = cst.maxWidth;
+          final flexW = tableW - (_isAdmin ? checkboxW : 0.0);
+          final colWidths = List.generate(
+            _columns.length,
+            (i) => (flexW * colWeights[i] / totalWeight).clamp(40.0, double.infinity),
+          );
 
-              return DataRow(
-                color: WidgetStateProperty.resolveWith<Color?>((states) {
-                  if (states.contains(WidgetState.hovered)) return primaryColor.withValues(alpha: 0.04);
-                  if (checked) return primaryColor.withValues(alpha: 0.08);
-                  return index.isEven ? Colors.white : const Color(0xFFFAFAFA);
-                }),
-                onSelectChanged: (_) => _showEditDialog(item),
-                cells: [
-                  if (_isAdmin)
-                    DataCell(
-                      Checkbox(
-                        value: checked,
-                        activeColor: primaryColor,
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
-                        onChanged: (v) => setState(() {
-                          if (v == true) _checkedIds.add(id);
-                          else _checkedIds.remove(id);
-                        }),
-                      ),
-                      onTap: () => setState(() {
-                        if (checked) { _checkedIds.remove(id); }
-                        else { _checkedIds.add(id); }
-                      }),
-                    ),
-                  DataCell(Text(_str(item, 'region').isNotEmpty ? _str(item, 'region') : _str(item, 'skt본부'), overflow: TextOverflow.ellipsis)),
-                  DataCell(Text(_str(item, 'ons팀'), overflow: TextOverflow.ellipsis)),
-                  DataCell(Text(_str(item, '허가번호'), overflow: TextOverflow.ellipsis)),
-                  DataCell(ConstrainedBox(constraints: const BoxConstraints(maxWidth: 160), child: Text(_str(item, '호출명칭'), overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w500)))),
-                  DataCell(ConstrainedBox(constraints: const BoxConstraints(maxWidth: 220), child: Text(_str(item, '주소'), overflow: TextOverflow.ellipsis, style: const TextStyle(color: Color(0xFF4B5563))))),
-                  DataCell(Text(_str(item, '검사일자'))),
-                  DataCell(_buildDeadlineCell(item)),
-                  DataCell(ConstrainedBox(constraints: const BoxConstraints(maxWidth: 160), child: Text(_str(item, '불합격내용'), overflow: TextOverflow.ellipsis))),
-                  DataCell(ConstrainedBox(constraints: const BoxConstraints(maxWidth: 200), child: Text(_str(item, '불합격상세'), overflow: TextOverflow.ellipsis, style: const TextStyle(color: Color(0xFF6B7280))))),
-                  DataCell(_buildStatusChip(_str(item, 'status'))),
-                  DataCell(Text(_str(item, '심의차수'), style: const TextStyle(fontWeight: FontWeight.w500))),
-                ],
-              );
-            }).toList(),
-          ),
-        ),
+          int ci = 0;
+          final cwMap = <int, TableColumnWidth>{};
+          if (_isAdmin) cwMap[ci++] = const FixedColumnWidth(checkboxW);
+          for (int i = 0; i < _columns.length; i++) {
+            cwMap[ci++] = FixedColumnWidth(colWidths[i]);
+          }
+
+          return Table(
+            columnWidths: cwMap,
+            defaultVerticalAlignment: TableCellVerticalAlignment.middle,
+            border: const TableBorder(
+              horizontalInside: BorderSide(color: Color(0xFFF0F0F0), width: 0.5),
+            ),
+            children: [
+              _buildFlexHeaderRow(),
+              ..._items.asMap().entries.map((e) => _buildFlexDataRow(e.key, e.value)),
+            ],
+          );
+        }),
       ),
     );
+  }
+
+  TableRow _buildFlexHeaderRow() {
+    final cells = <Widget>[];
+
+    if (_isAdmin) {
+      cells.add(Container(
+        height: 48,
+        color: const Color(0xFFF3F4F6),
+        alignment: Alignment.center,
+        child: Checkbox(
+          tristate: true,
+          value: _checkedIds.isEmpty ? false : _checkedIds.length == _items.length ? true : null,
+          activeColor: primaryColor,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+          onChanged: (v) => setState(() {
+            if (v == true) {
+              _checkedIds.addAll(_items.map((e) => e['id'] as int));
+            } else {
+              _checkedIds.clear();
+            }
+          }),
+        ),
+      ));
+    }
+
+    for (final (label, field) in _columns) {
+      final isSort = _sortColumn == field;
+      cells.add(InkWell(
+        onTap: () => _onSort(field),
+        child: Container(
+          height: 48,
+          color: const Color(0xFFF3F4F6),
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          child: Row(children: [
+            Expanded(
+              child: Text(label,
+                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Color(0xFF374151)),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            const SizedBox(width: 2),
+            Icon(
+              isSort
+                  ? (_sortAsc ? Icons.arrow_upward_rounded : Icons.arrow_downward_rounded)
+                  : Icons.unfold_more_rounded,
+              size: 13,
+              color: isSort ? primaryColor : const Color(0xFFD1D5DB),
+            ),
+          ]),
+        ),
+      ));
+    }
+
+    return TableRow(children: cells);
+  }
+
+  TableRow _buildFlexDataRow(int index, Map<String, dynamic> item) {
+    final id = item['id'] as int;
+    final checked = _checkedIds.contains(id);
+    final hovered = _hoveredRowIndex == index;
+
+    Color rowBg() {
+      if (checked) return primaryColor.withValues(alpha: 0.08);
+      if (hovered) return primaryColor.withValues(alpha: 0.04);
+      return index.isEven ? Colors.white : const Color(0xFFFAFAFA);
+    }
+
+    Widget cell(Widget content, {bool checkboxCell = false}) {
+      return MouseRegion(
+        cursor: SystemMouseCursors.click,
+        onEnter: (_) => setState(() => _hoveredRowIndex = index),
+        onExit: (_) {
+          if (_hoveredRowIndex == index) setState(() => _hoveredRowIndex = null);
+        },
+        child: GestureDetector(
+          onTap: checkboxCell
+              ? () => setState(() {
+                  if (checked) { _checkedIds.remove(id); } else { _checkedIds.add(id); }
+                })
+              : () => _showEditDialog(item),
+          child: Container(
+            height: 48,
+            color: rowBg(),
+            padding: checkboxCell ? EdgeInsets.zero : const EdgeInsets.symmetric(horizontal: 12),
+            alignment: checkboxCell ? Alignment.center : Alignment.centerLeft,
+            child: content,
+          ),
+        ),
+      );
+    }
+
+    const ts = TextStyle(fontSize: 13, color: Color(0xFF111827));
+    const tsAddr = TextStyle(fontSize: 13, color: Color(0xFF4B5563));
+    const tsGray = TextStyle(fontSize: 13, color: Color(0xFF6B7280));
+    const tsBold = TextStyle(fontSize: 13, color: Color(0xFF111827), fontWeight: FontWeight.w500);
+
+    return TableRow(children: [
+      if (_isAdmin)
+        cell(
+          Checkbox(
+            value: checked,
+            activeColor: primaryColor,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+            onChanged: (v) => setState(() {
+              if (v == true) { _checkedIds.add(id); } else { _checkedIds.remove(id); }
+            }),
+          ),
+          checkboxCell: true,
+        ),
+      cell(Text(_str(item, 'region').isNotEmpty ? _str(item, 'region') : _str(item, 'skt본부'), overflow: TextOverflow.ellipsis, style: ts)),
+      cell(Text(_str(item, 'ons팀'), overflow: TextOverflow.ellipsis, style: ts)),
+      cell(Text(_str(item, '허가번호'), overflow: TextOverflow.ellipsis, style: ts)),
+      cell(Text(_str(item, '호출명칭'), overflow: TextOverflow.ellipsis, style: tsBold)),
+      cell(Text(_str(item, '주소'), overflow: TextOverflow.ellipsis, style: tsAddr)),
+      cell(Text(_str(item, '검사일자'), style: ts)),
+      cell(_buildDeadlineCell(item)),
+      cell(Text(_str(item, '불합격내용'), overflow: TextOverflow.ellipsis, style: ts)),
+      cell(Text(_str(item, '불합격상세'), overflow: TextOverflow.ellipsis, style: tsGray)),
+      cell(_buildStatusChip(_str(item, 'status'))),
+      cell(Text(_str(item, '심의차수'), style: tsBold)),
+    ]);
   }
 
   Widget _buildDeadlineCell(Map<String, dynamic> item) {
