@@ -1037,7 +1037,7 @@ class _InadequateManagementScreenState extends State<InadequateManagementScreen>
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16),
       child: Container(
-        height: 40,
+        height: 48,
         padding: const EdgeInsets.symmetric(horizontal: 12),
         decoration: BoxDecoration(
           color: primaryColor.withValues(alpha: 0.06),
@@ -1047,6 +1047,7 @@ class _InadequateManagementScreenState extends State<InadequateManagementScreen>
         child: Row(
           mainAxisSize: MainAxisSize.max,
           children: [
+            const Spacer(),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
               decoration: BoxDecoration(
@@ -1063,20 +1064,20 @@ class _InadequateManagementScreenState extends State<InadequateManagementScreen>
               '선택됨',
               style: TextStyle(fontSize: 13, color: primaryColor, fontWeight: FontWeight.w500),
             ),
-            const Spacer(),
+            const SizedBox(width: 10),
             TextButton.icon(
               onPressed: _showBulkEditDialog,
-              icon: Icon(Icons.edit_outlined, size: 13, color: primaryColor),
-              label: Text('일괄 처리', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: primaryColor)),
+              icon: Icon(Icons.edit_outlined, size: 14, color: primaryColor),
+              label: Text('일괄 처리', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: primaryColor)),
               style: TextButton.styleFrom(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                 backgroundColor: primaryColor.withValues(alpha: 0.12),
                 minimumSize: Size.zero,
                 tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
               ),
             ),
-            const SizedBox(width: 4),
+            const SizedBox(width: 6),
             InkWell(
               onTap: () => setState(() => _checkedIds.clear()),
               borderRadius: BorderRadius.circular(4),
