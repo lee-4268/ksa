@@ -155,7 +155,7 @@ def _get_cached_file(division_id: str, division_code: str, import_date: str, ext
     path = _get_cache_path(division_id, division_code, import_date, ext)
     if os.path.exists(path):
         import time
-        age = time.time() - os.path.getmtime(path)
+        age = _time_mod.time() - os.path.getmtime(path)
         if age < DS_CACHE_TTL:
             return path
         try:
@@ -2464,7 +2464,7 @@ async def _build_multiple_xlsx_cache(
         _xlsx_build_process = proc
         proc.start()
 
-        start_wait_time = time.time()
+        start_wait_time = _time_mod.time()
         while proc.is_alive():
             if cancel_ev.is_set():
                 try:
@@ -2476,7 +2476,7 @@ async def _build_multiple_xlsx_cache(
                     proc.join(timeout=5)
                 raise InterruptedError("xlsx build cancelled")
 
-            if time.time() - start_wait_time > 10800:
+            if _time_mod.time() - start_wait_time > 10800:
                 logger.error(f"DS bg xlsx 타임아웃 발생 (강제 종료): {tag}")
                 proc.terminate()
                 proc.join(timeout=5)
@@ -2566,7 +2566,7 @@ async def _build_one_xlsx_cache(
         _xlsx_build_process = proc
         proc.start()
 
-        start_wait_time = time.time()
+        start_wait_time = _time_mod.time()
         while proc.is_alive():
             if cancel_ev.is_set():
                 try:
@@ -2580,7 +2580,7 @@ async def _build_one_xlsx_cache(
                     proc.join(timeout=5)
                 raise InterruptedError("xlsx build cancelled")
 
-            if time.time() - start_wait_time > 10800:
+            if _time_mod.time() - start_wait_time > 10800:
                 logger.error(f"DS bg xlsx 타임아웃 발생 (강제 종료): {tag}")
                 proc.terminate()
                 proc.join(timeout=5)
@@ -2715,7 +2715,7 @@ async def _build_xlsx_cache_background(division_id: str, division_code: str, imp
     """
     global _xlsx_build_cancel_event, _xlsx_build_current, _xlsx_build_process, _xlsx_build_start_time
     _xlsx_build_current = (division_id, division_code, import_date)
-    _xlsx_build_start_time = time.time()
+    _xlsx_build_start_time = _time_mod.time()
     cancel_ev = threading.Event()
     _xlsx_build_cancel_event = cancel_ev
     _xlsx_build_process = None
@@ -2992,7 +2992,7 @@ async def ds_xlsx_build_status(request: Request, divisionId: str, divisionCode: 
     estimated_remaining_sec = None
     elapsed_sec = None
     if is_building and _xlsx_build_start_time:
-        elapsed_sec = int(time.time() - _xlsx_build_start_time)
+        elapsed_sec = int(_time_mod.time() - _xlsx_build_start_time)
         estimated_remaining_sec = max(0, SECS_TOTAL - elapsed_sec)
     elif in_queue:
         estimated_remaining_sec = SECS_TOTAL
@@ -3019,7 +3019,7 @@ async def ds_city_hdqt_map(request: Request):
     await _verify_auth(request)
     import sqlite3, time
     global _city_hdqt_cache, _city_hdqt_cache_ts
-    now = time.time()
+    now = _time_mod.time()
     if _city_hdqt_cache is not None and (now - _city_hdqt_cache_ts) < _CITY_HDQT_CACHE_TTL:
         return _city_hdqt_cache
 
