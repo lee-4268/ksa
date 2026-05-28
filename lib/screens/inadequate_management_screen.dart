@@ -1034,20 +1034,17 @@ class _InadequateManagementScreenState extends State<InadequateManagementScreen>
   }
 
   Widget _buildBulkActionBar() {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16),
+    return Center(
       child: Container(
-        height: 48,
-        padding: const EdgeInsets.symmetric(horizontal: 12),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
         decoration: BoxDecoration(
           color: primaryColor.withValues(alpha: 0.06),
           borderRadius: BorderRadius.circular(8),
           border: Border.all(color: primaryColor.withValues(alpha: 0.18)),
         ),
         child: Row(
-          mainAxisSize: MainAxisSize.max,
+          mainAxisSize: MainAxisSize.min,
           children: [
-            const Spacer(),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
               decoration: BoxDecoration(
