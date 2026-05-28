@@ -31,11 +31,42 @@ except ImportError:
     HAS_TESSERACT = False
     logger.warning("pytesseract/Pillow 미설치 — OCR 기능 비활성화 (503 반환)")
 
-# 허가번호: 00-0000-00-0000000 형식
-# OCR이 하이픈을 공백/다른 문자로 오인하는 경우도 커버
-_LICENSE_RE = re.compile(r"\d{2}[-\s]\d{4}[-\s]\d{2}[-\s]\d{7}")
+# 허가번호 정규식 — 하이픈 정상 케이스
+_LICENSE_RE = re.compile(r"\d{2}-\d{4}-\d{2}-\d{7}")
+# 허가번호 — 공백/노이즈 사이에 숫자 그룹이 흩어진 경우 (psm 실패 후 폴백)
+_LICENSE_LOOSE = re.compile(r"(\d{2})\D{0,3}(\d{4})\D{0,3}(\d{2})\D{0,3}(\d{7})")
 # 호출명칭: "호출명칭 : XXX" 형식 (전각 콜론/공백 허용)
 _CALLNAME_RE = re.compile(r"호출명칭\s*[：:：]?\s*([^\s\n]{2,40})")
+
+# 숫자가 와야 할 자리에서 흔히 오인되는 문자 교정표
+# $ → 3,  \ → 1,  { } | → 1,  O o → 0,  S → 5,  B → 8
+_OCR_FIX_TABLE = str.maketrans({
+    "$": "3", "§": "5",
+    "\\": "1", "{": "1", "}": "1", "|": "1",
+    "S": "5", "B": "8",
+})
+
+
+def _fix_and_find_license(text: str) -> str | None:
+    """OCR 텍스트에서 허가번호를 여러 전략으로 추출."""
+    # 전략 1: 원문 직접 매칭
+    m = _LICENSE_RE.search(text)
+    if m:
+        return m.group(0)
+
+    # 전략 2: 공백 제거 + 숫자 오인 교정 후 매칭
+    no_space = re.sub(r"\s+", "", text)
+    fixed = no_space.translate(_OCR_FIX_TABLE)
+    m = _LICENSE_RE.search(fixed)
+    if m:
+        return m.group(0)
+
+    # 전략 3: 구분자(하이픈·공백·노이즈) 사이의 숫자 그룹 느슨하게 매칭
+    m = _LICENSE_LOOSE.search(fixed)
+    if m:
+        return f"{m.group(1)}-{m.group(2)}-{m.group(3)}-{m.group(4)}"
+
+    return None
 
 
 class ScanBody(BaseModel):
@@ -100,27 +131,27 @@ async def scan_cert(request: Request, body: ScanBody):
         # 6. 언샤프 마스크 (엣지 강화, SHARPEN보다 효과적)
         img = img.filter(ImageFilter.UnsharpMask(radius=1, percent=200, threshold=3))
 
-        # 7. OCR — psm 6: 단일 균일 텍스트 블록 (확인증처럼 구조화된 문서에 최적)
-        #          oem 3: LSTM 엔진 (숫자 인식 우수)
-        #          tessedit_char_whitelist 미사용 → 한글+영숫자 모두 인식
-        config = "--psm 6 --oem 3"
-        text_6 = pytesseract.image_to_string(img, lang="kor+eng", config=config)
+        # 7. OCR — 세 가지 psm 모드로 시도 후 합산
+        #   psm 6: 단일 균일 텍스트 블록 (구조화된 문서)
+        #   psm 11: 희소 텍스트 (레이아웃 무시, 숫자 흩어진 경우 유리)
+        #   psm 3: 완전 자동 (폴백)
+        texts = {}
+        for psm in (6, 11, 3):
+            try:
+                texts[psm] = pytesseract.image_to_string(
+                    img, lang="kor+eng", config=f"--psm {psm} --oem 3"
+                )
+            except Exception:
+                texts[psm] = ""
+            logger.info(f"OCR psm{psm}(앞200): {texts[psm][:200]!r}")
 
-        # psm 6에서 실패 시 psm 3(자동)으로 폴백
-        text_3 = pytesseract.image_to_string(img, lang="kor+eng", config="--psm 3 --oem 3")
+        combined = "\n".join(texts.values())
 
-        # 두 결과 합쳐서 정규식 탐색 (어느 쪽이든 인식되면 사용)
-        combined = text_6 + "\n" + text_3
-        logger.info(f"OCR psm6(앞200): {text_6[:200]!r}")
-        logger.info(f"OCR psm3(앞200): {text_3[:200]!r}")
+        # 8. 허가번호 추출 (3단계 전략)
+        license_no = _fix_and_find_license(combined)
 
-        licenses = _LICENSE_RE.findall(combined)
+        # 9. 호출명칭 추출
         callnames = _CALLNAME_RE.findall(combined)
-
-        # 하이픈 오인 공백 → 표준 허가번호 형식으로 정규화
-        license_no = None
-        if licenses:
-            license_no = re.sub(r"[-\s]+", "-", licenses[0])
 
         return {
             "license_no": license_no,

@@ -14,6 +14,7 @@ import '../screens/inspection_result_screen.dart';
 ///
 /// 카메라 앱 직접 촬영 또는 갤러리에서 이미지 선택 →
 /// base64 → /ocr/scan → 허가번호/호출명칭 추출 → 수검결과 열기
+/// OCR 실패 시 허가번호 직접 입력 폴백 제공
 class CertScannerSheet extends StatefulWidget {
   const CertScannerSheet({super.key});
 
@@ -23,9 +24,14 @@ class CertScannerSheet extends StatefulWidget {
 
 class _CertScannerSheetState extends State<CertScannerSheet> {
   Uint8List? _imageBytes;
-  bool _scanning = false;
+  bool _scanning    = false;
   String? _error;
   Map<String, dynamic>? _result;
+
+  // 직접 입력 폴백
+  bool _showManualInput = false;
+  final _manualCtrl     = TextEditingController();
+  final _manualFocus    = FocusNode();
 
   static const _apiBase = String.fromEnvironment(
     'API_BASE_URL',
@@ -45,7 +51,6 @@ class _CertScannerSheetState extends State<CertScannerSheet> {
       ..accept = 'image/*'
       ..style.display = 'none';
     if (useCamera) input.setAttribute('capture', 'environment');
-
     html.document.body!.append(input);
 
     final completer = Completer<Uint8List?>();
@@ -69,9 +74,14 @@ class _CertScannerSheetState extends State<CertScannerSheet> {
 
     final bytes = await completer.future;
     try { input.remove(); } catch (_) {}
-
     if (bytes == null || !mounted) return;
-    setState(() { _imageBytes = bytes; _result = null; _error = null; });
+
+    setState(() {
+      _imageBytes = bytes;
+      _result = null;
+      _error  = null;
+      _showManualInput = false;
+    });
     _scan(bytes);
   }
 
@@ -83,9 +93,21 @@ class _CertScannerSheetState extends State<CertScannerSheet> {
       final b64    = base64Encode(bytes);
       final token  = context.read<AuthService>().authToken;
       final result = await _callOcr(b64, token);
-      if (mounted) setState(() { _result = result; _scanning = false; });
+      if (!mounted) return;
+      setState(() {
+        _result  = result;
+        _scanning = false;
+        // OCR 실패 시 직접 입력 폼 자동 표시
+        if ((result['license_no'] as String? ?? '').trim().isEmpty) {
+          _showManualInput = true;
+          Future.delayed(const Duration(milliseconds: 300), () {
+            if (mounted) _manualFocus.requestFocus();
+          });
+        }
+      });
     } catch (e) {
-      if (mounted) setState(() { _error = '스캔 실패: $e'; _scanning = false; });
+      if (!mounted) return;
+      setState(() { _error = '스캔 실패: $e'; _scanning = false; _showManualInput = true; });
     }
   }
 
@@ -110,13 +132,23 @@ class _CertScannerSheetState extends State<CertScannerSheet> {
 
   // ── 수검결과 열기 ────────────────────────────────────────────
 
+  /// OCR 결과로 열기
   void _openResultSheet() {
     final r = _result;
     if (r == null) return;
     final licenseNo = (r['license_no'] as String? ?? '').trim();
-    final callname  = (r['callname']  as String? ?? '').trim();
     if (licenseNo.isEmpty) return;
+    _navigate(licenseNo, (r['callname'] as String? ?? '').trim());
+  }
 
+  /// 직접 입력으로 열기
+  void _openResultManual() {
+    final licenseNo = _manualCtrl.text.trim();
+    if (licenseNo.isEmpty) return;
+    _navigate(licenseNo, '');
+  }
+
+  void _navigate(String licenseNo, String callname) {
     Navigator.pop(context);
     final ctx = context;
     showModalBottomSheet(
@@ -133,6 +165,13 @@ class _CertScannerSheetState extends State<CertScannerSheet> {
         ),
       ),
     );
+  }
+
+  @override
+  void dispose() {
+    _manualCtrl.dispose();
+    _manualFocus.dispose();
+    super.dispose();
   }
 
   // ── Build ────────────────────────────────────────────────────
@@ -197,45 +236,66 @@ class _CertScannerSheetState extends State<CertScannerSheet> {
           _buildPickButtons(),
           const SizedBox(height: 20),
 
-          // 선택된 이미지 미리보기
+          // 이미지 미리보기
           if (_imageBytes != null) ...[
             _buildPreview(),
             const SizedBox(height: 16),
           ],
 
-          // OCR 결과
+          // OCR 처리 중
           if (_scanning)
-            const Center(
-              child: Padding(
-                padding: EdgeInsets.symmetric(vertical: 20),
-                child: Column(
-                  children: [
-                    CircularProgressIndicator(color: _blue, strokeWidth: 2),
-                    SizedBox(height: 10),
-                    Text('텍스트 인식 중…',
-                        style: TextStyle(fontSize: 13, color: _textGray)),
-                  ],
-                ),
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 16),
+              child: Column(
+                children: [
+                  CircularProgressIndicator(color: _blue, strokeWidth: 2),
+                  SizedBox(height: 10),
+                  Text('텍스트 인식 중…',
+                      style: TextStyle(fontSize: 13, color: _textGray)),
+                ],
               ),
             )
-          else if (_result != null)
-            _buildResultCard(),
+          else ...[
+            // OCR 성공 결과
+            if (_result != null) _buildResultCard(),
 
-          // 에러
-          if (_error != null && !_scanning)
-            _buildErrorCard(),
+            // 에러 표시
+            if (_error != null) ...[
+              const SizedBox(height: 8),
+              _buildErrorCard(),
+            ],
 
-          // 수검결과 열기 버튼
-          if ((_result?['license_no'] as String? ?? '').trim().isNotEmpty) ...[
-            const SizedBox(height: 16),
-            _buildOpenButton(),
+            // 직접 입력 폴백 (OCR 실패 or 수동 토글)
+            if (_showManualInput) ...[
+              const SizedBox(height: 16),
+              _buildManualInput(),
+            ] else if (_result != null && (_result!['license_no'] as String? ?? '').isEmpty) ...[
+              // 인식 실패인데 폼 미표시 상태일 때 토글 버튼
+              const SizedBox(height: 8),
+              Center(
+                child: TextButton.icon(
+                  onPressed: () => setState(() { _showManualInput = true; _manualFocus.requestFocus(); }),
+                  icon: const Icon(Icons.edit_outlined, size: 15),
+                  label: const Text('허가번호 직접 입력'),
+                  style: TextButton.styleFrom(foregroundColor: _blue),
+                ),
+              ),
+            ],
+
+            // 수검결과 열기 버튼 (OCR 성공)
+            if ((_result?['license_no'] as String? ?? '').trim().isNotEmpty) ...[
+              const SizedBox(height: 16),
+              _buildOpenButton(onTap: _openResultSheet),
+            ],
           ],
 
-          SizedBox(height: MediaQuery.of(context).padding.bottom + 8),
+          SizedBox(height: MediaQuery.of(context).padding.bottom + 16),
         ],
       ),
     );
   }
+
+  // ── 섹션 위젯들 ──────────────────────────────────────────────
 
   Widget _buildGuide() => Container(
     padding: const EdgeInsets.all(14),
@@ -288,12 +348,7 @@ class _CertScannerSheetState extends State<CertScannerSheet> {
     borderRadius: BorderRadius.circular(10),
     child: Stack(
       children: [
-        Image.memory(
-          _imageBytes!,
-          width: double.infinity,
-          height: 220,
-          fit: BoxFit.cover,
-        ),
+        Image.memory(_imageBytes!, width: double.infinity, height: 200, fit: BoxFit.cover),
         if (_scanning)
           Positioned.fill(
             child: Container(
@@ -318,18 +373,16 @@ class _CertScannerSheetState extends State<CertScannerSheet> {
       decoration: BoxDecoration(
         color: ok ? _blueSoft : const Color(0xFFFFFBEB),
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(
-          color: ok ? const Color(0xFFBFDBFE) : const Color(0xFFFDE68A),
-        ),
+        border: Border.all(color: ok ? const Color(0xFFBFDBFE) : const Color(0xFFFDE68A)),
       ),
       child: ok
           ? Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(children: [
-                  const Icon(Icons.check_circle_outline, size: 16, color: Color(0xFF1D4ED8)),
-                  const SizedBox(width: 6),
-                  const Text('인식 완료',
+                const Row(children: [
+                  Icon(Icons.check_circle_outline, size: 16, color: Color(0xFF1D4ED8)),
+                  SizedBox(width: 6),
+                  Text('인식 완료',
                       style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Color(0xFF1D4ED8))),
                 ]),
                 const SizedBox(height: 10),
@@ -352,9 +405,7 @@ class _CertScannerSheetState extends State<CertScannerSheet> {
                 const SizedBox(height: 6),
                 const Text(
                   '허가번호를 인식하지 못했습니다.\n'
-                  '· 확인증 전체가 화면에 들어오도록 촬영해 주세요\n'
-                  '· 글자가 흔들리지 않고 선명한지 확인해 주세요\n'
-                  '· 밝은 조명 환경에서 촬영하면 인식률이 높아집니다',
+                  '아래에 허가번호를 직접 입력하거나 다시 촬영해 주세요.',
                   style: TextStyle(fontSize: 12, color: Color(0xFF92400E), height: 1.6),
                 ),
               ],
@@ -391,10 +442,59 @@ class _CertScannerSheetState extends State<CertScannerSheet> {
     child: Text(_error ?? '', style: const TextStyle(fontSize: 12, color: Color(0xFF991B1B))),
   );
 
-  Widget _buildOpenButton() => SizedBox(
+  /// OCR 실패 시 허가번호 직접 입력 폼
+  Widget _buildManualInput() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            const Icon(Icons.edit_outlined, size: 14, color: _textGray),
+            const SizedBox(width: 6),
+            const Text('허가번호 직접 입력',
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: _textPrimary)),
+            const Spacer(),
+            GestureDetector(
+              onTap: () => setState(() => _showManualInput = false),
+              child: const Text('닫기',
+                  style: TextStyle(fontSize: 12, color: _textGray)),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        TextField(
+          controller: _manualCtrl,
+          focusNode: _manualFocus,
+          keyboardType: TextInputType.text,
+          decoration: InputDecoration(
+            hintText: '예) 52-2013-11-0012592',
+            hintStyle: const TextStyle(fontSize: 13, color: Color(0xFFD1D5DB)),
+            contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(10),
+              borderSide: const BorderSide(color: _borderColor),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(10),
+              borderSide: const BorderSide(color: _blue, width: 1.5),
+            ),
+            suffixIcon: IconButton(
+              icon: const Icon(Icons.clear, size: 16, color: _textGray),
+              onPressed: () => _manualCtrl.clear(),
+            ),
+          ),
+          onSubmitted: (_) => _openResultManual(),
+        ),
+        const SizedBox(height: 12),
+        _buildOpenButton(onTap: _openResultManual),
+      ],
+    );
+  }
+
+  Widget _buildOpenButton({required VoidCallback onTap}) => SizedBox(
     width: double.infinity,
     child: ElevatedButton.icon(
-      onPressed: _openResultSheet,
+      onPressed: onTap,
       icon: const Icon(Icons.open_in_new, size: 16),
       label: const Text('수검결과 입력 화면 열기',
           style: TextStyle(fontWeight: FontWeight.w700)),
@@ -419,11 +519,8 @@ class _PickButton extends StatelessWidget {
   final VoidCallback onTap;
 
   const _PickButton({
-    required this.icon,
-    required this.label,
-    required this.sub,
-    required this.color,
-    required this.onTap,
+    required this.icon, required this.label, required this.sub,
+    required this.color, required this.onTap,
   });
 
   @override
