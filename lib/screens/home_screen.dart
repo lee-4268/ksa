@@ -25,6 +25,7 @@ import '../services/community_service.dart';
 import '../services/notification_service.dart';
 import '../services/inspection_service.dart';
 import '../widgets/inspection_dashboard_widget.dart';
+import '../widgets/cert_scanner_sheet.dart';
 
 /// 앱 셸 — 사이드바 상시 표시 + 오른쪽 콘텐츠 전환
 class HomeScreen extends StatefulWidget {
@@ -491,9 +492,32 @@ final result = await showDialog<bool>(
             const SizedBox(width: 8),
             Text(item.title, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: _textPrimary)),
             const Spacer(),
+            // 확인증 스캔 버튼
+            Tooltip(
+              message: '확인증 스캔',
+              child: IconButton(
+                icon: const Icon(Icons.document_scanner_outlined, size: 22, color: _textSecondary),
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                onPressed: _openCertScanner,
+              ),
+            ),
+            const SizedBox(width: 2),
             _buildUserAvatar(),
           ],
         ),
+      ),
+    );
+  }
+
+  void _openCertScanner() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => SizedBox(
+        height: MediaQuery.of(context).size.height * 0.88,
+        child: const CertScannerSheet(),
       ),
     );
   }
