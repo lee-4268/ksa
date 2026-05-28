@@ -131,21 +131,21 @@ async def scan_cert(request: Request, body: ScanBody):
         # 6. 언샤프 마스크 (엣지 강화, SHARPEN보다 효과적)
         img = img.filter(ImageFilter.UnsharpMask(radius=1, percent=200, threshold=3))
 
-        # 7. OCR — 세 가지 psm 모드로 시도 후 합산
-        #   psm 6: 단일 균일 텍스트 블록 (구조화된 문서)
-        #   psm 11: 희소 텍스트 (레이아웃 무시, 숫자 흩어진 경우 유리)
-        #   psm 3: 완전 자동 (폴백)
-        texts = {}
-        for psm in (6, 11, 3):
-            try:
-                texts[psm] = pytesseract.image_to_string(
-                    img, lang="kor+eng", config=f"--psm {psm} --oem 3"
-                )
-            except Exception:
-                texts[psm] = ""
-            logger.info(f"OCR psm{psm}(앞200): {texts[psm][:200]!r}")
+        # 7. 4방향 회전 × psm(6,11,3) 조합 — 확인증이 세로/가로 부착 모두 대응
+        all_texts = []
+        for angle in (0, 90, 180, 270):
+            rotated = img.rotate(angle, expand=True) if angle else img
+            for psm in (6, 11, 3):
+                try:
+                    t = pytesseract.image_to_string(
+                        rotated, lang="kor+eng", config=f"--psm {psm} --oem 3"
+                    )
+                    all_texts.append(t)
+                    logger.info(f"OCR angle={angle} psm={psm} (앞150): {t[:150]!r}")
+                except Exception:
+                    pass
 
-        combined = "\n".join(texts.values())
+        combined = "\n".join(all_texts)
 
         # 8. 허가번호 추출 (3단계 전략)
         license_no = _fix_and_find_license(combined)
