@@ -33,16 +33,20 @@
     window.kakaoMapsLoaded = false;
     window.kakaoMapsLoadError = null;
 
+    var _kakaoInitRetry = 0;
     function initKakaoMaps() {
       if (typeof kakao !== 'undefined' && kakao.maps && typeof kakao.maps.load === 'function') {
         kakao.maps.load(function() {
           console.log('카카오맵 SDK 로드 완료');
           window.kakaoMapsLoaded = true;
         });
-      } else {
-        // SDK 스크립트가 아직 로드되지 않은 경우 재시도
-        console.log('카카오맵 SDK 대기 중...');
+      } else if (_kakaoInitRetry < 100) {
+        // 최대 10초(100 × 100ms) 대기 후 포기
+        _kakaoInitRetry++;
         setTimeout(initKakaoMaps, 100);
+      } else {
+        console.warn('카카오맵 SDK 로드 실패 (API 키 미설정 또는 네트워크 오류)');
+        window.kakaoMapsLoadError = 'timeout';
       }
     }
 
