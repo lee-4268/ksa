@@ -40,11 +40,16 @@ class ErpDsCompareScreen extends StatefulWidget {
 }
 
 class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
-  // 기존 메뉴들과 통일된 컬러 팔레트
-  static const Color _primaryColor = Color(0xFFE53935);
-  static const Color _blueAccent = Color(0xFF4A90D9);
-  static const Color _greenColor = Color(0xFF43A047);
-  static const Color _themeColor = Color(0xFF1565C0);
+  // Modern Minimal 디자인 토큰
+  static const Color _primaryColor  = Color(0xFFE53935);
+  static const Color _blueAccent    = Color(0xFF4A90D9);
+  static const Color _greenColor    = Color(0xFF43A047);
+  static const Color _themeColor    = Color(0xFF1565C0);
+  static const Color _border        = Color(0xFFE5E7EB);
+  static const Color _bg            = Color(0xFFF9FAFB);
+  static const Color _textPrimary   = Color(0xFF111827);
+  static const Color _textSecondary = Color(0xFF6B7280);
+  static const Color _amber         = Color(0xFFF59E0B);
 
   // access담당 한글명 → auth division ID
   static const Map<String, String> _accessToAuthId = {
@@ -374,18 +379,18 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
               margin: const EdgeInsets.only(bottom: 12),
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
               decoration: BoxDecoration(
-                color: Colors.orange.shade50,
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: Colors.orange.shade200),
+                color: const Color(0xFFFFFBEB),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: const Color(0xFFFDE68A)),
               ),
               child: Row(children: [
-                Icon(Icons.warning_amber_rounded, size: 16, color: Colors.orange.shade700),
+                const Icon(Icons.warning_amber_rounded, size: 15, color: Color(0xFFD97706)),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
                     '선택된 항목에 여러 본부가 포함되어 있습니다. '
                     'Access담당 기준 가장 많은 본부(${widget.initialAccessDivision})의 DS 파일로 자동 조회됩니다.',
-                    style: TextStyle(fontSize: 12, color: Colors.orange.shade800),
+                    style: const TextStyle(fontSize: 12, color: Color(0xFF92400E)),
                   ),
                 ),
               ]),
@@ -397,11 +402,14 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
             // 본부 선택
             Row(
               children: [
-                const Icon(Icons.business, color: _themeColor, size: 22),
+                Container(
+                  width: 3, height: 16,
+                  decoration: BoxDecoration(color: _themeColor, borderRadius: BorderRadius.circular(2)),
+                ),
                 const SizedBox(width: 8),
                 const Text(
                   '본부 선택',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: _textPrimary),
                 ),
                 if (divisionName != null) ...[
                   const Spacer(),
@@ -429,8 +437,8 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
               decoration: BoxDecoration(
                 color: Colors.white,
-                border: Border.all(color: Colors.grey.shade300),
-                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: _border),
+                borderRadius: BorderRadius.circular(8),
               ),
               child: DropdownButtonHideUnderline(
                 child: DropdownButton<String>(
@@ -463,31 +471,34 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
             ),
 
             const SizedBox(height: 20),
-            const Divider(height: 1),
+            Divider(height: 1, color: _border),
             const SizedBox(height: 20),
 
             // DS 파일 선택
             Row(
               children: [
-                const Icon(Icons.folder_open, color: _themeColor, size: 22),
+                Container(
+                  width: 3, height: 16,
+                  decoration: BoxDecoration(color: _themeColor, borderRadius: BorderRadius.circular(2)),
+                ),
                 const SizedBox(width: 8),
                 const Text(
                   'DS 파일 선택',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: _textPrimary),
                 ),
                 const Spacer(),
                 if (_selectedUpload != null)
                   Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                     decoration: BoxDecoration(
-                      color: _greenColor.withValues(alpha: 0.1),
-                      borderRadius: BorderRadius.circular(12),
+                      color: _greenColor.withValues(alpha: 0.08),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: _greenColor.withValues(alpha: 0.2)),
                     ),
                     child: Text(
                       '${_selectedUpload!.totalRows}행',
                       style: const TextStyle(
-                        fontSize: 12,
+                        fontSize: 11,
                         fontWeight: FontWeight.w600,
                         color: _greenColor,
                       ),
@@ -503,32 +514,30 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
               )
             else if (_dsUploads.isEmpty)
               Container(
-                padding: const EdgeInsets.all(16),
+                padding: const EdgeInsets.all(14),
                 decoration: BoxDecoration(
-                  color: const Color(0xFFF5F6FA),
-                  borderRadius: BorderRadius.circular(10),
+                  color: _bg,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: _border),
                 ),
-                child: Row(
+                child: const Row(
                   children: [
-                    Icon(Icons.info_outline,
-                        size: 18, color: Colors.grey.shade500),
-                    const SizedBox(width: 8),
+                    Icon(Icons.info_outline, size: 16, color: _textSecondary),
+                    SizedBox(width: 8),
                     Text(
                       '해당 본부에 업로드된 DS 파일이 없습니다.',
-                      style: TextStyle(
-                          color: Colors.grey.shade600, fontSize: 13),
+                      style: TextStyle(color: _textSecondary, fontSize: 12),
                     ),
                   ],
                 ),
               )
             else
               Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
                 decoration: BoxDecoration(
                   color: Colors.white,
-                  border: Border.all(color: Colors.grey.shade300),
-                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: _border),
+                  borderRadius: BorderRadius.circular(8),
                 ),
                 child: DropdownButtonHideUnderline(
                   child: DropdownButton<DsUploadInfo>(
@@ -564,30 +573,35 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
         _buildCard(
           Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Row(children: [
-              const Icon(Icons.search, color: _themeColor, size: 22),
+              Container(
+                width: 3, height: 16,
+                decoration: BoxDecoration(color: _themeColor, borderRadius: BorderRadius.circular(2)),
+              ),
               const SizedBox(width: 8),
               const Text(
                 '검색어 입력',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: _textPrimary),
               ),
               const Spacer(),
               Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                 decoration: BoxDecoration(
                   color: zpwinoCount > 500
-                      ? _primaryColor.withValues(alpha: 0.1)
-                      : Colors.grey.shade100,
-                  borderRadius: BorderRadius.circular(12),
+                      ? _primaryColor.withValues(alpha: 0.08)
+                      : _bg,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: zpwinoCount > 500
+                        ? _primaryColor.withValues(alpha: 0.3)
+                        : _border,
+                  ),
                 ),
                 child: Text(
                   '$zpwinoCount / 500건',
                   style: TextStyle(
-                    fontSize: 12,
+                    fontSize: 11,
                     fontWeight: FontWeight.w600,
-                    color: zpwinoCount > 500
-                        ? _primaryColor
-                        : Colors.grey.shade600,
+                    color: zpwinoCount > 500 ? _primaryColor : _textSecondary,
                   ),
                 ),
               ),
@@ -596,20 +610,19 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
             Container(
               decoration: BoxDecoration(
                 color: Colors.white,
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: Colors.grey.shade300),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: _border),
               ),
               child: TextField(
                 controller: _inputCtrl,
                 maxLines: 10,
-                style: const TextStyle(fontSize: 14),
-                decoration: InputDecoration(
+                style: const TextStyle(fontSize: 13),
+                decoration: const InputDecoration(
                   border: InputBorder.none,
-                  contentPadding: const EdgeInsets.all(14),
+                  contentPadding: EdgeInsets.all(14),
                   hintText:
                       '허가번호, 호출명칭, 주소를 입력하세요\n(줄바꿈, 쉼표, 세미콜론으로 구분)\n\n예: 3220056100000756\n     SKT홍대\n     서울시 마포구...',
-                  hintStyle: TextStyle(
-                      color: Colors.grey.shade400, fontSize: 13),
+                  hintStyle: TextStyle(color: Color(0xFF9CA3AF), fontSize: 12),
                 ),
                 onChanged: (_) => setState(() {}),
               ),
@@ -622,22 +635,19 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
         if (_error != null)
           Container(
             margin: const EdgeInsets.only(bottom: 12),
-            padding:
-                const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
             decoration: BoxDecoration(
-              color: Colors.red.shade50,
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: Colors.red.shade200),
+              color: const Color(0xFFFEE2E2),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: const Color(0xFFFCA5A5)),
             ),
             child: Row(
               children: [
-                Icon(Icons.error_outline,
-                    size: 18, color: Colors.red.shade600),
+                const Icon(Icons.error_outline, size: 16, color: Color(0xFFDC2626)),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(_error!,
-                      style: TextStyle(
-                          color: Colors.red.shade700, fontSize: 13)),
+                      style: const TextStyle(color: Color(0xFFB91C1C), fontSize: 12)),
                 ),
               ],
             ),
@@ -692,9 +702,9 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
             margin: const EdgeInsets.only(bottom: 16),
             padding: const EdgeInsets.all(14),
             decoration: BoxDecoration(
-              color: Colors.orange.shade50,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Colors.orange.shade200),
+              color: const Color(0xFFFFFBEB),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: const Color(0xFFFDE68A)),
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -703,10 +713,10 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
                     child: Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Icon(Icons.warning_amber, size: 16, color: Colors.orange.shade700),
+                        const Icon(Icons.warning_amber, size: 15, color: Color(0xFFD97706)),
                         const SizedBox(width: 8),
                         Expanded(child: Text(w,
-                            style: TextStyle(fontSize: 13, color: Colors.orange.shade800))),
+                            style: const TextStyle(fontSize: 12, color: Color(0xFF92400E)))),
                       ],
                     ),
                   )).toList(),
@@ -722,40 +732,37 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
         _buildCard(
           Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Row(children: [
-              const Icon(Icons.analytics_outlined,
-                  color: _themeColor, size: 22),
+              Container(
+                width: 3, height: 16,
+                decoration: BoxDecoration(color: _themeColor, borderRadius: BorderRadius.circular(2)),
+              ),
               const SizedBox(width: 8),
               const Text(
                 '비교 결과 요약',
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.black87,
-                ),
+                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: _textPrimary),
               ),
               const Spacer(),
               TextButton.icon(
                 onPressed: _reset,
-                icon: const Icon(Icons.refresh, size: 16),
-                label:
-                    const Text('다시 입력', style: TextStyle(fontSize: 13)),
+                icon: const Icon(Icons.refresh, size: 15),
+                label: const Text('다시 입력', style: TextStyle(fontSize: 12)),
                 style: TextButton.styleFrom(foregroundColor: _blueAccent),
               ),
             ]),
-            const SizedBox(height: 16),
+            const SizedBox(height: 14),
             // 조회 통계
             Wrap(spacing: 8, runSpacing: 8, children: [
-              _buildStatChip('전체', r.total, Colors.grey.shade600),
+              _buildStatChip('전체', r.total, _textSecondary),
               _buildStatChip('ERP', r.erpFound, _blueAccent),
-              _buildStatChip(
-                  'DS장치', r.dsDeviceFound, const Color(0xFF00897B)),
-              _buildStatChip(
-                  'DS안테나', r.dsAntennaFound, const Color(0xFF5C6BC0)),
+              _buildStatChip('DS장치', r.dsDeviceFound, const Color(0xFF00897B)),
+              _buildStatChip('DS안테나', r.dsAntennaFound, const Color(0xFF5C6BC0)),
             ]),
-            const SizedBox(height: 16),
+            const SizedBox(height: 14),
             _buildSummaryRow('설치대', r.summary),
-            const SizedBox(height: 10),
+            const SizedBox(height: 8),
             _buildSummaryRow('일련번호', r.summary, prefix: 'serial'),
+            const SizedBox(height: 8),
+            _buildSummaryRow('활용구분', r.summary, prefix: 'prac1'),
           ]),
         ),
 
@@ -764,16 +771,15 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
         // 필터 칩
         _buildCard(
           Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            const Row(children: [
-              Icon(Icons.filter_list, color: _themeColor, size: 22),
-              SizedBox(width: 8),
-              Text(
+            Row(children: [
+              Container(
+                width: 3, height: 16,
+                decoration: BoxDecoration(color: _themeColor, borderRadius: BorderRadius.circular(2)),
+              ),
+              const SizedBox(width: 8),
+              const Text(
                 '필터',
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.black87,
-                ),
+                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: _textPrimary),
               ),
             ]),
             const SizedBox(height: 12),
@@ -794,28 +800,27 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
         _buildCard(
           Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Row(children: [
-              const Icon(Icons.table_chart, color: _themeColor, size: 22),
+              Container(
+                width: 3, height: 16,
+                decoration: BoxDecoration(color: _themeColor, borderRadius: BorderRadius.circular(2)),
+              ),
               const SizedBox(width: 8),
               const Text(
                 '상세 결과',
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.black87,
-                ),
+                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: _textPrimary),
               ),
               const SizedBox(width: 8),
               Container(
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 10, vertical: 4),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                 decoration: BoxDecoration(
-                  color: _themeColor.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(12),
+                  color: _themeColor.withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: _themeColor.withValues(alpha: 0.2)),
                 ),
                 child: Text(
                   '${filteredItems.length}건',
                   style: const TextStyle(
-                    fontSize: 12,
+                    fontSize: 11,
                     fontWeight: FontWeight.w600,
                     color: _themeColor,
                   ),
@@ -839,8 +844,8 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
                   style: ElevatedButton.styleFrom(
                     backgroundColor: const Color(0xFF00897B),
                     foregroundColor: Colors.white,
-                    disabledBackgroundColor: Colors.grey.shade300,
-                    disabledForegroundColor: Colors.grey.shade500,
+                    disabledBackgroundColor: const Color(0xFFE5E7EB),
+                    disabledForegroundColor: const Color(0xFF9CA3AF),
                     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                     elevation: 0,
@@ -984,8 +989,13 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
     const chkW = 36.0;
     final isAdmin = context.read<AuthService>().isAdmin;
 
-    return SizedBox(
+    return Container(
       height: tableHeight,
+      decoration: BoxDecoration(
+        border: Border.all(color: _border),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      clipBehavior: Clip.antiAlias,
       child: LayoutBuilder(
         builder: (ctx, cons) {
           _ensureColWidths(isAdmin ? cons.maxWidth - chkW : cons.maxWidth);
@@ -997,19 +1007,18 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
               // 헤더 (sticky)
               Container(
                 decoration: const BoxDecoration(
-                  color: Color(0xFFF5F7FA),
+                  color: Color(0xFFF3F4F6),
                   border: Border(
-                    top: BorderSide(color: Color(0xFFE0E4EA)),
-                    bottom: BorderSide(color: Color(0xFFE0E4EA)),
+                    bottom: BorderSide(color: Color(0xFFE5E7EB), width: 1.5),
                   ),
                 ),
-                height: 44,
+                height: 40,
                 child: Row(
                   children: [
                     if (isAdmin)
                       SizedBox(
                         width: chkW,
-                        height: 44,
+                        height: 40,
                         child: Checkbox(
                           value: allSelected,
                           tristate: false,
@@ -1032,7 +1041,7 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
               Expanded(
                 child: ListView.builder(
                   itemCount: items.length,
-                  itemExtent: 48,
+                  itemExtent: 44,
                   itemBuilder: (ctx, idx) {
                     return _buildDataRow(items[idx], r, idx, widths, isAdmin ? chkW : 0);
                   },
@@ -1092,19 +1101,19 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
     final isLast = i == _colTitles.length - 1;
     return SizedBox(
       width: width,
-      height: 44,
+      height: 40,
       child: Stack(
         clipBehavior: Clip.none,
         children: [
           Container(
             width: width,
-            height: 44,
+            height: 40,
             padding: const EdgeInsets.symmetric(horizontal: 8),
             alignment: Alignment.center,
             decoration: isGroupBoundary
                 ? const BoxDecoration(
                     border: Border(
-                      right: BorderSide(color: Color(0xFF9AA3AE), width: 2),
+                      right: BorderSide(color: Color(0xFFCBD5E1), width: 1.5),
                     ),
                   )
                 : null,
@@ -1117,10 +1126,10 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
           ),
           if (!isLast && !isGroupBoundary)
             Positioned(
-              right: 8,
+              right: 0,
               top: 10,
               bottom: 10,
-              child: Container(width: 1, color: const Color(0xFFD1D5DB)),
+              child: Container(width: 1, color: const Color(0xFFE5E7EB)),
             ),
           if (!isLast)
             Positioned(
@@ -1221,16 +1230,16 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
     return Container(
       decoration: BoxDecoration(
         color: isSelected
-            ? const Color(0xFF00897B).withValues(alpha: 0.08)
-            : (idx.isEven ? Colors.white : const Color(0xFFFAFBFC)),
-        border: const Border(bottom: BorderSide(color: Color(0xFFEEF1F5))),
+            ? const Color(0xFF00897B).withValues(alpha: 0.07)
+            : (idx.isEven ? Colors.white : const Color(0xFFF9FAFB)),
+        border: const Border(bottom: BorderSide(color: Color(0xFFE5E7EB))),
       ),
       child: Row(
         children: [
           if (chkW > 0)
             SizedBox(
               width: chkW,
-              height: 48,
+              height: 44,
               child: Checkbox(
                 value: isSelected,
                 activeColor: const Color(0xFF00897B),
@@ -1248,13 +1257,13 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
             final isGroupBoundary = _groupBoundaryRight.contains(i);
             return Container(
               width: widths[i],
-              height: 48,
+              height: 44,
               padding: const EdgeInsets.symmetric(horizontal: 8),
               alignment: Alignment.center,
               decoration: isGroupBoundary
                   ? const BoxDecoration(
                       border: Border(
-                        right: BorderSide(color: Color(0xFF9AA3AE), width: 2),
+                        right: BorderSide(color: Color(0xFFCBD5E1), width: 1.5),
                       ),
                     )
                   : null,
@@ -1320,14 +1329,8 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.04),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          ),
-        ],
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: _border),
       ),
       child: child,
     );
@@ -1335,14 +1338,15 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
 
   Widget _buildStatChip(String label, int value, Color color) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(12),
+        color: color.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: color.withValues(alpha: 0.2)),
       ),
       child: Text('$label $value',
           style: TextStyle(
-              fontSize: 13, fontWeight: FontWeight.w600, color: color)),
+              fontSize: 12, fontWeight: FontWeight.w600, color: color)),
     );
   }
 
@@ -1358,22 +1362,26 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
 
     return _buildCard(
       Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        // ── 헤더 (일정 연결된 경우만 사전점검 회신 뱃지 표시)
+        // ── 헤더
         Row(children: [
-          const Icon(Icons.assignment_turned_in_outlined, color: Color(0xFF6B47DC), size: 22),
+          Container(
+            width: 3, height: 16,
+            decoration: BoxDecoration(color: const Color(0xFF6B47DC), borderRadius: BorderRadius.circular(2)),
+          ),
           const SizedBox(width: 8),
           const Text('사전점검',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.black87)),
+              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: _textPrimary)),
           const SizedBox(width: 8),
           if (hasPks)
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
               decoration: BoxDecoration(
-                color: const Color(0xFF6B47DC).withValues(alpha: 0.1),
-                borderRadius: BorderRadius.circular(10),
+                color: const Color(0xFF6B47DC).withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: const Color(0xFF6B47DC).withValues(alpha: 0.2)),
               ),
               child: Text('수검 건 $pkCount건',
-                  style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: Color(0xFF6B47DC))),
+                  style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 11, color: Color(0xFF6B47DC))),
             ),
         ]),
         const SizedBox(height: 12),
@@ -1383,12 +1391,12 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
           Container(
             padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(
-              color: _primaryColor.withValues(alpha: 0.05),
+              color: _primaryColor.withValues(alpha: 0.04),
               borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: _primaryColor.withValues(alpha: 0.2)),
+              border: Border.all(color: _primaryColor.withValues(alpha: 0.18)),
             ),
             child: Row(children: [
-              Icon(Icons.error_outline, size: 16, color: _primaryColor),
+              const Icon(Icons.error_outline, size: 15, color: _primaryColor),
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
@@ -1422,7 +1430,7 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
             check > 0
                 ? '확인필요 $check건은 ACTA/시설현황 등 외부 사이트에서 직접 확인 후 회신해주세요.'
                 : '모든 항목이 일치합니다. 회신 가능 상태입니다.',
-            style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
+            style: const TextStyle(fontSize: 12, color: _textSecondary),
           ),
           const SizedBox(height: 12),
           Row(mainAxisAlignment: MainAxisAlignment.end, children: [
@@ -1440,9 +1448,9 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
           ]),
         ] else if (hasPks && blocked) ...[
           // 불일치 있지만 schedulePks 있음 → 점검완료 회신 대신 안내
-          Text(
+          const Text(
             '불일치 항목 변경개설 신고 후 점검완료 회신이 가능합니다.',
-            style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+            style: TextStyle(fontSize: 12, color: _textSecondary),
           ),
         ],
       ]),
@@ -1567,34 +1575,35 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       decoration: BoxDecoration(
-        color: Colors.grey.shade50,
-        borderRadius: BorderRadius.circular(10),
+        color: _bg,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: _border),
       ),
       child: Row(children: [
         SizedBox(
             width: 70,
             child: Text(label,
                 style: const TextStyle(
-                    fontWeight: FontWeight.w600, fontSize: 13))),
+                    fontWeight: FontWeight.w600, fontSize: 13, color: _textPrimary))),
         _buildMiniStat('일치', match, _greenColor),
         const SizedBox(width: 10),
         _buildMiniStat('불일치', mismatch, _primaryColor),
         const SizedBox(width: 10),
         _buildMiniStat('DS누락', dsMissing, const Color(0xFFB85B3D)),
         const SizedBox(width: 10),
-        _buildMiniStat('확인필요', check, Colors.orange),
+        _buildMiniStat('확인필요', check, _amber),
         const Spacer(),
         Container(
-          padding:
-              const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
           decoration: BoxDecoration(
-            color: _themeColor.withValues(alpha: 0.1),
-            borderRadius: BorderRadius.circular(10),
+            color: _themeColor.withValues(alpha: 0.08),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: _themeColor.withValues(alpha: 0.2)),
           ),
           child: Text('일치율 $rate%',
               style: const TextStyle(
                   fontWeight: FontWeight.w600,
-                  fontSize: 13,
+                  fontSize: 12,
                   color: _themeColor)),
         ),
       ]),
@@ -1606,18 +1615,15 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
       mainAxisSize: MainAxisSize.min,
       children: [
         Container(
-          width: 8,
-          height: 8,
-          decoration: BoxDecoration(
-            color: color,
-            shape: BoxShape.circle,
-          ),
+          width: 7,
+          height: 7,
+          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
         ),
         const SizedBox(width: 4),
         Text('$label $count',
-            style: TextStyle(
+            style: const TextStyle(
                 fontSize: 12,
-                color: Colors.grey.shade700,
+                color: _textSecondary,
                 fontWeight: FontWeight.w500)),
       ],
     );
@@ -1629,18 +1635,18 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
       label: Text(
         count != null ? '$label ($count)' : label,
         style: TextStyle(
-          fontSize: 13,
+          fontSize: 12,
           fontWeight: FontWeight.w500,
-          color: selected ? Colors.white : Colors.grey.shade700,
+          color: selected ? Colors.white : _textSecondary,
         ),
       ),
       selected: selected,
       selectedColor: _themeColor,
-      backgroundColor: Colors.grey.shade100,
+      backgroundColor: _bg,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(8),
         side: BorderSide(
-          color: selected ? _themeColor : Colors.grey.shade300,
+          color: selected ? _themeColor : _border,
         ),
       ),
       onSelected: (_) => setState(() => _filter = label),
@@ -1652,41 +1658,44 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
     Color fg;
     switch (status) {
       case '일치':
-        bg = _greenColor.withValues(alpha: 0.1);
+        bg = _greenColor.withValues(alpha: 0.08);
         fg = _greenColor;
         break;
       case '부분일치':
-        bg = _blueAccent.withValues(alpha: 0.1);
+        bg = _blueAccent.withValues(alpha: 0.08);
         fg = _blueAccent;
         break;
       case '불일치':
-        bg = _primaryColor.withValues(alpha: 0.1);
+        bg = _primaryColor.withValues(alpha: 0.08);
         fg = _primaryColor;
         break;
       case 'DS누락':
-        bg = const Color(0xFFE17055).withValues(alpha: 0.1);
+        bg = const Color(0xFFE17055).withValues(alpha: 0.08);
         fg = const Color(0xFFB85B3D);
         break;
-      default:
-        bg = Colors.orange.withValues(alpha: 0.1);
-        fg = Colors.orange.shade700;
+      default: // 확인필요
+        bg = _amber.withValues(alpha: 0.1);
+        fg = const Color(0xFFD97706);
     }
 
     final chipContent = Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-      decoration:
-          BoxDecoration(color: bg, borderRadius: BorderRadius.circular(8)),
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: fg.withValues(alpha: 0.25)),
+      ),
       child: (status == '불일치' || status == '확인필요') && item != null
           ? Row(mainAxisSize: MainAxisSize.min, children: [
               Text(status,
                   style: TextStyle(
-                      fontSize: 12, fontWeight: FontWeight.w600, color: fg)),
-              const SizedBox(width: 4),
-              Icon(Icons.open_in_new, size: 11, color: fg),
+                      fontSize: 11, fontWeight: FontWeight.w600, color: fg)),
+              const SizedBox(width: 3),
+              Icon(Icons.open_in_new, size: 10, color: fg),
             ])
           : Text(status,
               style: TextStyle(
-                  fontSize: 12, fontWeight: FontWeight.w600, color: fg)),
+                  fontSize: 11, fontWeight: FontWeight.w600, color: fg)),
     );
 
     if ((status == '불일치' || status == '확인필요') && item != null) {
@@ -1742,10 +1751,10 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
 
   static const _headerStyle = TextStyle(
     fontWeight: FontWeight.w600,
-    fontSize: 13,
-    color: Colors.black87,
+    fontSize: 12,
+    color: Color(0xFF374151),
   );
-  static const _cellStyle = TextStyle(fontSize: 13);
+  static const _cellStyle = TextStyle(fontSize: 12, color: _textPrimary);
 }
 
 // ── 설치대 불일치 상세 모달 ──────────────────────────────────────
