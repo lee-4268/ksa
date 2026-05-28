@@ -563,15 +563,12 @@ Future<void> _downloadExcel() async {
   Widget build(BuildContext context) {
     return Container(
       color: const Color(0xFFF5F6FA),
-      child: Column(
-        children: [
-          _buildHeader(),
-          Expanded(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.only(bottom: 40),
-              child: Column(
-                children: [
-                  _buildSummaryCards(),
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.only(bottom: 40),
+        child: Column(
+          children: [
+            _buildActionBar(),
+            _buildSummaryCards(),
                   if (_reportLines.isNotEmpty) _buildSummaryReport(),
                   if (_selectedRegion.isNotEmpty)
                     Padding(
@@ -610,12 +607,9 @@ Future<void> _downloadExcel() async {
                       );
                     },
                   ),
-                  _buildBody(),
-                ],
-              ),
-            ),
-          ),
-        ],
+            _buildBody(),
+          ],
+        ),
       ),
     );
   }
@@ -659,6 +653,68 @@ Future<void> _downloadExcel() async {
     );
   }
 
+  // ── 액션 바 (헤더 대체 — 업로드/다운로드 + 날짜) ──
+
+  Widget _buildActionBar() {
+    return LayoutBuilder(builder: (context, cst) {
+      final isMobile = cst.maxWidth < 600;
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          border: Border(bottom: BorderSide(color: Color(0xFFE5E7EB))),
+        ),
+        child: Row(
+          children: [
+            _buildLastUploadBadge(),
+            const Spacer(),
+            if (_isAdmin) ...[
+              _uploading
+                  ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                  : isMobile
+                      ? IconButton(
+                          onPressed: _pickAndUpload,
+                          icon: const Icon(Icons.upload_file, size: 18),
+                          color: _primary,
+                          tooltip: '결과장 업로드',
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                        )
+                      : TextButton.icon(
+                          onPressed: _pickAndUpload,
+                          icon: const Icon(Icons.upload_file, size: 16),
+                          label: const Text('결과장 업로드', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+                          style: TextButton.styleFrom(
+                            foregroundColor: _primary,
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                          ),
+                        ),
+              const SizedBox(width: 4),
+            ],
+            isMobile
+                ? IconButton(
+                    onPressed: _downloadExcel,
+                    icon: const Icon(Icons.file_download, size: 18),
+                    color: _green,
+                    tooltip: 'Excel 다운로드',
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                  )
+                : TextButton.icon(
+                    onPressed: _downloadExcel,
+                    icon: const Icon(Icons.file_download, size: 16),
+                    label: const Text('Excel 다운로드', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+                    style: TextButton.styleFrom(
+                      foregroundColor: _green,
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    ),
+                  ),
+          ],
+        ),
+      );
+    });
+  }
+
   // ── 최근 업로드 배지 ──
 
   Widget _buildLastUploadBadge() {
@@ -678,78 +734,6 @@ Future<void> _downloadExcel() async {
     );
   }
 
-  // ── 상단 헤더 ──
-
-  Widget _buildHeader() {
-    return LayoutBuilder(builder: (context, cst) {
-      final isMobile = cst.maxWidth < 600;
-      return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-        decoration: const BoxDecoration(
-          color: Colors.white,
-          border: Border(bottom: BorderSide(color: Color(0xFFE5E7EB))),
-        ),
-        child: Row(
-          children: [
-            Container(
-              width: 3,
-              height: 18,
-              decoration: BoxDecoration(
-                color: _primary,
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
-            const SizedBox(width: 10),
-            const Text('실적 관리',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: Color(0xFF111827))),
-            const Spacer(),
-            _buildLastUploadBadge(),
-            if (_isAdmin) ...[
-              _uploading
-                  ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
-                  : isMobile
-                      ? IconButton(
-                          onPressed: _pickAndUpload,
-                          icon: const Icon(Icons.upload_file, size: 20),
-                          color: _primary,
-                          tooltip: '결과장 업로드',
-                          padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
-                        )
-                      : TextButton.icon(
-                          onPressed: _pickAndUpload,
-                          icon: const Icon(Icons.upload_file, size: 18),
-                          label: const Text('결과장 업로드', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
-                          style: TextButton.styleFrom(
-                            foregroundColor: _primary,
-                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                          ),
-                        ),
-              const SizedBox(width: 4),
-            ],
-            isMobile
-                ? IconButton(
-                    onPressed: _downloadExcel,
-                    icon: const Icon(Icons.file_download, size: 20),
-                    color: _green,
-                    tooltip: 'Excel 다운로드',
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
-                  )
-                : TextButton.icon(
-                    onPressed: _downloadExcel,
-                    icon: const Icon(Icons.file_download, size: 18),
-                    label: const Text('Excel 다운로드', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
-                    style: TextButton.styleFrom(
-                      foregroundColor: _green,
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                    ),
-                  ),
-          ],
-        ),
-      );
-    });
-  }
 
   // ── 요약 카드 ──
 
