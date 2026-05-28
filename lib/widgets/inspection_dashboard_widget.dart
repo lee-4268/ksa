@@ -178,14 +178,54 @@ class _InspectionDashboardWidgetState extends State<InspectionDashboardWidget> {
         ];
         return Wrap(spacing: 8, runSpacing: 8, children: cards);
       }),
-      // 시정기한 도래 국소
+      // 시정기한 도래
       if (deadlineItems.isNotEmpty) ...[
-        const SizedBox(height: 10),
-        const Text('시정기한 도래',
-            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
-                color: Color(0xFF6B7280))),
-        const SizedBox(height: 4),
-        ...deadlineItems.map((it) => _DeadlineRow(item: it)),
+        const SizedBox(height: 12),
+        Container(
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: const Color(0xFFFDE68A)),
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // 섹션 헤더
+              Container(
+                padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+                decoration: const BoxDecoration(
+                  color: Color(0xFFFFFBEB),
+                  border: Border(bottom: BorderSide(color: Color(0xFFFDE68A))),
+                ),
+                child: Row(children: [
+                  const Icon(Icons.timer_outlined, size: 14, color: Color(0xFFD97706)),
+                  const SizedBox(width: 6),
+                  const Text('시정기한 도래',
+                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700,
+                          color: Color(0xFF92400E))),
+                  const Spacer(),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF59E0B).withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Text('${deadlineItems.length}건',
+                        style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700,
+                            color: Color(0xFFD97706))),
+                  ),
+                ]),
+              ),
+              // 아이템 목록
+              ...deadlineItems.asMap().entries.map((e) => Column(children: [
+                if (e.key > 0)
+                  const Divider(height: 1, thickness: 1, color: Color(0xFFE5E7EB)),
+                _DeadlineRow(item: e.value),
+              ])),
+            ],
+          ),
+        ),
       ],
     ]);
   }
@@ -272,40 +312,85 @@ class _DeadlineRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final name = '${item['호출명칭'] ?? ''}';
-    final lic = '${item['허가번호'] ?? ''}';
+    final name     = '${item['호출명칭'] ?? ''}';
+    final lic      = '${item['허가번호'] ?? ''}';
     final deadline = '${item['시정기한'] ?? ''}';
-    final dLeft = (item['d_left'] as num?)?.toInt() ?? 0;
-    final isUrgent = dLeft <= 14;
+    final region   = '${item['region']   ?? ''}';
+    final dLeft    = (item['d_left'] as num?)?.toInt() ?? 0;
+
     final color = dLeft <= 7
         ? const Color(0xFFE53935)
         : dLeft <= 14
             ? const Color(0xFFE17055)
-            : const Color(0xFF6B7280);
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Row(children: [
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-          decoration: BoxDecoration(
-            color: color.withValues(alpha: isUrgent ? 0.12 : 0.06),
-            borderRadius: BorderRadius.circular(4),
+            : const Color(0xFFF59E0B);
+
+    final displayName = name.isNotEmpty ? name : lic;
+    final subText     = name.isNotEmpty ? lic : region;
+
+    return SizedBox(
+      height: 52,
+      child: Row(
+        children: [
+          // 긴급도 좌측 stripe
+          Container(width: 3, color: color),
+          const SizedBox(width: 12),
+          // D-X 배지
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(6),
+              border: Border.all(color: color.withValues(alpha: 0.25)),
+            ),
+            child: Text(
+              'D-$dLeft',
+              style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: color),
+            ),
           ),
-          child: Text('D-$dLeft',
-              style: TextStyle(fontSize: 10, color: color,
-                  fontWeight: FontWeight.w700)),
-        ),
-        const SizedBox(width: 6),
-        Text(deadline,
-            style: const TextStyle(fontSize: 10, color: Color(0xFF6B7280),
-                fontWeight: FontWeight.w500)),
-        const SizedBox(width: 8),
-        Expanded(
-          child: Text(name.isNotEmpty ? name : lic,
-              style: const TextStyle(fontSize: 12, color: Color(0xFF111827)),
-              maxLines: 1, overflow: TextOverflow.ellipsis),
-        ),
-      ]),
+          const SizedBox(width: 10),
+          // 이름 + 허가번호/본부
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(
+                  displayName,
+                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
+                      color: Color(0xFF111827)),
+                  maxLines: 1, overflow: TextOverflow.ellipsis,
+                ),
+                if (subText.isNotEmpty)
+                  Text(
+                    subText,
+                    style: const TextStyle(fontSize: 10, color: Color(0xFF9CA3AF)),
+                    maxLines: 1, overflow: TextOverflow.ellipsis,
+                  ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          // 시정기한 날짜 (우측 정렬)
+          Padding(
+            padding: const EdgeInsets.only(right: 12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(
+                  deadline,
+                  style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w500,
+                      color: Color(0xFF374151)),
+                ),
+                const Text(
+                  '시정기한',
+                  style: TextStyle(fontSize: 9, color: Color(0xFF9CA3AF)),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
