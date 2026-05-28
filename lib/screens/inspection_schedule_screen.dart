@@ -147,14 +147,36 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
       _sortColIdx = si;
       _sortAsc = asc;
       _items.sort((a, b) {
-        final av = (a[col.key] ?? '').toString();
-        final bv = (b[col.key] ?? '').toString();
+        final av = (a[col.key] ?? '').toString().trim();
+        final bv = (b[col.key] ?? '').toString().trim();
+
+        // 빈값은 항상 마지막
+        if (av.isEmpty && bv.isEmpty) return 0;
+        if (av.isEmpty) return 1;
+        if (bv.isEmpty) return -1;
+
+        // 숫자 비교
         final an = double.tryParse(av);
         final bn = double.tryParse(bv);
         if (an != null && bn != null) return asc ? an.compareTo(bn) : bn.compareTo(an);
+
+        // 날짜 비교 (YYYY-MM-DD / YYYY.MM.DD / YYYY/MM/DD)
+        final da = _tryParseScheduleDate(av);
+        final db = _tryParseScheduleDate(bv);
+        if (da != null && db != null) return asc ? da.compareTo(db) : db.compareTo(da);
+
+        // 문자열 비교 (fallback)
         return asc ? av.compareTo(bv) : bv.compareTo(av);
       });
     });
+  }
+
+  DateTime? _tryParseScheduleDate(String s) {
+    try {
+      return DateTime.parse(s.replaceAll('.', '-').replaceAll('/', '-'));
+    } catch (_) {
+      return null;
+    }
   }
 
   Map<String, dynamic> _matrix = {};
