@@ -762,7 +762,7 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
             const SizedBox(height: 8),
             _buildSummaryRow('일련번호', r.summary, prefix: 'serial'),
             const SizedBox(height: 8),
-            _buildSummaryRow('활용구분', r.summary, prefix: 'prac1'),
+            _buildSummaryRow('활용구분', _computePrac1Summary(r.items), prefix: 'prac1'),
           ]),
         ),
 
@@ -1306,6 +1306,26 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
     if (erp.isNotEmpty && ds.isEmpty) return 'DS누락';
     if (erp.isEmpty && ds.isNotEmpty) return 'ERP누락';
     return '';
+  }
+
+  // 활용구분 요약: prac1은 백엔드 summary에 없으므로 클라이언트에서 집계
+  Map<String, int> _computePrac1Summary(List<CompareItem> items) {
+    int match = 0, mismatch = 0, dsMissing = 0, check = 0;
+    for (final it in items) {
+      switch (_prac1Match(it)) {
+        case '일치': match++; break;
+        case '부분일치': match++; break;
+        case '불일치': mismatch++; break;
+        case 'DS누락': dsMissing++; break;
+        case '확인필요': check++; break;
+      }
+    }
+    return {
+      'prac1_match': match,
+      'prac1_mismatch': mismatch,
+      'prac1_ds_missing': dsMissing,
+      'prac1_check': check,
+    };
   }
   String _zpwina(CompareItem item) {
     final v = _schedMap?[item.zpwino]?['호출명칭'] ?? '';
