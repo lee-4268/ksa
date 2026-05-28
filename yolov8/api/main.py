@@ -68,7 +68,6 @@ from routers import (
     route_basket as route_basket_router,
     admin as admin_router,
     sisl_photos as sisl_photos_router,
-    ocr as ocr_router,
 )
 from routers.callname import _cleanup_callname_sessions
 from routers.ds import (
@@ -175,7 +174,6 @@ app.include_router(inadequate_router.router)
 app.include_router(route_basket_router.router)
 app.include_router(admin_router.router)
 app.include_router(sisl_photos_router.router)
-app.include_router(ocr_router.router)
 
 
 # ══════════════════════════════════════════════════════════════

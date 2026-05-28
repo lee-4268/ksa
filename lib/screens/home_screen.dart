@@ -25,7 +25,6 @@ import '../services/community_service.dart';
 import '../services/notification_service.dart';
 import '../services/inspection_service.dart';
 import '../widgets/inspection_dashboard_widget.dart';
-import '../widgets/cert_scanner_sheet.dart';
 
 /// 앱 셸 — 사이드바 상시 표시 + 오른쪽 콘텐츠 전환
 class HomeScreen extends StatefulWidget {
@@ -492,28 +491,6 @@ final result = await showDialog<bool>(
             const SizedBox(width: 8),
             Text(item.title, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: _textPrimary)),
             const Spacer(),
-            // 확인증 스캔 버튼 (아이콘 + 텍스트 pill)
-            GestureDetector(
-              onTap: _openCertScanner,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFEFF6FF),
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: const Color(0xFFBFDBFE)),
-                ),
-                child: const Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(Icons.document_scanner_outlined, size: 15, color: Color(0xFF1565C0)),
-                    SizedBox(width: 5),
-                    Text('확인증 스캔',
-                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF1565C0))),
-                  ],
-                ),
-              ),
-            ),
-            const SizedBox(width: 8),
             _buildUserAvatar(),
           ],
         ),
@@ -521,17 +498,6 @@ final result = await showDialog<bool>(
     );
   }
 
-  void _openCertScanner() {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (_) => SizedBox(
-        height: MediaQuery.of(context).size.height * 0.88,
-        child: const CertScannerSheet(),
-      ),
-    );
-  }
 
   // ── Drawer (모바일) ──
 
