@@ -83,6 +83,7 @@ from core.config import (
 )
 from core.db import get_s3_client, get_dynamodb_resource, get_dynamodb_client
 from core.s3 import _validate_s3_key
+import core.cert_cache as _cert_cache_mod
 from core.utils import _check_memory, _log_mem, _release_memory, decimal_to_native
 from pydantic import BaseModel
 from schemas.models import (
@@ -2809,7 +2810,7 @@ async def _job_worker_loop():
                 # 잡 큐가 비었을 때 xlsx 빌드 태스크 시작 (이미 실행 중이면 무시)
                 if _xlsx_build_queue and (_xlsx_build_task is None or _xlsx_build_task.done()):
                     # cert 캐시 빌드 완료 대기 (GIL 경합으로 xlsx 코루틴 실행 기회 차단 방지)
-                    if not _cert_cache_db_path:
+                    if not _cert_cache_mod._cert_cache_db_path:
                         await asyncio.sleep(5)
                         continue
                     _xlsx_build_task = asyncio.create_task(_xlsx_build_worker())
