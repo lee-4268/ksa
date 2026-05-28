@@ -1281,8 +1281,10 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
 
   bool _hasAnyMismatch(ErpDsCompareResult r) {
     final s = r.summary;
+    final p = _computePrac1Summary(r.items);
     return (s['tower_mismatch'] ?? 0) > 0 || (s['serial_mismatch'] ?? 0) > 0 ||
-        (s['tower_ds_missing'] ?? 0) > 0 || (s['serial_ds_missing'] ?? 0) > 0;
+        (s['tower_ds_missing'] ?? 0) > 0 || (s['serial_ds_missing'] ?? 0) > 0 ||
+        (p['prac1_mismatch'] ?? 0) > 0 || (p['prac1_ds_missing'] ?? 0) > 0;
   }
 
   // schedMap 오버레이: 일정화면에서 넘어온 값 우선, 없으면 백엔드 값
@@ -1373,8 +1375,9 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
   // 사전점검 회신 카드 (Phase 1)
   Widget _buildPreCheckReplyCard(ErpDsCompareResult r) {
     final s = r.summary;
-    final mismatch = (s['tower_mismatch'] ?? 0) + (s['serial_mismatch'] ?? 0);
-    final dsMissing = (s['tower_ds_missing'] ?? 0) + (s['serial_ds_missing'] ?? 0);
+    final p = _computePrac1Summary(r.items);
+    final mismatch = (s['tower_mismatch'] ?? 0) + (s['serial_mismatch'] ?? 0) + (p['prac1_mismatch'] ?? 0);
+    final dsMissing = (s['tower_ds_missing'] ?? 0) + (s['serial_ds_missing'] ?? 0) + (p['prac1_ds_missing'] ?? 0);
     final check = (s['tower_check'] ?? 0) + (s['serial_check'] ?? 0);
     final blocked = mismatch > 0 || dsMissing > 0;
     final hasPks = widget.initialSchedulePks?.isNotEmpty ?? false;
