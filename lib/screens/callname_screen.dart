@@ -465,6 +465,8 @@ class _CallnameScreenState extends State<CallnameScreen> {
                 _buildStepIndicator(),
                 const SizedBox(height: 24),
                 if (_step == 0) ...[
+                  _buildManualCard(),
+                  const SizedBox(height: 16),
                   _buildSampleTemplateCard(),
                   const SizedBox(height: 16),
                   _buildUploadStep(),
@@ -475,6 +477,129 @@ class _CallnameScreenState extends State<CallnameScreen> {
             ),
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildManualCard() {
+    return Container(
+      width: double.infinity,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFE5E7EB)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.04),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // 헤더
+          Row(children: [
+            Icon(Icons.info_outline, color: Colors.blue.shade400, size: 20),
+            const SizedBox(width: 8),
+            const Text('호출명칭 매칭이란?',
+                style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
+          ]),
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              color: const Color(0xFFF0F4FF),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: const Text(
+              '정기검사 대상 Excel 파일을 업로드하면, 파일 내 무선국 정보를 KSA DB와 자동 매칭하여 '
+              '최신 호출명칭·통시구분 등을 채워 넣은 결과 파일을 다운로드할 수 있습니다.',
+              style: TextStyle(fontSize: 13, color: Color(0xFF374151), height: 1.6),
+            ),
+          ),
+          const SizedBox(height: 16),
+          // 사용 방법
+          Row(children: [
+            Icon(Icons.list_alt_outlined, color: Colors.blue.shade400, size: 18),
+            const SizedBox(width: 6),
+            const Text('사용 방법',
+                style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: Color(0xFF111827))),
+          ]),
+          const SizedBox(height: 10),
+          _buildManualStep('1', '샘플 양식 다운로드', '아래 "샘플 양식" 카드에서 엑셀 양식을 다운받습니다.'),
+          _buildManualStep('2', '대상 무선국 입력', '양식에 맞게 정기검사 대상 무선국 정보를 입력하고 저장합니다.'),
+          _buildManualStep('3', '파일 업로드', '작성한 xlsx/xls 파일을 업로드합니다. 시스템이 호출명칭·통시구분 컬럼을 자동 감지합니다.'),
+          _buildManualStep('4', '필터 설정 (선택)', '특정 조건(예: 본부, 국종 등)으로 매칭 대상을 좁힐 수 있습니다.'),
+          _buildManualStep('5', '매칭 실행 및 다운로드', '매칭을 실행하면 DB와 비교한 결과가 새 컬럼으로 추가된 엑셀 파일이 자동 다운로드됩니다.'),
+          const SizedBox(height: 14),
+          // 주의사항
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              color: const Color(0xFFFFFBEB),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: const Color(0xFFFDE68A)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(children: [
+                  Icon(Icons.warning_amber_rounded, size: 15, color: Colors.orange.shade700),
+                  const SizedBox(width: 6),
+                  Text('주의사항',
+                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Colors.orange.shade800)),
+                ]),
+                const SizedBox(height: 6),
+                const Text(
+                  '• 업로드 파일에 호출명칭 또는 통시구분 컬럼이 없으면 자동 감지가 실패할 수 있습니다.\n'
+                  '• 샘플 양식 기반으로 작성하면 컬럼명이 정확히 인식됩니다.\n'
+                  '• 매칭 기준은 허가번호이며, 일치하지 않는 행은 빈값으로 처리됩니다.',
+                  style: TextStyle(fontSize: 12, color: Color(0xFF92400E), height: 1.6),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildManualStep(String number, String title, String desc) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 22,
+            height: 22,
+            decoration: BoxDecoration(
+              color: _primary.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(11),
+            ),
+            alignment: Alignment.center,
+            child: Text(number,
+                style: const TextStyle(
+                    color: _primary, fontWeight: FontWeight.bold, fontSize: 11)),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title,
+                    style: const TextStyle(
+                        fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF111827))),
+                const SizedBox(height: 2),
+                Text(desc,
+                    style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280), height: 1.5)),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
