@@ -107,6 +107,8 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
 
   // 그룹 경계: 이 인덱스 컬럼 오른쪽에 진한 구분선 그림
   static const Set<int> _groupBoundaryRight = {7, 10};
+  // 비교 배지 컬럼: 창 크기에 따라 FittedBox로 자동 축소
+  static const Set<int> _chipCols = {7, 10, 13};
 
   // 사용자가 드래그로 조정한 컬럼 너비. null이면 가용폭에 비례 분배.
   List<double>? _colWidths;
@@ -1256,7 +1258,9 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
                       ),
                     )
                   : null,
-              child: cells[i],
+              child: _chipCols.contains(i)
+                  ? FittedBox(fit: BoxFit.scaleDown, child: cells[i])
+                  : cells[i],
             );
           }),
         ],
