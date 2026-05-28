@@ -385,140 +385,155 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
   Widget _buildUploadSection() {
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(16),
+      clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
-        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 12, offset: const Offset(0, 2))],
+        border: Border.all(color: const Color(0xFFE5E7EB)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // 업로드 버튼
-          SizedBox(
-            width: double.infinity,
-            height: 48,
-            child: ElevatedButton.icon(
-              onPressed: _isUploading ? null : _startUpload,
-              icon: Icon(_isUploading ? Icons.hourglass_top : Icons.cloud_upload),
-              label: Text(
-                _isUploading ? '업로드 진행 중...' : 'DS ZIP 파일 업로드',
-                style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
-              ),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF42A5F5),
-                foregroundColor: Colors.white,
-                disabledBackgroundColor: Colors.grey.shade300,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-              ),
-            ),
-          ),
-          // 업로드 진행률
-          if (_isUploading) ...[
-            const SizedBox(height: 14),
-            ClipRRect(
-              borderRadius: BorderRadius.circular(4),
-              child: LinearProgressIndicator(
-                value: _uploadProgress == 0 ? null : _uploadProgress,
-                backgroundColor: Colors.grey.shade200,
-                valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFF42A5F5)),
-                minHeight: 6,
-              ),
-            ),
-            const SizedBox(height: 6),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          Container(height: 3, color: _accentColor),
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Expanded(
-                  child: Row(
+                Row(children: [
+                  Container(width: 3, height: 16, decoration: BoxDecoration(color: _accentColor, borderRadius: BorderRadius.circular(2))),
+                  const SizedBox(width: 8),
+                  const Icon(Icons.cloud_upload_outlined, size: 14, color: Color(0xFF6B7280)),
+                  const SizedBox(width: 6),
+                  const Text('DS 데이터 업로드', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Color(0xFF374151))),
+                ]),
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
+                  height: 46,
+                  child: ElevatedButton.icon(
+                    onPressed: _isUploading ? null : _startUpload,
+                    icon: Icon(_isUploading ? Icons.hourglass_top : Icons.cloud_upload_outlined, size: 18),
+                    label: Text(
+                      _isUploading ? '업로드 진행 중...' : 'DS ZIP 파일 업로드',
+                      style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                    ),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: _accentColor,
+                      foregroundColor: Colors.white,
+                      disabledBackgroundColor: const Color(0xFFE5E7EB),
+                      elevation: 0,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    ),
+                  ),
+                ),
+                if (_isUploading) ...[
+                  const SizedBox(height: 14),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(4),
+                    child: LinearProgressIndicator(
+                      value: _uploadProgress == 0 ? null : _uploadProgress,
+                      backgroundColor: const Color(0xFFE5E7EB),
+                      valueColor: AlwaysStoppedAnimation<Color>(_accentColor),
+                      minHeight: 6,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      if (_uploadProgress == 0) ...[
-                        SizedBox(
-                          width: 12, height: 12,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 1.5,
-                            valueColor: AlwaysStoppedAnimation<Color>(Colors.grey.shade500),
-                          ),
-                        ),
-                        const SizedBox(width: 6),
-                      ],
                       Expanded(
-                        child: Text(
-                          _uploadProgress == 0
-                              ? '$_uploadStage (대용량 파일은 시간이 걸릴 수 있습니다)'
-                              : _uploadStage,
-                          style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
-                          overflow: TextOverflow.ellipsis,
+                        child: Row(
+                          children: [
+                            if (_uploadProgress == 0) ...[
+                              SizedBox(
+                                width: 12, height: 12,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 1.5,
+                                  valueColor: AlwaysStoppedAnimation<Color>(_accentColor.withValues(alpha: 0.6)),
+                                ),
+                              ),
+                              const SizedBox(width: 6),
+                            ],
+                            Expanded(
+                              child: Text(
+                                _uploadProgress == 0
+                                    ? '$_uploadStage (대용량 파일은 시간이 걸릴 수 있습니다)'
+                                    : _uploadStage,
+                                style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          ],
                         ),
                       ),
+                      if (_uploadProgress > 0)
+                        Text('${(_uploadProgress * 100).toInt()}%',
+                            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Color(0xFF374151))),
                     ],
                   ),
-                ),
-                if (_uploadProgress > 0)
-                  Text('${(_uploadProgress * 100).toInt()}%',
-                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.grey.shade700)),
-              ],
-            ),
-            const SizedBox(height: 6),
-            Text('업로드가 완료될 때까지 이 화면을 유지해 주세요.',
-                style: TextStyle(fontSize: 11, color: Colors.orange.shade700)),
-            const SizedBox(height: 8),
-            Align(
-              alignment: Alignment.centerRight,
-              child: SizedBox(
-                height: 32,
-                child: OutlinedButton.icon(
-                  onPressed: () async {
-                    await _uploadService.cancelCurrentJob();
-                    if (mounted) {
-                      setState(() {
-                        _isUploading = false;
-                        _uploadResult = '업로드가 취소되었습니다.';
-                        _uploadSuccess = false;
-                      });
-                    }
-                  },
-                  icon: const Icon(Icons.cancel_outlined, size: 16),
-                  label: const Text('업로드 취소', style: TextStyle(fontSize: 12)),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: Colors.red,
-                    side: const BorderSide(color: Colors.red, width: 1),
-                    padding: const EdgeInsets.symmetric(horizontal: 12),
-                  ),
-                ),
-              ),
-            ),
-          ],
-          // 업로드 결과
-          if (_uploadResult != null) ...[
-            const SizedBox(height: 12),
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: (_uploadSuccess == true ? Colors.green : Colors.red).withValues(alpha: 0.05),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(
-                  color: (_uploadSuccess == true ? Colors.green : Colors.red).withValues(alpha: 0.3),
-                ),
-              ),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Icon(
-                    _uploadSuccess == true ? Icons.check_circle : Icons.error,
-                    color: _uploadSuccess == true ? Colors.green : Colors.red,
-                    size: 18,
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(_uploadResult!,
-                        style: TextStyle(fontSize: 13, color: Colors.grey.shade800)),
+                  const SizedBox(height: 6),
+                  Text('업로드가 완료될 때까지 이 화면을 유지해 주세요.',
+                      style: TextStyle(fontSize: 11, color: Colors.orange.shade700)),
+                  const SizedBox(height: 8),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: SizedBox(
+                      height: 32,
+                      child: OutlinedButton.icon(
+                        onPressed: () async {
+                          await _uploadService.cancelCurrentJob();
+                          if (mounted) {
+                            setState(() {
+                              _isUploading = false;
+                              _uploadResult = '업로드가 취소되었습니다.';
+                              _uploadSuccess = false;
+                            });
+                          }
+                        },
+                        icon: const Icon(Icons.cancel_outlined, size: 16),
+                        label: const Text('업로드 취소', style: TextStyle(fontSize: 12)),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: const Color(0xFFEF4444),
+                          side: const BorderSide(color: Color(0xFFEF4444), width: 1),
+                          padding: const EdgeInsets.symmetric(horizontal: 12),
+                        ),
+                      ),
+                    ),
                   ),
                 ],
-              ),
+                if (_uploadResult != null) ...[
+                  const SizedBox(height: 12),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: _uploadSuccess == true ? const Color(0xFFECFDF5) : const Color(0xFFFEF2F2),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                        color: _uploadSuccess == true ? const Color(0xFFBBF7D0) : const Color(0xFFFECACA),
+                      ),
+                    ),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Icon(
+                          _uploadSuccess == true ? Icons.check_circle_outline : Icons.error_outline,
+                          color: _uploadSuccess == true ? const Color(0xFF059669) : const Color(0xFFEF4444),
+                          size: 16,
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(_uploadResult!,
+                              style: const TextStyle(fontSize: 12, color: Color(0xFF374151))),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ],
             ),
-          ],
+          ),
         ],
       ),
     );
@@ -576,30 +591,38 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
 
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(16),
+      clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
-        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 12, offset: const Offset(0, 2))],
+        border: Border.all(color: const Color(0xFFE5E7EB)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          Container(height: 3, color: _accentColor),
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
           Row(
             children: [
-              Icon(Icons.update, size: 20, color: _accentColor),
+              Container(width: 3, height: 16, decoration: BoxDecoration(color: _accentColor, borderRadius: BorderRadius.circular(2))),
               const SizedBox(width: 8),
-              Text('본부별 데이터 현황', style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
+              const Icon(Icons.update_rounded, size: 14, color: Color(0xFF6B7280)),
+              const SizedBox(width: 6),
+              const Text('본부별 데이터 현황', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: Color(0xFF374151))),
               const Spacer(),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                 decoration: BoxDecoration(
-                  color: Colors.grey.shade100,
+                  color: const Color(0xFFF3F4F6),
                   borderRadius: BorderRadius.circular(6),
                 ),
                 child: Text(
                   '기준: $currentMonthLabel',
-                  style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
+                  style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280)),
                 ),
               ),
             ],
@@ -607,7 +630,7 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
           const SizedBox(height: 4),
           Text(
             '※ 본부코드: 수도권 10 · 강원 40 · 경남 20 · 경북 60 · 충남 50 · 충북 55 · 전남 30 · 전북 70 · 울산 26 · 제주 80',
-            style: TextStyle(fontSize: 10, color: Colors.grey.shade600),
+            style: const TextStyle(fontSize: 10, color: Color(0xFF9CA3AF)),
           ),
           if (outdatedCount > 0) ...[
             const SizedBox(height: 12),
@@ -615,17 +638,17 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
               width: double.infinity,
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
               decoration: BoxDecoration(
-                color: Colors.orange.shade50,
+                color: const Color(0xFFFFF7ED),
                 borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: Colors.orange.shade200),
+                border: Border.all(color: const Color(0xFFFED7AA)),
               ),
               child: Row(
                 children: [
-                  Icon(Icons.warning_amber_rounded, size: 18, color: Colors.orange.shade700),
+                  const Icon(Icons.warning_amber_rounded, size: 16, color: Color(0xFFD97706)),
                   const SizedBox(width: 8),
                   Text(
                     '$outdatedCount개 본부 데이터 업데이트 필요',
-                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Colors.orange.shade800),
+                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFFB45309)),
                   ),
                 ],
               ),
@@ -644,6 +667,9 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
             final dataYm = latest.actualDate.length >= 6 ? latest.actualDate.substring(0, 6) : '';
             return _buildFreshnessRow(divName, latest.actualDate, dataYm, currentYm);
           }),
+              ],
+            ),
+          ),
         ],
       ),
     );
@@ -667,15 +693,15 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
     final String statusText;
 
     if (!hasData) {
-      statusColor = Colors.grey;
+      statusColor = const Color(0xFF9CA3AF);
       statusIcon = Icons.remove_circle_outline;
       statusText = '미등록';
     } else if (isCurrent) {
-      statusColor = Colors.green;
-      statusIcon = Icons.check_circle;
+      statusColor = const Color(0xFF059669);
+      statusIcon = Icons.check_circle_outline;
       statusText = '최신';
     } else {
-      statusColor = Colors.orange;
+      statusColor = const Color(0xFFD97706);
       statusIcon = Icons.error_outline;
       statusText = '업데이트 필요';
     }
@@ -686,39 +712,39 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         decoration: BoxDecoration(
           color: hasData && !isCurrent
-              ? Colors.orange.withValues(alpha: 0.04)
-              : Colors.grey.shade50,
+              ? const Color(0xFFFFFBEB)
+              : const Color(0xFFF9FAFB),
           borderRadius: BorderRadius.circular(8),
           border: Border.all(
             color: hasData && !isCurrent
-                ? Colors.orange.withValues(alpha: 0.2)
-                : Colors.grey.shade200,
+                ? const Color(0xFFFDE68A)
+                : const Color(0xFFE5E7EB),
           ),
         ),
         child: Row(
           children: [
-            Icon(Icons.business, size: 16, color: Colors.grey.shade500),
+            const Icon(Icons.business_outlined, size: 15, color: Color(0xFF9CA3AF)),
             const SizedBox(width: 8),
             Expanded(
-              child: Text(divName, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500)),
+              child: Text(divName, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: Color(0xFF374151))),
             ),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
               decoration: BoxDecoration(
-                color: Colors.grey.shade100,
+                color: const Color(0xFFF3F4F6),
                 borderRadius: BorderRadius.circular(6),
               ),
               child: Text(
                 monthLabel,
-                style: TextStyle(fontSize: 12, color: Colors.grey.shade700, fontWeight: FontWeight.w500),
+                style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280), fontWeight: FontWeight.w500),
               ),
             ),
             const SizedBox(width: 8),
-            Icon(statusIcon, size: 16, color: statusColor),
+            Icon(statusIcon, size: 14, color: statusColor),
             const SizedBox(width: 4),
             Text(
               statusText,
-              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: statusColor),
+              style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: statusColor),
             ),
           ],
         ),
@@ -729,16 +755,18 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
   Widget _buildDivisionFilter() {
     return Row(
       children: [
-        Icon(Icons.filter_list, size: 20, color: Colors.grey.shade600),
+        Container(width: 3, height: 16, decoration: BoxDecoration(color: _accentColor, borderRadius: BorderRadius.circular(2))),
         const SizedBox(width: 8),
-        const Text('본부 필터:', style: TextStyle(fontWeight: FontWeight.w500)),
-        const SizedBox(width: 8),
+        const Icon(Icons.filter_list_rounded, size: 14, color: Color(0xFF6B7280)),
+        const SizedBox(width: 6),
+        const Text('본부 필터', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Color(0xFF374151))),
+        const SizedBox(width: 12),
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
           decoration: BoxDecoration(
             color: Colors.white,
             borderRadius: BorderRadius.circular(10),
-            border: Border.all(color: Colors.grey.shade300),
+            border: Border.all(color: const Color(0xFFE5E7EB)),
           ),
           child: DropdownButtonHideUnderline(
             child: DropdownButton<String>(
@@ -746,8 +774,8 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
               isDense: true,
               dropdownColor: Colors.white,
               borderRadius: BorderRadius.circular(12),
-              icon: Icon(Icons.arrow_drop_down, size: 20, color: _accentColor),
-              style: const TextStyle(fontSize: 13, color: Colors.black87),
+              icon: Icon(Icons.arrow_drop_down, size: 18, color: _accentColor),
+              style: const TextStyle(fontSize: 13, color: Color(0xFF111827)),
               items: [
                 DropdownMenuItem(
                   value: 'all',
@@ -793,13 +821,13 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(12),
-          boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 12, offset: const Offset(0, 2))],
+          border: Border.all(color: const Color(0xFFE5E7EB)),
         ),
-        child: Column(
+        child: const Column(
           children: [
-            Icon(Icons.inbox_outlined, size: 48, color: Colors.grey.shade300),
-            const SizedBox(height: 12),
-            Text('업로드된 데이터가 없습니다', style: TextStyle(color: Colors.grey.shade500)),
+            Icon(Icons.inbox_outlined, size: 44, color: Color(0xFFD1D5DB)),
+            SizedBox(height: 12),
+            Text('업로드된 데이터가 없습니다', style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
           ],
         ),
       );
@@ -809,10 +837,20 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(children: [
-          Icon(Icons.list_alt, size: 20, color: Colors.grey.shade600),
+          Container(width: 3, height: 16, decoration: BoxDecoration(color: _accentColor, borderRadius: BorderRadius.circular(2))),
           const SizedBox(width: 8),
-          Text('업로드 목록 (${uploads.length}건)',
-              style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
+          const Icon(Icons.list_alt_rounded, size: 14, color: Color(0xFF6B7280)),
+          const SizedBox(width: 6),
+          const Text('업로드 목록', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: Color(0xFF374151))),
+          const SizedBox(width: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+            decoration: BoxDecoration(
+              color: _accentColor.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Text('${uploads.length}건', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: _accentColor)),
+          ),
         ]),
         const SizedBox(height: 12),
         ...uploads.map((u) => _buildUploadCard(u)),
@@ -829,29 +867,30 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
     return Container(
       width: double.infinity,
       margin: const EdgeInsets.only(bottom: 12),
+      clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
-        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 12, offset: const Offset(0, 2))],
+        border: Border.all(color: const Color(0xFFE5E7EB)),
       ),
       child: Column(
         children: [
+          Container(height: 3, color: _accentColor),
           // 헤더
           Container(
             padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: _accentColor.withValues(alpha: 0.04),
-              borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
+            decoration: const BoxDecoration(
+              color: Colors.white,
             ),
             child: Row(
               children: [
                 Container(
                   padding: const EdgeInsets.all(8),
                   decoration: BoxDecoration(
-                    color: _accentColor.withValues(alpha: 0.1),
+                    color: _accentColor.withValues(alpha: 0.08),
                     borderRadius: BorderRadius.circular(8),
                   ),
-                  child: Icon(Icons.storage, color: _accentColor, size: 20),
+                  child: Icon(Icons.storage_rounded, color: _accentColor, size: 18),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
@@ -859,10 +898,10 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(upload.divisionName,
-                          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                          style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15, color: Color(0xFF111827))),
                       const SizedBox(height: 2),
                       Text('${upload.formattedDate}  |  코드: ${_mergedCodeDisplay[upload.divisionCode] ?? upload.divisionCode}',
-                          style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+                          style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
                     ],
                   ),
                 ),
@@ -926,8 +965,8 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
                     borderRadius: BorderRadius.circular(4),
                     child: LinearProgressIndicator(
                       value: _exportProgress,
-                      backgroundColor: Colors.grey.shade200,
-                      valueColor: const AlwaysStoppedAnimation<Color>(Colors.green),
+                      backgroundColor: const Color(0xFFE5E7EB),
+                      valueColor: AlwaysStoppedAnimation<Color>(_accentColor),
                       minHeight: 6,
                     ),
                   ),
@@ -937,14 +976,14 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
                     children: [
                       Expanded(
                         child: Text(_exportStage,
-                            style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
+                            style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280)),
                             overflow: TextOverflow.ellipsis),
                       ),
                       Text('${(_exportProgress * 100).toInt()}%',
-                          style: TextStyle(
+                          style: const TextStyle(
                               fontSize: 12,
-                              fontWeight: FontWeight.bold,
-                              color: Colors.grey.shade700)),
+                              fontWeight: FontWeight.w700,
+                              color: Color(0xFF374151))),
                     ],
                   ),
                 ],
@@ -952,8 +991,8 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
             ),
           // 액션 버튼
           Container(
-            decoration: BoxDecoration(
-              border: Border(top: BorderSide(color: Colors.grey.shade100)),
+            decoration: const BoxDecoration(
+              border: Border(top: BorderSide(color: Color(0xFFE5E7EB))),
             ),
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             child: Row(
@@ -1032,9 +1071,9 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Icon(icon, size: 14, color: Colors.grey.shade500),
+        Icon(icon, size: 13, color: const Color(0xFF9CA3AF)),
         const SizedBox(width: 4),
-        Text(text, style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+        Text(text, style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
       ],
     );
   }
