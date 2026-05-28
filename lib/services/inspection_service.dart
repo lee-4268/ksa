@@ -148,6 +148,8 @@ class InspectionService {
     List<String> workflowStatuses = const [],   // Phase 5: 워크플로우 상태 서버측 필터 (복수 선택)
     String needsRecheck = '',     // Phase 5: '1' = 재점검 필요만
     String overdueOnly = '',      // Phase 5: '1' = SLA 임계점 초과 건만
+    String sortBy = '',
+    String sortDir = 'asc',
   }) async {
     final resp = await http.post(
       Uri.parse('$_baseUrl/inspection/data'),
@@ -161,6 +163,8 @@ class InspectionService {
         'workflow_status': workflowStatuses.join(','),
         'needs_recheck': needsRecheck,
         'overdue_only': overdueOnly,
+        'sort_by': sortBy,
+        'sort_dir': sortDir,
       }),
     ).timeout(_apiTimeout);
     return json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
@@ -1083,6 +1087,8 @@ class InspectionService {
     String searchValues = '',  // 콤마 구분 복수값
     int page = 1,
     int pageSize = 100,
+    String sortBy = '',
+    String sortDir = 'desc',
   }) async {
     final uri = Uri.parse('$_baseUrl/inadequate/list').replace(
         queryParameters: {
@@ -1094,6 +1100,8 @@ class InspectionService {
       if (searchField.isNotEmpty && searchValues.isNotEmpty) 'search_values': searchValues,
       'page': '$page',
       'pageSize': '$pageSize',
+      if (sortBy.isNotEmpty) 'sort_by': sortBy,
+      'sort_dir': sortDir,
     });
     final resp = await http.get(uri, headers: _headers).timeout(_apiTimeout);
     return json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;

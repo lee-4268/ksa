@@ -100,6 +100,8 @@ async def inadequate_list(
     status: str = Query(""),
     search_field: str = Query(""),
     search_values: str = Query(""),
+    sort_by: str = Query(""),
+    sort_dir: str = Query("desc"),
     page: int = Query(1),
     pageSize: int = Query(100),
 ):
@@ -140,8 +142,16 @@ async def inadequate_list(
             f"SELECT COUNT(*) FROM inadequate_management WHERE {where}", params
         ).fetchone()[0]
         offset = (page - 1) * pageSize
+        _ALLOWED_SORT = {
+            'region', 'ons팀', '허가번호', '호출명칭', '주소',
+            '검사일자', '시정기한', '불합격내용', '불합격상세', 'status', '심의차수'
+        }
+        sort_col = sort_by if sort_by in _ALLOWED_SORT else '검사일자'
+        dir_kw = 'ASC' if sort_dir.lower() == 'asc' else 'DESC'
+        null_last = f'CASE WHEN "{sort_col}" IS NULL OR "{sort_col}" = \'\' THEN 1 ELSE 0 END'
         rows = conn.execute(
-            f"SELECT * FROM inadequate_management WHERE {where} ORDER BY 검사일자 DESC LIMIT ? OFFSET ?",
+            f"SELECT * FROM inadequate_management WHERE {where} "
+            f"ORDER BY {null_last}, \"{sort_col}\" {dir_kw} LIMIT ? OFFSET ?",
             params + [pageSize, offset],
         ).fetchall()
         conn.close()

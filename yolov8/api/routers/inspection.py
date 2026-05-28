@@ -2261,6 +2261,8 @@ class InspectionDataReq(BaseModel):
     workflow_status: str = ""
     needs_recheck: str = ""
     overdue_only: str = ""
+    sort_by: str = ""
+    sort_dir: str = "asc"
 
 def _build_insp_where(year, sheet, filters, search, addr, schedule_yn="", schedule_week="",
                      workflow_status="", needs_recheck="", overdue_only=""):
@@ -2391,6 +2393,19 @@ async def inspection_data(request: Request, req: InspectionDataReq):
         req.year, req.sheet, req.filters, req.search, req.addr,
         req.schedule_yn, req.schedule_week,
         req.workflow_status, req.needs_recheck, req.overdue_only)
+    _ALLOWED_INSP_SORT = {
+        '허가번호', '호출명칭', '국종군', '부서', '연도주기',
+        '설치장소', '도로명주소', '장치수', '통시', '공대',
+        'zpprac1', '시기조정', '기준연도', 'skt본부', 'access담당', '품질개선팀',
+    }
+    _s_col = req.sort_by if req.sort_by in _ALLOWED_INSP_SORT else ''
+    _s_dir = 'ASC' if req.sort_dir.lower() == 'asc' else 'DESC'
+    if _s_col:
+        _null_last = f'CASE WHEN "{_s_col}" IS NULL OR "{_s_col}" = \'\' THEN 1 ELSE 0 END'
+        _order_clause = f'ORDER BY {_null_last}, "{_s_col}" {_s_dir}'
+    else:
+        _order_clause = 'ORDER BY id'
+
     def _read():
         c = sqlite3.connect(_INSP_DB, timeout=60); c.row_factory = sqlite3.Row
         total = c.execute(f'SELECT COUNT(*) FROM inspection_targets WHERE {where_sql}', params).fetchone()[0]
@@ -2398,7 +2413,7 @@ async def inspection_data(request: Request, req: InspectionDataReq):
         rows = c.execute(
             f'''SELECT t.*, s.수검예정주차,
                     COALESCE(r.status, irr.합불여부) AS 검사결과
-                FROM (SELECT * FROM inspection_targets WHERE {where_sql} ORDER BY id LIMIT ? OFFSET ?) t
+                FROM (SELECT * FROM inspection_targets WHERE {where_sql} {_order_clause} LIMIT ? OFFSET ?) t
                 LEFT JOIN inspection_schedules s ON s.year = t.year AND s.허가번호 = t.허가번호
                 LEFT JOIN inspection_results r ON r.year = t.year AND r.허가번호 = t.허가번호
                 LEFT JOIN (

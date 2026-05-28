@@ -142,41 +142,14 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
   void _onScheduleSort(int si, bool asc) {
     final col = _kInspCols.firstWhere((c) => c.si == si,
         orElse: () => const _InspColSpec('', '', 0, -1));
-    if (col.key.isEmpty) return;
+    if (col.key.isEmpty || col.key.startsWith('__')) return;
     setState(() {
       _sortColIdx = si;
       _sortAsc = asc;
-      _items.sort((a, b) {
-        final av = (a[col.key] ?? '').toString().trim();
-        final bv = (b[col.key] ?? '').toString().trim();
-
-        // 빈값은 항상 마지막
-        if (av.isEmpty && bv.isEmpty) return 0;
-        if (av.isEmpty) return 1;
-        if (bv.isEmpty) return -1;
-
-        // 숫자 비교
-        final an = double.tryParse(av);
-        final bn = double.tryParse(bv);
-        if (an != null && bn != null) return asc ? an.compareTo(bn) : bn.compareTo(an);
-
-        // 날짜 비교 (YYYY-MM-DD / YYYY.MM.DD / YYYY/MM/DD)
-        final da = _tryParseScheduleDate(av);
-        final db = _tryParseScheduleDate(bv);
-        if (da != null && db != null) return asc ? da.compareTo(db) : db.compareTo(da);
-
-        // 문자열 비교 (fallback)
-        return asc ? av.compareTo(bv) : bv.compareTo(av);
-      });
+      _page = 1;
+      _selectedLicenseNos.clear();
     });
-  }
-
-  DateTime? _tryParseScheduleDate(String s) {
-    try {
-      return DateTime.parse(s.replaceAll('.', '-').replaceAll('/', '-'));
-    } catch (_) {
-      return null;
-    }
+    _loadData();
   }
 
   Map<String, dynamic> _matrix = {};
@@ -391,6 +364,12 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
 
   Future<Map<String, dynamic>?> _fetchData() async {
     try {
+      final sortCol = _sortColIdx != null
+          ? _kInspCols.firstWhere(
+              (c) => c.si == _sortColIdx && c.si > 0 && !c.key.startsWith('__'),
+              orElse: () => const _InspColSpec('', '', 0, -1),
+            )
+          : const _InspColSpec('', '', 0, -1);
       return await _svc.getData(
         year: _year, sheet: _sheet,
         filters: _activeFilters,
@@ -399,11 +378,11 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
         page: _page, pageSize: 100,
         scheduleYn: _aScheduled,
         scheduleWeek: _aSchedWeek,
-        // Phase 5: 워크플로우 상태/재점검/SLA 지연도 서버에 전달
-        // (클라이언트 _filteredItems도 동일 조건 → 멱등 OK)
         workflowStatuses: _statusFilters,
         needsRecheck: _recheckOnly ? '1' : '',
         overdueOnly: _overdueOnly ? '1' : '',
+        sortBy: sortCol.key,
+        sortDir: _sortAsc ? 'asc' : 'desc',
       );
     } catch (_) { return null; }
   }

@@ -146,6 +146,8 @@ class _InadequateManagementScreenState extends State<InadequateManagementScreen>
           searchValues: _searchValues,
           page: _page,
           pageSize: _pageSize,
+          sortBy: _sortColumn ?? '',
+          sortDir: _sortAsc ? 'asc' : 'desc',
         ),
       ]);
       final stats = results[0];
@@ -159,7 +161,6 @@ class _InadequateManagementScreenState extends State<InadequateManagementScreen>
           _items = List<Map<String, dynamic>>.from(listData['items'] ?? []);
           _totalItems = listData['total'] as int? ?? 0;
           _loading = false;
-          if (_sortColumn != null) _applySort();
         });
       }
     } catch (e) {
@@ -167,44 +168,7 @@ class _InadequateManagementScreenState extends State<InadequateManagementScreen>
     }
   }
 
-  void _applySort() {
-    final col = _sortColumn!;
-    _items.sort((a, b) {
-      final va = (a[col] ?? '').toString().trim();
-      final vb = (b[col] ?? '').toString().trim();
 
-      // 빈값은 항상 마지막
-      if (va.isEmpty && vb.isEmpty) return 0;
-      if (va.isEmpty) return 1;
-      if (vb.isEmpty) return -1;
-
-      // 숫자 비교
-      final na = num.tryParse(va);
-      final nb = num.tryParse(vb);
-      if (na != null && nb != null) {
-        return _sortAsc ? na.compareTo(nb) : nb.compareTo(na);
-      }
-
-      // 날짜 비교 (YYYY-MM-DD / YYYY.MM.DD / YYYY/MM/DD)
-      final da = _tryParseDate(va);
-      final db = _tryParseDate(vb);
-      if (da != null && db != null) {
-        return _sortAsc ? da.compareTo(db) : db.compareTo(da);
-      }
-
-      // 문자열 비교 (fallback)
-      final cmp = va.compareTo(vb);
-      return _sortAsc ? cmp : -cmp;
-    });
-  }
-
-  DateTime? _tryParseDate(String s) {
-    try {
-      return DateTime.parse(s.replaceAll('.', '-').replaceAll('/', '-'));
-    } catch (_) {
-      return null;
-    }
-  }
 
   void _onSort(String col) {
     setState(() {
@@ -214,8 +178,9 @@ class _InadequateManagementScreenState extends State<InadequateManagementScreen>
         _sortColumn = col;
         _sortAsc = true;
       }
-      _applySort();
+      _page = 1;
     });
+    _loadData();
   }
 
   Future<void> _doSync() async {
