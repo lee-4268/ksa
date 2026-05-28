@@ -492,17 +492,28 @@ final result = await showDialog<bool>(
             const SizedBox(width: 8),
             Text(item.title, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: _textPrimary)),
             const Spacer(),
-            // 확인증 스캔 버튼
-            Tooltip(
-              message: '확인증 스캔',
-              child: IconButton(
-                icon: const Icon(Icons.document_scanner_outlined, size: 22, color: _textSecondary),
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
-                onPressed: _openCertScanner,
+            // 확인증 스캔 버튼 (아이콘 + 텍스트 pill)
+            GestureDetector(
+              onTap: _openCertScanner,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFEFF6FF),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: const Color(0xFFBFDBFE)),
+                ),
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.document_scanner_outlined, size: 15, color: Color(0xFF1565C0)),
+                    SizedBox(width: 5),
+                    Text('확인증 스캔',
+                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF1565C0))),
+                  ],
+                ),
               ),
             ),
-            const SizedBox(width: 2),
+            const SizedBox(width: 8),
             _buildUserAvatar(),
           ],
         ),
