@@ -246,8 +246,6 @@ class _InadequateManagementScreenState extends State<InadequateManagementScreen>
                 ],
               ),
             ),
-          if (_isAdmin && _checkedIds.isNotEmpty) _buildBulkActionBar(),
-          
           Expanded(
             child: SingleChildScrollView(
               padding: const EdgeInsets.symmetric(vertical: 16),
@@ -257,7 +255,11 @@ class _InadequateManagementScreenState extends State<InadequateManagementScreen>
                   _buildSummaryCards(),
                   const SizedBox(height: 16),
                   _buildUnifiedToolbar(), // 반응형 툴바 적용
-                  const SizedBox(height: 16),
+                  if (_isAdmin && _checkedIds.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    _buildBulkActionBar(),
+                  ],
+                  const SizedBox(height: 8),
                   if (_loading)
                     Padding(
                       padding: const EdgeInsets.all(40.0),
@@ -963,54 +965,59 @@ class _InadequateManagementScreenState extends State<InadequateManagementScreen>
   }
 
   Widget _buildBulkActionBar() {
-    return Container(
-      height: 48,
+    return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16),
-      decoration: const BoxDecoration(
-        color: Color(0xFFF8FAFF),
-        border: Border(
-          top: BorderSide(color: Color(0xFFDDE3F0)),
-          bottom: BorderSide(color: Color(0xFFDDE3F0)),
+      child: Container(
+        height: 40,
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        decoration: BoxDecoration(
+          color: primaryColor.withValues(alpha: 0.06),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: primaryColor.withValues(alpha: 0.18)),
         ),
-      ),
-      child: Row(
-        children: [
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-            decoration: BoxDecoration(
-              color: primaryColor.withValues(alpha: 0.1),
+        child: Row(
+          mainAxisSize: MainAxisSize.max,
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+              decoration: BoxDecoration(
+                color: primaryColor,
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Text(
+                '${_checkedIds.length}건',
+                style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Colors.white),
+              ),
+            ),
+            const SizedBox(width: 6),
+            Text(
+              '선택됨',
+              style: TextStyle(fontSize: 13, color: primaryColor, fontWeight: FontWeight.w500),
+            ),
+            const Spacer(),
+            TextButton.icon(
+              onPressed: _showBulkEditDialog,
+              icon: Icon(Icons.edit_outlined, size: 13, color: primaryColor),
+              label: Text('일괄 처리', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: primaryColor)),
+              style: TextButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                backgroundColor: primaryColor.withValues(alpha: 0.12),
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+              ),
+            ),
+            const SizedBox(width: 4),
+            InkWell(
+              onTap: () => setState(() => _checkedIds.clear()),
               borderRadius: BorderRadius.circular(4),
+              child: Padding(
+                padding: const EdgeInsets.all(4),
+                child: Icon(Icons.close, size: 15, color: primaryColor.withValues(alpha: 0.5)),
+              ),
             ),
-            child: Text(
-              '${_checkedIds.length}건',
-              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: primaryColor),
-            ),
-          ),
-          const SizedBox(width: 8),
-          Text(
-            '선택됨',
-            style: const TextStyle(fontSize: 13, color: Color(0xFF374151), fontWeight: FontWeight.w500),
-          ),
-          const Spacer(),
-          TextButton.icon(
-            onPressed: _showBulkEditDialog,
-            icon: Icon(Icons.edit_outlined, size: 14, color: primaryColor),
-            label: Text('일괄 처리', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: primaryColor)),
-            style: TextButton.styleFrom(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-              backgroundColor: primaryColor.withValues(alpha: 0.08),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
-            ),
-          ),
-          const SizedBox(width: 4),
-          IconButton(
-            onPressed: () => setState(() => _checkedIds.clear()),
-            icon: const Icon(Icons.close, size: 16, color: Color(0xFF9CA3AF)),
-            tooltip: '선택 해제',
-            padding: EdgeInsets.zero,
-            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
