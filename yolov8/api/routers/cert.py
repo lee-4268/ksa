@@ -39,8 +39,11 @@ from core.config import (
 from core.cert_cache import (
     _cert_cache_load, _cert_cache_force_rebuild,
     _cert_lookup_cached, _cert_batch_lookup_cached,
-    _cert_cache_db_path,
 )
+import core.cert_cache as _cert_cache_mod
+# NOTE: _cert_cache_db_path는 모듈 레벨 가변 상태이므로 from-import하면 빈 초기값이
+# 박혀버림 (Python import-by-name 동작). 항상 _cert_cache_mod._cert_cache_db_path로
+# 참조해서 최신 값을 가져와야 함. inspection.py, ds.py와 동일한 패턴.
 from core.s3 import get_s3_client
 from core.utils import _check_memory
 
@@ -373,7 +376,7 @@ def _parse_swing_list(s: str) -> list:
 def _resolve_inputs_to_zpwino(raw_list: list) -> tuple:
     """입력값을 허가번호로 변환 (배치 최적화)."""
     _cert_cache_load()
-    _db = _cert_cache_db_path
+    _db = _cert_cache_mod._cert_cache_db_path
 
     zpwino_list = []
     resolve_map = {}
@@ -475,7 +478,7 @@ def _erp_ds_compare_sync(
     erp_data = _cert_batch_lookup_cached(zpwino_list)
 
     erp_multi = {}
-    _cert_db = _cert_cache_db_path or ""
+    _cert_db = _cert_cache_mod._cert_cache_db_path or ""
     if _cert_db and os.path.exists(_cert_db):
         try:
             _cc = sqlite3.connect(_cert_db, timeout=15)
@@ -1061,10 +1064,14 @@ async def azimuths_batch(request: Request):
         raise HTTPException(status_code=400, detail="최대 1000건까지 조회 가능합니다.")
 
     _cert_cache_load()
+    _db = _cert_cache_mod._cert_cache_db_path
+    if not _db or not os.path.exists(_db):
+        logger.warning(f"azimuths/batch: cert cache DB 미존재 (path={_db!r})")
+        return {"items": {}}
     result = {z: {} for z in zpwino_list}
 
     try:
-        conn = sqlite3.connect(_cert_cache_db_path, timeout=30)
+        conn = sqlite3.connect(_db, timeout=30)
         conn.row_factory = sqlite3.Row
         try:
             BATCH = 900
