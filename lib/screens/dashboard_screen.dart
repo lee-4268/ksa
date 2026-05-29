@@ -98,6 +98,12 @@ class _DashboardScreenState extends State<DashboardScreen>
     try {
       final items = await _inspSvc.getProgressByTeam(_progressYear, regionShortName);
       if (!mounted) return;
+      // 진행률 내림차순 정렬 (본부 카드 순위 매기기와 동일한 의미)
+      items.sort((a, b) {
+        final pa = (a['percent'] as num?)?.toDouble() ?? 0.0;
+        final pb = (b['percent'] as num?)?.toDouble() ?? 0.0;
+        return pb.compareTo(pa);
+      });
       setState(() { _teams = items; _teamsLoading = false; });
     } catch (_) {
       if (!mounted) return;
@@ -633,25 +639,29 @@ class _DashboardScreenState extends State<DashboardScreen>
       children: [
         for (int i = 0; i < _teams.length; i++) ...[
           if (i > 0) const SizedBox(height: 8),
-          _buildTeamListItem(_teams[i]),
+          _buildTeamListItem(_teams[i], i),
         ],
       ],
     );
   }
 
-  Widget _buildTeamListItem(Map<String, dynamic> team) {
+  /// 팀 리스트 아이템 — 본부 카드와 동일한 레이아웃
+  /// [순위 원] [팀명 / 카운트] [퍼센트 / 진행바]
+  Widget _buildTeamListItem(Map<String, dynamic> team, int index) {
     final name = (team['팀'] as String?) ?? '';
     final total = (team['total'] as num?)?.toInt() ?? 0;
     final completed = (team['completed'] as num?)?.toInt() ?? 0;
-    final percent = (team['percent'] as num?)?.toDouble() ?? 0.0;
     final rate = total > 0 ? completed / total : 0.0;
+    final percent = (rate * 100).round();
     final isSelected = widget.selectedTeam == name;
-    final shortName = name.replaceAll('품질개선팀', '');
+    final shortName = name.endsWith('품질개선팀')
+        ? name.substring(0, name.length - 5)
+        : name;
     return InkWell(
       onTap: () => widget.onTeamSelected?.call(name),
       borderRadius: BorderRadius.circular(10),
       child: Container(
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
           color: const Color(0xFFF5F6FA),
           borderRadius: BorderRadius.circular(10),
@@ -660,38 +670,84 @@ class _DashboardScreenState extends State<DashboardScreen>
             width: 2,
           ),
         ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        child: Row(
           children: [
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    shortName.isNotEmpty ? shortName : name,
-                    style: const TextStyle(
-                        fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF111827)),
-                    overflow: TextOverflow.ellipsis,
-                  ),
+            // 순위
+            Container(
+              width: 28,
+              height: 28,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: index < 3
+                    ? _getProgressColor(rate).withValues(alpha: 0.1)
+                    : Colors.grey.shade200,
+                shape: BoxShape.circle,
+              ),
+              child: Text(
+                '${index + 1}',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                  color: index < 3
+                      ? _getProgressColor(rate)
+                      : Colors.grey.shade600,
                 ),
-                Text('${percent.toStringAsFixed(1)}%',
-                    style: TextStyle(
-                        fontSize: 13, fontWeight: FontWeight.bold,
-                        color: _getProgressColor(rate))),
-              ],
-            ),
-            const SizedBox(height: 6),
-            ClipRRect(
-              borderRadius: BorderRadius.circular(4),
-              child: LinearProgressIndicator(
-                value: rate.clamp(0.0, 1.0),
-                minHeight: 5,
-                backgroundColor: Colors.grey.shade200,
-                valueColor: AlwaysStoppedAnimation(_getProgressColor(rate)),
               ),
             ),
-            const SizedBox(height: 4),
-            Text('$completed / $total',
-                style: TextStyle(fontSize: 11, color: Colors.grey.shade600)),
+            const SizedBox(width: 12),
+            // 팀명 + 카운트
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    shortName.isNotEmpty ? shortName : name,
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    '$completed/$total',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Colors.grey.shade600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            // 진행률
+            SizedBox(
+              width: 80,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text(
+                    '$percent%',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: _getProgressColor(rate),
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(3),
+                    child: LinearProgressIndicator(
+                      value: rate.clamp(0.0, 1.0),
+                      minHeight: 4,
+                      backgroundColor: Colors.grey.shade300,
+                      valueColor: AlwaysStoppedAnimation(
+                        _getProgressColor(rate),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ],
         ),
       ),
