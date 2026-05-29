@@ -585,7 +585,9 @@ class _DashboardScreenState extends State<DashboardScreen>
                 const Icon(Icons.analytics_outlined, color: _blueAccent, size: 22),
               const SizedBox(width: 8),
               Text(
-                selectedData != null ? '${selectedData.name} · 팀별' : '본부별 현황',
+                selectedData != null
+                    ? '${selectedData.name} · 팀별 진행률 현황'
+                    : '본부별 진행률 현황',
                 style: const TextStyle(
                   fontSize: 16,
                   fontWeight: FontWeight.bold,

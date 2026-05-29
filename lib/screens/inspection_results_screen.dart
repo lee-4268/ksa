@@ -590,6 +590,10 @@ Future<void> _downloadExcel() async {
   String _shortTeamName(String name) =>
       name.endsWith('품질개선팀') ? name.substring(0, name.length - 5) : name;
 
+  /// 합격율 표시/판정용 통일 값: 소숫점 둘째 자리에서 버림 (1자리 표시).
+  /// 표시 텍스트("98.5%")와 임계값 비교가 일치하도록 화면 전체에서 이 값으로 통일.
+  double _truncTo1(double v) => (v * 10).floorToDouble() / 10;
+
   // ── Build ──
 
   @override
@@ -1399,8 +1403,8 @@ Future<void> _downloadExcel() async {
             final r = entry.value;
             final isTotalRow = i == allRows.length - 1 && totals.isNotEmpty;
             final isEven = i.isEven;
-            final perfRate = _asPercent(r['성능합격율'] ?? r['perf_pass_rate']);
-            final docRate = _asPercent(r['서류합격율'] ?? r['doc_pass_rate']);
+            final perfRate = _truncTo1(_asPercent(r['성능합격율'] ?? r['perf_pass_rate']));
+            final docRate = _truncTo1(_asPercent(r['서류합격율'] ?? r['doc_pass_rate']));
             final style = TextStyle(
               fontSize: 11,
               fontWeight: isTotalRow ? FontWeight.w700 : FontWeight.w400,
@@ -1727,8 +1731,8 @@ Future<void> _downloadExcel() async {
       dPass += _toDouble(r['서류합격'] ?? r['doc_pass']);
       dFail += _toDouble(r['서류불합격'] ?? r['doc_fail']);
     }
-    final totalPerf = (pPass + pFail) > 0 ? (pPass / (pPass + pFail)) * 100 : 0.0;
-    final totalDoc = (dPass + dFail) > 0 ? (dPass / (dPass + dFail)) * 100 : 0.0;
+    final totalPerf = _truncTo1((pPass + pFail) > 0 ? (pPass / (pPass + pFail)) * 100 : 0.0);
+    final totalDoc = _truncTo1((dPass + dFail) > 0 ? (dPass / (dPass + dFail)) * 100 : 0.0);
     final totalPerfPass = totalPerf >= perfTarget;
     final totalDocPass = totalDoc >= docTarget;
 
@@ -1762,8 +1766,8 @@ Future<void> _downloadExcel() async {
           ...regionData.map((r) {
             final rawName = _regionName(r);
             final name = byTeam ? _shortTeamName(rawName) : rawName;
-            final perf = _asPercent(r['성능합격율'] ?? r['perf_pass_rate']);
-            final doc = _asPercent(r['서류합격율'] ?? r['doc_pass_rate']);
+            final perf = _truncTo1(_asPercent(r['성능합격율'] ?? r['perf_pass_rate']));
+            final doc = _truncTo1(_asPercent(r['서류합격율'] ?? r['doc_pass_rate']));
             final perfPass = perf >= perfTarget;
             final docPass = doc >= docTarget;
 
@@ -2061,8 +2065,8 @@ Future<void> _downloadExcel() async {
           const DataColumn(label: Center(child: Text('서류합격율')), numeric: true, headingRowAlignment: MainAxisAlignment.center),
         ],
         rows: monthWeeks.map((w) {
-          final rate = _asPercent(w['합격율'] ?? 0);
-          final docRate = _asPercent(w['서류합격율'] ?? 0);
+          final rate = _truncTo1(_asPercent(w['합격율'] ?? 0));
+          final docRate = _truncTo1(_asPercent(w['서류합격율'] ?? 0));
           final weekLabel = (w['주차'] ?? '-').toString().replaceAll(RegExp(r'^\d+월'), '');
           return DataRow(cells: [
             DataCell(Center(child: Text(weekLabel, style: TextStyle(fontSize: fontSize)))),
