@@ -3753,7 +3753,9 @@ async def inspection_result_upsert(request: Request, req: InspectionResultReq):
 
     user_info = await asyncio.to_thread(_get_user_info_for_community, empno)
     입력자_name = user_info.get("name", empno)
-    needs_recheck = '1' if req.status.strip() not in ('합격', '') else '0'
+    # 재점검 대상: 합격/빈값/검사대기를 제외한 모든 status. 검사대기는 결과 미정이라
+    # 재점검 흐름에 포함하지 않음 (합격/불합격/부적합 판정 후에만 재점검 의미 있음).
+    needs_recheck = '1' if req.status.strip() not in ('합격', '', '검사대기') else '0'
 
     def _write():
         c = sqlite3.connect(_INSP_DB, timeout=60); c.row_factory = sqlite3.Row
