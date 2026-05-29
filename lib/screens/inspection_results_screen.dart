@@ -606,33 +606,39 @@ Future<void> _downloadExcel() async {
           children: [
             _buildActionBar(),
             _buildSummaryCards(),
-                  if (_reportLines.isNotEmpty) _buildSummaryReport(),
-                  if (_selectedRegion.isNotEmpty || _selectedTeam.isNotEmpty)
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-                      child: Row(children: [
-                        Icon(Icons.filter_alt, size: 16, color: _primary),
-                        const SizedBox(width: 6),
-                        Text(
-                          _selectedTeam.isNotEmpty
-                              ? '$_selectedRegion · $_selectedTeam 필터 적용 중'
-                              : '$_selectedRegion 본부 필터 적용 중',
-                          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFFE53935)),
-                        ),
-                        const SizedBox(width: 8),
-                        TextButton(
-                          onPressed: () {
-                            setState(() {
-                              _selectedRegion = '';
-                              _selectedTeam = '';
-                              _failureChartTeam = '';
-                            });
-                            _loadData();
-                          },
-                          child: const Text('전체 보기', style: TextStyle(fontSize: 12)),
-                        ),
-                      ]),
-                    ),
+            // 조건부 children은 Column의 자식 위치 인덱스를 바꿔
+            // 아래 DashboardScreen이 unmount/remount되는 race condition을 유발하므로,
+            // 빈 상태에서도 SizedBox.shrink()로 자리를 유지.
+            _reportLines.isNotEmpty
+                ? _buildSummaryReport()
+                : const SizedBox.shrink(),
+            (_selectedRegion.isNotEmpty || _selectedTeam.isNotEmpty)
+                ? Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                    child: Row(children: [
+                      Icon(Icons.filter_alt, size: 16, color: _primary),
+                      const SizedBox(width: 6),
+                      Text(
+                        _selectedTeam.isNotEmpty
+                            ? '$_selectedRegion · $_selectedTeam 필터 적용 중'
+                            : '$_selectedRegion 본부 필터 적용 중',
+                        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFFE53935)),
+                      ),
+                      const SizedBox(width: 8),
+                      TextButton(
+                        onPressed: () {
+                          setState(() {
+                            _selectedRegion = '';
+                            _selectedTeam = '';
+                            _failureChartTeam = '';
+                          });
+                          _loadData();
+                        },
+                        child: const Text('전체 보기', style: TextStyle(fontSize: 12)),
+                      ),
+                    ]),
+                  )
+                : const SizedBox.shrink(),
                   // 전국 수검 현황 지도 + 본부 상세
                   LayoutBuilder(
                     builder: (context, cst) {
@@ -642,12 +648,6 @@ Future<void> _downloadExcel() async {
                         child: SizedBox(
                           height: 550,
                           child: DashboardScreen(
-                            // 고정 키: 부모 트리에서 위 형제 위젯(필터 적용 중 줄)이
-                            // 조건부로 추가/제거되면서 Column children 위치가 바뀌어도
-                            // 같은 element로 유지되어 unmount/remount 방지 — 진행 중인
-                            // 비동기 API 호출(_loadTeamsForRegion)이 mounted=false로 버려지는
-                            // 첫 클릭 race condition 해결.
-                            key: const ValueKey('dashboard_in_results'),
                             showStats: false,
                             selectedRegion: _selectedRegion,
                             selectedTeam: _selectedTeam,

@@ -126,6 +126,13 @@ class _DashboardScreenState extends State<DashboardScreen>
     super.didChangeDependencies();
     final token = context.read<AuthService>().authToken;
     _inspSvc.setAuthToken(token);
+    // 본부가 이미 선택된 상태로 마운트되었으면 팀 로딩도 시작.
+    // (부모 트리가 리빌드하면서 unmount→remount된 경우, 옛 인스턴스의 진행 중이던
+    // _loadTeamsForRegion이 mounted=false로 버려지므로 새 인스턴스가 다시 요청해야 함)
+    if (widget.selectedRegion != null && widget.selectedRegion!.isNotEmpty
+        && _teamsLoadedForRegion != widget.selectedRegion) {
+      _loadTeamsForRegion(widget.selectedRegion!);
+    }
     if (!_progressLoaded) {
       _progressLoaded = true;
       _loadProgress();
