@@ -565,7 +565,8 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
 
   Widget _buildUserCard(AppUserProfile user) {
     final authService = context.read<AuthService>();
-    final canChangeRole = _canChangeUserRole(authService.userRole, user.role);
+    final isSelf = authService.userId == user.id;
+    final canChangeRole = _canChangeUserRole(authService.userRole, user.role, isSelf: isSelf);
 
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
@@ -734,23 +735,24 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
   }
 
   /// 현재 사용자가 대상 사용자의 권한을 변경할 수 있는지 확인
-  /// - 자신보다 하위 권한을 가진 사용자만 변경 가능
-  /// - 자기 자신이나 동급/상위 권한자는 변경 불가
-  bool _canChangeUserRole(AppUserRole myRole, UserRole targetRole) {
+  /// - 본인 권한 이하(같거나 낮음) 사용자만 변경 가능
+  /// - 본인 자신은 변경 불가 (자기 강등 방지)
+  bool _canChangeUserRole(AppUserRole myRole, UserRole targetRole, {bool isSelf = false}) {
+    if (isSelf) return false;
     final myRoleLevel = _getRoleLevel(myRole);
     final targetRoleLevel = _getRoleLevelFromUserRole(targetRole);
-
-    // 자신보다 하위 권한만 변경 가능 (동급 이상은 불가)
-    return myRoleLevel < targetRoleLevel;
+    // 본인 권한 이하(같거나 낮음)만 변경 가능
+    return myRoleLevel <= targetRoleLevel;
   }
 
   /// 현재 사용자가 부여할 수 있는 권한 목록 (백엔드 3역할: admin/manager/member)
+  /// 본인 권한 이하(같거나 낮음)까지 부여 가능
   List<UserRole> _getAssignableRoles(AppUserRole myRole) {
     switch (myRole) {
       case AppUserRole.superAdmin:
-        return [UserRole.divisionAdmin, UserRole.member];
+        return [UserRole.superAdmin, UserRole.divisionAdmin, UserRole.member];
       case AppUserRole.divisionAdmin:
-        return [UserRole.member];
+        return [UserRole.divisionAdmin, UserRole.member];
       case AppUserRole.teamAdmin:
       case AppUserRole.member:
         return [];
@@ -825,7 +827,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(
-                          '본인보다 하위 권한만 부여할 수 있습니다.',
+                          '본인 권한 이하(같거나 낮은)만 부여할 수 있습니다.',
                           style: TextStyle(fontSize: 12, color: Colors.blue[700]),
                         ),
                       ),
@@ -909,27 +911,28 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
 
   Future<void> _changeUserRole(AppUserProfile user, UserRole newRole) async {
     final adminService = context.read<AdminService>();
+    final d = ProgressDialog(context);
+    d.show(message: '권한 변경 중...');
     final success = await adminService.changeUserRole(user.id, newRole);
-
-    if (mounted) {
-      final d = ProgressDialog(context);
-      if (success) {
-        await d.complete(message: '${user.name ?? user.id}의 권한이 ${_getRoleName(newRole)}(으)로 변경되었습니다.');
-        _applyFilters();
-      } else {
-        await d.error(message: '권한 변경 실패: ${adminService.errorMessage}');
-      }
+    if (!mounted) return;
+    if (success) {
+      await d.complete(message: '${user.name ?? user.id}의 권한이 ${_getRoleName(newRole)}(으)로 변경되었습니다.');
+      if (mounted) _applyFilters();
+    } else {
+      await d.error(message: '권한 변경 실패: ${adminService.errorMessage ?? '알 수 없는 오류'}');
     }
   }
 
   Future<void> _undormantUser(AppUserProfile user) async {
-    final ok = await context.read<AdminService>().undormantUser(user.id);
-    if (!mounted) return;
+    final adminService = context.read<AdminService>();
     final d = ProgressDialog(context);
+    d.show(message: '휴면 해제 중...');
+    final ok = await adminService.undormantUser(user.id);
+    if (!mounted) return;
     if (ok) {
       await d.complete(message: '${user.name ?? user.id} 휴면 해제 완료');
     } else {
-      await d.error(message: '휴면 해제 실패');
+      await d.error(message: '휴면 해제 실패: ${adminService.errorMessage ?? '알 수 없는 오류'}');
     }
   }
 

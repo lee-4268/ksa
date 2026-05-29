@@ -447,6 +447,13 @@ def _record_audit_log_sync(action: str, entity_type: str, entity_id: str,
 # 전체 사용자 목록 (admin 화면용)
 # ══════════════════════════════════════════════════════════════
 
+def _invalidate_admin_users_cache():
+    """관리자 사용자 목록 캐시 무효화 (역할/휴면 변경 후 호출)."""
+    global _admin_users_cache, _admin_users_cache_time
+    _admin_users_cache = None
+    _admin_users_cache_time = 0
+
+
 def _list_all_users_sync() -> list:
     """kca-user-roles 스캔 → Users 테이블 개별 조회 (캐시 60초)"""
     global _admin_users_cache, _admin_users_cache_time

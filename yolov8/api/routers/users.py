@@ -27,7 +27,7 @@ from core.auth import (
     _verify_auth, _require_role,
     _get_user_role_sync, _get_user_role_info,
     _ensure_user_in_roles_sync, _record_audit_log_sync,
-    _list_all_users_sync, _dev_users,
+    _list_all_users_sync, _invalidate_admin_users_cache, _dev_users,
 )
 from core.config import (
     DYNAMODB_TABLES, VALID_ROLES, ADMIN_BOOTSTRAP_KEY, USERS_DATA_PATH,
@@ -146,16 +146,26 @@ async def get_user_by_empno(empno: str, request: Request = None):
 
 @router.put("/admin/set-role")
 async def set_user_role(req: SetRoleRequest, request: Request):
-    """사용자 역할 설정 — admin 또는 부트스트랩 키 필요."""
+    """사용자 역할 설정.
+
+    권한 정책:
+    - admin/manager 또는 부트스트랩 키 필요
+    - 본인 권한 이하(같거나 낮음)만 부여 가능 (admin→admin/manager/member, manager→manager/member)
+    - 본인 자신의 권한은 변경 불가 (자기 강등 방지)
+    """
     if req.role not in VALID_ROLES:
         raise HTTPException(
             status_code=400,
             detail=f"유효하지 않은 역할: {req.role} (가능: {', '.join(VALID_ROLES)})",
         )
 
+    # 역할 레벨: 낮을수록 높은 권한
+    role_level = {"admin": 0, "manager": 1, "member": 2}
+
     admin_key = request.headers.get("X-Admin-Key", "").strip()
     authorized = False
     caller_id = None
+    caller_role = None
     if ADMIN_BOOTSTRAP_KEY and admin_key and _hmac_mod.compare_digest(admin_key, ADMIN_BOOTSTRAP_KEY):
         authorized = True
         logger.info(f"role 변경 (부트스트랩): {req.empno} → {req.role}")
@@ -163,20 +173,40 @@ async def set_user_role(req: SetRoleRequest, request: Request):
         try:
             caller_id = await _verify_auth(request)
             caller_role = await asyncio.to_thread(_get_user_role_sync, caller_id)
-            if caller_role == "admin":
+            if caller_role in {"admin", "manager"}:
                 authorized = True
-                logger.info(f"role 변경 (admin {caller_id}): {req.empno} → {req.role}")
         except HTTPException:
             pass
 
     if not authorized:
-        raise HTTPException(status_code=403, detail="권한 없음 (admin 또는 부트스트랩 키 필요)")
+        raise HTTPException(status_code=403, detail="권한 없음 (admin/manager 또는 부트스트랩 키 필요)")
+
+    # 부트스트랩 키가 아닌 일반 인증 경로일 때 추가 정책 검증
+    if caller_role is not None:
+        # 자기 자신 변경 금지
+        if caller_id == req.empno:
+            raise HTTPException(status_code=403, detail="본인 권한은 변경할 수 없습니다")
+        # 본인 권한 이하만 부여 가능
+        if role_level.get(caller_role, 99) > role_level.get(req.role, 99):
+            raise HTTPException(
+                status_code=403,
+                detail=f"본인 권한({caller_role}) 이하만 부여 가능합니다 (요청: {req.role})",
+            )
+        # 대상이 본인보다 상위 권한이면 변경 불가
+        target_role_current = await asyncio.to_thread(_get_user_role_sync, req.empno)
+        if role_level.get(caller_role, 99) > role_level.get(target_role_current, 99):
+            raise HTTPException(
+                status_code=403,
+                detail=f"본인({caller_role})보다 상위 권한 사용자({target_role_current})는 변경할 수 없습니다",
+            )
+        logger.info(f"role 변경 ({caller_role} {caller_id}): {req.empno} → {req.role}")
 
     try:
         old_role = await asyncio.to_thread(_get_user_role_sync, req.empno)
         dynamodb = get_dynamodb_resource()
         table = dynamodb.Table(DYNAMODB_TABLES["user_roles"])
         table.put_item(Item={"user_id": req.empno, "role": req.role})
+        _invalidate_admin_users_cache()
 
         actor = caller_id or "bootstrap"
         await asyncio.to_thread(
@@ -211,6 +241,7 @@ async def admin_undormant(empno: str, request: Request):
                 ":now": datetime.now(timezone.utc).isoformat(),
             },
         )
+        _invalidate_admin_users_cache()
         logger.info(f"휴면 해제: {empno} (by {caller_id})")
         return {"success": True, "empno": empno, "message": "휴면 해제 완료"}
     except Exception as e:
