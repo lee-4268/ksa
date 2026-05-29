@@ -65,6 +65,7 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
 
   String _selectedRegion = '';
   String _selectedTeam = ''; // 본부 안에서 선택된 팀(ons팀, 예: '평택품질개선팀')
+  String _failureChartTeam = ''; // 불합격 항목별 비율 차트만 별도로 필터링하는 팀
   List<String> _regionTeams = []; // 현재 본부의 팀 이름 목록 (불합격 항목별 토글용)
   int _selectedQuarter = 0; // 0=전체, 1=1Q, 2=2Q, 3=3Q, 4=4Q
   late bool _isAdmin;
@@ -146,9 +147,11 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
         });
       }
       // 차트 데이터 (별도 try-catch)
+      // analysis만은 차트별 토글(_failureChartTeam)이 있으면 그 값을 우선 사용
+      final analysisTeam = _failureChartTeam.isNotEmpty ? _failureChartTeam : tm;
       try {
         final results = await Future.wait([
-          _svc.getResultsAnalysis(_year, region: rgn, team: tm),
+          _svc.getResultsAnalysis(_year, region: rgn, team: analysisTeam),
           _svc.getResultsWeeklyTrend(_year, region: rgn, team: tm),
           _svc.getResultsSummaryReport(_year, region: rgn, team: tm),
           // weekly-trend-by-region: region 지정 시 자동으로 그 본부 팀별 trend 반환
@@ -615,7 +618,11 @@ Future<void> _downloadExcel() async {
                         const SizedBox(width: 8),
                         TextButton(
                           onPressed: () {
-                            setState(() { _selectedRegion = ''; _selectedTeam = ''; });
+                            setState(() {
+                              _selectedRegion = '';
+                              _selectedTeam = '';
+                              _failureChartTeam = '';
+                            });
                             _loadData();
                           },
                           child: const Text('전체 보기', style: TextStyle(fontSize: 12)),
@@ -639,6 +646,7 @@ Future<void> _downloadExcel() async {
                                 setState(() {
                                   _selectedRegion = region;
                                   _selectedTeam = '';
+                                  _failureChartTeam = '';
                                   _regionTeams = [];
                                 });
                                 _loadData();
@@ -1541,7 +1549,7 @@ Future<void> _downloadExcel() async {
   }
 
   Widget _failureTeamChip({required String label, required String team}) {
-    final isSelected = _selectedTeam == team;
+    final isSelected = _failureChartTeam == team;
     return ChoiceChip(
       label: Text(label,
           style: TextStyle(
@@ -1558,13 +1566,28 @@ Future<void> _downloadExcel() async {
       materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 0),
       onSelected: (v) {
-        if (!v && isSelected) return; // 같은 거 다시 클릭 무시
-        if (_selectedTeam != team) {
-          setState(() => _selectedTeam = team);
-          _loadData();
+        if (!v && isSelected) return;
+        if (_failureChartTeam != team) {
+          setState(() => _failureChartTeam = team);
+          _loadFailureChartOnly();
         }
       },
     );
+  }
+
+  /// 불합격 차트(analysis API)만 따로 갱신 — 전체 페이지 재렌더 방지.
+  Future<void> _loadFailureChartOnly() async {
+    try {
+      final data = await _svc.getResultsAnalysis(
+        _year,
+        region: _selectedRegion,
+        team: _failureChartTeam,
+      );
+      if (!mounted) return;
+      setState(() => _analysis = data);
+    } catch (_) {
+      // 실패 시 기존 데이터 유지
+    }
   }
 
   Widget _donutChart({
@@ -2663,66 +2686,78 @@ class _DonutPainter extends CustomPainter {
     final outerRadius = math.min(size.width, size.height) / 2 - labelMargin;
     final innerRadius = outerRadius * 0.45;
 
+    // 단일 슬라이스 100% 케이스: arcTo(2π)가 그려지지 않는 Flutter 동작 우회.
+    // 외부 원 채우고 내부 흰 원으로 도넛 모양 만들기.
+    if (slices.length == 1) {
+      canvas.drawCircle(center, outerRadius, Paint()..color = slices[0].color);
+      canvas.drawCircle(center, innerRadius, Paint()..color = Colors.white);
+    }
+
     double startAngle = -math.pi / 2;
 
-    // 1단계: 슬라이스를 filled arc로 그리기
+    // 1단계: 슬라이스를 filled arc로 그리기 (단일 슬라이스는 위에서 이미 처리)
     final sliceAngles = <double>[];
     for (int i = 0; i < slices.length; i++) {
       final slice = slices[i];
       final sweepAngle = 2 * math.pi * (slice.value / total);
 
-      // 외부 arc path
-      final path = Path()
-        ..moveTo(
-          center.dx + innerRadius * math.cos(startAngle),
-          center.dy + innerRadius * math.sin(startAngle),
-        )
-        ..lineTo(
-          center.dx + outerRadius * math.cos(startAngle),
-          center.dy + outerRadius * math.sin(startAngle),
-        )
-        ..arcTo(
-          Rect.fromCircle(center: center, radius: outerRadius),
-          startAngle,
-          sweepAngle,
-          false,
-        )
-        ..lineTo(
-          center.dx + innerRadius * math.cos(startAngle + sweepAngle),
-          center.dy + innerRadius * math.sin(startAngle + sweepAngle),
-        )
-        ..arcTo(
-          Rect.fromCircle(center: center, radius: innerRadius),
-          startAngle + sweepAngle,
-          -sweepAngle,
-          false,
-        )
-        ..close();
+      // 단일 슬라이스는 위에서 그렸으므로 path 그리기 생략, 각도만 기록
+      if (slices.length > 1) {
+        // 외부 arc path
+        final path = Path()
+          ..moveTo(
+            center.dx + innerRadius * math.cos(startAngle),
+            center.dy + innerRadius * math.sin(startAngle),
+          )
+          ..lineTo(
+            center.dx + outerRadius * math.cos(startAngle),
+            center.dy + outerRadius * math.sin(startAngle),
+          )
+          ..arcTo(
+            Rect.fromCircle(center: center, radius: outerRadius),
+            startAngle,
+            sweepAngle,
+            false,
+          )
+          ..lineTo(
+            center.dx + innerRadius * math.cos(startAngle + sweepAngle),
+            center.dy + innerRadius * math.sin(startAngle + sweepAngle),
+          )
+          ..arcTo(
+            Rect.fromCircle(center: center, radius: innerRadius),
+            startAngle + sweepAngle,
+            -sweepAngle,
+            false,
+          )
+          ..close();
 
-      canvas.drawPath(path, Paint()..color = slice.color);
+        canvas.drawPath(path, Paint()..color = slice.color);
+      }
 
       sliceAngles.add(startAngle + sweepAngle / 2);
       startAngle += sweepAngle;
     }
 
-    // 2단계: 슬라이스 경계에 흰색 구분선
-    startAngle = -math.pi / 2;
-    final dividerPaint = Paint()
-      ..color = Colors.white
-      ..strokeWidth = 2.5
-      ..style = PaintingStyle.stroke;
-    for (int i = 0; i < slices.length; i++) {
-      final sweepAngle = 2 * math.pi * (slices[i].value / total);
-      startAngle += sweepAngle;
-      final innerPt = Offset(
-        center.dx + innerRadius * math.cos(startAngle),
-        center.dy + innerRadius * math.sin(startAngle),
-      );
-      final outerPt = Offset(
-        center.dx + outerRadius * math.cos(startAngle),
-        center.dy + outerRadius * math.sin(startAngle),
-      );
-      canvas.drawLine(innerPt, outerPt, dividerPaint);
+    // 2단계: 슬라이스 경계에 흰색 구분선 (단일 슬라이스는 경계가 없으므로 생략)
+    if (slices.length > 1) {
+      startAngle = -math.pi / 2;
+      final dividerPaint = Paint()
+        ..color = Colors.white
+        ..strokeWidth = 2.5
+        ..style = PaintingStyle.stroke;
+      for (int i = 0; i < slices.length; i++) {
+        final sweepAngle = 2 * math.pi * (slices[i].value / total);
+        startAngle += sweepAngle;
+        final innerPt = Offset(
+          center.dx + innerRadius * math.cos(startAngle),
+          center.dy + innerRadius * math.sin(startAngle),
+        );
+        final outerPt = Offset(
+          center.dx + outerRadius * math.cos(startAngle),
+          center.dy + outerRadius * math.sin(startAngle),
+        );
+        canvas.drawLine(innerPt, outerPt, dividerPaint);
+      }
     }
 
     // 2단계: 라벨 Y좌표 겹침 방지

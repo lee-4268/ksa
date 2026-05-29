@@ -4066,8 +4066,10 @@ async def inspection_progress(request: Request, year: int):
 async def inspection_progress_by_team(request: Request, year: int, region: str):
     """본부 하나의 팀별 진행률 (실적 화면 Map 우측 팀 리스트용).
 
-    팀 목록은 inspection_targets에서, 완료 카운트는 inspection_results_raw.ons팀에서.
-    매칭이 어긋날 수 있으므로 두 쪽 합집합으로 팀 키 추출.
+    팀 목록 소스 (합집합):
+    1) inspection_targets.품질개선팀 (year, access담당=region)
+    2) inspection_schedules.품질개선팀 (year, access담당=region) — targets에 비어있을 때 폴백
+    3) inspection_results_raw.ons팀 (year, region=region) — 완료 카운트와 결합
     """
     await _verify_auth(request)
     if not os.path.exists(_INSP_DB) or not region:
@@ -4075,12 +4077,20 @@ async def inspection_progress_by_team(request: Request, year: int, region: str):
 
     def _query():
         c = sqlite3.connect(_INSP_DB, timeout=60); c.row_factory = sqlite3.Row
+        # 1) targets에서 팀별 total
         target_rows = c.execute(
             'SELECT 품질개선팀, COUNT(*) AS cnt FROM inspection_targets '
             'WHERE year=? AND access담당=? AND 품질개선팀 IS NOT NULL AND 품질개선팀<>"" '
             'GROUP BY 품질개선팀',
             (year, region)
         ).fetchall()
+        # 2) schedules에서 팀 목록 (폴백: targets에 팀 정보 없을 수 있음)
+        schedule_teams = c.execute(
+            'SELECT DISTINCT 품질개선팀 FROM inspection_schedules '
+            'WHERE year=? AND access담당=? AND 품질개선팀 IS NOT NULL AND 품질개선팀<>""',
+            (year, region)
+        ).fetchall()
+        # 3) raw에서 ons팀별 완료 카운트
         done_rows = c.execute(
             'SELECT ons팀, COUNT(*) AS cnt FROM inspection_results_raw '
             'WHERE year=? AND region=? AND ons팀 IS NOT NULL AND ons팀<>"" '
@@ -4088,12 +4098,13 @@ async def inspection_progress_by_team(request: Request, year: int, region: str):
             (year, region)
         ).fetchall()
         c.close()
-        return target_rows, done_rows
+        return target_rows, schedule_teams, done_rows
 
-    target_rows, done_rows = await asyncio.to_thread(_query)
+    target_rows, schedule_teams, done_rows = await asyncio.to_thread(_query)
     total_map = {r['품질개선팀']: r['cnt'] for r in target_rows}
     done_map = {r['ons팀']: r['cnt'] for r in done_rows}
-    all_teams = sorted(set(total_map) | set(done_map))
+    schedule_team_set = {r['품질개선팀'] for r in schedule_teams}
+    all_teams = sorted(set(total_map) | set(done_map) | schedule_team_set)
     items = []
     for tm in all_teams:
         total = total_map.get(tm, 0)
@@ -4104,6 +4115,11 @@ async def inspection_progress_by_team(request: Request, year: int, region: str):
             "completed": completed,
             "percent": round(completed / total * 100, 1) if total > 0 else 0.0,
         })
+    logger.info(
+        f"progress-by-team(year={year}, region={region}): "
+        f"targets={len(target_rows)}, schedules={len(schedule_teams)}, "
+        f"results={len(done_rows)}, returned={len(items)}"
+    )
     return {"items": items}
 
 
