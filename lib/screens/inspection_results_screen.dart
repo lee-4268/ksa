@@ -59,6 +59,8 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
   Map<String, dynamic> _dashboard = {};
   Map<String, dynamic> _monthlyData = {};
   Map<String, dynamic> _analysis = {};
+  // 장비 Type별 차트는 본부/팀 선택과 무관하게 전체 데이터 유지
+  Map<String, dynamic> _analysisAll = {};
   Map<String, dynamic> _weeklyTrend = {};
   Map<String, dynamic> _regionWeeklyTrend = {};
   List<Map<String, dynamic>> _reportLines = [];
@@ -156,6 +158,12 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
           _svc.getResultsSummaryReport(_year, region: rgn, team: tm),
           // weekly-trend-by-region: region 지정 시 자동으로 그 본부 팀별 trend 반환
           _svc.getResultsWeeklyTrendByRegion(_year, region: rgn),
+          // 장비Type별 차트용 — 본부/팀 무관 전체 분석. region/team 둘 다 비어있는 응답이
+          // 이미 _analysis로 들어오는 경우(필터 미적용) 중복 호출 피하려고 조건부.
+          if (rgn.isNotEmpty || tm.isNotEmpty)
+            _svc.getResultsAnalysis(_year)
+          else
+            Future.value(<String, dynamic>{}),
         ]);
         if (!mounted) return;
         setState(() {
@@ -165,6 +173,10 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
           _reportLines =
               List<Map<String, dynamic>>.from(report['lines'] ?? []);
           _regionWeeklyTrend = results[3];
+          // 필터 없을 땐 _analysis가 곧 전체 데이터, 있을 땐 별도 호출 결과 사용
+          _analysisAll = (rgn.isNotEmpty || tm.isNotEmpty)
+              ? results[4]
+              : results[0];
         });
       } catch (_) {}
     } catch (e) {
@@ -2424,8 +2436,9 @@ Future<void> _downloadExcel() async {
   // ══════════════════════════════════════════════════════════
 
   Widget _buildEquipTypeCrosstab() {
+    // 장비 Type별 차트는 본부/팀 필터 무관하게 전체 데이터 사용
     final crosstab = List<Map<String, dynamic>>.from(
-        _analysis['장비타입별_크로스탭'] ?? []);
+        _analysisAll['장비타입별_크로스탭'] ?? []);
     if (crosstab.isEmpty) return const SizedBox.shrink();
 
     // Collect all regions across all rows
@@ -2530,8 +2543,9 @@ Future<void> _downloadExcel() async {
   // ══════════════════════════════════════════════════════════
 
   Widget _buildEquipTypeSummary() {
+    // 장비 Type별 차트는 본부/팀 필터 무관하게 전체 데이터 사용
     final crosstab = List<Map<String, dynamic>>.from(
-        _analysis['장비타입별_크로스탭'] ?? []);
+        _analysisAll['장비타입별_크로스탭'] ?? []);
     // 합계 행 제외
     final items = crosstab.where((r) => r['타입'] != '성능불합격(건)').toList();
     if (items.isEmpty) return const SizedBox.shrink();
