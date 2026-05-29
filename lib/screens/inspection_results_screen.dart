@@ -642,6 +642,12 @@ Future<void> _downloadExcel() async {
                         child: SizedBox(
                           height: 550,
                           child: DashboardScreen(
+                            // 고정 키: 부모 트리에서 위 형제 위젯(필터 적용 중 줄)이
+                            // 조건부로 추가/제거되면서 Column children 위치가 바뀌어도
+                            // 같은 element로 유지되어 unmount/remount 방지 — 진행 중인
+                            // 비동기 API 호출(_loadTeamsForRegion)이 mounted=false로 버려지는
+                            // 첫 클릭 race condition 해결.
+                            key: const ValueKey('dashboard_in_results'),
                             showStats: false,
                             selectedRegion: _selectedRegion,
                             selectedTeam: _selectedTeam,
