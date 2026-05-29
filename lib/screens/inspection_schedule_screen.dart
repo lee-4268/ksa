@@ -1806,29 +1806,40 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
               _sheetDropdown(),
               SizedBox(
                 width: 280,
+                height: 40,
                 child: TextField(
                   controller: _searchCtrl,
                   onChanged: (v) => setState(() => _pSearch = v),
                   decoration: InputDecoration(
                     hintText: '호출명칭, 허가번호 또는 주소 (복수검색: 쉼표/공백 구분)',
-                    hintStyle: TextStyle(fontSize: 13, color: Colors.grey.shade400),
+                    hintStyle: const TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)),
                     isDense: true,
-                    prefixIcon: Icon(Icons.search, size: 18, color: Colors.grey.shade400),
+                    prefixIcon: const Icon(Icons.search, size: 18, color: Color(0xFF9CA3AF)),
                     filled: true,
                     fillColor: const Color(0xFFF9FAFB),
                     border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(10),
-                      borderSide: BorderSide(color: Colors.grey.shade300),
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: const BorderSide(color: Color(0xFFE5E7EB)),
                     ),
                     enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(10),
-                      borderSide: BorderSide(color: Colors.grey.shade300),
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: const BorderSide(color: Color(0xFFE5E7EB)),
                     ),
                     focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(10),
+                      borderRadius: BorderRadius.circular(8),
                       borderSide: BorderSide(color: _primary, width: 1.5),
                     ),
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
+                    suffixIcon: _searchCtrl.text.isNotEmpty
+                        ? IconButton(
+                            icon: const Icon(Icons.cancel, size: 16, color: Color(0xFF9CA3AF)),
+                            onPressed: () {
+                              _searchCtrl.clear();
+                              setState(() => _pSearch = '');
+                              if (_aSearch.isNotEmpty) _applyFilters();
+                            },
+                          )
+                        : null,
                   ),
                   style: const TextStyle(fontSize: 13),
                   onSubmitted: (_) => _applyFilters(),
@@ -1994,25 +2005,33 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                 },
               )),
               const SizedBox(width: 4),
-              ElevatedButton(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: _primary, foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  elevation: 0,
+              SizedBox(
+                height: 40,
+                child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF1F2937),
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    elevation: 0,
+                  ),
+                  onPressed: _applyFilters,
+                  child: const Text('적용', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
                 ),
-                onPressed: _applyFilters,
-                child: const Text('적용', style: TextStyle(fontSize: 13)),
               ),
-              OutlinedButton(
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: Colors.grey.shade600,
-                  side: BorderSide(color: Colors.grey.shade300),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              SizedBox(
+                height: 40,
+                child: OutlinedButton(
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: const Color(0xFF6B7280),
+                    side: const BorderSide(color: Color(0xFFE5E7EB)),
+                    backgroundColor: const Color(0xFFF9FAFB),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                  ),
+                  onPressed: _resetFilters,
+                  child: const Text('초기화', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
                 ),
-                onPressed: _resetFilters,
-                child: const Text('초기화', style: TextStyle(fontSize: 13)),
               ),
               OutlinedButton.icon(
                 icon: const Icon(Icons.file_download, size: 16),
@@ -2115,29 +2134,30 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
           }),
           // 월 필터 (기본: 현재 ±1개월)
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+            height: 40,
+            padding: const EdgeInsets.symmetric(horizontal: 10),
             decoration: BoxDecoration(
-              color: Colors.white,
+              color: const Color(0xFFF9FAFB),
               border: Border.all(
-                color: _mMonth.isNotEmpty ? _primary : Colors.grey.shade300,
-                width: _mMonth.isNotEmpty ? 1.5 : 1,
+                color: _mMonth.isNotEmpty ? _primary : const Color(0xFFE5E7EB),
               ),
-              borderRadius: BorderRadius.circular(10),
+              borderRadius: BorderRadius.circular(8),
             ),
             child: DropdownButtonHideUnderline(
               child: DropdownButton<String>(
                 value: monthOptions.contains(_mMonth) ? _mMonth : '',
                 isDense: true,
-                icon: Icon(Icons.arrow_drop_down,
-                    color: _mMonth.isNotEmpty ? _primary : Colors.grey.shade500, size: 20),
+                icon: Icon(Icons.unfold_more,
+                    color: _mMonth.isNotEmpty ? _primary : const Color(0xFF9CA3AF), size: 16),
                 dropdownColor: Colors.white,
-                borderRadius: BorderRadius.circular(12),
+                borderRadius: BorderRadius.circular(10),
                 style: TextStyle(
-                    color: _mMonth.isNotEmpty ? _primary : Colors.black87, fontSize: 13),
+                    color: _mMonth.isNotEmpty ? _primary : const Color(0xFF111827),
+                    fontSize: 13, fontWeight: FontWeight.w500),
                 hint: Text('월 ($monthHint)',
                     style: TextStyle(
                         fontSize: 13,
-                        color: _mMonth.isEmpty ? _primary.withValues(alpha: 0.8) : Colors.black87)),
+                        color: _mMonth.isEmpty ? _primary.withValues(alpha: 0.8) : const Color(0xFF111827))),
                 items: monthOptions.map((m) => DropdownMenuItem(
                   value: m,
                   child: Text(
@@ -2174,21 +2194,21 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
 
   Widget _yearDropdown() {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      height: 40,
+      padding: const EdgeInsets.symmetric(horizontal: 10),
       decoration: BoxDecoration(
-        color: Colors.white,
-        border: Border.all(color: Colors.grey.shade300),
-        borderRadius: BorderRadius.circular(10),
+        color: const Color(0xFFF9FAFB),
+        border: Border.all(color: const Color(0xFFE5E7EB)),
+        borderRadius: BorderRadius.circular(8),
       ),
       child: DropdownButtonHideUnderline(
         child: DropdownButton<int>(
           value: _year,
           isDense: true,
-          icon: Icon(Icons.arrow_drop_down, color: _primary, size: 20),
+          icon: const Icon(Icons.unfold_more, color: Color(0xFF9CA3AF), size: 16),
           dropdownColor: Colors.white,
-
-          borderRadius: BorderRadius.circular(12),
-          style: const TextStyle(color: Colors.black87, fontSize: 13),
+          borderRadius: BorderRadius.circular(10),
+          style: const TextStyle(color: Color(0xFF111827), fontSize: 13, fontWeight: FontWeight.w500),
           items: List.generate(5, (i) => DateTime.now().year - 1 + i)
               .map((y) => DropdownMenuItem(value: y, child: Text('$y년')))
               .toList(),
@@ -2214,21 +2234,21 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
 
   Widget _sheetDropdown() {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      height: 40,
+      padding: const EdgeInsets.symmetric(horizontal: 10),
       decoration: BoxDecoration(
-        color: Colors.white,
-        border: Border.all(color: Colors.grey.shade300),
-        borderRadius: BorderRadius.circular(10),
+        color: const Color(0xFFF9FAFB),
+        border: Border.all(color: const Color(0xFFE5E7EB)),
+        borderRadius: BorderRadius.circular(8),
       ),
       child: DropdownButtonHideUnderline(
         child: DropdownButton<String>(
           value: _sheet,
           isDense: true,
-          icon: Icon(Icons.arrow_drop_down, color: _primary, size: 20),
+          icon: const Icon(Icons.unfold_more, color: Color(0xFF9CA3AF), size: 16),
           dropdownColor: Colors.white,
-
-          borderRadius: BorderRadius.circular(12),
-          style: const TextStyle(color: Colors.black87, fontSize: 13),
+          borderRadius: BorderRadius.circular(10),
+          style: const TextStyle(color: Color(0xFF111827), fontSize: 13, fontWeight: FontWeight.w500),
           items: const [
             DropdownMenuItem(value: 'all', child: Text('전체')),
             DropdownMenuItem(value: 'SKT', child: Text('정기검사')),
@@ -2253,29 +2273,29 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
       return displayMap?[v] ?? v;
     }
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      height: 40,
+      padding: const EdgeInsets.symmetric(horizontal: 10),
       decoration: BoxDecoration(
-        color: Colors.white,
-        border: Border.all(color: safeValue.isNotEmpty ? _primary : Colors.grey.shade300),
-        borderRadius: BorderRadius.circular(10),
+        color: const Color(0xFFF9FAFB),
+        border: Border.all(color: safeValue.isNotEmpty ? _primary : const Color(0xFFE5E7EB)),
+        borderRadius: BorderRadius.circular(8),
       ),
       child: DropdownButtonHideUnderline(
         child: DropdownButton<String>(
           value: safeValue,
           isDense: true,
-          icon: Icon(Icons.arrow_drop_down,
-              color: safeValue.isNotEmpty ? _primary : Colors.grey, size: 20),
+          icon: Icon(Icons.unfold_more,
+              color: safeValue.isNotEmpty ? _primary : const Color(0xFF9CA3AF), size: 16),
           dropdownColor: Colors.white,
-
-          borderRadius: BorderRadius.circular(12),
-          style: const TextStyle(color: Colors.black87, fontSize: 13),
+          borderRadius: BorderRadius.circular(10),
+          style: const TextStyle(color: Color(0xFF111827), fontSize: 13, fontWeight: FontWeight.w500),
           items: options
               .map((v) => DropdownMenuItem(
                     value: v,
                     child: Text(
                       display(v),
                       style: TextStyle(
-                          color: v.isEmpty ? Colors.grey.shade500 : Colors.black87),
+                          color: v.isEmpty ? const Color(0xFF9CA3AF) : const Color(0xFF111827)),
                     ),
                   ))
               .toList(),
@@ -2301,19 +2321,20 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
         if (result != null) onChanged(result);
       },
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        height: 40,
+        padding: const EdgeInsets.symmetric(horizontal: 12),
         decoration: BoxDecoration(
-          color: Colors.white,
-          border: Border.all(color: hasVal ? _primary : Colors.grey.shade300),
-          borderRadius: BorderRadius.circular(10),
+          color: const Color(0xFFF9FAFB),
+          border: Border.all(color: hasVal ? _primary : const Color(0xFFE5E7EB)),
+          borderRadius: BorderRadius.circular(8),
         ),
         child: Row(mainAxisSize: MainAxisSize.min, children: [
           Text(displayText,
-              style: TextStyle(fontSize: 13,
-                  color: hasVal ? _primary : Colors.grey.shade600)),
+              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500,
+                  color: hasVal ? _primary : const Color(0xFF6B7280))),
           const SizedBox(width: 4),
-          Icon(Icons.arrow_drop_down,
-              color: hasVal ? _primary : Colors.grey, size: 20),
+          Icon(Icons.unfold_more,
+              color: hasVal ? _primary : const Color(0xFF9CA3AF), size: 16),
         ]),
       ),
     );
