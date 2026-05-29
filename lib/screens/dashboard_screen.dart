@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/auth_service.dart';
+import '../widgets/app_loader.dart';
 import '../widgets/korea_map_widget.dart';
 import '../services/inspection_service.dart';
 
@@ -98,7 +99,6 @@ class _DashboardScreenState extends State<DashboardScreen>
     try {
       final items = await _inspSvc.getProgressByTeam(_progressYear, regionShortName);
       if (!mounted) return;
-      // 진행률 내림차순 정렬 (본부 카드 순위 매기기와 동일한 의미)
       items.sort((a, b) {
         final pa = (a['percent'] as num?)?.toDouble() ?? 0.0;
         final pb = (b['percent'] as num?)?.toDouble() ?? 0.0;
@@ -617,9 +617,9 @@ class _DashboardScreenState extends State<DashboardScreen>
 
   Widget _buildTeamList(RegionData region) {
     if (_teamsLoading) {
-      return const Padding(
-        padding: EdgeInsets.all(24),
-        child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+      return Padding(
+        padding: const EdgeInsets.all(24),
+        child: AppLoader.centered(),
       );
     }
     if (_teams.isEmpty) {
