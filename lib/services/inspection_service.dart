@@ -282,6 +282,19 @@ class InspectionService {
     }
   }
 
+  /// admin/manager 전용 — 강등 포함 어떤 상태로든 강제 변경
+  Future<void> forceTransitionStatus(String pk, String toStatus, {String memo = ''}) async {
+    final resp = await http.patch(
+      Uri.parse('$_baseUrl/inspection/schedule/${Uri.encodeComponent(pk)}/status-force'),
+      headers: _headers,
+      body: json.encode({'to_status': toStatus, 'memo': memo}),
+    ).timeout(_apiTimeout);
+    if (resp.statusCode != 200) {
+      final b = json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+      throw Exception(b['detail'] ?? '상태 강제 변경 실패');
+    }
+  }
+
   Future<Map<String, dynamic>> transitionStatusBulk(
       List<String> schedulePks, String toStatus, {String memo = ''}) async {
     final resp = await http.post(

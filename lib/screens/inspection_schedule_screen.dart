@@ -974,8 +974,8 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     }
   }
 
-  // 워크플로우 상태 배지
-  Widget _buildStatusBadge(String? status) {
+  // 워크플로우 상태 배지. [schedulePk]가 주어지고 admin이면 클릭 시 수동 변경 다이얼로그.
+  Widget _buildStatusBadge(String? status, {String? schedulePk}) {
     final s = (status ?? 'REGISTERED').isEmpty ? 'REGISTERED' : status!;
     final (label, color) = switch (s) {
       'PRE_CHECKED' => ('사전점검완료', const Color(0xFF00897B)),
@@ -989,7 +989,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
       'INSPECTED' => ('수검완료', const Color(0xFF2D3436)),
       _ => (s, const Color(0xFF6E7780)),
     };
-    return Container(
+    final badge = Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(
         color: color.withValues(alpha: 0.12),
@@ -999,6 +999,106 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
       child: Text(label,
           style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: color)),
     );
+    if (_isAdmin && schedulePk != null && schedulePk.isNotEmpty) {
+      return InkWell(
+        borderRadius: BorderRadius.circular(10),
+        onTap: () => _showStatusChangeDialog(schedulePk, s),
+        child: badge,
+      );
+    }
+    return badge;
+  }
+
+  static const List<(String, String)> _wfChoices = [
+    ('REGISTERED', '등록됨'),
+    ('PRE_CHECK', '사전점검중'),
+    ('PRE_CHECK_DONE', '점검완료'),
+    ('CHANGE_FILING', '변경개설중'),
+    ('RE_CHECK', '재점검대기'),
+    ('REPORT_ISSUED', '내역서발급'),
+    ('SUBMITTED', '접수완료'),
+    ('INSPECTED', '수검완료'),
+  ];
+
+  Future<void> _showStatusChangeDialog(String schedulePk, String currentStatus) async {
+    String selected = currentStatus;
+    final memoCtrl = TextEditingController();
+    final result = await showDialog<String>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSt) => AlertDialog(
+          backgroundColor: Colors.white,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          title: const Text('상태 수동 변경', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+          content: SizedBox(
+            width: 340,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(color: const Color(0xFFFEF3C7), borderRadius: BorderRadius.circular(6)),
+                  child: const Row(children: [
+                    Icon(Icons.warning_amber_rounded, size: 16, color: Color(0xFFB45309)),
+                    SizedBox(width: 6),
+                    Expanded(child: Text(
+                      'admin 강제 변경: 일반 워크플로우 가드(강등 차단)를 우회합니다.',
+                      style: TextStyle(fontSize: 11, color: Color(0xFF92400E), fontWeight: FontWeight.w500),
+                    )),
+                  ]),
+                ),
+                const SizedBox(height: 12),
+                ..._wfChoices.map((c) => RadioListTile<String>(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  value: c.$1,
+                  groupValue: selected,
+                  onChanged: (v) => setSt(() => selected = v ?? selected),
+                  title: Text(c.$2, style: const TextStyle(fontSize: 13)),
+                  subtitle: c.$1 == currentStatus
+                      ? const Text('현재 상태', style: TextStyle(fontSize: 10, color: Color(0xFF6B7280)))
+                      : null,
+                  activeColor: _primary,
+                )),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: memoCtrl,
+                  decoration: const InputDecoration(
+                    labelText: '변경 사유 (선택)',
+                    isDense: true,
+                    border: OutlineInputBorder(),
+                  ),
+                  style: const TextStyle(fontSize: 12),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('취소')),
+            ElevatedButton(
+              onPressed: selected == currentStatus ? null : () => Navigator.pop(ctx, selected),
+              style: ElevatedButton.styleFrom(backgroundColor: _primary, foregroundColor: Colors.white),
+              child: const Text('변경'),
+            ),
+          ],
+        ),
+      ),
+    );
+    memoCtrl.dispose();
+    if (result == null || result == currentStatus) return;
+    if (!mounted) return;
+    final dialog = ProgressDialog(context);
+    dialog.show(message: '상태 변경 중...');
+    try {
+      await _svc.forceTransitionStatus(schedulePk, result, memo: memoCtrl.text.trim());
+      if (!mounted) return;
+      await dialog.complete(message: '상태가 변경되었습니다');
+      _loadAll();
+    } catch (e) {
+      if (!mounted) return;
+      await dialog.error(message: '실패: $e');
+    }
   }
 
   // ── 전산비교 화면 이동 ─────────────────────────────────────
@@ -2570,9 +2670,11 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     final week = _scheduleWeekMap[licenseNo] ?? '';
     final status = _scheduleStatusMap[licenseNo];
     final submission = _scheduleSubmissionMap[licenseNo] ?? '';
+    final pk = _schedulePkMap[licenseNo];
     if (week.isEmpty && status == null) {
       final preCheck = _targetPreCheckMap[licenseNo] ?? '';
       if (preCheck.isNotEmpty) {
+        // preCheck는 일정 등록 전 단계라 schedulePk 없음 — admin 클릭 비활성
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
@@ -2583,8 +2685,10 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
       return const SizedBox.shrink();
     }
     final showSubmission = status == 'SUBMITTED' && submission.isNotEmpty;
-    final needsRecheck =
-        status == 'INSPECTED' && _scheduleNeedsRecheck.contains(licenseNo);
+    // 재점검 필요 표시: 검사결과가 합격이 아니면 status에 관계없이 표시.
+    // (이전엔 INSPECTED 일정에만 표시했는데, status가 강등된 일정에서도 합격 여부는
+    // 변하지 않으므로 같이 보여줘야 운영자가 이상 케이스를 발견 가능)
+    final needsRecheck = _scheduleNeedsRecheck.contains(licenseNo);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
@@ -2598,7 +2702,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
           // SUBMITTED → 배지 옆에 접수번호 / INSPECTED+재점검 → 배지 옆에 재점검 칩 (셀 높이 제한 안 침범)
           showSubmission
               ? Row(mainAxisSize: MainAxisSize.min, children: [
-                  _buildStatusBadge(status),
+                  _buildStatusBadge(status, schedulePk: pk),
                   const SizedBox(width: 4),
                   Flexible(
                     child: Tooltip(
@@ -2613,7 +2717,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                 ])
               : needsRecheck
                   ? Row(mainAxisSize: MainAxisSize.min, children: [
-                      _buildStatusBadge(status),
+                      _buildStatusBadge(status, schedulePk: pk),
                       const SizedBox(width: 4),
                       Tooltip(
                         message: '검사 결과 합격이 아님 — 재점검 필요',
@@ -2631,7 +2735,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                         ),
                       ),
                     ])
-                  : _buildStatusBadge(status),
+                  : _buildStatusBadge(status, schedulePk: pk),
         ],
       ],
     );

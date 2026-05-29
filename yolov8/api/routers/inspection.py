@@ -3155,6 +3155,52 @@ async def inspection_schedule_transition(pk: str, request: Request, req: WfTrans
     return {"success": True}
 
 
+@router.patch("/inspection/schedule/{pk:path}/status-force")
+async def inspection_schedule_force_transition(pk: str, request: Request, req: WfTransitionReq):
+    """admin 전용 강제 상태 변경 — 강등 포함 어떤 전이든 허용.
+
+    일반 /status endpoint와 달리 _WF_RANK 가드도 우회. 운영 중 잘못된 전이가
+    일어났을 때 수동으로 되돌리거나 임의 상태 강제 변경하는 용도.
+    상태 뱃지 클릭 → admin/manager에게만 노출되는 다이얼로그에서 호출.
+    """
+    empno = await _verify_auth(request)
+    role = await asyncio.to_thread(_get_user_role_sync, empno)
+    if role not in ("admin", "manager"):
+        raise HTTPException(403, "admin/manager 권한 필요")
+    if req.to_status not in WF_VALID:
+        raise HTTPException(400, f"잘못된 상태: {req.to_status}")
+
+    def _force():
+        c = sqlite3.connect(_INSP_DB, timeout=60)
+        try:
+            row = c.execute(
+                'SELECT workflow_status FROM inspection_schedules WHERE pk=?',
+                (pk,)).fetchone()
+            if not row:
+                return None, "일정 없음"
+            cur = row[0] or WF_REGISTERED
+            if cur == req.to_status:
+                return None, "이미 해당 상태"
+            now = datetime.now(timezone.utc).isoformat()
+            c.execute(
+                'UPDATE inspection_schedules SET workflow_status=?, '
+                'status_updated_at=?, status_updated_by=? WHERE pk=?',
+                (req.to_status, now, empno, pk))
+            memo = req.memo or f"admin 수동 변경 ({cur} → {req.to_status})"
+            _wf_record_log_sync(c, pk, cur, req.to_status, empno, memo)
+            c.commit()
+            return cur, "ok"
+        finally:
+            c.close()
+
+    from_status, msg = await asyncio.to_thread(_force)
+    if from_status is None and msg != "ok":
+        raise HTTPException(400, msg)
+    await asyncio.to_thread(_record_audit_log_sync,
+                            "wf_transition_force", "inspection_schedule", pk, empno)
+    return {"success": True, "from": from_status, "to": req.to_status}
+
+
 @router.post("/inspection/schedule/transition-bulk")
 async def inspection_schedule_transition_bulk(request: Request, req: WfBulkTransitionReq):
     empno = await _verify_auth(request)
