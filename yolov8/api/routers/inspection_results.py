@@ -687,8 +687,15 @@ def _parse_irr_xlsx_sync(file_bytes: bytes, year_hint: int, uploaded_by: str):
     return db_rows, primary_region, year_hint
 
 
-def _irr_dashboard_calc_sync(year: int, region: str = "", month: str = ""):
-    """검사실적 대시보드 집계 (동기)."""
+def _irr_dashboard_calc_sync(year: int, region: str = "", month: str = "", team: str = "", group_by: str = ""):
+    """검사실적 대시보드 집계 (동기).
+
+    그룹화 규칙:
+    - group_by="" + region="" → 본부 단위 (기본)
+    - group_by="" + region 지정 → 본부 한 곳 단일 집계
+    - group_by="team" + region 지정 → 그 본부의 팀별(ons팀) 집계
+    - team 지정 → 그 팀 한 곳 단일 집계 (group_by 무시)
+    """
     conn = sqlite3.connect(_INSP_DB, timeout=60)
     conn.row_factory = sqlite3.Row
     try:
@@ -700,23 +707,47 @@ def _irr_dashboard_calc_sync(year: int, region: str = "", month: str = ""):
         if month:
             base_where += " AND 월=?"
             params.append(month)
+        if team:
+            base_where += " AND ons팀=?"
+            params.append(team)
 
-        regions = [r[0] for r in conn.execute(
-            f'SELECT DISTINCT region FROM inspection_results_raw WHERE {base_where} ORDER BY region',
-            params
-        ).fetchall()]
+        # 그룹 키 결정
+        if team:
+            group_keys = [team]
+            key_mode = "team"
+        elif group_by == "team" and region:
+            group_keys = [r[0] for r in conn.execute(
+                f"SELECT DISTINCT ons팀 FROM inspection_results_raw WHERE {base_where} "
+                f"AND ons팀 IS NOT NULL AND ons팀<>'' ORDER BY ons팀",
+                params
+            ).fetchall()]
+            key_mode = "team"
+        else:
+            group_keys = [r[0] for r in conn.execute(
+                f"SELECT DISTINCT region FROM inspection_results_raw WHERE {base_where} ORDER BY region",
+                params
+            ).fetchall()]
+            key_mode = "region"
 
         result_regions = []
-        for rg in regions:
-            if region:
+        for gk in group_keys:
+            if team:
                 rg_where = base_where
                 rg_params = list(params)
+            elif key_mode == "team":
+                rg_where = base_where + " AND ons팀=?"
+                rg_params = list(params) + [gk]
             else:
-                rg_where = "year=? AND region=?"
-                rg_params = [year, rg]
-                if month:
-                    rg_where += " AND 월=?"
-                    rg_params.append(month)
+                # 본부 단위 — region 없을 때는 base_where에 region이 없으므로 추가
+                if region:
+                    rg_where = base_where
+                    rg_params = list(params)
+                else:
+                    rg_where = "year=? AND region=?"
+                    rg_params = [year, gk]
+                    if month:
+                        rg_where += " AND 월=?"
+                        rg_params.append(month)
 
             수검국소 = conn.execute(
                 f'SELECT COUNT(*) FROM inspection_results_raw WHERE {rg_where}', rg_params
@@ -747,7 +778,7 @@ def _irr_dashboard_calc_sync(year: int, region: str = "", month: str = ""):
             서류합격 = 수검국소 - 서류불합격
 
             result_regions.append({
-                "name": rg,
+                "name": gk,
                 "수검국소": 수검국소,
                 "완료": 완료,
                 "시기조정": 시기조정,
@@ -816,7 +847,14 @@ def _irr_dashboard_calc_sync(year: int, region: str = "", month: str = ""):
         except Exception:
             pass
 
-        return {"regions": result_regions, "total": total, "target": target, "last_upload": last_upload}
+        resolved_group_by = "team" if (team or (group_by == "team" and region)) else "region"
+        return {
+            "regions": result_regions,
+            "total": total,
+            "target": target,
+            "last_upload": last_upload,
+            "groupBy": resolved_group_by,
+        }
     finally:
         conn.close()
 
@@ -892,23 +930,44 @@ async def inspection_results_upload(request: Request, file: UploadFile = File(..
 
 
 @router.get("/inspection-results/dashboard")
-async def inspection_results_dashboard(request: Request, year: int = Query(...), region: str = Query("")):
-    """검사실적 대시보드 — 지역별 합격/불합격 집계."""
+async def inspection_results_dashboard(
+    request: Request,
+    year: int = Query(...),
+    region: str = Query(""),
+    team: str = Query(""),
+    groupBy: str = Query(""),
+):
+    """검사실적 대시보드 — 지역별 합격/불합격 집계.
+
+    파라미터:
+    - region: 본부 필터 (예: '강남')
+    - team: 팀 필터 (예: '평택품질개선팀')
+    - groupBy='team' + region 지정 → 그 본부의 팀별 분해
+    """
     await _verify_auth(request)
     if not os.path.exists(_INSP_DB):
-        return {"regions": [], "total": {}, "target": {}}
-    return await asyncio.to_thread(_irr_dashboard_calc_sync, year, region=region)
+        return {"regions": [], "total": {}, "target": {}, "groupBy": "region"}
+    return await asyncio.to_thread(
+        _irr_dashboard_calc_sync, year, region=region, team=team, group_by=groupBy
+    )
 
 
 @router.get("/inspection-results/dashboard/monthly")
 async def inspection_results_dashboard_monthly(
-    request: Request, year: int = Query(...), month: str = Query("")
+    request: Request,
+    year: int = Query(...),
+    month: str = Query(""),
+    region: str = Query(""),
+    team: str = Query(""),
+    groupBy: str = Query(""),
 ):
     """검사실적 월별 대시보드."""
     await _verify_auth(request)
     if not os.path.exists(_INSP_DB):
-        return {"regions": [], "total": {}, "target": {}}
-    return await asyncio.to_thread(_irr_dashboard_calc_sync, year, month=month)
+        return {"regions": [], "total": {}, "target": {}, "groupBy": "region"}
+    return await asyncio.to_thread(
+        _irr_dashboard_calc_sync, year, region=region, month=month, team=team, group_by=groupBy
+    )
 
 
 @router.get("/inspection-results/trend")
@@ -995,8 +1054,16 @@ async def inspection_results_raw_list(
 
 
 @router.get("/inspection-results/analysis")
-async def inspection_results_analysis(request: Request, year: int = Query(...), region: str = Query("")):
-    """불합격 사유 분석 (성능/서류/장비타입별)."""
+async def inspection_results_analysis(
+    request: Request,
+    year: int = Query(...),
+    region: str = Query(""),
+    team: str = Query(""),
+):
+    """불합격 사유 분석 (성능/서류/장비타입별).
+
+    team 지정 시 inspection_targets와 JOIN해서 그 팀에 속한 허가번호만 집계.
+    """
     await _verify_auth(request)
 
     def _analysis():
@@ -1004,44 +1071,55 @@ async def inspection_results_analysis(request: Request, year: int = Query(...), 
             return {"성능불합격": [], "서류불합격": [], "장비타입별": []}
         conn = sqlite3.connect(_INSP_DB, timeout=60)
         try:
-            rgn_filter = " AND region=?" if region else ""
-            rgn_params = (year, region) if region else (year,)
+            base_where = "year=?"
+            base_params: list = [year]
+            if region:
+                base_where += " AND region=?"
+                base_params.append(region)
+            if team:
+                base_where += " AND ons팀=?"
+                base_params.append(team)
 
             perf_rows = conn.execute(
-                "SELECT 간략불합격, COUNT(*) as cnt FROM inspection_results_raw "
-                f"WHERE year=?{rgn_filter} AND 성능서류='성능' AND 간략불합격 IS NOT NULL AND 간략불합격 != '' "
-                "GROUP BY 간략불합격 ORDER BY cnt DESC",
-                rgn_params
+                f"SELECT 간략불합격, COUNT(*) as cnt FROM inspection_results_raw "
+                f"WHERE {base_where} AND 성능서류='성능' "
+                f"AND 간략불합격 IS NOT NULL AND 간략불합격 != '' "
+                f"GROUP BY 간략불합격 ORDER BY cnt DESC",
+                base_params
             ).fetchall()
             perf_total = sum(r[1] for r in perf_rows) or 1
             성능불합격 = [{"사유": r[0], "건수": r[1], "비율": round(r[1]/perf_total, 4)} for r in perf_rows]
 
             doc_rows = conn.execute(
-                "SELECT 간략불합격, COUNT(*) as cnt FROM inspection_results_raw "
-                f"WHERE year=?{rgn_filter} AND 성능서류='서류' AND 간략불합격 IS NOT NULL AND 간략불합격 != '' "
-                "GROUP BY 간략불합격 ORDER BY cnt DESC",
-                rgn_params
+                f"SELECT 간략불합격, COUNT(*) as cnt FROM inspection_results_raw "
+                f"WHERE {base_where} AND 성능서류='서류' "
+                f"AND 간략불합격 IS NOT NULL AND 간략불합격 != '' "
+                f"GROUP BY 간략불합격 ORDER BY cnt DESC",
+                base_params
             ).fetchall()
             doc_total = sum(r[1] for r in doc_rows) or 1
             서류불합격 = [{"사유": r[0], "건수": r[1], "비율": round(r[1]/doc_total, 4)} for r in doc_rows]
 
             equip_rows = conn.execute(
-                "SELECT 장비타입간소화, COUNT(*) as cnt FROM inspection_results_raw "
-                f"WHERE year=?{rgn_filter} AND 성능서류='성능' AND 장비타입간소화 IS NOT NULL AND 장비타입간소화 != '' "
-                "GROUP BY 장비타입간소화 ORDER BY cnt DESC",
-                rgn_params
+                f"SELECT 장비타입간소화, COUNT(*) as cnt FROM inspection_results_raw "
+                f"WHERE {base_where} AND 성능서류='성능' "
+                f"AND 장비타입간소화 IS NOT NULL AND 장비타입간소화 != '' "
+                f"GROUP BY 장비타입간소화 ORDER BY cnt DESC",
+                base_params
             ).fetchall()
             equip_total = sum(r[1] for r in equip_rows) or 1
             장비타입별 = [{"타입": r[0], "건수": r[1], "비율": round(r[1]/equip_total, 4)} for r in equip_rows]
 
             top3_types = [r["타입"] for r in 장비타입별[:3]]
             crosstab = []
-            if top3_types:
+            # 크로스탭은 본부 단위 비교용이라 team 지정 시 의미가 없어 생략
+            if top3_types and not team:
                 placeholders = ",".join("?" for _ in top3_types)
-                ct_params = list(rgn_params) + top3_types
+                ct_params = list(base_params) + top3_types
                 ct_rows = conn.execute(
                     f"SELECT 장비타입간소화, region, COUNT(*) as cnt FROM inspection_results_raw "
-                    f"WHERE year=?{rgn_filter} AND 성능서류='성능' AND 장비타입간소화 IN ({placeholders}) "
+                    f"WHERE {base_where} AND 성능서류='성능' "
+                    f"AND 장비타입간소화 IN ({placeholders}) "
                     f"AND 장비타입간소화 IS NOT NULL AND 장비타입간소화 != '' "
                     f"GROUP BY 장비타입간소화, region ORDER BY 장비타입간소화",
                     ct_params
@@ -1057,9 +1135,9 @@ async def inspection_results_analysis(request: Request, year: int = Query(...), 
                     crosstab.append({"타입": typ, "본부별": row_data, "총합계": total_ct})
                 total_rows = conn.execute(
                     f"SELECT region, COUNT(*) FROM inspection_results_raw "
-                    f"WHERE year=?{rgn_filter} AND 성능서류='성능' AND region != '' "
+                    f"WHERE {base_where} AND 성능서류='성능' AND region != '' "
                     f"GROUP BY region",
-                    rgn_params
+                    base_params
                 ).fetchall()
                 total_row = {rg: cnt for rg, cnt in total_rows}
                 crosstab.append({"타입": "성능불합격(건)", "본부별": total_row, "총합계": sum(total_row.values())})
@@ -1072,7 +1150,12 @@ async def inspection_results_analysis(request: Request, year: int = Query(...), 
 
 
 @router.get("/inspection-results/weekly-trend")
-async def inspection_results_weekly_trend(request: Request, year: int = Query(...), region: str = Query("")):
+async def inspection_results_weekly_trend(
+    request: Request,
+    year: int = Query(...),
+    region: str = Query(""),
+    team: str = Query(""),
+):
     """주차별 합격율 추이."""
     await _verify_auth(request)
 
@@ -1081,15 +1164,21 @@ async def inspection_results_weekly_trend(request: Request, year: int = Query(..
             return {"weeks": []}
         conn = sqlite3.connect(_INSP_DB, timeout=60)
         try:
-            rgn_f = " AND region=?" if region else ""
-            rgn_p = (year, region) if region else (year,)
+            where = "year=?"
+            params: list = [year]
+            if region:
+                where += " AND region=?"
+                params.append(region)
+            if team:
+                where += " AND ons팀=?"
+                params.append(team)
             rows = conn.execute(
                 "SELECT 주차별, COUNT(*) as cnt, "
                 "SUM(CASE WHEN 성능서류='성능' THEN 1 ELSE 0 END) as 성능불, "
                 "SUM(CASE WHEN 성능서류='서류' THEN 1 ELSE 0 END) as 서류불 "
-                f"FROM inspection_results_raw WHERE year=?{rgn_f} AND 주차별 IS NOT NULL AND 주차별 != '' "
+                f"FROM inspection_results_raw WHERE {where} AND 주차별 IS NOT NULL AND 주차별 != '' "
                 "GROUP BY 주차별 ORDER BY 주차별",
-                rgn_p
+                params
             ).fetchall()
             weeks = []
             for r in rows:
@@ -1110,40 +1199,70 @@ async def inspection_results_weekly_trend(request: Request, year: int = Query(..
 
 
 @router.get("/inspection-results/weekly-trend-by-region")
-async def inspection_results_weekly_trend_by_region(request: Request, year: int = Query(...)):
-    """본부별 주차별 합격율 추이 (9개 소형 차트용)."""
+async def inspection_results_weekly_trend_by_region(
+    request: Request,
+    year: int = Query(...),
+    region: str = Query(""),
+):
+    """본부별 또는 팀별 주차별 합격율 추이 (소형 차트용).
+
+    region 비어있음 → 본부 9개 차트
+    region 지정 → 그 본부에 속한 팀들(ons팀)의 차트로 자동 전환
+    응답 키는 'regions' 유지(프론트 호환), groupBy 필드로 구분.
+    """
     await _verify_auth(request)
 
-    def _by_region():
+    def _by_group():
         if not os.path.exists(_INSP_DB):
-            return {"regions": {}}
+            return {"regions": {}, "groupBy": "region"}
         conn = sqlite3.connect(_INSP_DB, timeout=60)
         try:
-            rows = conn.execute(
-                "SELECT region, 주차별, COUNT(*) as cnt, "
-                "SUM(CASE WHEN 성능서류='성능' THEN 1 ELSE 0 END) as 성능불, "
-                "SUM(CASE WHEN 성능서류='서류' THEN 1 ELSE 0 END) as 서류불 "
-                "FROM inspection_results_raw "
-                "WHERE year=? AND 주차별 IS NOT NULL AND 주차별 != '' AND region IS NOT NULL AND region != '' "
-                "GROUP BY region, 주차별 ORDER BY region, 주차별",
-                (year,)
-            ).fetchall()
-            regions: Dict[str, list] = {}
-            for region, 주차, cnt, 성능불, 서류불 in rows:
-                regions.setdefault(region, []).append({
+            if region:
+                # 본부 선택됨 → ons팀 단위로 분해
+                rows = conn.execute(
+                    "SELECT ons팀, 주차별, COUNT(*) as cnt, "
+                    "SUM(CASE WHEN 성능서류='성능' THEN 1 ELSE 0 END) as 성능불, "
+                    "SUM(CASE WHEN 성능서류='서류' THEN 1 ELSE 0 END) as 서류불 "
+                    "FROM inspection_results_raw "
+                    "WHERE year=? AND region=? AND 주차별 IS NOT NULL AND 주차별 != '' "
+                    "AND ons팀 IS NOT NULL AND ons팀 != '' "
+                    "GROUP BY ons팀, 주차별 ORDER BY ons팀, 주차별",
+                    (year, region)
+                ).fetchall()
+                resolved = "team"
+            else:
+                rows = conn.execute(
+                    "SELECT region, 주차별, COUNT(*) as cnt, "
+                    "SUM(CASE WHEN 성능서류='성능' THEN 1 ELSE 0 END) as 성능불, "
+                    "SUM(CASE WHEN 성능서류='서류' THEN 1 ELSE 0 END) as 서류불 "
+                    "FROM inspection_results_raw "
+                    "WHERE year=? AND 주차별 IS NOT NULL AND 주차별 != '' AND region IS NOT NULL AND region != '' "
+                    "GROUP BY region, 주차별 ORDER BY region, 주차별",
+                    (year,)
+                ).fetchall()
+                resolved = "region"
+
+            groups: Dict[str, list] = {}
+            for key, 주차, cnt, 성능불, 서류불 in rows:
+                groups.setdefault(key, []).append({
                     "주차": 주차,
                     "합격율": round((cnt - 성능불) / cnt, 4) if cnt > 0 else 0,
                     "서류합격율": round((cnt - 서류불) / cnt, 4) if cnt > 0 else 0,
                 })
-            return {"regions": regions}
+            return {"regions": groups, "groupBy": resolved}
         finally:
             conn.close()
 
-    return await asyncio.to_thread(_by_region)
+    return await asyncio.to_thread(_by_group)
 
 
 @router.get("/inspection-results/summary-report")
-async def inspection_results_summary_report(request: Request, year: int = Query(...), region: str = Query("")):
+async def inspection_results_summary_report(
+    request: Request,
+    year: int = Query(...),
+    region: str = Query(""),
+    team: str = Query(""),
+):
     """실적 현황 리포트 자동 생성."""
     await _verify_auth(request)
 
@@ -1152,14 +1271,20 @@ async def inspection_results_summary_report(request: Request, year: int = Query(
             return {"lines": []}
         conn = sqlite3.connect(_INSP_DB, timeout=60)
         try:
-            rgn_f = " AND region=?" if region else ""
-            rgn_p = (year, region) if region else (year,)
-            total = conn.execute(f"SELECT COUNT(*) FROM inspection_results_raw WHERE year=?{rgn_f}", rgn_p).fetchone()[0]
+            base_where = "year=?"
+            base_params: list = [year]
+            if region:
+                base_where += " AND region=?"
+                base_params.append(region)
+            if team:
+                base_where += " AND ons팀=?"
+                base_params.append(team)
+            total = conn.execute(f"SELECT COUNT(*) FROM inspection_results_raw WHERE {base_where}", base_params).fetchone()[0]
             if total == 0:
                 return {"lines": ["데이터가 없습니다."]}
 
-            perf_fail = conn.execute(f"SELECT COUNT(*) FROM inspection_results_raw WHERE year=?{rgn_f} AND 성능서류='성능'", rgn_p).fetchone()[0]
-            doc_fail = conn.execute(f"SELECT COUNT(*) FROM inspection_results_raw WHERE year=?{rgn_f} AND 성능서류='서류'", rgn_p).fetchone()[0]
+            perf_fail = conn.execute(f"SELECT COUNT(*) FROM inspection_results_raw WHERE {base_where} AND 성능서류='성능'", base_params).fetchone()[0]
+            doc_fail = conn.execute(f"SELECT COUNT(*) FROM inspection_results_raw WHERE {base_where} AND 성능서류='서류'", base_params).fetchone()[0]
             perf_pass = total - perf_fail
             doc_pass = total - doc_fail
             perf_rate = round(perf_pass / total * 100, 1) if total > 0 else 0

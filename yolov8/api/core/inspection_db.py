@@ -253,6 +253,7 @@ def _init_inspection_db():
     conn.execute('CREATE INDEX IF NOT EXISTS idx_irr_hn ON inspection_results_raw(허가번호)')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_irr_month ON inspection_results_raw(월)')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_irr_year_hn ON inspection_results_raw(year, 허가번호)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_irr_year_team ON inspection_results_raw(year, ons팀)')
     conn.execute('''CREATE TABLE IF NOT EXISTS inadequate_management (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         year INTEGER,
