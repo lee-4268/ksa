@@ -2940,9 +2940,27 @@ _WF_TRANSITIONS = {
     WF_INSPECTED: set(),
 }
 
+# 상태 진행 순위 (역방향 강등 차단용). 같은 rank는 횡이동 OK(예: PRE_CHECK_DONE ↔ CHANGE_FILING)지만,
+# rank가 작은 쪽으로 가는 전이는 admin도 차단 — 검사내역서 발급 endpoint가 INSPECTED 일정을
+# REPORT_ISSUED로 되돌리던 사고 방지. 명시적 강등이 필요하면 별도 endpoint(상태 뱃지 수동 변경) 사용.
+_WF_RANK = {
+    None: 0,
+    WF_REGISTERED: 1,
+    WF_PRE_CHECK: 2,
+    WF_CHANGE_FILING: 2,  # PRE_CHECK 옆 분기
+    WF_RE_CHECK: 2,
+    WF_PRE_CHECK_DONE: 3,
+    WF_REPORT_ISSUED: 4,
+    WF_SUBMITTED: 5,
+    WF_INSPECTED: 6,
+}
+
 
 def _wf_can_transition(from_status, to_status: str, role: str) -> bool:
     if to_status not in WF_VALID:
+        return False
+    # 역방향(강등) 차단 — admin 포함. 명시적 강등이 필요하면 _wf_force_transition 사용.
+    if _WF_RANK.get(to_status, 0) < _WF_RANK.get(from_status, 0):
         return False
     if role == "admin":
         return True
@@ -4649,6 +4667,14 @@ async def inspection_report_generate(request: Request, req: InspectionReportGene
         transitioned = 0
         for s in scheds:
             cur = s.get('workflow_status') or WF_REGISTERED
+            # 이미 SUBMITTED/INSPECTED까지 진행된 일정은 status 강등 금지.
+            # report_issued_at/by 메타만 갱신 (재발급 이력 남김).
+            if cur in (WF_SUBMITTED, WF_INSPECTED):
+                c.execute(
+                    'UPDATE inspection_schedules SET '
+                    'report_issued_at=?, report_issued_by=? WHERE pk=?',
+                    (now, empno, s['pk']))
+                continue
             can_transition = _wf_can_transition(cur, WF_REPORT_ISSUED, role)
             if can_transition:
                 c.execute(
