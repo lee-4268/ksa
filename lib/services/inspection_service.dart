@@ -745,6 +745,16 @@ class InspectionService {
     return json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
   }
 
+  /// 본부 하나의 팀별 진행률
+  Future<List<Map<String, dynamic>>> getProgressByTeam(int year, String region) async {
+    final uri = Uri.parse('$_baseUrl/inspection/progress-by-team').replace(
+        queryParameters: {'year': '$year', 'region': region});
+    final resp = await http.get(uri, headers: _headers).timeout(_apiTimeout);
+    if (resp.statusCode != 200) return [];
+    final body = json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+    return List<Map<String, dynamic>>.from(body['items'] ?? []);
+  }
+
   Future<Map<String, dynamic>> geocodeTargets(int year) async {
     final resp = await http.post(
       Uri.parse('$_baseUrl/inspection/geocode-targets').replace(
@@ -943,23 +953,37 @@ class InspectionService {
   }
 
   /// 대시보드 통계
-  Future<Map<String, dynamic>> getResultsDashboard(int year, {String region = ''}) async {
+  ///
+  /// [team] 지정 시 그 팀만, [groupBy]='team' + [region] 지정 시 그 본부의 팀별 분해.
+  Future<Map<String, dynamic>> getResultsDashboard(int year, {
+    String region = '',
+    String team = '',
+    String groupBy = '',
+  }) async {
     final uri = Uri.parse('$_baseUrl/inspection-results/dashboard')
         .replace(queryParameters: {
       'year': '$year',
       if (region.isNotEmpty) 'region': region,
+      if (team.isNotEmpty) 'team': team,
+      if (groupBy.isNotEmpty) 'groupBy': groupBy,
     });
     final resp = await http.get(uri, headers: _headers).timeout(_apiTimeout);
     return json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
   }
 
   /// 월별 대시보드
-  Future<Map<String, dynamic>> getResultsMonthly(int year, String month, {String region = ''}) async {
+  Future<Map<String, dynamic>> getResultsMonthly(int year, String month, {
+    String region = '',
+    String team = '',
+    String groupBy = '',
+  }) async {
     final uri = Uri.parse('$_baseUrl/inspection-results/dashboard/monthly')
         .replace(queryParameters: {
       'year': '$year',
       'month': month,
       if (region.isNotEmpty) 'region': region,
+      if (team.isNotEmpty) 'team': team,
+      if (groupBy.isNotEmpty) 'groupBy': groupBy,
     });
     final resp = await http.get(uri, headers: _headers).timeout(_apiTimeout);
     return json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
@@ -992,17 +1016,22 @@ class InspectionService {
     return json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
   }
 
-  Future<Map<String, dynamic>> getResultsAnalysis(int year, {String region = ''}) async {
+  Future<Map<String, dynamic>> getResultsAnalysis(int year, {
+    String region = '',
+    String team = '',
+  }) async {
     final uri = Uri.parse('$_baseUrl/inspection-results/analysis')
         .replace(queryParameters: {
       'year': '$year',
       if (region.isNotEmpty) 'region': region,
+      if (team.isNotEmpty) 'team': team,
     });
     final resp = await http.get(uri, headers: _headers).timeout(_apiTimeout);
     if (resp.statusCode != 200) throw Exception('분석 조회 실패');
     return json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
   }
 
+  /// 본부별 또는 팀별 주차별 추이. [region] 지정 시 그 본부의 ons팀 단위로 자동 분해.
   Future<Map<String, dynamic>> getResultsWeeklyTrendByRegion(int year, {String region = ''}) async {
     final uri = Uri.parse('$_baseUrl/inspection-results/weekly-trend-by-region')
         .replace(queryParameters: {
@@ -1014,22 +1043,30 @@ class InspectionService {
     return json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
   }
 
-  Future<Map<String, dynamic>> getResultsWeeklyTrend(int year, {String region = ''}) async {
+  Future<Map<String, dynamic>> getResultsWeeklyTrend(int year, {
+    String region = '',
+    String team = '',
+  }) async {
     final uri = Uri.parse('$_baseUrl/inspection-results/weekly-trend')
         .replace(queryParameters: {
       'year': '$year',
       if (region.isNotEmpty) 'region': region,
+      if (team.isNotEmpty) 'team': team,
     });
     final resp = await http.get(uri, headers: _headers).timeout(_apiTimeout);
     if (resp.statusCode != 200) throw Exception('주차별 추이 조회 실패');
     return json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
   }
 
-  Future<Map<String, dynamic>> getResultsSummaryReport(int year, {String region = ''}) async {
+  Future<Map<String, dynamic>> getResultsSummaryReport(int year, {
+    String region = '',
+    String team = '',
+  }) async {
     final uri = Uri.parse('$_baseUrl/inspection-results/summary-report')
         .replace(queryParameters: {
       'year': '$year',
       if (region.isNotEmpty) 'region': region,
+      if (team.isNotEmpty) 'team': team,
     });
     final resp = await http.get(uri, headers: _headers).timeout(_apiTimeout);
     if (resp.statusCode != 200) throw Exception('리포트 조회 실패');

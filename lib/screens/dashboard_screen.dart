@@ -8,8 +8,17 @@ import '../services/inspection_service.dart';
 class DashboardScreen extends StatefulWidget {
   final bool showStats;
   final void Function(String region)? onRegionSelected;
+  final void Function(String team)? onTeamSelected;
   final String? selectedRegion; // 외부에서 선택 상태 동기화
-  const DashboardScreen({super.key, this.showStats = true, this.onRegionSelected, this.selectedRegion});
+  final String? selectedTeam;   // 외부에서 선택 팀 동기화
+  const DashboardScreen({
+    super.key,
+    this.showStats = true,
+    this.onRegionSelected,
+    this.onTeamSelected,
+    this.selectedRegion,
+    this.selectedTeam,
+  });
 
   @override
   State<DashboardScreen> createState() => _DashboardScreenState();
@@ -26,6 +35,11 @@ class _DashboardScreenState extends State<DashboardScreen>
   final _inspSvc = InspectionService();
   final int _progressYear = DateTime.now().year;
   bool _progressLoaded = false; // didChangeDependencies 중복 호출 방지
+
+  // 본부 선택 시 그 본부의 팀별 진행률
+  List<Map<String, dynamic>> _teams = [];
+  bool _teamsLoading = false;
+  String? _teamsLoadedForRegion; // 어느 본부의 팀을 로드했는지
 
   // access담당 컬럼 값 → map key 매핑
   static const Map<String, String> _hdqtKeyMap = {
@@ -72,7 +86,22 @@ class _DashboardScreenState extends State<DashboardScreen>
           : null;
       if (key != _selectedRegion) {
         setState(() => _selectedRegion = key);
+        if (key != null) _loadTeamsForRegion(widget.selectedRegion!);
+        else setState(() { _teams = []; _teamsLoadedForRegion = null; });
       }
+    }
+  }
+
+  Future<void> _loadTeamsForRegion(String regionShortName) async {
+    if (_teamsLoadedForRegion == regionShortName) return;
+    setState(() { _teamsLoading = true; _teamsLoadedForRegion = regionShortName; });
+    try {
+      final items = await _inspSvc.getProgressByTeam(_progressYear, regionShortName);
+      if (!mounted) return;
+      setState(() { _teams = items; _teamsLoading = false; });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() { _teams = []; _teamsLoading = false; });
     }
   }
 
@@ -423,6 +452,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                 // 부모에게 본부 shortName 전달
                 final shortName = _regionData[regionId]?.shortName ?? '';
                 widget.onRegionSelected?.call(shortName);
+                if (shortName.isNotEmpty) _loadTeamsForRegion(shortName);
               },
             ),
           ),
@@ -535,10 +565,27 @@ class _DashboardScreenState extends State<DashboardScreen>
         children: [
           Row(
             children: [
-              const Icon(Icons.analytics_outlined, color: _blueAccent, size: 22),
+              if (selectedData != null)
+                IconButton(
+                  icon: const Icon(Icons.arrow_back, size: 18),
+                  tooltip: '본부 목록',
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                  onPressed: () {
+                    setState(() {
+                      _selectedRegion = null;
+                      _teams = [];
+                      _teamsLoadedForRegion = null;
+                    });
+                    widget.onRegionSelected?.call('');
+                    widget.onTeamSelected?.call('');
+                  },
+                )
+              else
+                const Icon(Icons.analytics_outlined, color: _blueAccent, size: 22),
               const SizedBox(width: 8),
               Text(
-                selectedData != null ? '${selectedData.name} 상세' : '본부별 현황',
+                selectedData != null ? '${selectedData.name} · 팀별' : '본부별 현황',
                 style: const TextStyle(
                   fontSize: 16,
                   fontWeight: FontWeight.bold,
@@ -551,7 +598,7 @@ class _DashboardScreenState extends State<DashboardScreen>
           Expanded(
             child: SingleChildScrollView(
               child: selectedData != null
-                  ? _buildSelectedRegionDetail(selectedData)
+                  ? _buildTeamList(selectedData)
                   : _buildRegionList(),
             ),
           ),
@@ -560,107 +607,91 @@ class _DashboardScreenState extends State<DashboardScreen>
     );
   }
 
-  Widget _buildSelectedRegionDetail(RegionData data) {
-    final remaining = data.total - data.completed;
-
+  Widget _buildTeamList(RegionData region) {
+    if (_teamsLoading) {
+      return const Padding(
+        padding: EdgeInsets.all(24),
+        child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+      );
+    }
+    if (_teams.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          children: [
+            Icon(Icons.groups_outlined, size: 36, color: Colors.grey.shade400),
+            const SizedBox(height: 8),
+            Text('이 본부의 팀 데이터가 없습니다',
+                style: TextStyle(fontSize: 13, color: Colors.grey.shade600)),
+          ],
+        ),
+      );
+    }
     return Column(
       children: [
-        // 큰 진행률 원형
-        Center(
-          child: SizedBox(
-            width: 140,
-            height: 140,
-            child: Stack(
-              alignment: Alignment.center,
-              children: [
-                SizedBox(
-                  width: 140,
-                  height: 140,
-                  child: CircularProgressIndicator(
-                    value: data.progressRate,
-                    strokeWidth: 12,
-                    backgroundColor: Colors.grey.shade200,
-                    valueColor: AlwaysStoppedAnimation(_getProgressColor(data.progressRate)),
-                  ),
-                ),
-                Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      '${data.progressPercent}%',
-                      style: TextStyle(
-                        fontSize: 32,
-                        fontWeight: FontWeight.bold,
-                        color: _getProgressColor(data.progressRate),
-                      ),
-                    ),
-                    Text(
-                      '진행률',
-                      style: TextStyle(
-                        fontSize: 13,
-                        color: Colors.grey.shade600,
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ),
-        const SizedBox(height: 24),
-        // 상세 수치
-        _buildDetailRow('전체 무선국', data.total.toString(), Icons.cell_tower),
-        const SizedBox(height: 12),
-        _buildDetailRow('수검 완료', data.completed.toString(), Icons.check_circle,
-            color: const Color(0xFF43A047)),
-        const SizedBox(height: 12),
-        _buildDetailRow('미수검', remaining.toString(), Icons.pending_outlined,
-            color: const Color(0xFFFFA726)),
-        const SizedBox(height: 20),
-        // 선택 해제 버튼
-        TextButton.icon(
-          onPressed: () {
-            setState(() => _selectedRegion = null);
-            widget.onRegionSelected?.call('');
-          },
-          icon: const Icon(Icons.list, size: 18),
-          label: const Text('전체 목록 보기'),
-          style: TextButton.styleFrom(
-            foregroundColor: _blueAccent,
-          ),
-        ),
+        for (int i = 0; i < _teams.length; i++) ...[
+          if (i > 0) const SizedBox(height: 8),
+          _buildTeamListItem(_teams[i]),
+        ],
       ],
     );
   }
 
-  Widget _buildDetailRow(String label, String value, IconData icon, {Color? color}) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      decoration: BoxDecoration(
-        color: const Color(0xFFF5F6FA),
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: Row(
-        children: [
-          Icon(icon, size: 20, color: color ?? const Color(0xFF6B7280)),
-          const SizedBox(width: 12),
-          Text(
-            label,
-            style: const TextStyle(
-              fontSize: 14,
-              color: Color(0xFF6B7280),
-            ),
+  Widget _buildTeamListItem(Map<String, dynamic> team) {
+    final name = (team['팀'] as String?) ?? '';
+    final total = (team['total'] as num?)?.toInt() ?? 0;
+    final completed = (team['completed'] as num?)?.toInt() ?? 0;
+    final percent = (team['percent'] as num?)?.toDouble() ?? 0.0;
+    final rate = total > 0 ? completed / total : 0.0;
+    final isSelected = widget.selectedTeam == name;
+    final shortName = name.replaceAll('품질개선팀', '');
+    return InkWell(
+      onTap: () => widget.onTeamSelected?.call(name),
+      borderRadius: BorderRadius.circular(10),
+      child: Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: const Color(0xFFF5F6FA),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            color: isSelected ? _blueAccent : Colors.transparent,
+            width: 2,
           ),
-          const Spacer(),
-          Text(
-            value,
-            style: TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.bold,
-              color: color ?? const Color(0xFF111827),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    shortName.isNotEmpty ? shortName : name,
+                    style: const TextStyle(
+                        fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF111827)),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                Text('${percent.toStringAsFixed(1)}%',
+                    style: TextStyle(
+                        fontSize: 13, fontWeight: FontWeight.bold,
+                        color: _getProgressColor(rate))),
+              ],
             ),
-          ),
-        ],
+            const SizedBox(height: 6),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(4),
+              child: LinearProgressIndicator(
+                value: rate.clamp(0.0, 1.0),
+                minHeight: 5,
+                backgroundColor: Colors.grey.shade200,
+                valueColor: AlwaysStoppedAnimation(_getProgressColor(rate)),
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text('$completed / $total',
+                style: TextStyle(fontSize: 11, color: Colors.grey.shade600)),
+          ],
+        ),
       ),
     );
   }
@@ -691,6 +722,7 @@ class _DashboardScreenState extends State<DashboardScreen>
       onTap: () {
         setState(() => _selectedRegion = entry.key);
         widget.onRegionSelected?.call(data.shortName);
+        _loadTeamsForRegion(data.shortName);
       },
       borderRadius: BorderRadius.circular(10),
       child: Container(

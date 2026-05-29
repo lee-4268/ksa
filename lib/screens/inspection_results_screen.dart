@@ -64,6 +64,8 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
   List<Map<String, dynamic>> _reportLines = [];
 
   String _selectedRegion = '';
+  String _selectedTeam = ''; // 본부 안에서 선택된 팀(ons팀, 예: '평택품질개선팀')
+  List<String> _regionTeams = []; // 현재 본부의 팀 이름 목록 (불합격 항목별 토글용)
   int _selectedQuarter = 0; // 0=전체, 1=1Q, 2=2Q, 3=3Q, 4=4Q
   late bool _isAdmin;
 
@@ -93,6 +95,23 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
     }
   }
 
+  Future<void> _loadRegionTeams(String region) async {
+    try {
+      final items = await _svc.getProgressByTeam(_year, region);
+      if (!mounted) return;
+      setState(() {
+        _regionTeams = items
+            .map((e) => (e['팀'] as String?) ?? '')
+            .where((s) => s.isNotEmpty)
+            .toList()
+          ..sort();
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _regionTeams = []);
+    }
+  }
+
   Future<void> _loadData() async {
     setState(() {
       _loading = true;
@@ -100,8 +119,12 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
     });
     try {
       final rgn = _selectedRegion;
+      final tm = _selectedTeam;
+      // 본부 선택 + 팀 미선택 → 본부 안 팀별 분해 (groupBy=team)
+      final groupBy = rgn.isNotEmpty && tm.isEmpty ? 'team' : '';
       if (_tabCtrl.index == 0) {
-        final dash = await _svc.getResultsDashboard(_year, region: rgn);
+        final dash = await _svc.getResultsDashboard(_year,
+            region: rgn, team: tm, groupBy: groupBy);
         if (!mounted) return;
         setState(() {
           _dashboard = dash;
@@ -109,10 +132,12 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
         });
       } else {
         final month = _tabCtrl.index.toString();
-        final data = await _svc.getResultsMonthly(_year, month, region: rgn);
+        final data = await _svc.getResultsMonthly(_year, month,
+            region: rgn, team: tm, groupBy: groupBy);
         if (!mounted) return;
         if (_dashboard.isEmpty) {
-          final dash = await _svc.getResultsDashboard(_year, region: rgn);
+          final dash = await _svc.getResultsDashboard(_year,
+              region: rgn, team: tm, groupBy: groupBy);
           if (!mounted) return;
           _dashboard = dash;
         }
@@ -123,9 +148,10 @@ class _InspectionResultsScreenState extends State<InspectionResultsScreen>
       // 차트 데이터 (별도 try-catch)
       try {
         final results = await Future.wait([
-          _svc.getResultsAnalysis(_year, region: rgn),
-          _svc.getResultsWeeklyTrend(_year, region: rgn),
-          _svc.getResultsSummaryReport(_year, region: rgn),
+          _svc.getResultsAnalysis(_year, region: rgn, team: tm),
+          _svc.getResultsWeeklyTrend(_year, region: rgn, team: tm),
+          _svc.getResultsSummaryReport(_year, region: rgn, team: tm),
+          // weekly-trend-by-region: region 지정 시 자동으로 그 본부 팀별 trend 반환
           _svc.getResultsWeeklyTrendByRegion(_year, region: rgn),
         ]);
         if (!mounted) return;
@@ -557,6 +583,10 @@ Future<void> _downloadExcel() async {
     return r['name'] ?? r['본부'] ?? r['region'] ?? fallback;
   }
 
+  /// 팀명 단축: '평택품질개선팀' → '평택'
+  String _shortTeamName(String name) =>
+      name.endsWith('품질개선팀') ? name.substring(0, name.length - 5) : name;
+
   // ── Build ──
 
   @override
@@ -570,17 +600,24 @@ Future<void> _downloadExcel() async {
             _buildActionBar(),
             _buildSummaryCards(),
                   if (_reportLines.isNotEmpty) _buildSummaryReport(),
-                  if (_selectedRegion.isNotEmpty)
+                  if (_selectedRegion.isNotEmpty || _selectedTeam.isNotEmpty)
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
                       child: Row(children: [
                         Icon(Icons.filter_alt, size: 16, color: _primary),
                         const SizedBox(width: 6),
-                        Text('$_selectedRegion 본부 필터 적용 중',
-                            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFFE53935))),
+                        Text(
+                          _selectedTeam.isNotEmpty
+                              ? '$_selectedRegion · $_selectedTeam 필터 적용 중'
+                              : '$_selectedRegion 본부 필터 적용 중',
+                          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFFE53935)),
+                        ),
                         const SizedBox(width: 8),
                         TextButton(
-                          onPressed: () { setState(() => _selectedRegion = ''); _loadData(); },
+                          onPressed: () {
+                            setState(() { _selectedRegion = ''; _selectedTeam = ''; });
+                            _loadData();
+                          },
                           child: const Text('전체 보기', style: TextStyle(fontSize: 12)),
                         ),
                       ]),
@@ -596,9 +633,21 @@ Future<void> _downloadExcel() async {
                           child: DashboardScreen(
                             showStats: false,
                             selectedRegion: _selectedRegion,
+                            selectedTeam: _selectedTeam,
                             onRegionSelected: (region) {
-                              if (_selectedRegion != region) {
-                                setState(() => _selectedRegion = region);
+                              if (_selectedRegion != region || _selectedTeam.isNotEmpty) {
+                                setState(() {
+                                  _selectedRegion = region;
+                                  _selectedTeam = '';
+                                  _regionTeams = [];
+                                });
+                                _loadData();
+                                if (region.isNotEmpty) _loadRegionTeams(region);
+                              }
+                            },
+                            onTeamSelected: (team) {
+                              if (_selectedTeam != team) {
+                                setState(() => _selectedTeam = team);
                                 _loadData();
                               }
                             },
@@ -1302,8 +1351,9 @@ Future<void> _downloadExcel() async {
           headingRowAlignment: MainAxisAlignment.center,
         );
 
+    final byTeam = (_dashboard['groupBy'] as String?) == 'team' || _selectedTeam.isNotEmpty;
     return _chartSection(
-      title: '본부별 현황',
+      title: byTeam ? '팀별 현황' : '본부별 현황',
       icon: Icons.table_chart,
       iconColor: _blue,
       child: SingleChildScrollView(
@@ -1324,7 +1374,7 @@ Future<void> _downloadExcel() async {
               fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF374151)),
           dataTextStyle: const TextStyle(fontSize: 11, color: Color(0xFF111827)),
           columns: [
-            col('본부'),
+            col(byTeam ? '팀' : '본부'),
             col('수검국소', numeric: true),
             col('완료', numeric: true),
             col('시기조정', numeric: true),
@@ -1358,7 +1408,11 @@ Future<void> _downloadExcel() async {
                         : const Color(0xFFFAFAFB),
               ),
               cells: [
-                DataCell(Center(child: Text(_regionName(r, fallback: isTotalRow ? '합계' : '-'), style: style))),
+                DataCell(Center(child: Text(
+                  byTeam && !isTotalRow
+                      ? _shortTeamName(_regionName(r, fallback: '-'))
+                      : _regionName(r, fallback: isTotalRow ? '합계' : '-'),
+                  style: style))),
                 DataCell(Center(child: Text(_fmt(r['수검국소'] ?? r['total']), style: style))),
                 DataCell(Center(child: Text(_fmt(r['완료'] ?? r['completed']), style: style))),
                 DataCell(Center(child: Text(_fmt(r['시기조정'] ?? r['adjusted']), style: style))),
@@ -1441,9 +1495,25 @@ Future<void> _downloadExcel() async {
       title: '불합격 항목별 비율 (성능/서류)',
       icon: Icons.pie_chart_outline,
       iconColor: _primary,
-      child: Row(
+      child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // 본부 선택 시 그 본부의 팀명(지역명만) 토글 버튼
+          if (_selectedRegion.isNotEmpty && _regionTeams.isNotEmpty) ...[
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                _failureTeamChip(label: '전체', team: ''),
+                for (final t in _regionTeams)
+                  _failureTeamChip(label: _shortTeamName(t), team: t),
+              ],
+            ),
+            const SizedBox(height: 12),
+          ],
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
           Expanded(
             child: _donutChart(
               label: '성능 불합격 사유',
@@ -1463,8 +1533,37 @@ Future<void> _downloadExcel() async {
               ratioKey: '비율',
             ),
           ),
+            ],
+          ),
         ],
       ),
+    );
+  }
+
+  Widget _failureTeamChip({required String label, required String team}) {
+    final isSelected = _selectedTeam == team;
+    return ChoiceChip(
+      label: Text(label,
+          style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: isSelected ? Colors.white : const Color(0xFF374151))),
+      selected: isSelected,
+      selectedColor: _primary,
+      backgroundColor: const Color(0xFFF3F4F6),
+      side: BorderSide(
+          color: isSelected ? _primary : const Color(0xFFE5E7EB)),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      visualDensity: VisualDensity.compact,
+      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 0),
+      onSelected: (v) {
+        if (!v && isSelected) return; // 같은 거 다시 클릭 무시
+        if (_selectedTeam != team) {
+          setState(() => _selectedTeam = team);
+          _loadData();
+        }
+      },
     );
   }
 
@@ -1579,12 +1678,17 @@ Future<void> _downloadExcel() async {
         List<Map<String, dynamic>>.from(_monthlyData['regions'] ?? []);
     if (regionData.isEmpty) return const SizedBox.shrink();
 
-    // _regionOrder 순서로 고정 정렬
-    regionData.sort((a, b) {
-      final ai = _regionOrder.indexOf(_regionName(a, fallback: ''));
-      final bi = _regionOrder.indexOf(_regionName(b, fallback: ''));
-      return (ai < 0 ? 99 : ai).compareTo(bi < 0 ? 99 : bi);
-    });
+    final byTeam = (_monthlyData['groupBy'] as String?) == 'team' || _selectedTeam.isNotEmpty;
+    // 본부 모드일 때만 _regionOrder 정렬, 팀 모드는 이름순
+    if (!byTeam) {
+      regionData.sort((a, b) {
+        final ai = _regionOrder.indexOf(_regionName(a, fallback: ''));
+        final bi = _regionOrder.indexOf(_regionName(b, fallback: ''));
+        return (ai < 0 ? 99 : ai).compareTo(bi < 0 ? 99 : bi);
+      });
+    } else {
+      regionData.sort((a, b) => _regionName(a).compareTo(_regionName(b)));
+    }
 
     const double perfTarget = 98.5;
     const double docTarget = 85.5;
@@ -1606,7 +1710,7 @@ Future<void> _downloadExcel() async {
     final totalDocPass = totalDoc >= docTarget;
 
     return _chartSection(
-      title: '본부별 목표 대비 합격율',
+      title: byTeam ? '팀별 목표 대비 합격율' : '본부별 목표 대비 합격율',
       icon: Icons.assessment,
       iconColor: _blue,
       child: Column(
@@ -1631,9 +1735,10 @@ Future<void> _downloadExcel() async {
             ],
           ),
           const SizedBox(height: 14),
-          // 본부별 바 차트 행
+          // 본부별/팀별 바 차트 행
           ...regionData.map((r) {
-            final name = _regionName(r);
+            final rawName = _regionName(r);
+            final name = byTeam ? _shortTeamName(rawName) : rawName;
             final perf = _asPercent(r['성능합격율'] ?? r['perf_pass_rate']);
             final doc = _asPercent(r['서류합격율'] ?? r['doc_pass_rate']);
             final perfPass = perf >= perfTarget;
@@ -2065,27 +2170,38 @@ Future<void> _downloadExcel() async {
             as Map<String, dynamic>?) ??
         {};
     if (regionsMap.isEmpty) return const SizedBox.shrink();
+    final byTeam = (_regionWeeklyTrend['groupBy'] as String?) == 'team';
 
-    // Build ordered list using _regionOrder, fill missing
+    // Build ordered list
     final charts = <Widget>[];
-    for (final rName in _regionOrder) {
-      final data = regionsMap[rName];
-      final weekList = data != null
-          ? _filterByQuarter(List<Map<String, dynamic>>.from(data as List))
-          : <Map<String, dynamic>>[];
-      charts.add(_smallLineChart(rName, weekList));
-    }
-    // Any extra regions not in _regionOrder
-    for (final key in regionsMap.keys) {
-      if (!_regionOrder.contains(key)) {
+    if (byTeam) {
+      // 팀 모드: 응답 키(팀명) 그대로, 알파벳/가나다 정렬
+      final keys = regionsMap.keys.toList()..sort();
+      for (final key in keys) {
         final weekList =
             _filterByQuarter(List<Map<String, dynamic>>.from(regionsMap[key] as List));
-        charts.add(_smallLineChart(key, weekList));
+        charts.add(_smallLineChart(_shortTeamName(key), weekList));
+      }
+    } else {
+      // 본부 모드: _regionOrder 정렬
+      for (final rName in _regionOrder) {
+        final data = regionsMap[rName];
+        final weekList = data != null
+            ? _filterByQuarter(List<Map<String, dynamic>>.from(data as List))
+            : <Map<String, dynamic>>[];
+        charts.add(_smallLineChart(rName, weekList));
+      }
+      for (final key in regionsMap.keys) {
+        if (!_regionOrder.contains(key)) {
+          final weekList =
+              _filterByQuarter(List<Map<String, dynamic>>.from(regionsMap[key] as List));
+          charts.add(_smallLineChart(key, weekList));
+        }
       }
     }
 
     return _chartSection(
-      title: 'Acc.담당별 주별 Trend',
+      title: byTeam ? '팀별 주별 Trend' : 'Acc.담당별 주별 Trend',
       icon: Icons.grid_view,
       iconColor: _primary,
       child: Column(

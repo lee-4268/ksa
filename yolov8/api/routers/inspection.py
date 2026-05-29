@@ -4062,6 +4062,51 @@ async def inspection_progress(request: Request, year: int):
     return {"items": items}
 
 
+@router.get("/inspection/progress-by-team")
+async def inspection_progress_by_team(request: Request, year: int, region: str):
+    """본부 하나의 팀별 진행률 (실적 화면 Map 우측 팀 리스트용).
+
+    팀 목록은 inspection_targets에서, 완료 카운트는 inspection_results_raw.ons팀에서.
+    매칭이 어긋날 수 있으므로 두 쪽 합집합으로 팀 키 추출.
+    """
+    await _verify_auth(request)
+    if not os.path.exists(_INSP_DB) or not region:
+        return {"items": []}
+
+    def _query():
+        c = sqlite3.connect(_INSP_DB, timeout=60); c.row_factory = sqlite3.Row
+        target_rows = c.execute(
+            'SELECT 품질개선팀, COUNT(*) AS cnt FROM inspection_targets '
+            'WHERE year=? AND access담당=? AND 품질개선팀 IS NOT NULL AND 품질개선팀<>"" '
+            'GROUP BY 품질개선팀',
+            (year, region)
+        ).fetchall()
+        done_rows = c.execute(
+            'SELECT ons팀, COUNT(*) AS cnt FROM inspection_results_raw '
+            'WHERE year=? AND region=? AND ons팀 IS NOT NULL AND ons팀<>"" '
+            'GROUP BY ons팀',
+            (year, region)
+        ).fetchall()
+        c.close()
+        return target_rows, done_rows
+
+    target_rows, done_rows = await asyncio.to_thread(_query)
+    total_map = {r['품질개선팀']: r['cnt'] for r in target_rows}
+    done_map = {r['ons팀']: r['cnt'] for r in done_rows}
+    all_teams = sorted(set(total_map) | set(done_map))
+    items = []
+    for tm in all_teams:
+        total = total_map.get(tm, 0)
+        completed = done_map.get(tm, 0)
+        items.append({
+            "팀": tm,
+            "total": total,
+            "completed": completed,
+            "percent": round(completed / total * 100, 1) if total > 0 else 0.0,
+        })
+    return {"items": items}
+
+
 @router.get("/inspection/progress-by-result")
 async def inspection_progress_by_result(request: Request, year: int):
     await _verify_auth(request)
