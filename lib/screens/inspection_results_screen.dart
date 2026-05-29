@@ -2410,17 +2410,12 @@ Future<void> _downloadExcel() async {
                   height: 350,
                   child: perfValues.isEmpty
                       ? const Center(child: Text('데이터 없음'))
-                      : CustomPaint(
-                          size: Size.infinite,
-                          painter: _SmallLineChartPainter(
-                            values: perfValues,
-                            values2: docValues,
-                            labels: labels,
-                            target: 98.5,
-                            lineColor: _primary,
-                            line2Color: const Color(0xFF2196F3),
-                            fontSize: 13,
-                          ),
+                      : _ExpandedTrendChart(
+                          perfValues: perfValues,
+                          docValues: docValues,
+                          labels: labels,
+                          lineColor: _primary,
+                          line2Color: const Color(0xFF2196F3),
                         ),
                 ),
               ],
@@ -3245,4 +3240,230 @@ class _SmallLineChartPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant _SmallLineChartPainter old) =>
       old.values != values || old.values2 != values2 || old.target != target || old.fontSize != fontSize;
+}
+
+/// 확대 차트 — 마우스 호버 시 가장 가까운 점에 툴팁 표시.
+class _ExpandedTrendChart extends StatefulWidget {
+  final List<double> perfValues;
+  final List<double> docValues;
+  final List<String> labels;
+  final Color lineColor;
+  final Color line2Color;
+
+  const _ExpandedTrendChart({
+    required this.perfValues,
+    required this.docValues,
+    required this.labels,
+    required this.lineColor,
+    required this.line2Color,
+  });
+
+  @override
+  State<_ExpandedTrendChart> createState() => _ExpandedTrendChartState();
+}
+
+class _ExpandedTrendChartState extends State<_ExpandedTrendChart> {
+  int? _hoverIndex;
+  Size _chartSize = Size.zero;
+
+  /// _SmallLineChartPainter와 동일한 좌표 계산식. 마우스 X로부터 가장 가까운 인덱스.
+  int? _nearestIndex(double mouseX) {
+    final n = widget.perfValues.length;
+    if (n == 0) return null;
+    const pad = 4.0;
+    final chartW = _chartSize.width - pad * 2;
+    if (n == 1) return 0;
+    // x = pad + chartW * i / (n - 1)
+    final raw = ((mouseX - pad) / chartW) * (n - 1);
+    final idx = raw.round().clamp(0, n - 1);
+    return idx;
+  }
+
+  Offset _pointFor(int i, double v) {
+    const pad = 4.0;
+    const bottomPad = 40.0;
+    final chartW = _chartSize.width - pad * 2;
+    final chartH = _chartSize.height - pad - bottomPad;
+    // y 범위 계산 — painter와 동일
+    double dataMin = widget.perfValues.fold<double>(100, math.min);
+    if (widget.docValues.isNotEmpty) {
+      dataMin = math.min(dataMin, widget.docValues.fold<double>(100, math.min));
+    }
+    final yMin = math.min(dataMin - 2, 80.0).floorToDouble();
+    const yMax = 100.0;
+    final yRange = yMax - yMin;
+    final clamped = v.clamp(yMin, yMax);
+    final y = pad + chartH * (1 - (clamped - yMin) / yRange);
+    final x = widget.perfValues.length == 1
+        ? pad + chartW / 2
+        : pad + chartW * i / (widget.perfValues.length - 1);
+    return Offset(x, y);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        _chartSize = Size(constraints.maxWidth, constraints.maxHeight);
+        return MouseRegion(
+          onHover: (event) {
+            final idx = _nearestIndex(event.localPosition.dx);
+            if (idx != _hoverIndex) setState(() => _hoverIndex = idx);
+          },
+          onExit: (_) {
+            if (_hoverIndex != null) setState(() => _hoverIndex = null);
+          },
+          child: Stack(
+            children: [
+              CustomPaint(
+                size: Size.infinite,
+                painter: _SmallLineChartPainter(
+                  values: widget.perfValues,
+                  values2: widget.docValues,
+                  labels: widget.labels,
+                  target: 98.5,
+                  lineColor: widget.lineColor,
+                  line2Color: widget.line2Color,
+                  fontSize: 13,
+                ),
+              ),
+              // 호버 강조: 세로 가이드 라인 + 점 강조 원
+              if (_hoverIndex != null) ..._buildHoverOverlay(),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  List<Widget> _buildHoverOverlay() {
+    final i = _hoverIndex!;
+    if (i >= widget.perfValues.length) return const [];
+    final perfPt = _pointFor(i, widget.perfValues[i]);
+    final docPt = widget.docValues.length > i
+        ? _pointFor(i, widget.docValues[i])
+        : null;
+    final label = (widget.labels.length > i ? widget.labels[i] : '');
+
+    // 툴팁 위치: 점 근처, 화면 밖으로 안 나가도록 조정
+    const tooltipW = 140.0;
+    const tooltipH = 64.0;
+    double tx = perfPt.dx + 12;
+    if (tx + tooltipW > _chartSize.width) {
+      tx = perfPt.dx - tooltipW - 12;
+    }
+    double ty = perfPt.dy - tooltipH - 6;
+    if (ty < 0) ty = perfPt.dy + 12;
+
+    return [
+      // 세로 가이드 라인
+      Positioned(
+        left: perfPt.dx - 0.5,
+        top: 0,
+        child: Container(
+          width: 1,
+          height: _chartSize.height - 40, // bottomPad 제외
+          color: const Color(0xFF9CA3AF).withValues(alpha: 0.5),
+        ),
+      ),
+      // 성능 점 강조
+      Positioned(
+        left: perfPt.dx - 6,
+        top: perfPt.dy - 6,
+        child: Container(
+          width: 12,
+          height: 12,
+          decoration: BoxDecoration(
+            color: widget.lineColor,
+            shape: BoxShape.circle,
+            border: Border.all(color: Colors.white, width: 2),
+            boxShadow: [
+              BoxShadow(
+                color: widget.lineColor.withValues(alpha: 0.3),
+                blurRadius: 4,
+              ),
+            ],
+          ),
+        ),
+      ),
+      // 서류 점 강조
+      if (docPt != null)
+        Positioned(
+          left: docPt.dx - 6,
+          top: docPt.dy - 6,
+          child: Container(
+            width: 12,
+            height: 12,
+            decoration: BoxDecoration(
+              color: widget.line2Color,
+              shape: BoxShape.circle,
+              border: Border.all(color: Colors.white, width: 2),
+              boxShadow: [
+                BoxShadow(
+                  color: widget.line2Color.withValues(alpha: 0.3),
+                  blurRadius: 4,
+                ),
+              ],
+            ),
+          ),
+        ),
+      // 툴팁
+      Positioned(
+        left: tx,
+        top: ty,
+        child: IgnorePointer(
+          child: Container(
+            width: tooltipW,
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            decoration: BoxDecoration(
+              color: const Color(0xFF111827).withValues(alpha: 0.92),
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (label.isNotEmpty)
+                  Text(label,
+                      style: const TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: Color(0xFFE5E7EB))),
+                if (label.isNotEmpty) const SizedBox(height: 4),
+                Row(children: [
+                  Container(
+                      width: 8,
+                      height: 8,
+                      decoration: BoxDecoration(
+                          color: widget.lineColor, shape: BoxShape.circle)),
+                  const SizedBox(width: 6),
+                  Text('성능 ${widget.perfValues[i].toStringAsFixed(1)}%',
+                      style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.white)),
+                ]),
+                if (docPt != null) ...[
+                  const SizedBox(height: 2),
+                  Row(children: [
+                    Container(
+                        width: 8,
+                        height: 8,
+                        decoration: BoxDecoration(
+                            color: widget.line2Color, shape: BoxShape.circle)),
+                    const SizedBox(width: 6),
+                    Text('서류 ${widget.docValues[i].toStringAsFixed(1)}%',
+                        style: const TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.white)),
+                  ]),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ),
+    ];
+  }
 }
