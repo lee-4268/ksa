@@ -77,7 +77,13 @@ for _envname, _envval in (
         logger.warning(f"{_envname} 환경변수 미설정 — 해당 외부 API 기능이 동작하지 않습니다")
 
 # ── SSO 로그인 URL ────────────────────────────────────────────
-SSO_LOGIN_URL = "https://auth.skons.net/accounts/sko/sso/login/"
+# 인프라 측 SSO 도메인 마이그레이션 중(auth2.skons.net → auth.skons.net) 으로
+# systemd Environment 로 덮어쓸 수 있게 환경변수 우선. 현재 운영은 auth2 가 실서비스.
+SSO_LOGIN_URL = os.environ.get(
+    "SSO_LOGIN_URL",
+    "https://auth2.skons.net/accounts/sko/sso/login/",
+)
+logger.info(f"SSO_LOGIN_URL = {SSO_LOGIN_URL}")
 
 # ── 부트스트랩 키 ─────────────────────────────────────────────
 ADMIN_BOOTSTRAP_KEY = os.environ.get("ADMIN_BOOTSTRAP_KEY")
