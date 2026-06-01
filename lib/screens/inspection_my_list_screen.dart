@@ -17,7 +17,6 @@ import '../services/inspection_service.dart';
 import '../models/route_basket.dart';
 import '../services/route_basket_service.dart';
 import '../widgets/progress_dialog.dart';
-import '../widgets/screen_tour.dart';
 import '../widgets/user_profile_button.dart';
 import 'inspection_result_screen.dart';
 
@@ -98,16 +97,6 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
   static const double _minListRatio = 0.15;
   static const double _maxListRatio = 0.85;
 
-  // 화면 투어 표적
-  final GlobalKey _kTourHelpBtn = GlobalKey();
-  final GlobalKey _kTourRefreshBtn = GlobalKey();
-  final GlobalKey _kTourAzimuthCtrl = GlobalKey();
-  final GlobalKey _kTourFitBtn = GlobalKey();        // 전체 뷰 리셋
-  final GlobalKey _kTourSatelliteBtn = GlobalKey();  // 위성뷰 토글
-  final GlobalKey _kTourMyLocBtn = GlobalKey();      // 내 위치
-  final GlobalKey _kTourPolygonBtn = GlobalKey();
-  final GlobalKey _kTourDetailList = GlobalKey();
-  ScreenTour? _screenTour;
 
   @override
   void initState() {
@@ -133,45 +122,7 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
         onVertices: _onPolygonVerticesReceived,
         onCount: (c) => setState(() => _polygonVertexCount = c),
       );
-
-      // 화면 투어 — 메인 온보딩이 끝난 직후를 피해 살짝 더 늦게.
-      Future.delayed(const Duration(milliseconds: 2200), () {
-        if (!mounted) return;
-        _buildScreenTour().maybeShowFirstTime(context);
-      });
     });
-  }
-
-  ScreenTour _buildScreenTour() {
-    _screenTour = ScreenTour(
-      screenKey: 'map',
-      version: 2,
-      steps: [
-        TourStep(_kTourRefreshBtn, '새로고침',
-            '서버에서 최신 검사 일정·결과를 다시 받아옵니다. 다른 사람이 검사 결과를 올렸거나 일정이 바뀐 것 같을 때 누르세요.',
-            shape: ShapeLightFocus.Circle),
-        TourStep(_kTourAzimuthCtrl, '안테나 방위각 표시',
-            '국소별 안테나가 향하는 방향을 부채꼴로 표시합니다. 가까운 두 국소가 같은 안테나를 공유하는지, 전파 간섭이 있을 만한 위치인지 한눈에 봅니다. LTE 800M / 1.8G / 5G 등 대역을 골라 켤 수 있어요.'),
-        TourStep(_kTourFitBtn, '전체 보기로 리셋',
-            '지도가 너무 확대됐거나 위치를 잃어버렸을 때 이 버튼을 누르면 현재 조건의 모든 국소가 한 화면에 들어오도록 자동으로 맞춰줍니다.',
-            shape: ShapeLightFocus.Circle),
-        TourStep(_kTourSatelliteBtn, '위성/지도 전환',
-            '도로 표시가 부족한 산악·해안 등에서 위성뷰로 바꾸면 실제 지형이 보여 길 찾기가 쉬워집니다. 다시 누르면 일반 지도로 돌아와요.',
-            shape: ShapeLightFocus.Circle),
-        TourStep(_kTourMyLocBtn, '내 위치 추적',
-            '내 현재 위치를 지도에 파란 점으로 표시하고 따라갑니다. 한 번 더 누르면 추적 종료. 차량 방향까지 화살표로 표시돼서 현장 이동 중 가까운 국소를 찾을 때 유용합니다.',
-            shape: ShapeLightFocus.Circle),
-        TourStep(_kTourPolygonBtn, '영역 선택 → 경로 계획',
-            '지도에 다각형을 그려 그 안에 들어가는 국소들만 추려냅니다. 그 다음 출발/도착을 골라 "최적 경로 계산" 하면 순서가 정해져요. 자주 다니는 코스는 "경로 담기" 로 저장해두면 다음번에 바로 불러올 수 있습니다.',
-            shape: ShapeLightFocus.Circle),
-        TourStep(_kTourDetailList, '국소 리스트 / 경로 보관함',
-            '현재 조건에 해당하는 국소가 여기 모입니다. 항목을 누르면 지도가 이동하고 검사 상세 시트가 열려요. 저장해둔 경로는 "경로 담기" 카드에서 다시 꺼낼 수 있고, 카드 안의 "이미지" 버튼으로 순서·주소를 PNG로 만들어 다른 사람에게도 공유할 수 있습니다.'),
-        TourStep(_kTourHelpBtn, '도움말 다시 보기',
-            '이 안내를 다시 보고 싶을 때 이 ? 아이콘을 누르세요. 화면마다 그 화면 전용 안내가 따로 있습니다.',
-            shape: ShapeLightFocus.Circle),
-      ],
-    );
-    return _screenTour!;
   }
 
   Future<void> _loadTeams() async {
@@ -482,7 +433,7 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
                   ),
                   SizedBox(
                     width: listWidth,
-                    child: KeyedSubtree(key: _kTourDetailList, child: _buildDetailList(isWebLayout: true)),
+                    child: _buildDetailList(isWebLayout: true),
                   ),
                 ],
               ),
@@ -576,7 +527,7 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
                             decoration: BoxDecoration(color: Colors.grey[400], borderRadius: BorderRadius.circular(2)),
                           ),
                         ),
-                        Expanded(child: KeyedSubtree(key: _kTourDetailList, child: _buildDetailList())),
+                        Expanded(child: _buildDetailList()),
                       ],
                     ),
                   ),
@@ -622,16 +573,11 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
                   child: SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
                 ),
               IconButton(
-                key: _kTourRefreshBtn,
                 icon: const Icon(Icons.refresh_rounded, color: Colors.black54, size: 22),
                 tooltip: '새로고침',
                 padding: EdgeInsets.zero,
                 constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
                 onPressed: _loadingInsp ? null : _loadInspection,
-              ),
-              ScreenTourHelpButton(
-                key: _kTourHelpBtn,
-                onTap: () => _buildScreenTour().show(context),
               ),
               UserProfileButton(onLogout: () => context.read<AuthService>().signOut()),
               const SizedBox(width: 4),
@@ -2071,7 +2017,6 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
 
   Widget _buildAzimuthControl(List<RadioStation> markerStations) {
     return Material(
-      key: _kTourAzimuthCtrl,
       color: Colors.white,
       elevation: 3,
       borderRadius: BorderRadius.circular(10),
@@ -2176,50 +2121,41 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
       mainAxisSize: MainAxisSize.min,
       children: [
         // 전체 뷰 리셋
-        KeyedSubtree(
-          key: _kTourFitBtn,
-          child: _mapFloatingButton(
-            icon: Icons.zoom_out_map,
-            color: Colors.black87,
-            onTap: () => _mapKey.currentState?.resetView(),
-          ),
+        _mapFloatingButton(
+          icon: Icons.zoom_out_map,
+          color: Colors.black87,
+          onTap: () => _mapKey.currentState?.resetView(),
         ),
         const SizedBox(height: 8),
         // 위성뷰 토글
-        KeyedSubtree(
-          key: _kTourSatelliteBtn,
-          child: _mapFloatingButton(
-            icon: _isSatellite ? Icons.map : Icons.satellite_alt,
-            color: _isSatellite ? const Color(0xFF4285F4) : Colors.black87,
-            onTap: () {
-              setState(() => _isSatellite = !_isSatellite);
-              _mapKey.currentState?.setMapType(_isSatellite);
-            },
-          ),
+        _mapFloatingButton(
+          icon: _isSatellite ? Icons.map : Icons.satellite_alt,
+          color: _isSatellite ? const Color(0xFF4285F4) : Colors.black87,
+          onTap: () {
+            setState(() => _isSatellite = !_isSatellite);
+            _mapKey.currentState?.setMapType(_isSatellite);
+          },
         ),
         const SizedBox(height: 8),
         // 내 위치 버튼 (토글: 꺼짐 ↔ 현재 위치 + 방향 표시)
-        KeyedSubtree(
-          key: _kTourMyLocBtn,
-          child: _mapFloatingButton(
-            icon: _isLocationActive ? Icons.navigation : Icons.my_location,
-            color: _isLocationActive ? const Color(0xFF4285F4) : Colors.black87,
-            onTap: () {
-              _mapKey.currentState?.onGeolocationError = (error) {
-                if (mounted) {
-                  final d = ProgressDialog(context);
-                  d.error(message: error);
-                }
-              };
-              if (_isLocationActive) {
-                _mapKey.currentState?.stopLocationTracking();
-                _mapKey.currentState?.clearLocationMarker();
-              } else {
-                _mapKey.currentState?.startLocationTracking();
+        _mapFloatingButton(
+          icon: _isLocationActive ? Icons.navigation : Icons.my_location,
+          color: _isLocationActive ? const Color(0xFF4285F4) : Colors.black87,
+          onTap: () {
+            _mapKey.currentState?.onGeolocationError = (error) {
+              if (mounted) {
+                final d = ProgressDialog(context);
+                d.error(message: error);
               }
-              setState(() => _isLocationActive = !_isLocationActive);
-            },
-          ),
+            };
+            if (_isLocationActive) {
+              _mapKey.currentState?.stopLocationTracking();
+              _mapKey.currentState?.clearLocationMarker();
+            } else {
+              _mapKey.currentState?.startLocationTracking();
+            }
+            setState(() => _isLocationActive = !_isLocationActive);
+          },
         ),
       ],
     );
@@ -2393,21 +2329,18 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
   // ── 폴리곤 경로 UI ────────────────────────────────────────────────────
 
   Widget _buildPolygonEntryButton() {
-    return KeyedSubtree(
-      key: _kTourPolygonBtn,
-      child: _mapFloatingButton(
-        icon: Icons.polyline,
-        color: const Color(0xFFE53935),
-        onTap: () {
-          setState(() {
-            _polygonPhase = _PolygonPhase.drawing;
-            _polygonVertexCount = 0;
-            _activeBasketId = null;
-          });
-          _mapKey.currentState?.clearRouteOverlay();
-          _mapKey.currentState?.startPolygonDraw();
-        },
-      ),
+    return _mapFloatingButton(
+      icon: Icons.polyline,
+      color: const Color(0xFFE53935),
+      onTap: () {
+        setState(() {
+          _polygonPhase = _PolygonPhase.drawing;
+          _polygonVertexCount = 0;
+          _activeBasketId = null;
+        });
+        _mapKey.currentState?.clearRouteOverlay();
+        _mapKey.currentState?.startPolygonDraw();
+      },
     );
   }
 

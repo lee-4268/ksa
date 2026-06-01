@@ -25,7 +25,6 @@ import '../services/community_service.dart';
 import '../services/notification_service.dart';
 import '../services/inspection_service.dart';
 import '../widgets/inspection_dashboard_widget.dart';
-import '../widgets/screen_tour.dart';
 
 /// 앱 셸 — 사이드바 상시 표시 + 오른쪽 콘텐츠 전환
 class HomeScreen extends StatefulWidget {
@@ -37,12 +36,6 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
-
-  // 화면 투어 표적
-  final GlobalKey _kTourSidebar = GlobalKey();      // 데스크탑 사이드바 전체
-  final GlobalKey _kTourMenuButton = GlobalKey();   // 모바일 햄버거
-  final GlobalKey _kTourNotification = GlobalKey(); // 알림 종 (데스크탑 헤더에만)
-  final GlobalKey _kTourHelp = GlobalKey();         // 도움말 ?
 
   // 디자인 토큰
   static const _bg = Color(0xFFF5F6FA);
@@ -122,40 +115,6 @@ class _HomeScreenState extends State<HomeScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _maybeShowLoginNotificationPopup();
     });
-    // 첫 접속 시 1회 자동 — 알림 팝업과 시간차로 띄움
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      Future.delayed(const Duration(milliseconds: 1800), () {
-        if (!mounted) return;
-        _buildHomeTour().maybeShowFirstTime(context);
-      });
-    });
-  }
-
-  ScreenTour _buildHomeTour() {
-    // 매 호출 새로 — 모바일/데스크탑 전환 시 표적 키가 달라짐
-    final isMobile = MediaQuery.of(context).size.width < 800;
-    return ScreenTour(
-      screenKey: 'home',
-      version: 2,
-      steps: [
-        if (isMobile)
-          TourStep(_kTourMenuButton, '메뉴 열기',
-              '왼쪽 위의 메뉴 버튼을 누르면 현장 수검 Map, 일정, 호출명칭 등 모든 화면으로 이동할 수 있어요.',
-              shape: ShapeLightFocus.Circle)
-        else
-          TourStep(_kTourSidebar, '메뉴',
-              '왼쪽 사이드바에서 현장 수검 Map, 일정 및 통계, 호출명칭·설치확인서 등 화면을 전환할 수 있어요.'),
-        TourStep(_kTourNotification, '알림',
-            '새 공지·요청사항이 도착하면 빨간 점이 표시됩니다. 클릭해 모아 볼 수 있어요.'),
-        TourStep(_kTourHelp, '도움말',
-            '이 투어를 다시 보고 싶을 때는 화면 우측 상단의 ? 아이콘을 누르세요. 각 화면마다 그 화면 전용 안내가 따로 있습니다.',
-            shape: ShapeLightFocus.Circle),
-      ],
-    );
-  }
-
-  void _showOnboardingTour() {
-    _buildHomeTour().show(context);
   }
 
 
@@ -525,7 +484,6 @@ final result = await showDialog<bool>(
         child: Row(
           children: [
             IconButton(
-              key: _kTourMenuButton,
               icon: const Icon(Icons.menu, color: _textSecondary, size: 22),
               onPressed: () => _scaffoldKey.currentState?.openDrawer(),
             ),
@@ -534,15 +492,6 @@ final result = await showDialog<bool>(
             const SizedBox(width: 8),
             Text(item.title, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: _textPrimary)),
             const Spacer(),
-            IconButton(
-              key: _kTourHelp,
-              icon: Icon(Icons.help_outline_rounded, size: 22, color: Colors.grey.shade500),
-              padding: EdgeInsets.zero,
-              constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-              tooltip: '도움말 / 투어 다시보기',
-              onPressed: _showOnboardingTour,
-            ),
-            const SizedBox(width: 4),
             _buildUserAvatar(),
           ],
         ),
@@ -565,7 +514,6 @@ final result = await showDialog<bool>(
 
   Widget _buildSidebar(AuthService auth, List<_MenuItem> items) {
     return AnimatedContainer(
-      key: _kTourSidebar,
       duration: const Duration(milliseconds: 200),
       width: _sidebarCollapsed ? 64 : _sidebarWidth,
       decoration: const BoxDecoration(
@@ -978,22 +926,11 @@ final result = await showDialog<bool>(
         const SizedBox(width: 4),
         Text(timeText, style: TextStyle(fontSize: 12, color: isWarning ? Colors.orange : _textSecondary)),
         const SizedBox(width: 8),
-        // 도움말(투어 다시보기) 버튼
-        IconButton(
-          key: _kTourHelp,
-          icon: Icon(Icons.help_outline_rounded, size: 22, color: Colors.grey.shade500),
-          padding: EdgeInsets.zero,
-          constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-          tooltip: '도움말 / 투어 다시보기',
-          onPressed: _showOnboardingTour,
-        ),
-        const SizedBox(width: 4),
         // 벨 아이콘 + 배지
         Consumer<NotificationService>(
           builder: (context, notifSvc, _) {
             final unread = notifSvc.unreadCount;
             return Stack(
-              key: _kTourNotification,
               clipBehavior: Clip.none,
               children: [
                 IconButton(
