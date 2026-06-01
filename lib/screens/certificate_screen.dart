@@ -267,7 +267,7 @@ class _IndividualTabState extends State<_IndividualTab>
 
   /// 시설물(SKO-OCEAN) 사진 팝업 — 허가번호 조회로 얻은 공대 기준 조회.
   /// 사내망 CORS 차단으로 바이트 자동삽입은 불가 → 사진을 보여주고 다운로드하게 함.
-  /// 다운로드한 파일은 사용자가 현장사진 칸을 클릭해 직접 업로드.
+  /// 시설물 사진 조회 → 체크박스 선택 → 백엔드 프록시로 다운로드 → _photoBytes 에 추가.
   Future<void> _openSislPhotoPicker() async {
     if (_neosCode.isEmpty) return;
     final dialog = ProgressDialog(context);
@@ -285,10 +285,41 @@ class _IndividualTabState extends State<_IndividualTab>
       await ProgressDialog(context).error(message: '등록된 시설물 사진이\n없습니다');
       return;
     }
-    showDialog(
+    final remainingSlots = (8 - _photoBytes.length).clamp(0, 8);
+    if (remainingSlots == 0) {
+      await ProgressDialog(context).error(message: '현장사진 칸이 가득 찼습니다\n(최대 8장)');
+      return;
+    }
+    final selectedIndices = await showDialog<List<int>>(
       context: context,
-      builder: (_) => _SislPickerDialog(items: items),
+      builder: (_) => _SislPickerDialog(
+        items: items,
+        maxSelect: remainingSlots,
+        service: widget.service,
+      ),
     );
+    if (!mounted || selectedIndices == null || selectedIndices.isEmpty) return;
+
+    final progress = ProgressDialog(context);
+    progress.show(message: '사진 ${selectedIndices.length}장 가져오는 중...');
+    try {
+      final added = <Uint8List>[];
+      for (final i in selectedIndices) {
+        final p = items[i];
+        final fp = (p['file_path'] ?? '').toString();
+        final guid = (p['guid'] ?? '').toString();
+        if (fp.isEmpty || guid.isEmpty) continue;
+        final bytes = await widget.service.downloadSislPhoto(filePath: fp, guid: guid);
+        added.add(bytes);
+      }
+      if (!mounted) return;
+      setState(() {
+        _photoBytes.addAll(added.take(remainingSlots));
+      });
+      await progress.complete(message: '${added.length}장 첨부 완료');
+    } catch (e) {
+      await progress.error(message: '사진 다운로드 실패\n$e');
+    }
   }
 
   String _bytesToBase64DataUrl(Uint8List bytes) {
@@ -1412,14 +1443,39 @@ class _BatchTabState extends State<_BatchTab>
 }
 
 /// 시설물(SKO-OCEAN) 사진 선택 팝업.
-/// 사내망 CORS 차단으로 사진 바이트를 직접 가져올 수 없어, 사진을 보여주고
-/// 다운로드만 제공한다. 사용자는 다운로드한 파일을 현장사진 칸에 직접 업로드한다.
-class _SislPickerDialog extends StatelessWidget {
+/// 체크박스로 선택 → 선택 완료 시 인덱스 리스트 반환. 부모 화면이 백엔드
+/// 프록시로 바이트를 받아 현장사진 칸에 자동 추가.
+class _SislPickerDialog extends StatefulWidget {
   final List<Map<String, dynamic>> items;
-  const _SislPickerDialog({required this.items});
+  final int maxSelect;
+  final CertificateService service;
+  const _SislPickerDialog({
+    required this.items,
+    required this.maxSelect,
+    required this.service,
+  });
+
+  @override
+  State<_SislPickerDialog> createState() => _SislPickerDialogState();
+}
+
+class _SislPickerDialogState extends State<_SislPickerDialog> {
+  final Set<int> _selected = <int>{};
+
+  void _toggle(int i) {
+    setState(() {
+      if (_selected.contains(i)) {
+        _selected.remove(i);
+      } else {
+        if (_selected.length >= widget.maxSelect) return;
+        _selected.add(i);
+      }
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
+    final selectedCount = _selected.length;
     return Dialog(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
       insetPadding: const EdgeInsets.all(24),
@@ -1431,22 +1487,9 @@ class _SislPickerDialog extends StatelessWidget {
             Row(children: [
               const Icon(Icons.photo_library_outlined, color: Color(0xFF06B6D4), size: 20),
               const SizedBox(width: 8),
-              Text('시설물 사진 (${items.length}장)',
+              Text('시설물 사진 (${widget.items.length}장)',
                   style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
               const Spacer(),
-              OutlinedButton.icon(
-                onPressed: () => openSislPhotosNewTab(items),
-                icon: const Icon(Icons.open_in_new, size: 16),
-                label: const Text('전체 새 탭으로 열기', style: TextStyle(fontSize: 12)),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: const Color(0xFF06B6D4),
-                  side: const BorderSide(color: Color(0xFF06B6D4)),
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                  visualDensity: VisualDensity.compact,
-                ),
-              ),
-              const SizedBox(width: 4),
               IconButton(
                 icon: const Icon(Icons.close, size: 20),
                 onPressed: () => Navigator.pop(context),
@@ -1458,15 +1501,13 @@ class _SislPickerDialog extends StatelessWidget {
               width: double.infinity,
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
               decoration: BoxDecoration(
-                color: const Color(0xFFFFF7ED),
+                color: const Color(0xFFF0F9FF),
                 borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: const Color(0xFFFFE0B2)),
+                border: Border.all(color: const Color(0xFFBAE6FD)),
               ),
-              child: const Text(
-                '보안 정책상 사진을 바로 첨부·저장할 수 없습니다. 사진을 클릭하거나 '
-                "'전체 새 탭으로 열기'로 새 탭에서 연 뒤, 우클릭 → 이미지 저장으로 받아 "
-                '위 현장사진 칸을 클릭해 업로드해주세요.',
-                style: TextStyle(fontSize: 12, color: Color(0xFF9A6A2C), height: 1.4),
+              child: Text(
+                '체크박스로 선택한 사진이 현장사진 칸에 자동으로 추가됩니다. 남은 슬롯: ${widget.maxSelect}장',
+                style: const TextStyle(fontSize: 12, color: Color(0xFF075985), height: 1.4),
               ),
             ),
             const SizedBox(height: 12),
@@ -1480,24 +1521,66 @@ class _SislPickerDialog extends StatelessWidget {
                     crossAxisSpacing: 8,
                     childAspectRatio: 1,
                   ),
-                  itemCount: items.length,
+                  itemCount: widget.items.length,
                   itemBuilder: (_, i) {
-                    final p = items[i];
-                    final url = (p['url'] ?? '').toString();
+                    final p = widget.items[i];
+                    final fp = (p['file_path'] ?? '').toString();
+                    final guid = (p['guid'] ?? '').toString();
+                    final url = (fp.isNotEmpty && guid.isNotEmpty)
+                        ? widget.service.sislPhotoProxyUrl(filePath: fp, guid: guid)
+                        : (p['url'] ?? '').toString();
                     final dt = fmtSislDate(p['upload_date']);
-                    return SislPhotoTile(
-                      url: url,
-                      label: dt,
-                      onTap: () => showDialog(
-                        context: context,
-                        barrierColor: Colors.black87,
-                        builder: (_) => SislPhotoViewer(items: items, initialIndex: i),
+                    final checked = _selected.contains(i);
+                    return Stack(fit: StackFit.expand, children: [
+                      SislPhotoTile(
+                        url: url,
+                        label: dt,
+                        onTap: () => _toggle(i),
                       ),
-                    );
+                      Positioned(
+                        left: 6, top: 6,
+                        child: GestureDetector(
+                          onTap: () => _toggle(i),
+                          child: Container(
+                            width: 22, height: 22,
+                            decoration: BoxDecoration(
+                              color: checked ? const Color(0xFF06B6D4) : Colors.white.withValues(alpha: 0.85),
+                              borderRadius: BorderRadius.circular(4),
+                              border: Border.all(color: const Color(0xFF06B6D4), width: 1.5),
+                            ),
+                            child: checked
+                                ? const Icon(Icons.check, size: 16, color: Colors.white)
+                                : null,
+                          ),
+                        ),
+                      ),
+                    ]);
                   },
                 );
               }),
             ),
+            const SizedBox(height: 12),
+            Row(children: [
+              Text('$selectedCount / ${widget.maxSelect} 선택',
+                  style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+              const Spacer(),
+              OutlinedButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('취소'),
+              ),
+              const SizedBox(width: 8),
+              ElevatedButton.icon(
+                onPressed: selectedCount == 0
+                    ? null
+                    : () => Navigator.pop(context, _selected.toList()..sort()),
+                icon: const Icon(Icons.check, size: 16),
+                label: Text('선택 완료 ($selectedCount장)'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF06B6D4),
+                  foregroundColor: Colors.white,
+                ),
+              ),
+            ]),
           ]),
         ),
       ),

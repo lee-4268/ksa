@@ -23,8 +23,11 @@ import logging
 import os
 import sqlite3
 from datetime import datetime, timedelta, timezone
+from urllib.parse import quote
 
+import httpx
 from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
+from fastapi.responses import StreamingResponse
 
 from core.auth import _verify_auth, _get_user_role_sync, _record_audit_log_sync
 from core.config import _SISL_PHOTO_DB
@@ -34,17 +37,33 @@ from core.cert_cache import _cert_cache_load
 router = APIRouter(tags=["sisl_photos"])
 logger = logging.getLogger(__name__)
 
+# inline 표시(<img src=>)용 정적 호스트. CORS 막혀 브라우저 직접 fetch 는 안 되지만
+# 우리 백엔드가 프록시할 때는 사용 가능.
 _SISL_PHOTO_BASE_URL = os.environ.get(
     "SISL_PHOTO_BASE_URL", "https://static-int.skons.co.kr/SKO-OCEAN"
+)
+# 다운로드용 — EC2 외부망에서도 200 응답 확인. URL 인코딩된 백슬래시 키.
+_SISL_DOWNLOAD_URL = os.environ.get(
+    "SISL_DOWNLOAD_URL",
+    "https://neosmobile.networkons.com/Handler/FileDownloadFromStorage.ashx",
 )
 _SISL_DEFAULT_YEARS_BACK = 3
 
 
 def _build_sisl_photo_url(file_path: str, guid: str) -> str:
-    """엑셀의 FilePath + Guid 를 URL 로 조립."""
+    """엑셀의 FilePath + Guid 를 URL 로 조립 (사내망 inline 조회용)."""
     path = (file_path or '').replace('\\', '/').strip('/')
     base = _SISL_PHOTO_BASE_URL.rstrip('/')
     return f"{base}/{path}/{guid}"
+
+
+def _build_sisl_download_url(file_path: str, guid: str) -> str:
+    """neosmobile 다운로드 핸들러 URL — EC2 에서도 접근 가능.
+    key 는 백슬래시 경로(\\11\\공대\\YYYYMM\\GUID) URL-encode."""
+    path = (file_path or '').strip().strip('/').replace('/', '\\').strip('\\')
+    g = (guid or '').strip()
+    key = f"\\{path}\\{g}"
+    return f"{_SISL_DOWNLOAD_URL}?key={quote(key, safe='')}"
 
 
 def _sisl_upload_date_cutoff(years_back: int) -> int:
@@ -419,3 +438,40 @@ async def sisl_photos_search(
         }
 
     return await asyncio.to_thread(_read)
+
+
+# ── 사진 프록시 ────────────────────────────────────────────────
+
+_PROXY_TIMEOUT = httpx.Timeout(15.0)
+
+
+@router.get("/sisl-photos/proxy")
+async def sisl_photo_proxy(
+    request: Request,
+    file_path: str = Query(..., description="sisl_photo.file_path"),
+    guid: str = Query(..., description="sisl_photo.guid"),
+):
+    """neosmobile 핸들러로부터 이미지를 받아 그대로 스트리밍.
+    사내망 정적 호스트(static-int)는 CORS 막혀 브라우저에서 직접 못 받으므로 백엔드 프록시."""
+    await _verify_auth(request)
+    url = _build_sisl_download_url(file_path, guid)
+    try:
+        async with httpx.AsyncClient(timeout=_PROXY_TIMEOUT, follow_redirects=True) as client:
+            resp = await client.get(url)
+    except httpx.TimeoutException:
+        raise HTTPException(504, "사진 서버 응답 시간 초과")
+    except Exception as e:
+        logger.warning(f"sisl 사진 프록시 실패: {e}")
+        raise HTTPException(502, "사진 서버 연결 실패")
+
+    if resp.status_code != 200:
+        raise HTTPException(resp.status_code, "사진을 찾을 수 없습니다")
+
+    media_type = resp.headers.get("content-type", "application/octet-stream")
+    return StreamingResponse(
+        iter([resp.content]),
+        media_type=media_type,
+        headers={"Cache-Control": "private, max-age=600"},
+    )
+
+

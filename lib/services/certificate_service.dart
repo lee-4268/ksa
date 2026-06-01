@@ -40,6 +40,41 @@ class CertificateService {
     return json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
   }
 
+  /// 백엔드 프록시 URL — sisl 사진 1장. 인증 헤더 없이 신뢰 가능한 도메인이라
+  /// <img src=> 에 그대로 박아 inline 표시. 다만 brower 가 보내는 요청에 Authorization
+  /// 헤더가 없어 백엔드 _verify_auth 가 거절 — 인증 토큰을 쿼리로 함께 전달.
+  String sislPhotoProxyUrl({required String filePath, required String guid}) {
+    final params = {
+      'file_path': filePath,
+      'guid': guid,
+      // 쿠키/Authorization 없이 <img> 요청도 통과시키려면 토큰을 쿼리로 — 단,
+      // 백엔드 _verify_auth 가 query token 도 받도록 보강이 필요. 일단은
+      // http.get 으로 헤더 인증을 거치는 다운로드 용으로만 사용.
+      if (_authToken != null) 'token': _authToken!,
+    };
+    final uri = Uri.parse('$_baseUrl/sisl-photos/proxy')
+        .replace(queryParameters: params);
+    return uri.toString();
+  }
+
+  /// sisl 사진 1장을 바이너리로 다운로드. PDF 첨부용.
+  Future<Uint8List> downloadSislPhoto({
+    required String filePath,
+    required String guid,
+  }) async {
+    final uri = Uri.parse('$_baseUrl/sisl-photos/proxy').replace(queryParameters: {
+      'file_path': filePath,
+      'guid': guid,
+    });
+    final resp = await http.get(uri, headers: {
+      'Authorization': 'Bearer ${_authToken ?? ''}',
+    }).timeout(_apiTimeout);
+    if (resp.statusCode != 200) {
+      throw Exception('사진 다운로드 실패 (${resp.statusCode})');
+    }
+    return resp.bodyBytes;
+  }
+
   /// 공대(neos_code) 기준 SKO-OCEAN 시설물 사진 메타 조회 (각 항목에 url 포함).
   Future<List<Map<String, dynamic>>> listSislPhotos(String neosCode,
       {int limit = 500}) async {
