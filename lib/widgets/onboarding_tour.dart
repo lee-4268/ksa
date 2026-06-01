@@ -4,18 +4,25 @@ import 'package:tutorial_coach_mark/tutorial_coach_mark.dart';
 
 /// 첫 접속 시 1회 자동, 헤더 '?' 아이콘으로 재실행 가능한 코치마크 투어.
 ///
-/// 사용 측에서:
-///   final tour = OnboardingTour(targets);
-///   await tour.maybeShowFirstTime(context);  // 자동 트리거
-///   ...
-///   tour.show(context);  // 수동 재실행
+/// 데스크탑/모바일 분기:
+/// - 데스크탑(사이드바 상시 노출): 사이드바 메뉴 → 알림 → 도움말 5단계
+/// - 모바일(드로어): 햄버거 메뉴 강조 → 드로어 자동 열기 → 드로어 안 메뉴 →
+///   드로어 닫고 도움말 안내
 class OnboardingTour {
   static const String _doneKey = 'onboarding_v1_done';
 
   final OnboardingTargets targets;
+  final bool isMobile;
+  final VoidCallback? openDrawer;
+  final VoidCallback? closeDrawer;
   TutorialCoachMark? _tutorial;
 
-  OnboardingTour(this.targets);
+  OnboardingTour(
+    this.targets, {
+    this.isMobile = false,
+    this.openDrawer,
+    this.closeDrawer,
+  });
 
   Future<void> maybeShowFirstTime(BuildContext context) async {
     final prefs = await SharedPreferences.getInstance();
@@ -25,8 +32,134 @@ class OnboardingTour {
   }
 
   void show(BuildContext context, {bool markDoneOnFinish = true}) {
-    final items = _buildTargets();
+    if (isMobile) {
+      _showMobile(context, markDoneOnFinish: markDoneOnFinish);
+    } else {
+      _showDesktop(context, markDoneOnFinish: markDoneOnFinish);
+    }
+  }
+
+  // ── 데스크탑: 한 번에 5단계 ──
+
+  void _showDesktop(BuildContext context, {required bool markDoneOnFinish}) {
+    final items = <TargetFocus>[
+      _step(targets.mapMenuKey, '현장 수검 Map',
+          '지도에서 마커를 클릭하면 해당 국소의 검사 정보를 볼 수 있어요. 여러 국소를 묶어 최적 경로도 짤 수 있습니다.', isLast: false),
+      _step(targets.scheduleMenuKey, '일정 및 통계',
+          '검사 일정과 진행 상황, 통계를 한 곳에서 확인하세요.', isLast: false),
+      _step(targets.callnameMenuKey, '호출명칭 / 설치확인서',
+          '필요한 자료를 빠르게 조회하고, 설치확인서·전산비교도 여기서 처리해요.', isLast: false),
+      _step(targets.notificationKey, '알림',
+          '새 공지·요청사항이 도착하면 여기에 표시됩니다.', isLast: false),
+      _step(targets.helpKey, '도움말',
+          '이 투어를 다시 보고 싶을 때는 이 ? 아이콘을 누르세요.', isLast: true, shape: ShapeLightFocus.Circle),
+    ].whereType<TargetFocus>().toList();
+
     if (items.isEmpty) return;
+    _launch(context, items, onAllDone: () => _markDone(markDoneOnFinish));
+  }
+
+  // ── 모바일: 햄버거 → 드로어 자동 열기 → 드로어 안 메뉴 → 드로어 닫고 도움말 ──
+
+  void _showMobile(BuildContext context, {required bool markDoneOnFinish}) {
+    // 1단계: 햄버거 메뉴
+    final first = _step(
+      targets.menuButtonKey,
+      '메뉴 열기',
+      '왼쪽 위의 메뉴 버튼을 누르면 화면 전환 메뉴가 열려요. 자동으로 열어드릴게요.',
+      isLast: false,
+      shape: ShapeLightFocus.Circle,
+    );
+    if (first == null) {
+      // 햄버거가 없으면 모바일 모드인데 의미 없으므로 데스크탑 흐름으로 폴백
+      _showDesktop(context, markDoneOnFinish: markDoneOnFinish);
+      return;
+    }
+
+    _launch(context, [first], onAllDone: () async {
+      // 드로어 열고, 한 프레임 기다린 뒤 2단계 시작
+      openDrawer?.call();
+      await Future.delayed(const Duration(milliseconds: 400));
+      if (!context.mounted) return;
+      _showMobileStep2(context, markDoneOnFinish: markDoneOnFinish);
+    });
+  }
+
+  void _showMobileStep2(BuildContext context, {required bool markDoneOnFinish}) {
+    final items = <TargetFocus>[
+      _step(targets.mapMenuKey, '현장 수검 Map',
+          '지도에서 마커를 클릭하면 해당 국소의 검사 정보를 볼 수 있고, 여러 국소를 묶어 최적 경로도 짤 수 있어요.', isLast: false),
+      _step(targets.scheduleMenuKey, '일정 및 통계',
+          '검사 일정과 진행 상황, 통계를 한 곳에서 확인하세요.', isLast: false),
+      _step(targets.callnameMenuKey, '호출명칭 / 설치확인서',
+          '필요한 자료를 빠르게 조회하고, 설치확인서·전산비교도 여기서 처리해요.', isLast: false),
+    ].whereType<TargetFocus>().toList();
+
+    if (items.isEmpty) {
+      // 드로어 안 메뉴들이 아직 마운트 안 됐다면 키 등록이 PostFrame 이후일 수도.
+      // 한 번 더 짧게 기다려보고 안 되면 그냥 마지막 단계로 점프.
+      Future.delayed(const Duration(milliseconds: 200), () {
+        if (!context.mounted) return;
+        _showMobileFinal(context, markDoneOnFinish: markDoneOnFinish);
+      });
+      return;
+    }
+
+    _launch(context, items, onAllDone: () async {
+      closeDrawer?.call();
+      await Future.delayed(const Duration(milliseconds: 350));
+      if (!context.mounted) return;
+      _showMobileFinal(context, markDoneOnFinish: markDoneOnFinish);
+    });
+  }
+
+  void _showMobileFinal(BuildContext context, {required bool markDoneOnFinish}) {
+    final last = _step(
+      targets.helpKey,
+      '도움말',
+      '이 투어를 다시 보고 싶을 때는 오른쪽 위의 ? 아이콘을 누르세요.',
+      isLast: true,
+      shape: ShapeLightFocus.Circle,
+    );
+    if (last == null) {
+      _markDone(markDoneOnFinish);
+      return;
+    }
+    _launch(context, [last], onAllDone: () => _markDone(markDoneOnFinish));
+  }
+
+  // ── 헬퍼 ──
+
+  TargetFocus? _step(
+    GlobalKey? key,
+    String title,
+    String body, {
+    required bool isLast,
+    ShapeLightFocus shape = ShapeLightFocus.RRect,
+    ContentAlign align = ContentAlign.bottom,
+  }) {
+    if (key?.currentContext == null) return null;
+    return TargetFocus(
+      identify: title,
+      keyTarget: key,
+      shape: shape,
+      radius: 10,
+      contents: [
+        TargetContent(
+          align: align,
+          builder: (ctx, ctrl) => _TourCard(
+            title: title,
+            body: body,
+            onNext: ctrl.next,
+            onSkip: ctrl.skip,
+            isLast: isLast,
+          ),
+        ),
+      ],
+    );
+  }
+
+  void _launch(BuildContext context, List<TargetFocus> items, {required VoidCallback onAllDone}) {
     _tutorial = TutorialCoachMark(
       targets: items,
       colorShadow: Colors.black,
@@ -35,56 +168,18 @@ class OnboardingTour {
       hideSkip: false,
       textSkip: '건너뛰기',
       textStyleSkip: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600),
-      onFinish: () async {
-        if (markDoneOnFinish) {
-          final prefs = await SharedPreferences.getInstance();
-          await prefs.setBool(_doneKey, true);
-        }
-      },
+      onFinish: onAllDone,
       onSkip: () {
-        SharedPreferences.getInstance().then((p) => p.setBool(_doneKey, true));
+        _markDone(true);
         return true;
       },
     )..show(context: context);
   }
 
-  List<TargetFocus> _buildTargets() {
-    final out = <TargetFocus>[];
-
-    void add(GlobalKey? key, String title, String body, {ShapeLightFocus shape = ShapeLightFocus.RRect, ContentAlign align = ContentAlign.bottom}) {
-      if (key?.currentContext == null) return;
-      out.add(TargetFocus(
-        identify: title,
-        keyTarget: key,
-        shape: shape,
-        radius: 10,
-        contents: [
-          TargetContent(
-            align: align,
-            builder: (ctx, ctrl) => _TourCard(
-              title: title,
-              body: body,
-              onNext: ctrl.next,
-              onSkip: ctrl.skip,
-              isLast: out.length == 4, // 5번째(마지막)면 true가 됨
-            ),
-          ),
-        ],
-      ));
-    }
-
-    add(targets.mapMenuKey, '현장 수검 Map',
-        '지도에서 마커를 클릭하면 해당 국소의 검사 정보를 볼 수 있어요. 여러 국소를 묶어 최적 경로도 짤 수 있습니다.');
-    add(targets.scheduleMenuKey, '일정 및 통계',
-        '검사 일정과 진행 상황, 통계를 한 곳에서 확인하세요.');
-    add(targets.callnameMenuKey, '호출명칭 / 설치확인서',
-        '필요한 자료를 빠르게 조회하고, 설치확인서·전산비교도 여기서 처리해요.');
-    add(targets.notificationKey, '알림',
-        '새 공지·요청사항이 도착하면 여기에 표시됩니다.');
-    add(targets.helpKey, '도움말',
-        '이 투어를 다시 보고 싶을 때는 이 ? 아이콘을 누르세요.', shape: ShapeLightFocus.Circle, align: ContentAlign.bottom);
-
-    return out;
+  Future<void> _markDone(bool shouldMark) async {
+    if (!shouldMark) return;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_doneKey, true);
   }
 }
 
@@ -94,6 +189,7 @@ class OnboardingTargets {
   final GlobalKey? callnameMenuKey;
   final GlobalKey? notificationKey;
   final GlobalKey? helpKey;
+  final GlobalKey? menuButtonKey;
 
   const OnboardingTargets({
     this.mapMenuKey,
@@ -101,6 +197,7 @@ class OnboardingTargets {
     this.callnameMenuKey,
     this.notificationKey,
     this.helpKey,
+    this.menuButtonKey,
   });
 }
 

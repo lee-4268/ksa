@@ -44,7 +44,7 @@ class _HomeScreenState extends State<HomeScreen> {
   final GlobalKey _tourCallnameMenuKey = GlobalKey();
   final GlobalKey _tourNotificationKey = GlobalKey();
   final GlobalKey _tourHelpKey = GlobalKey();
-  OnboardingTour? _tour;
+  final GlobalKey _tourMenuButtonKey = GlobalKey(); // 모바일 햄버거 메뉴
 
   // 디자인 토큰
   static const _bg = Color(0xFFF5F6FA);
@@ -128,27 +128,35 @@ class _HomeScreenState extends State<HomeScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       Future.delayed(const Duration(milliseconds: 1500), () {
         if (!mounted) return;
-        _tour ??= OnboardingTour(OnboardingTargets(
-          mapMenuKey: _tourMapMenuKey,
-          scheduleMenuKey: _tourScheduleMenuKey,
-          callnameMenuKey: _tourCallnameMenuKey,
-          notificationKey: _tourNotificationKey,
-          helpKey: _tourHelpKey,
-        ));
-        _tour!.maybeShowFirstTime(context);
+        _buildTour().maybeShowFirstTime(context);
       });
     });
   }
 
+  OnboardingTour _buildTour() {
+    // 매 호출마다 새로 만들어 모바일/데스크탑 전환에 대응 (화면 회전·창 크기 변경).
+    final isMobile = MediaQuery.of(context).size.width < 800;
+    return OnboardingTour(
+      OnboardingTargets(
+        mapMenuKey: _tourMapMenuKey,
+        scheduleMenuKey: _tourScheduleMenuKey,
+        callnameMenuKey: _tourCallnameMenuKey,
+        notificationKey: _tourNotificationKey,
+        helpKey: _tourHelpKey,
+        menuButtonKey: _tourMenuButtonKey,
+      ),
+      isMobile: isMobile,
+      openDrawer: () => _scaffoldKey.currentState?.openDrawer(),
+      closeDrawer: () {
+        if (_scaffoldKey.currentState?.isDrawerOpen ?? false) {
+          Navigator.of(context).pop();
+        }
+      },
+    );
+  }
+
   void _showOnboardingTour() {
-    _tour ??= OnboardingTour(OnboardingTargets(
-      mapMenuKey: _tourMapMenuKey,
-      scheduleMenuKey: _tourScheduleMenuKey,
-      callnameMenuKey: _tourCallnameMenuKey,
-      notificationKey: _tourNotificationKey,
-      helpKey: _tourHelpKey,
-    ));
-    _tour!.show(context);
+    _buildTour().show(context);
   }
 
   // 사이드바 메뉴 타이틀 → 투어용 키 매핑.
@@ -534,6 +542,7 @@ final result = await showDialog<bool>(
         child: Row(
           children: [
             IconButton(
+              key: _tourMenuButtonKey,
               icon: const Icon(Icons.menu, color: _textSecondary, size: 22),
               onPressed: () => _scaffoldKey.currentState?.openDrawer(),
             ),
@@ -543,6 +552,7 @@ final result = await showDialog<bool>(
             Text(item.title, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: _textPrimary)),
             const Spacer(),
             IconButton(
+              key: _tourHelpKey,
               icon: Icon(Icons.help_outline_rounded, size: 22, color: Colors.grey.shade500),
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
