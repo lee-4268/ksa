@@ -1,10 +1,16 @@
 // ignore_for_file: avoid_web_libraries_in_flutter
 import 'dart:convert';
 import 'dart:html' as html;
+import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
+import 'package:flutter/gestures.dart';
 import 'package:http/http.dart' as http;
 import 'package:provider/provider.dart';
+import 'package:share_plus/share_plus.dart';
+import 'package:path_provider/path_provider.dart';
+import 'dart:io' show File;
 import '../models/radio_station.dart';
 import '../services/auth_service.dart';
 import '../services/inspection_service.dart';
@@ -1244,6 +1250,8 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
     var editableStations = List<RadioStation>.from(stations);
     var isEditMode = false;
     var isSaving = false;
+    var isExporting = false;
+    final captureKey = GlobalKey();
 
     showModalBottomSheet(
       context: context,
@@ -1255,7 +1263,16 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
               (editableStations.first.id != stations.first.id ||
                editableStations.last.id != stations.last.id);
 
-          return SafeArea(
+          return Listener(
+            onPointerSignal: (event) {
+              // 웹에서 마우스 휠이 뒤의 카카오맵으로 새지 않도록 흡수.
+              // ListView 가 자체적으로 PointerSignalResolver 에 등록해 스크롤을 가져가고,
+              // 여기서는 그 외 영역(헤더·버튼·여백)에서 발생한 휠을 막는 역할.
+              if (event is PointerScrollEvent) {
+                GestureBinding.instance.pointerSignalResolver.register(event, (_) {});
+              }
+            },
+            child: SafeArea(
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
@@ -1264,6 +1281,13 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
                   width: 36, height: 4,
                   decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(2)),
                 ),
+                RepaintBoundary(
+                  key: captureKey,
+                  child: Container(
+                    color: Colors.white,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
                 // 헤더
                 Padding(
                   padding: const EdgeInsets.fromLTRB(20, 0, 12, 10),
@@ -1278,6 +1302,55 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
                       Text('${editableStations.length}개 국소',
                           style: TextStyle(fontSize: 12, color: Colors.grey.shade500)),
                       const SizedBox(width: 8),
+                      // 편집 모드가 아닐 때만 '이미지 저장' 버튼 노출
+                      if (!isEditMode) ...[
+                        InkWell(
+                          onTap: isExporting
+                              ? null
+                              : () async {
+                                  setSheetState(() => isExporting = true);
+                                  try {
+                                    await _exportBasketImage(
+                                      captureKey: captureKey,
+                                      entry: entry,
+                                      stations: editableStations,
+                                    );
+                                  } catch (e) {
+                                    if (mounted) {
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        SnackBar(content: Text('이미지 저장 실패: $e'), backgroundColor: Colors.red),
+                                      );
+                                    }
+                                  } finally {
+                                    if (mounted) setSheetState(() => isExporting = false);
+                                  }
+                                },
+                          borderRadius: BorderRadius.circular(6),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: Colors.grey.shade100,
+                              border: Border.all(color: Colors.grey.shade300),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                isExporting
+                                    ? const SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 1.6))
+                                    : Icon(Icons.ios_share, size: 12, color: Colors.grey.shade600),
+                                const SizedBox(width: 3),
+                                Text('이미지',
+                                    style: TextStyle(
+                                      fontSize: 11, fontWeight: FontWeight.w600,
+                                      color: Colors.grey.shade600,
+                                    )),
+                              ],
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                      ],
                       // 편집 토글
                       InkWell(
                         onTap: () => setSheetState(() {
@@ -1521,6 +1594,10 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
                     },
                   ),
                 ),
+                      ],
+                    ),
+                  ),
+                ),
                 // 편집 모드 하단 버튼
                 if (isEditMode)
                   Padding(
@@ -1594,6 +1671,7 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
                   const SizedBox(height: 8),
               ],
             ),
+          ),
           );
         },
       ),
@@ -1637,6 +1715,55 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
         child: Text(label, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: textColor)),
       ),
     );
+  }
+
+  // 경로 보관함 바텀시트를 PNG 로 캡처해서 웹은 다운로드, 모바일은 시스템 공유 시트 띄움.
+  Future<void> _exportBasketImage({
+    required GlobalKey captureKey,
+    required RouteBasketEntry entry,
+    required List<RadioStation> stations,
+  }) async {
+    // 다음 프레임까지 기다려 위젯이 안정된 상태에서 캡처.
+    await Future.delayed(const Duration(milliseconds: 50));
+    final ctx = captureKey.currentContext;
+    if (ctx == null) throw Exception('캡처 대상이 없습니다');
+    final boundary = ctx.findRenderObject() as RenderRepaintBoundary?;
+    if (boundary == null) throw Exception('캡처 대상이 없습니다');
+
+    final image = await boundary.toImage(pixelRatio: 2.5);
+    final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+    if (byteData == null) throw Exception('이미지 변환 실패');
+    final pngBytes = byteData.buffer.asUint8List();
+
+    final safeTitle = entry.title.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
+    final stamp = DateTime.now().toIso8601String().substring(0, 10);
+    final fileName = '경로_${safeTitle}_$stamp.png';
+
+    if (kIsWeb) {
+      final blob = html.Blob([pngBytes], 'image/png');
+      final url = html.Url.createObjectUrlFromBlob(blob);
+      final anchor = html.AnchorElement(href: url)
+        ..download = fileName
+        ..style.display = 'none';
+      html.document.body?.append(anchor);
+      anchor.click();
+      anchor.remove();
+      html.Url.revokeObjectUrl(url);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('이미지를 다운로드했습니다')),
+        );
+      }
+    } else {
+      final dir = await getTemporaryDirectory();
+      final file = File('${dir.path}/$fileName');
+      await file.writeAsBytes(pngBytes);
+      await Share.shareXFiles(
+        [XFile(file.path, mimeType: 'image/png')],
+        subject: entry.title,
+        text: '${entry.title} (${stations.length}개 국소)',
+      );
+    }
   }
 
   void _navToStation(RadioStation s, String app) {
