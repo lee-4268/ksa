@@ -73,7 +73,7 @@ async def admin_menu_stats(request: Request, days: int = Query(30)):
             (cutoff,),
         ).fetchall()
         daily = conn.execute(
-            "SELECT DATE(accessed_at) as day, COUNT(*) as cnt FROM menu_usage_log "
+            "SELECT DATE(accessed_at) as day, COUNT(DISTINCT user_id) as cnt FROM menu_usage_log "
             "WHERE accessed_at >= ? GROUP BY DATE(accessed_at) ORDER BY day",
             (cutoff,),
         ).fetchall()
