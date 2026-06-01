@@ -17,6 +17,7 @@ import '../services/inspection_service.dart';
 import '../models/route_basket.dart';
 import '../services/route_basket_service.dart';
 import '../widgets/progress_dialog.dart';
+import '../widgets/screen_tour.dart';
 import '../widgets/user_profile_button.dart';
 import 'inspection_result_screen.dart';
 
@@ -97,6 +98,15 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
   static const double _minListRatio = 0.15;
   static const double _maxListRatio = 0.85;
 
+  // 화면 투어 표적
+  final GlobalKey _kTourHelpBtn = GlobalKey();
+  final GlobalKey _kTourRefreshBtn = GlobalKey();
+  final GlobalKey _kTourAzimuthCtrl = GlobalKey();
+  final GlobalKey _kTourMyLocBtn = GlobalKey();
+  final GlobalKey _kTourPolygonBtn = GlobalKey();
+  final GlobalKey _kTourDetailList = GlobalKey();
+  ScreenTour? _screenTour;
+
   @override
   void initState() {
     super.initState();
@@ -121,7 +131,34 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
         onVertices: _onPolygonVerticesReceived,
         onCount: (c) => setState(() => _polygonVertexCount = c),
       );
+
+      // 화면 투어 — 메인 온보딩이 끝난 직후를 피해 살짝 더 늦게.
+      Future.delayed(const Duration(milliseconds: 2200), () {
+        if (!mounted) return;
+        _buildScreenTour().maybeShowFirstTime(context);
+      });
     });
+  }
+
+  ScreenTour _buildScreenTour() {
+    _screenTour ??= ScreenTour(
+      screenKey: 'map',
+      steps: [
+        TourStep(_kTourRefreshBtn, '새로고침',
+            '서버에서 최신 검사 일정·결과를 다시 받아옵니다. 다른 사람이 검사를 입력했거나 일정이 바뀌었을 때 사용하세요.'),
+        TourStep(_kTourAzimuthCtrl, '안테나 방위각',
+            '국소별 안테나가 어느 방향을 향하는지 부채꼴로 표시할 수 있어요. LTE/5G 대역을 선택해서 켜고 끌 수 있습니다.'),
+        TourStep(_kTourMyLocBtn, '내 위치',
+            '현재 위치를 지도에 추적합니다. 현장에서 가까운 국소를 빠르게 찾을 때 유용해요.'),
+        TourStep(_kTourPolygonBtn, '영역 선택 / 경로 계획',
+            '지도에 폴리곤을 그려 그 안의 국소만 골라낼 수 있고, 출발/도착을 정해 최적 경로까지 계산합니다.'),
+        TourStep(_kTourDetailList, '국소 리스트',
+            '현재 조건에 해당하는 국소들이 여기 모입니다. 항목을 누르면 지도가 이동하고 검사 상세를 열 수 있어요. "경로 담기" 로 묶어 저장해두면 다음에 바로 불러올 수 있습니다.'),
+        TourStep(_kTourHelpBtn, '도움말',
+            '이 화면의 투어를 다시 보고 싶을 때 이 ? 아이콘을 누르세요.', shape: ShapeLightFocus.Circle),
+      ],
+    );
+    return _screenTour!;
   }
 
   Future<void> _loadTeams() async {
@@ -432,7 +469,7 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
                   ),
                   SizedBox(
                     width: listWidth,
-                    child: _buildDetailList(isWebLayout: true),
+                    child: KeyedSubtree(key: _kTourDetailList, child: _buildDetailList(isWebLayout: true)),
                   ),
                 ],
               ),
@@ -526,7 +563,7 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
                             decoration: BoxDecoration(color: Colors.grey[400], borderRadius: BorderRadius.circular(2)),
                           ),
                         ),
-                        Expanded(child: _buildDetailList()),
+                        Expanded(child: KeyedSubtree(key: _kTourDetailList, child: _buildDetailList())),
                       ],
                     ),
                   ),
@@ -572,11 +609,16 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
                   child: SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
                 ),
               IconButton(
+                key: _kTourRefreshBtn,
                 icon: const Icon(Icons.refresh_rounded, color: Colors.black54, size: 22),
                 tooltip: '새로고침',
                 padding: EdgeInsets.zero,
                 constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
                 onPressed: _loadingInsp ? null : _loadInspection,
+              ),
+              ScreenTourHelpButton(
+                key: _kTourHelpBtn,
+                onTap: () => _buildScreenTour().show(context),
               ),
               UserProfileButton(onLogout: () => context.read<AuthService>().signOut()),
               const SizedBox(width: 4),
@@ -2016,6 +2058,7 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
 
   Widget _buildAzimuthControl(List<RadioStation> markerStations) {
     return Material(
+      key: _kTourAzimuthCtrl,
       color: Colors.white,
       elevation: 3,
       borderRadius: BorderRadius.circular(10),
@@ -2117,6 +2160,7 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
 
   Widget _buildMyLocationButton() {
     return Column(
+      key: _kTourMyLocBtn,
       mainAxisSize: MainAxisSize.min,
       children: [
         // 전체 뷰 리셋
@@ -2328,18 +2372,21 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
   // ── 폴리곤 경로 UI ────────────────────────────────────────────────────
 
   Widget _buildPolygonEntryButton() {
-    return _mapFloatingButton(
-      icon: Icons.polyline,
-      color: const Color(0xFFE53935),
-      onTap: () {
-        setState(() {
-          _polygonPhase = _PolygonPhase.drawing;
-          _polygonVertexCount = 0;
-          _activeBasketId = null;
-        });
-        _mapKey.currentState?.clearRouteOverlay();
-        _mapKey.currentState?.startPolygonDraw();
-      },
+    return KeyedSubtree(
+      key: _kTourPolygonBtn,
+      child: _mapFloatingButton(
+        icon: Icons.polyline,
+        color: const Color(0xFFE53935),
+        onTap: () {
+          setState(() {
+            _polygonPhase = _PolygonPhase.drawing;
+            _polygonVertexCount = 0;
+            _activeBasketId = null;
+          });
+          _mapKey.currentState?.clearRouteOverlay();
+          _mapKey.currentState?.startPolygonDraw();
+        },
+      ),
     );
   }
 
