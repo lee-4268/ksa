@@ -64,6 +64,9 @@ dependencies:
   # JS interop (Web 전용 — contenteditable 에디터)
   js: ^0.6.7
 
+  # 온보딩 코치마크 투어
+  tutorial_coach_mark: ^1.2.13
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
