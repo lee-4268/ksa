@@ -16,6 +16,7 @@ import tempfile as _tempfile
 from .config import (
     S3_BUCKET_NAME, CERT_CACHE_TTL,
     CALLNAME_CSV_PREFIX, CALLNAME_USE_COLS,
+    _INSP_DB,
 )
 from .s3 import get_s3_client
 
@@ -177,26 +178,84 @@ def _cert_cache_force_rebuild():
 
 
 def _cert_lookup_cached(query: str) -> dict:
-    """설치확인서 단건 조회 — SQLite 인덱스 O(1) 조회."""
+    """설치확인서 단건 조회 — SQLite 인덱스 조회.
+
+    같은 허가번호(zpwino)에 여러 cert 행이 있을 수 있음(주파수/장비별). 단순
+    LIMIT 1 은 비결정적이라 일정 화면(inspection_targets)과 어긋날 수 있어,
+    inspection_targets 에 저장된 공대/통시 를 우선 매칭한다.
+
+    매칭 우선순위 (zpwino 가 여러 행을 반환할 때):
+    1) inspection_targets.공대 == zpkcode 일치
+    2) inspection_targets.통시 == zpcode 일치
+    3) zpkcode 비어있지 않은 행
+    4) zpcname 알파벳 순 첫 번째 (결정적)
+    """
     if not query or not query.strip():
         return {}
     _cert_cache_load()
     q = query.strip()
-    cols = ["zpwino", "zpwina", "zpwiadr", "zpcode", "zpkcode", "zpcname", "area_hdofc_nm", "ons_team_nm", "zpirty3", "eqp_ser_no"]
+    cols = ["zpwino", "zpwina", "zpwiadr", "zpcode", "zpkcode", "zpcname",
+            "area_hdofc_nm", "ons_team_nm", "zpirty3", "eqp_ser_no"]
     try:
         conn = sqlite3.connect(_cert_cache_db_path)
         conn.row_factory = sqlite3.Row
         for col in ("zpwino", "zpwina", "zpwiadr"):
-            cur = conn.execute(f"SELECT * FROM cert WHERE {col}=? LIMIT 1", (q,))
-            row = cur.fetchone()
-            if row:
-                result = {c: (row[c] or "") for c in cols}
+            rows = conn.execute(f"SELECT * FROM cert WHERE {col}=?", (q,)).fetchall()
+            if not rows:
+                continue
+            if len(rows) == 1:
                 conn.close()
-                return result
+                return {c: (rows[0][c] or "") for c in cols}
+            # 여러 행 — inspection_targets 와 일치하는 행 우선
+            chosen = _pick_cert_row_matching_inspection(rows, q if col == "zpwino" else "")
+            conn.close()
+            return {c: (chosen[c] or "") for c in cols}
         conn.close()
     except Exception as e:
         logger.warning(f"설치확인서 캐시 조회 실패: {e}")
     return {}
+
+
+def _pick_cert_row_matching_inspection(rows, license_no: str):
+    """여러 cert 행 중 inspection_targets 의 공대/통시 와 일치하는 행을 우선 선택.
+
+    rows: sqlite3.Row 리스트 (len >= 2 가정)
+    license_no: 허가번호 (zpwino 컬럼으로 조회한 경우만 채워짐, 그 외엔 빈 문자열)
+    Returns: 선택된 sqlite3.Row
+    """
+    insp_gongtae = ""
+    insp_tongsi = ""
+    if license_no and os.path.exists(_INSP_DB):
+        try:
+            iconn = sqlite3.connect(_INSP_DB, timeout=5)
+            try:
+                # inspection_targets 는 허가번호에 하이픈 포함 케이스가 있을 수 있어 REPLACE 비교
+                r = iconn.execute(
+                    "SELECT 공대, 통시 FROM inspection_targets "
+                    "WHERE REPLACE(허가번호,'-','')=? LIMIT 1",
+                    (license_no.replace('-', ''),),
+                ).fetchone()
+                if r:
+                    insp_gongtae = (r[0] or '').strip()
+                    insp_tongsi = (r[1] or '').strip()
+            finally:
+                iconn.close()
+        except Exception as e:
+            logger.warning(f"inspection_targets 조회 실패 (cert row 선택용): {e}")
+
+    if insp_gongtae:
+        for row in rows:
+            if (row["zpkcode"] or "").strip() == insp_gongtae:
+                return row
+    if insp_tongsi:
+        for row in rows:
+            if (row["zpcode"] or "").strip() == insp_tongsi:
+                return row
+    # 공대 채워진 행 우선, 그 안에서 zpcname 알파벳 순
+    non_empty_gongtae = [r for r in rows if (r["zpkcode"] or "").strip()]
+    pool = non_empty_gongtae or list(rows)
+    pool.sort(key=lambda r: (r["zpcname"] or ""))
+    return pool[0]
 
 
 def _cert_batch_lookup_cached(zpwino_list: list) -> dict:
