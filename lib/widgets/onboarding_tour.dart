@@ -42,7 +42,7 @@ class OnboardingTour {
   // ── 데스크탑: 한 번에 5단계 ──
 
   void _showDesktop(BuildContext context, {required bool markDoneOnFinish}) {
-    final items = <TargetFocus>[
+    final items = <TargetFocus?>[
       _step(targets.mapMenuKey, '현장 수검 Map',
           '지도에서 마커를 클릭하면 해당 국소의 검사 정보를 볼 수 있어요. 여러 국소를 묶어 최적 경로도 짤 수 있습니다.', isLast: false),
       _step(targets.scheduleMenuKey, '일정 및 통계',
@@ -86,7 +86,7 @@ class OnboardingTour {
   }
 
   void _showMobileStep2(BuildContext context, {required bool markDoneOnFinish}) {
-    final items = <TargetFocus>[
+    final items = <TargetFocus?>[
       _step(targets.mapMenuKey, '현장 수검 Map',
           '지도에서 마커를 클릭하면 해당 국소의 검사 정보를 볼 수 있고, 여러 국소를 묶어 최적 경로도 짤 수 있어요.', isLast: false),
       _step(targets.scheduleMenuKey, '일정 및 통계',
