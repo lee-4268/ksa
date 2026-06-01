@@ -24,7 +24,7 @@ import threading
 import secrets as _secrets_mod
 import time as _time_mod
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from fastapi import HTTPException, Request
 
@@ -153,9 +153,10 @@ def _blacklist_token(token: str) -> None:
 # ══════════════════════════════════════════════════════════════
 
 def _track_daily_visitor(empno: str):
-    """일일 방문자 집합에 사번 추가 (자정 리셋)."""
+    """일일 방문자 집합에 사번 추가 (KST 자정 리셋)."""
     global _daily_visitors, _daily_visitors_date
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    kst = timezone(timedelta(hours=9))
+    today = datetime.now(kst).strftime("%Y-%m-%d")
     if _daily_visitors_date != today:
         _daily_visitors = set()
         _daily_visitors_date = today
@@ -163,15 +164,16 @@ def _track_daily_visitor(empno: str):
 
 
 def _count_daily_visitors() -> int:
-    """오늘 고유 접속자 수 (menu_usage_log 기반, 서버 재시작해도 유지)."""
+    """오늘(KST) 고유 접속자 수 (menu_usage_log 기반, 서버 재시작해도 유지)."""
     try:
         if not os.path.exists(_INSP_DB):
             return len(_daily_visitors)
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        kst = timezone(timedelta(hours=9))
+        kst_midnight_utc = datetime.now(kst).replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc).isoformat()
         conn = sqlite3.connect(_INSP_DB, timeout=10)
         cnt = conn.execute(
             "SELECT COUNT(DISTINCT user_id) FROM menu_usage_log WHERE accessed_at >= ?",
-            (today,)
+            (kst_midnight_utc,)
         ).fetchone()[0]
         conn.close()
         return cnt
