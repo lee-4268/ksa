@@ -2,7 +2,7 @@
 main - FastAPI 앱 초기화 + 라우터 등록
 
 구조:
-    core/       - config, auth, db, s3, sms, utils, model, cert_cache, inspection_db
+    core/       - config, auth, sso_verify, db, s3, utils, model, cert_cache, inspection_db
     schemas/    - 모든 Pydantic 모델 (schemas/models.py)
     routers/    - 14개 도메인 라우터 (auth, users, predict, categories, stations,
                   storage, ds, callname, cert, inspection, inspection_results,

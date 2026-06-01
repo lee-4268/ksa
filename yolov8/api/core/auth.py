@@ -12,7 +12,6 @@ auth - 토큰 생성/검증, 블랙리스트, OTP 스토어, 역할 체크
 """
 
 import os
-import re as _re_phone
 import hmac as _hmac_mod
 import hashlib
 import base64
@@ -21,7 +20,6 @@ import uuid
 import sqlite3
 import asyncio
 import threading
-import secrets as _secrets_mod
 import time as _time_mod
 import logging
 from datetime import datetime, timezone, timedelta
@@ -617,14 +615,8 @@ async def _check_division_access(request: Request, target_access: str) -> tuple[
 # ══════════════════════════════════════════════════════════════
 # 전화번호 유틸
 # ══════════════════════════════════════════════════════════════
-
-def _is_valid_phone(phone: str) -> bool:
-    """한국 휴대폰 번호 유효성 검사."""
-    if not phone:
-        return False
-    clean = phone.replace('-', '').replace(' ', '')
-    return bool(_re_phone.match(r'^01[0-9]\d{7,8}$', clean))
-
+# 2026-06-01: 자체 SMS 발송(Celery)/OTP 생성 로직은 인프라 통합 SSO 로 이관되어
+# 제거. 응답 마스킹용 _mask_phone 과 _get_user_phone_sync 만 유지.
 
 def _mask_phone(phone: str) -> str:
     """전화번호 마스킹 (개인정보 보호)."""
@@ -647,18 +639,3 @@ def _get_user_phone_sync(empno: str) -> str | None:
     except Exception as e:
         logger.warning(f"phone_number 조회 실패 ({empno}): {e}")
         return None
-
-
-def _send_otp_sync(phone: str, empno: str) -> str:
-    """OTP 6자리 생성 + sms-sender-v2 Celery로 SMS 발송. OTP 반환."""
-    from .sms import HAS_SMS, SMS_SENDER_NUMBER, _sms_app
-    otp = str(_secrets_mod.randbelow(1_000_000)).zfill(6)
-    msg = f"[SKO 무선국] 인증번호: {otp} (5분 이내 입력)"
-    clean_phone = phone.replace('-', '').replace(' ', '')
-    if HAS_SMS and SMS_SENDER_NUMBER:
-        _sms_app.send_task('send_sms.sending_sms',
-                           args=(clean_phone, msg, SMS_SENDER_NUMBER, 'sms'))
-        logger.info(f"OTP SMS 발송 완료: empno={empno}, phone={_mask_phone(phone)}")
-    else:
-        logger.info(f"[DEV-OTP] empno={empno} phone={_mask_phone(phone)} OTP={otp}")
-    return otp
