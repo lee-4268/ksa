@@ -25,7 +25,7 @@ import '../services/community_service.dart';
 import '../services/notification_service.dart';
 import '../services/inspection_service.dart';
 import '../widgets/inspection_dashboard_widget.dart';
-import '../widgets/onboarding_tour.dart';
+import '../widgets/screen_tour.dart';
 
 /// 앱 셸 — 사이드바 상시 표시 + 오른쪽 콘텐츠 전환
 class HomeScreen extends StatefulWidget {
@@ -38,13 +38,11 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
 
-  // 온보딩 투어 표적용 GlobalKey
-  final GlobalKey _tourMapMenuKey = GlobalKey();
-  final GlobalKey _tourScheduleMenuKey = GlobalKey();
-  final GlobalKey _tourCallnameMenuKey = GlobalKey();
-  final GlobalKey _tourNotificationKey = GlobalKey();
-  final GlobalKey _tourHelpKey = GlobalKey();
-  final GlobalKey _tourMenuButtonKey = GlobalKey(); // 모바일 햄버거 메뉴
+  // 화면 투어 표적
+  final GlobalKey _kTourSidebar = GlobalKey();      // 데스크탑 사이드바 전체
+  final GlobalKey _kTourMenuButton = GlobalKey();   // 모바일 햄버거
+  final GlobalKey _kTourNotification = GlobalKey(); // 알림 종 (데스크탑 헤더에만)
+  final GlobalKey _kTourHelp = GlobalKey();         // 도움말 ?
 
   // 디자인 토큰
   static const _bg = Color(0xFFF5F6FA);
@@ -124,57 +122,42 @@ class _HomeScreenState extends State<HomeScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _maybeShowLoginNotificationPopup();
     });
-    // 첫 접속 시 1회 자동 온보딩 투어 — 알림 팝업과 시간차로 띄움
+    // 첫 접속 시 1회 자동 — 알림 팝업과 시간차로 띄움
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      Future.delayed(const Duration(milliseconds: 1500), () {
+      Future.delayed(const Duration(milliseconds: 1800), () {
         if (!mounted) return;
-        _buildTour().maybeShowFirstTime(context);
+        _buildHomeTour().maybeShowFirstTime(context);
       });
     });
   }
 
-  OnboardingTour _buildTour() {
-    // 매 호출마다 새로 만들어 모바일/데스크탑 전환에 대응 (화면 회전·창 크기 변경).
+  ScreenTour _buildHomeTour() {
+    // 매 호출 새로 — 모바일/데스크탑 전환 시 표적 키가 달라짐
     final isMobile = MediaQuery.of(context).size.width < 800;
-    return OnboardingTour(
-      OnboardingTargets(
-        mapMenuKey: _tourMapMenuKey,
-        scheduleMenuKey: _tourScheduleMenuKey,
-        callnameMenuKey: _tourCallnameMenuKey,
-        notificationKey: _tourNotificationKey,
-        helpKey: _tourHelpKey,
-        menuButtonKey: _tourMenuButtonKey,
-      ),
-      isMobile: isMobile,
-      openDrawer: () => _scaffoldKey.currentState?.openDrawer(),
-      closeDrawer: () {
-        if (_scaffoldKey.currentState?.isDrawerOpen ?? false) {
-          Navigator.of(context).pop();
-        }
-      },
+    return ScreenTour(
+      screenKey: 'home',
+      version: 2,
+      steps: [
+        if (isMobile)
+          TourStep(_kTourMenuButton, '메뉴 열기',
+              '왼쪽 위의 메뉴 버튼을 누르면 현장 수검 Map, 일정, 호출명칭 등 모든 화면으로 이동할 수 있어요.',
+              shape: ShapeLightFocus.Circle)
+        else
+          TourStep(_kTourSidebar, '메뉴',
+              '왼쪽 사이드바에서 현장 수검 Map, 일정 및 통계, 호출명칭·설치확인서 등 화면을 전환할 수 있어요.'),
+        TourStep(_kTourNotification, '알림',
+            '새 공지·요청사항이 도착하면 빨간 점이 표시됩니다. 클릭해 모아 볼 수 있어요.'),
+        TourStep(_kTourHelp, '도움말',
+            '이 투어를 다시 보고 싶을 때는 화면 우측 상단의 ? 아이콘을 누르세요. 각 화면마다 그 화면 전용 안내가 따로 있습니다.',
+            shape: ShapeLightFocus.Circle),
+      ],
     );
   }
 
   void _showOnboardingTour() {
-    _buildTour().show(context);
+    _buildHomeTour().show(context);
   }
 
-  // 사이드바 메뉴 타이틀 → 투어용 키 매핑.
-  // 사이드바와 드로어가 같은 빌더를 공유하므로 한쪽에서만 키가 매겨지도록
-  // _selectedIndex/inDrawer 와 무관하게 같은 GlobalKey 인스턴스를 돌려준다.
-  // (드로어가 닫혀 있을 때는 currentContext 가 null 이라 투어가 자동으로 그 항목을 스킵.)
-  GlobalKey? _tourKeyForMenu(String title) {
-    switch (title) {
-      case '현장 수검 Map':
-        return _tourMapMenuKey;
-      case '일정 및 통계':
-        return _tourScheduleMenuKey;
-      case '호출명칭':
-        return _tourCallnameMenuKey;
-      default:
-        return null;
-    }
-  }
 
   Future<void> _maybeShowLoginNotificationPopup() async {
     try {
@@ -542,7 +525,7 @@ final result = await showDialog<bool>(
         child: Row(
           children: [
             IconButton(
-              key: _tourMenuButtonKey,
+              key: _kTourMenuButton,
               icon: const Icon(Icons.menu, color: _textSecondary, size: 22),
               onPressed: () => _scaffoldKey.currentState?.openDrawer(),
             ),
@@ -552,7 +535,7 @@ final result = await showDialog<bool>(
             Text(item.title, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: _textPrimary)),
             const Spacer(),
             IconButton(
-              key: _tourHelpKey,
+              key: _kTourHelp,
               icon: Icon(Icons.help_outline_rounded, size: 22, color: Colors.grey.shade500),
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
@@ -582,6 +565,7 @@ final result = await showDialog<bool>(
 
   Widget _buildSidebar(AuthService auth, List<_MenuItem> items) {
     return AnimatedContainer(
+      key: _kTourSidebar,
       duration: const Duration(milliseconds: 200),
       width: _sidebarCollapsed ? 64 : _sidebarWidth,
       decoration: const BoxDecoration(
@@ -742,9 +726,7 @@ final result = await showDialog<bool>(
   Widget _buildSidebarMenuItem(List<_MenuItem> items, int i, bool inDrawer) {
     final item = items[i];
     final isSelected = _selectedIndex == i;
-    final tourKey = _tourKeyForMenu(item.title);
     return Padding(
-      key: tourKey,
       padding: const EdgeInsets.only(bottom: 2),
       child: Stack(
         children: [
@@ -834,9 +816,7 @@ final result = await showDialog<bool>(
             if (idx < 0) return const SizedBox.shrink();
             final item = items[idx];
             final isSelected = _selectedIndex == idx;
-            final childTourKey = _tourKeyForMenu(item.title);
             return Align(
-              key: childTourKey,
               alignment: Alignment.centerLeft,
               child: Stack(
                 children: [
@@ -1000,7 +980,7 @@ final result = await showDialog<bool>(
         const SizedBox(width: 8),
         // 도움말(투어 다시보기) 버튼
         IconButton(
-          key: _tourHelpKey,
+          key: _kTourHelp,
           icon: Icon(Icons.help_outline_rounded, size: 22, color: Colors.grey.shade500),
           padding: EdgeInsets.zero,
           constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
@@ -1013,7 +993,7 @@ final result = await showDialog<bool>(
           builder: (context, notifSvc, _) {
             final unread = notifSvc.unreadCount;
             return Stack(
-              key: _tourNotificationKey,
+              key: _kTourNotification,
               clipBehavior: Clip.none,
               children: [
                 IconButton(
