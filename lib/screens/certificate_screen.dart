@@ -1524,11 +1524,10 @@ class _SislPickerDialogState extends State<_SislPickerDialog> {
                   itemCount: widget.items.length,
                   itemBuilder: (_, i) {
                     final p = widget.items[i];
-                    final fp = (p['file_path'] ?? '').toString();
-                    final guid = (p['guid'] ?? '').toString();
-                    final url = (fp.isNotEmpty && guid.isNotEmpty)
-                        ? widget.service.sislPhotoProxyUrl(filePath: fp, guid: guid)
-                        : (p['url'] ?? '').toString();
+                    // 썸네일은 기존 static-int URL 그대로 — 사내망 브라우저에서만 보임.
+                    // 외부망에선 보이지 않아도 체크박스 선택은 가능. '선택 완료' 시
+                    // 백엔드 프록시로 바이트를 받아오므로 다운로드 자체는 어디서나 동작.
+                    final url = (p['url'] ?? '').toString();
                     final dt = fmtSislDate(p['upload_date']);
                     final checked = _selected.contains(i);
                     return Stack(fit: StackFit.expand, children: [
