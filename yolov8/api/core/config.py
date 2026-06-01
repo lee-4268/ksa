@@ -77,13 +77,28 @@ for _envname, _envval in (
         logger.warning(f"{_envname} 환경변수 미설정 — 해당 외부 API 기능이 동작하지 않습니다")
 
 # ── SSO 로그인 URL ────────────────────────────────────────────
-# 인프라 측 SSO 도메인 마이그레이션 중(auth2.skons.net → auth.skons.net) 으로
-# systemd Environment 로 덮어쓸 수 있게 환경변수 우선. 현재 운영은 auth2 가 실서비스.
+# 인프라가 1차 로그인(SMS 발송 포함)과 2차 OTP 검증을 통합 서비스로 분리.
+# - /auth/login        : 사번/비번 1차 검증 + 인프라 측이 직접 SMS OTP 발송
+#                        성공 시 login_session 쿠키 발급 (Path=/auth/sms/verify 로 제한)
+# - /auth/sms/verify   : login_session 쿠키 + (username, otp_code) 검증
+#                        성공 시 RS256 JWT access_token/refresh_token 쿠키 발급
+# 우리 백엔드는 두 URL 의 "중계" 역할. 인프라 JWT 는 일단 수신만 하고 우리 자체
+# HMAC 토큰을 발급(클라이언트 영향 0). JWKS 공개키 받을 수 있게 되면 sso_verify.py
+# 에서 RS256 서명 추가 검증.
 SSO_LOGIN_URL = os.environ.get(
     "SSO_LOGIN_URL",
-    "https://auth2.skons.net/accounts/sko/sso/login/",
+    "https://auth2.skons.net/auth/login",
 )
+SSO_VERIFY_URL = os.environ.get(
+    "SSO_VERIFY_URL",
+    "https://auth2.skons.net/auth/sms/verify",
+)
+# 향후 인프라가 공개키 엔드포인트(JWKS) 제공하면 systemd Environment 로 주입.
+# 비어있으면 sso_verify 가 검증을 skip 한다(현재 운영 상태).
+SSO_JWKS_URL = os.environ.get("SSO_JWKS_URL", "")
 logger.info(f"SSO_LOGIN_URL = {SSO_LOGIN_URL}")
+logger.info(f"SSO_VERIFY_URL = {SSO_VERIFY_URL}")
+logger.info(f"SSO_JWKS_URL = {SSO_JWKS_URL or '(none — RS256 검증 skip)'}")
 
 # ── 부트스트랩 키 ─────────────────────────────────────────────
 ADMIN_BOOTSTRAP_KEY = os.environ.get("ADMIN_BOOTSTRAP_KEY")
