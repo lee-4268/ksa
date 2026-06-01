@@ -84,6 +84,10 @@ class PlatformMapWidgetState extends State<PlatformMapWidget>
     debugPrint('Map interaction set to: $draggable');
   }
 
+  /// 모달/시트가 떠 있는 동안 지도 휠/드래그를 막기 위한 토글.
+  /// 모바일에선 마우스 휠이 없어 시각적 영향은 없지만, 인터페이스 일관성을 위해 둠.
+  void setMapInteraction(bool enabled) => setMapDraggable(enabled);
+
   /// 마커 아이콘 PNG 바이트 (SVG에서 변환)
   Uint8List? _pendingIconBytes;
   Uint8List? _inspectedIconBytes;

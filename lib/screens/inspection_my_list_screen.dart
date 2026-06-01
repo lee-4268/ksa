@@ -1251,7 +1251,9 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
     var isEditMode = false;
     var isSaving = false;
     var isExporting = false;
-    final captureKey = GlobalKey();
+
+    // 시트가 열린 동안 카카오맵의 휠/드래그를 끔. 닫힐 때 복원.
+    _mapKey.currentState?.setMapInteraction(false);
 
     showModalBottomSheet(
       context: context,
@@ -1281,13 +1283,6 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
                   width: 36, height: 4,
                   decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(2)),
                 ),
-                RepaintBoundary(
-                  key: captureKey,
-                  child: Container(
-                    color: Colors.white,
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
                 // 헤더
                 Padding(
                   padding: const EdgeInsets.fromLTRB(20, 0, 12, 10),
@@ -1309,21 +1304,11 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
                               ? null
                               : () async {
                                   setSheetState(() => isExporting = true);
-                                  try {
-                                    await _exportBasketImage(
-                                      captureKey: captureKey,
-                                      entry: entry,
-                                      stations: editableStations,
-                                    );
-                                  } catch (e) {
-                                    if (mounted) {
-                                      ScaffoldMessenger.of(context).showSnackBar(
-                                        SnackBar(content: Text('이미지 저장 실패: $e'), backgroundColor: Colors.red),
-                                      );
-                                    }
-                                  } finally {
-                                    if (mounted) setSheetState(() => isExporting = false);
-                                  }
+                                  await _exportBasketImage(
+                                    entry: entry,
+                                    stations: editableStations,
+                                  );
+                                  if (mounted) setSheetState(() => isExporting = false);
                                 },
                           borderRadius: BorderRadius.circular(6),
                           child: Container(
@@ -1594,10 +1579,6 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
                     },
                   ),
                 ),
-                      ],
-                    ),
-                  ),
-                ),
                 // 편집 모드 하단 버튼
                 if (isEditMode)
                   Padding(
@@ -1675,7 +1656,9 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
           );
         },
       ),
-    );
+    ).whenComplete(() {
+      if (mounted) _mapKey.currentState?.setMapInteraction(true);
+    });
   }
 
   Widget _buildMiniToggle({required bool value, required ValueChanged<bool> onChanged}) {
@@ -1717,52 +1700,82 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
     );
   }
 
-  // 경로 보관함 바텀시트를 PNG 로 캡처해서 웹은 다운로드, 모바일은 시스템 공유 시트 띄움.
+  // 경로 보관함 전체 리스트를 PNG 로 캡처해서 웹은 다운로드, 모바일은 시스템 공유 시트.
+  // ListView 의 viewport 제약을 우회하기 위해 OverlayEntry 에 모든 항목이 펼쳐진
+  // 전용 위젯을 화면 밖에 그린 뒤 RepaintBoundary 로 캡처.
   Future<void> _exportBasketImage({
-    required GlobalKey captureKey,
     required RouteBasketEntry entry,
     required List<RadioStation> stations,
   }) async {
-    // 다음 프레임까지 기다려 위젯이 안정된 상태에서 캡처.
-    await Future.delayed(const Duration(milliseconds: 50));
-    final ctx = captureKey.currentContext;
-    if (ctx == null) throw Exception('캡처 대상이 없습니다');
-    final boundary = ctx.findRenderObject() as RenderRepaintBoundary?;
-    if (boundary == null) throw Exception('캡처 대상이 없습니다');
+    final dialog = ProgressDialog(context);
+    dialog.show(message: '이미지 생성 중...');
+    final captureKey = GlobalKey();
+    OverlayEntry? entryWidget;
 
-    final image = await boundary.toImage(pixelRatio: 2.5);
-    final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
-    if (byteData == null) throw Exception('이미지 변환 실패');
-    final pngBytes = byteData.buffer.asUint8List();
+    try {
+      const captureWidth = 720.0;
+      entryWidget = OverlayEntry(builder: (_) {
+        return Positioned(
+          left: -100000, // 화면 밖에 배치 — 사용자에게 보이지 않지만 paint 는 됨
+          top: 0,
+          child: Material(
+            color: Colors.transparent,
+            child: RepaintBoundary(
+              key: captureKey,
+              child: _BasketCaptureCard(
+                title: entry.title,
+                stations: stations,
+                width: captureWidth,
+              ),
+            ),
+          ),
+        );
+      });
+      Overlay.of(context, rootOverlay: true).insert(entryWidget);
 
-    final safeTitle = entry.title.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
-    final stamp = DateTime.now().toIso8601String().substring(0, 10);
-    final fileName = '경로_${safeTitle}_$stamp.png';
+      // 페인트 사이클 두 번 정도 기다려 안정화
+      await WidgetsBinding.instance.endOfFrame;
+      await Future.delayed(const Duration(milliseconds: 80));
 
-    if (kIsWeb) {
-      final blob = html.Blob([pngBytes], 'image/png');
-      final url = html.Url.createObjectUrlFromBlob(blob);
-      final anchor = html.AnchorElement(href: url)
-        ..download = fileName
-        ..style.display = 'none';
-      html.document.body?.append(anchor);
-      anchor.click();
-      anchor.remove();
-      html.Url.revokeObjectUrl(url);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('이미지를 다운로드했습니다')),
+      final boundary = captureKey.currentContext?.findRenderObject() as RenderRepaintBoundary?;
+      if (boundary == null) throw Exception('캡처 대상이 없습니다');
+
+      final image = await boundary.toImage(pixelRatio: 2.5);
+      final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+      if (byteData == null) throw Exception('이미지 변환 실패');
+      final pngBytes = byteData.buffer.asUint8List();
+
+      final safeTitle = entry.title.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
+      final stamp = DateTime.now().toIso8601String().substring(0, 10);
+      final fileName = '경로_${safeTitle}_$stamp.png';
+
+      if (kIsWeb) {
+        final blob = html.Blob([pngBytes], 'image/png');
+        final url = html.Url.createObjectUrlFromBlob(blob);
+        final anchor = html.AnchorElement(href: url)
+          ..download = fileName
+          ..style.display = 'none';
+        html.document.body?.append(anchor);
+        anchor.click();
+        anchor.remove();
+        html.Url.revokeObjectUrl(url);
+        await dialog.complete(message: '이미지 저장 완료');
+      } else {
+        final dir = await getTemporaryDirectory();
+        final file = File('${dir.path}/$fileName');
+        await file.writeAsBytes(pngBytes);
+        // 다이얼로그를 먼저 닫고 시스템 공유 시트를 띄움.
+        dialog.dismiss();
+        await Share.shareXFiles(
+          [XFile(file.path, mimeType: 'image/png')],
+          subject: entry.title,
+          text: '${entry.title} (${stations.length}개 국소)',
         );
       }
-    } else {
-      final dir = await getTemporaryDirectory();
-      final file = File('${dir.path}/$fileName');
-      await file.writeAsBytes(pngBytes);
-      await Share.shareXFiles(
-        [XFile(file.path, mimeType: 'image/png')],
-        subject: entry.title,
-        text: '${entry.title} (${stations.length}개 국소)',
-      );
+    } catch (e) {
+      await dialog.error(message: '이미지 저장 실패\n${e.toString().replaceFirst('Exception: ', '')}');
+    } finally {
+      entryWidget?.remove();
     }
   }
 
@@ -2892,6 +2905,107 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
             child: Icon(icon, color: color, size: 22),
           ),
         ),
+      ),
+    );
+  }
+}
+
+// 이미지 캡처 전용 위젯. 모든 국소가 한 화면에 펼쳐진 형태로 그려진다
+// (ListView 와 달리 viewport 제약이 없어서 잘림 없이 전체가 paint 됨).
+class _BasketCaptureCard extends StatelessWidget {
+  final String title;
+  final List<RadioStation> stations;
+  final double width;
+
+  const _BasketCaptureCard({
+    required this.title,
+    required this.stations,
+    required this.width,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final today = DateTime.now().toIso8601String().substring(0, 10);
+    return Container(
+      width: width,
+      color: Colors.white,
+      padding: const EdgeInsets.fromLTRB(20, 18, 20, 18),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.bookmark, size: 22, color: Color(0xFFE53935)),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(title,
+                    style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold, color: Color(0xFF111827))),
+              ),
+              Text('${stations.length}개 국소',
+                  style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(today, style: TextStyle(fontSize: 11, color: Colors.grey.shade500)),
+          const SizedBox(height: 12),
+          const Divider(height: 1, color: Color(0xFFE5E7EB)),
+          ...List.generate(stations.length, (i) {
+            final s = stations[i];
+            final isFirst = i == 0;
+            final isLast = i == stations.length - 1;
+            final color = isFirst
+                ? const Color(0xFF10B981)
+                : (isLast ? const Color(0xFFEF4444) : const Color(0xFF2563EB));
+            final tag = isFirst ? '출발' : (isLast ? '도착' : '${i + 1}');
+            return Padding(
+              padding: const EdgeInsets.symmetric(vertical: 10),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    width: 36, height: 36,
+                    decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(18)),
+                    alignment: Alignment.center,
+                    child: Text(tag,
+                        style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w700)),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(s.displayName,
+                            style: const TextStyle(
+                                fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF111827))),
+                        if (s.address.isNotEmpty)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 3),
+                            child: Text(s.address,
+                                style: TextStyle(fontSize: 11, color: Colors.grey.shade600)),
+                          ),
+                        if (s.latitude != null && s.longitude != null)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 2),
+                            child: Text(
+                              '${s.latitude!.toStringAsFixed(5)}, ${s.longitude!.toStringAsFixed(5)}',
+                              style: TextStyle(fontSize: 10, color: Colors.grey.shade400),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            );
+          }),
+          const Divider(height: 1, color: Color(0xFFE5E7EB)),
+          const SizedBox(height: 8),
+          Text('KSA · 무선국 정기검사 경로',
+              style: TextStyle(fontSize: 10, color: Colors.grey.shade400),
+              textAlign: TextAlign.center),
+        ],
       ),
     );
   }

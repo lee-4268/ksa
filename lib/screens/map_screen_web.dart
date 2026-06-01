@@ -1346,6 +1346,21 @@ class PlatformMapWidgetState extends State<PlatformMapWidget> {
     html.document.body?.append(html.ScriptElement()..text = jsCode);
   }
 
+  /// 지도 인터랙션(드래그·휠줌·더블클릭줌) 전체 토글.
+  /// 모달/바텀시트가 떠 있는 동안 뒤의 카카오맵으로 마우스 휠이 새는 것을 막을 때 사용.
+  void setMapInteraction(bool enabled) {
+    final jsCode = '''
+      (function() {
+        if (typeof kakao === 'undefined') return;
+        var map = window['kakaoMapInstance_$_containerId'];
+        if (!map) return;
+        map.setDraggable(${enabled ? 'true' : 'false'});
+        map.setZoomable(${enabled ? 'true' : 'false'});
+      })();
+    ''';
+    html.document.body?.append(html.ScriptElement()..text = jsCode);
+  }
+
   /// 경로 오버레이 전체 제거
   void clearRouteOverlay() {
     final jsCode = '''
