@@ -1306,7 +1306,7 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
                                   setSheetState(() => isExporting = true);
                                   await _exportBasketImage(
                                     entry: entry,
-                                    stations: editableStations,
+                                    stations: _withResolvedAddresses(editableStations),
                                   );
                                   if (mounted) setSheetState(() => isExporting = false);
                                 },
@@ -1698,6 +1698,34 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
         child: Text(label, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: textColor)),
       ),
     );
+  }
+
+  // 보관함 RadioStation 은 address 가 비어 저장돼 있다. 같은 좌표/허가번호로
+  // _assignedItems 에서 도로명주소/설치장소를 끌어와 채운 사본을 돌려준다.
+  List<RadioStation> _withResolvedAddresses(List<RadioStation> stations) {
+    return stations.map((s) {
+      if (s.address.isNotEmpty) return s;
+      final lat5 = s.latitude?.toStringAsFixed(5);
+      final lng5 = s.longitude?.toStringAsFixed(5);
+      if (lat5 == null || lng5 == null) return s;
+      final coLocated = _assignedItems.where((it) {
+        final ilat = (it['위도'] as num?)?.toDouble().toStringAsFixed(5);
+        final ilng = (it['경도'] as num?)?.toDouble().toStringAsFixed(5);
+        return ilat == lat5 && ilng == lng5;
+      }).toList();
+      if (coLocated.isEmpty) return s;
+      final match = coLocated.firstWhere(
+        (it) => (it['허가번호'] as String? ?? '').trim() == s.licenseNumber.trim(),
+        orElse: () => coLocated.first,
+      );
+      final addr = (match['도로명주소'] as String?)?.trim().isNotEmpty == true
+          ? match['도로명주소'] as String
+          : (match['설치장소'] as String?)?.trim().isNotEmpty == true
+              ? match['설치장소'] as String
+              : (match['t_설치장소'] as String? ?? '');
+      if (addr.trim().isEmpty) return s;
+      return s.copyWith(address: addr);
+    }).toList();
   }
 
   // 경로 보관함 전체 리스트를 PNG 로 캡처해서 웹은 다운로드, 모바일은 시스템 공유 시트.
