@@ -2,6 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:tutorial_coach_mark/tutorial_coach_mark.dart';
 
+// 화면측에서 TourStep(..., shape: ShapeLightFocus.Circle) 처럼 쓰기 좋도록 재노출.
+export 'package:tutorial_coach_mark/tutorial_coach_mark.dart'
+    show ShapeLightFocus, ContentAlign;
+
 /// 화면별 상세 투어 — 진입 시 1회 자동, 헤더 '?' 아이콘으로 재생.
 ///
 /// 메인 OnboardingTour 가 "어떤 메뉴가 어디 있다" 를 안내한다면 ScreenTour 는
