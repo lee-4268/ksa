@@ -4970,7 +4970,7 @@ async def ds_change_history_cancel(history_id: int, request: Request):
 
 @router.post("/ds/apply-partial-update")
 async def ds_apply_partial_update(request: Request, file: UploadFile = File(...),
-                                   excluded: str = Form("")):
+                                   excluded: str = Form(""), division_id: str = Form("")):
     """변경개설 신고 후 전파관리소 회신 부분 DS 파일 업로드 → ds_detail.db 갱신 + 자동 재비교 + 워크플로우 전환.
 
     - 파일은 변경개설 신고한 허가번호들만 포함된 DS 파일 (전파관리소 회신본)
@@ -5167,7 +5167,7 @@ async def ds_apply_partial_update(request: Request, file: UploadFile = File(...)
             logger.warning(f"hn_to_div 매핑 실패: {_e}")
 
         def _div(hn: str) -> str:
-            return hn_to_div.get(hn, '')
+            return hn_to_div.get(hn, '') or division_id
 
         for (hn, jn), fields in device_data.items():
             included = {col: val for col, val in fields.items()

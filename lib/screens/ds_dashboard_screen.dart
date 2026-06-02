@@ -1059,7 +1059,7 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
                 if (context.read<AuthService>().isAdmin) ...[
                   const SizedBox(width: 4),
                   TextButton.icon(
-                    onPressed: () => _showPartialDsUploadDialog(),
+                    onPressed: () => _showPartialDsUploadDialog(divisionId: upload.divisionId),
                     icon: Icon(Icons.upload_file_outlined, size: 18, color: Colors.deepOrange.shade600),
                     label: Text('데이터 변경요청',
                         style: TextStyle(color: Colors.deepOrange.shade600, fontSize: 13)),
@@ -1151,7 +1151,7 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
     );
   }
 
-  Future<void> _showPartialDsUploadDialog() async {
+  Future<void> _showPartialDsUploadDialog({String divisionId = ''}) async {
     final picked = await FilePicker.platform.pickFiles(
       type: FileType.custom,
       allowedExtensions: ['xls', 'xlsx', 'zip'],
@@ -1398,7 +1398,7 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
     );
     try {
       final result = await svc.applyPartialDsUpdate(Uint8List.fromList(bytes), f.name,
-          excludedKeys: excludedKeys);
+          excludedKeys: excludedKeys, divisionId: divisionId);
       if (!mounted) return;
       Navigator.pop(context);
       final applied = result['applied'] ?? 0;
