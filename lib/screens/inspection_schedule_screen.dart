@@ -3035,7 +3035,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
         year: _year,
         licenseNos: licenseNos,
         orgMap: _orgMap,
-        isAdmin: _isAdmin,
+        isAdmin: _isSuperAdmin,
         myHdqt: _myHdqt,
         overridesIndex: _overridesIndex,
       ),
@@ -3074,7 +3074,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
         int success = 0;
         for (final licNo in licenseNos) {
           await _svc.upsertOverride(_year, licNo, '품질개선팀', team, reason: reason);
-          if (_isAdmin && hdqt.isNotEmpty) {
+          if (_isSuperAdmin && hdqt.isNotEmpty) {
             await _svc.upsertOverride(_year, licNo, 'access담당', hdqt, reason: reason);
           }
           success++;
@@ -3349,7 +3349,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
         year: _year,
         item: item,
         orgMap: _orgMap,
-        isAdmin: _isAdmin,
+        isAdmin: _isSuperAdmin,
         myHdqt: _myHdqt,
         overrides: overrides,
       ),
