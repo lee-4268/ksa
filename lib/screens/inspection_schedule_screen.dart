@@ -3038,19 +3038,64 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
   }
 
   Future<void> _showBulkMappingDialog() async {
-    final result = await showDialog<bool>(
+    final licenseNos = _selectedLicenseNos.toList();
+    final result = await showDialog<Map<String, dynamic>>(
       context: context,
       builder: (ctx) => _BulkMappingDialog(
-        svc: _svc,
         year: _year,
-        licenseNos: _selectedLicenseNos.toList(),
+        licenseNos: licenseNos,
         orgMap: _orgMap,
         isAdmin: _isAdmin,
         myHdqt: _myHdqt,
         overridesIndex: _overridesIndex,
       ),
     );
-    if (result == true && mounted) {
+    if (result == null || !mounted) return;
+
+    final action = result['action'] as String;
+    final n = licenseNos.length;
+    final dialog = ProgressDialog(context);
+
+    if (action == 'revert') {
+      dialog.show(message: '보정 취소 중...');
+      try {
+        int success = 0;
+        for (final licNo in licenseNos) {
+          final ovs = _overridesIndex[licNo];
+          if (ovs == null || ovs.isEmpty) continue;
+          for (final ov in ovs.values) {
+            final id = (ov['id'] as num?)?.toInt();
+            if (id != null) {
+              try { await _svc.deleteOverride(id); } catch (_) {}
+            }
+          }
+          success++;
+        }
+        await dialog.complete(message: '$success개 보정 취소 완료');
+      } catch (e) {
+        await dialog.error(message: '취소 실패: $e');
+      }
+    } else {
+      final hdqt = result['hdqt'] as String? ?? '';
+      final team = result['team'] as String? ?? '';
+      final reason = result['reason'] as String? ?? '';
+      dialog.show(message: '$n개 관할 변경 중...');
+      try {
+        int success = 0;
+        for (final licNo in licenseNos) {
+          await _svc.upsertOverride(_year, licNo, '품질개선팀', team, reason: reason);
+          if (_isAdmin && hdqt.isNotEmpty) {
+            await _svc.upsertOverride(_year, licNo, 'access담당', hdqt, reason: reason);
+          }
+          success++;
+        }
+        await dialog.complete(message: '$success개 관할 변경 완료');
+      } catch (e) {
+        await dialog.error(message: '변경 실패: $e');
+      }
+    }
+
+    if (mounted) {
       setState(() => _selectedLicenseNos.clear());
       await _loadOverrides();
       await _loadData();
@@ -3308,10 +3353,9 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
   Future<void> _showMappingDialog(Map<String, dynamic> item) async {
     final licenseNo = '${item['허가번호'] ?? ''}';
     final overrides = _overridesIndex[licenseNo] ?? {};
-    final result = await showDialog<bool>(
+    final result = await showDialog<Map<String, dynamic>>(
       context: context,
       builder: (ctx) => _MappingCorrectionDialog(
-        svc: _svc,
         year: _year,
         item: item,
         orgMap: _orgMap,
@@ -3320,7 +3364,39 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
         overrides: overrides,
       ),
     );
-    if (result == true && mounted) {
+    if (result == null || !mounted) return;
+
+    final action = result['action'] as String;
+    final dialog = ProgressDialog(context);
+
+    if (action == 'revert') {
+      dialog.show(message: '보정 취소 중...');
+      try {
+        for (final ov in overrides.values) {
+          final id = (ov['id'] as num?)?.toInt();
+          if (id != null) await _svc.deleteOverride(id);
+        }
+        await dialog.complete(message: '보정 취소 완료');
+      } catch (e) {
+        await dialog.error(message: '취소 실패: $e');
+      }
+    } else {
+      final hdqt = result['hdqt'] as String? ?? '';
+      final team = result['team'] as String? ?? '';
+      final reason = result['reason'] as String? ?? '';
+      dialog.show(message: '관할 변경 중...');
+      try {
+        await _svc.upsertOverride(_year, licenseNo, '품질개선팀', team, reason: reason);
+        if (_isAdmin && hdqt.isNotEmpty) {
+          await _svc.upsertOverride(_year, licenseNo, 'access담당', hdqt, reason: reason);
+        }
+        await dialog.complete(message: '관할 변경 완료');
+      } catch (e) {
+        await dialog.error(message: '변경 실패: $e');
+      }
+    }
+
+    if (mounted) {
       await _loadOverrides();
       await _loadData();
     }
@@ -6671,7 +6747,6 @@ class _SchedSislPhotoViewerState extends State<_SchedSislPhotoViewer> {
 
 
 class _MappingCorrectionDialog extends StatefulWidget {
-  final InspectionService svc;
   final int year;
   final Map<String, dynamic> item;
   final Map<String, List<String>> orgMap;
@@ -6680,7 +6755,6 @@ class _MappingCorrectionDialog extends StatefulWidget {
   final Map<String, Map<String, dynamic>> overrides; // { field: { id, value, ... } }
 
   const _MappingCorrectionDialog({
-    required this.svc,
     required this.year,
     required this.item,
     required this.orgMap,
@@ -6697,8 +6771,6 @@ class _MappingCorrectionDialogState extends State<_MappingCorrectionDialog> {
   late String _hdqt;
   late String _team;
   final _reasonCtrl = TextEditingController();
-  bool _saving = false;
-  bool _reverting = false;
 
   @override
   void initState() {
@@ -6728,51 +6800,6 @@ class _MappingCorrectionDialogState extends State<_MappingCorrectionDialog> {
     final origHdqt = '${widget.item['access담당'] ?? ''}';
     final origTeam = '${widget.item['품질개선팀'] ?? ''}';
     return _hdqt != origHdqt || _team != origTeam;
-  }
-
-  Future<void> _save() async {
-    if (_team.isEmpty) return;
-    setState(() => _saving = true);
-    try {
-      // 팀 저장 (백엔드에서 본부도 자동 연동)
-      await widget.svc.upsertOverride(
-        widget.year, '${widget.item['허가번호']}', '품질개선팀', _team,
-        reason: _reasonCtrl.text.trim(),
-      );
-      // admin이 본부도 직접 변경한 경우
-      if (widget.isAdmin) {
-        await widget.svc.upsertOverride(
-          widget.year, '${widget.item['허가번호']}', 'access담당', _hdqt,
-          reason: _reasonCtrl.text.trim(),
-        );
-      }
-      if (mounted) Navigator.pop(context, true);
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('저장 실패: $e'), backgroundColor: Colors.red));
-      }
-    } finally {
-      if (mounted) setState(() => _saving = false);
-    }
-  }
-
-  Future<void> _revert() async {
-    setState(() => _reverting = true);
-    try {
-      for (final ov in widget.overrides.values) {
-        final id = (ov['id'] as num?)?.toInt();
-        if (id != null) await widget.svc.deleteOverride(id);
-      }
-      if (mounted) Navigator.pop(context, true);
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('취소 실패: $e'), backgroundColor: Colors.red));
-      }
-    } finally {
-      if (mounted) setState(() => _reverting = false);
-    }
   }
 
   Widget _infoRow(String label, String value) => Padding(
@@ -6956,11 +6983,8 @@ class _MappingCorrectionDialogState extends State<_MappingCorrectionDialog> {
               Row(children: [
                 if (_hasOverride && widget.isAdmin) ...[
                   OutlinedButton.icon(
-                    onPressed: _reverting ? null : _revert,
-                    icon: _reverting
-                        ? const SizedBox(width: 14, height: 14,
-                            child: CircularProgressIndicator(strokeWidth: 2))
-                        : const Icon(Icons.undo_rounded, size: 16),
+                    onPressed: () => Navigator.pop(context, {'action': 'revert'}),
+                    icon: const Icon(Icons.undo_rounded, size: 16),
                     label: const Text('보정 취소', style: TextStyle(fontSize: 13)),
                     style: OutlinedButton.styleFrom(
                       foregroundColor: const Color(0xFF6B7280),
@@ -6973,7 +6997,7 @@ class _MappingCorrectionDialogState extends State<_MappingCorrectionDialog> {
                 ] else
                   const Spacer(),
                 TextButton(
-                  onPressed: () => Navigator.pop(context, false),
+                  onPressed: () => Navigator.pop(context, null),
                   style: TextButton.styleFrom(
                     foregroundColor: const Color(0xFF6B7280),
                     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
@@ -6982,7 +7006,12 @@ class _MappingCorrectionDialogState extends State<_MappingCorrectionDialog> {
                 ),
                 const SizedBox(width: 8),
                 ElevatedButton(
-                  onPressed: (_saving || _team.isEmpty || !_changed) ? null : _save,
+                  onPressed: (_team.isEmpty || !_changed) ? null : () => Navigator.pop(context, {
+                    'action': 'save',
+                    'hdqt': _hdqt,
+                    'team': _team,
+                    'reason': _reasonCtrl.text.trim(),
+                  }),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: const Color(0xFF2563EB),
                     foregroundColor: Colors.white,
@@ -6990,10 +7019,7 @@ class _MappingCorrectionDialogState extends State<_MappingCorrectionDialog> {
                     padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                   ),
-                  child: _saving
-                      ? const SizedBox(width: 16, height: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                      : const Text('저장', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                  child: const Text('저장', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
                 ),
               ]),
             ],
@@ -7005,7 +7031,6 @@ class _MappingCorrectionDialogState extends State<_MappingCorrectionDialog> {
 }
 
 class _BulkMappingDialog extends StatefulWidget {
-  final InspectionService svc;
   final int year;
   final List<String> licenseNos;
   final Map<String, List<String>> orgMap;
@@ -7014,7 +7039,6 @@ class _BulkMappingDialog extends StatefulWidget {
   final Map<String, Map<String, Map<String, dynamic>>> overridesIndex;
 
   const _BulkMappingDialog({
-    required this.svc,
     required this.year,
     required this.licenseNos,
     required this.orgMap,
@@ -7031,9 +7055,6 @@ class _BulkMappingDialogState extends State<_BulkMappingDialog> {
   late String _hdqt;
   String _team = '';
   final _reasonCtrl = TextEditingController();
-  bool _saving = false;
-  bool _reverting = false;
-  int _savedCount = 0;
 
   @override
   void initState() {
@@ -7050,51 +7071,9 @@ class _BulkMappingDialogState extends State<_BulkMappingDialog> {
   List<String> get _hdqtOptions => widget.orgMap.keys.toList()..sort();
   List<String> get _teamOptions => widget.orgMap[_hdqt] ?? [];
 
-  // 보정이 있는 선택 항목 수
   int get _overrideCount => widget.licenseNos
       .where((no) => widget.overridesIndex[no]?.isNotEmpty == true)
       .length;
-
-  Future<void> _revert() async {
-    setState(() { _reverting = true; _savedCount = 0; });
-    int success = 0;
-    for (final licNo in widget.licenseNos) {
-      final ovs = widget.overridesIndex[licNo];
-      if (ovs == null || ovs.isEmpty) continue;
-      for (final ov in ovs.values) {
-        final id = (ov['id'] as num?)?.toInt();
-        if (id != null) {
-          try { await widget.svc.deleteOverride(id); } catch (_) {}
-        }
-      }
-      success++;
-      if (mounted) setState(() => _savedCount = success);
-    }
-    if (mounted) Navigator.pop(context, success > 0);
-  }
-
-  Future<void> _save() async {
-    if (_team.isEmpty) return;
-    setState(() { _saving = true; _savedCount = 0; });
-    int success = 0;
-    for (final licNo in widget.licenseNos) {
-      try {
-        await widget.svc.upsertOverride(
-          widget.year, licNo, '품질개선팀', _team,
-          reason: _reasonCtrl.text.trim(),
-        );
-        if (widget.isAdmin && _hdqt.isNotEmpty) {
-          await widget.svc.upsertOverride(
-            widget.year, licNo, 'access담당', _hdqt,
-            reason: _reasonCtrl.text.trim(),
-          );
-        }
-        success++;
-        if (mounted) setState(() => _savedCount = success);
-      } catch (_) {}
-    }
-    if (mounted) Navigator.pop(context, success > 0);
-  }
 
   Widget _fieldLabel(String label) => Padding(
     padding: const EdgeInsets.only(bottom: 6),
@@ -7133,7 +7112,7 @@ class _BulkMappingDialogState extends State<_BulkMappingDialog> {
                 ),
                 IconButton(
                   icon: const Icon(Icons.close, size: 20, color: Color(0xFF6B7280)),
-                  onPressed: _saving ? null : () => Navigator.pop(context, false),
+                  onPressed: () => Navigator.pop(context, null),
                   padding: EdgeInsets.zero,
                   constraints: const BoxConstraints(),
                 ),
@@ -7180,7 +7159,7 @@ class _BulkMappingDialogState extends State<_BulkMappingDialog> {
                       borderRadius: BorderRadius.circular(12),
                       style: const TextStyle(fontSize: 13, color: Color(0xFF111827)),
                       items: _hdqtOptions.map((h) => DropdownMenuItem(value: h, child: Text(h))).toList(),
-                      onChanged: _saving ? null : (v) => setState(() { _hdqt = v ?? ''; _team = ''; }),
+                      onChanged: (v) => setState(() { _hdqt = v ?? ''; _team = ''; }),
                     ),
                   ),
                 ),
@@ -7208,8 +7187,7 @@ class _BulkMappingDialogState extends State<_BulkMappingDialog> {
                     borderRadius: BorderRadius.circular(12),
                     style: const TextStyle(fontSize: 13, color: Color(0xFF111827)),
                     items: _teamOptions.map((t) => DropdownMenuItem(value: t, child: Text(t))).toList(),
-                    onChanged: (_saving || _teamOptions.isEmpty) ? null
-                        : (v) => setState(() => _team = v ?? ''),
+                    onChanged: _teamOptions.isEmpty ? null : (v) => setState(() => _team = v ?? ''),
                   ),
                 ),
               ),
@@ -7225,7 +7203,6 @@ class _BulkMappingDialogState extends State<_BulkMappingDialog> {
                 ),
                 child: TextField(
                   controller: _reasonCtrl,
-                  enabled: !_saving,
                   style: const TextStyle(fontSize: 13),
                   decoration: const InputDecoration(
                     hintText: '예: 경계지역으로 실제 담당팀과 다름',
@@ -7238,36 +7215,12 @@ class _BulkMappingDialogState extends State<_BulkMappingDialog> {
               ),
               const SizedBox(height: 20),
 
-              // 저장 진행 표시
-              if (_saving) ...[
-                Row(children: [
-                  const SizedBox(width: 2),
-                  SizedBox(
-                    width: 120,
-                    child: LinearProgressIndicator(
-                      value: n > 0 ? _savedCount / n : 0,
-                      backgroundColor: const Color(0xFFE5E7EB),
-                      color: const Color(0xFF2563EB),
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Text('$_savedCount / $n 처리 중...',
-                    style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
-                ]),
-                const SizedBox(height: 12),
-              ],
-
               // 버튼
               Row(children: [
-                // 보정 취소 (admin + 보정 항목 있을 때)
                 if (widget.isAdmin && _overrideCount > 0)
                   OutlinedButton.icon(
-                    onPressed: (_saving || _reverting) ? null : _revert,
-                    icon: _reverting
-                        ? const SizedBox(width: 14, height: 14,
-                            child: CircularProgressIndicator(strokeWidth: 2))
-                        : const Icon(Icons.undo_rounded, size: 16),
+                    onPressed: () => Navigator.pop(context, {'action': 'revert'}),
+                    icon: const Icon(Icons.undo_rounded, size: 16),
                     label: Text('보정 취소 ($_overrideCount개)',
                         style: const TextStyle(fontSize: 13)),
                     style: OutlinedButton.styleFrom(
@@ -7279,7 +7232,7 @@ class _BulkMappingDialogState extends State<_BulkMappingDialog> {
                   ),
                 const Spacer(),
                 TextButton(
-                  onPressed: (_saving || _reverting) ? null : () => Navigator.pop(context, false),
+                  onPressed: () => Navigator.pop(context, null),
                   style: TextButton.styleFrom(
                     foregroundColor: const Color(0xFF6B7280),
                     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
@@ -7288,7 +7241,12 @@ class _BulkMappingDialogState extends State<_BulkMappingDialog> {
                 ),
                 const SizedBox(width: 8),
                 ElevatedButton(
-                  onPressed: (_saving || _reverting || _team.isEmpty) ? null : _save,
+                  onPressed: _team.isEmpty ? null : () => Navigator.pop(context, {
+                    'action': 'apply',
+                    'hdqt': _hdqt,
+                    'team': _team,
+                    'reason': _reasonCtrl.text.trim(),
+                  }),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: const Color(0xFF2563EB),
                     foregroundColor: Colors.white,
@@ -7296,11 +7254,8 @@ class _BulkMappingDialogState extends State<_BulkMappingDialog> {
                     padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                   ),
-                  child: _saving
-                      ? const SizedBox(width: 16, height: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                      : Text('$n개 일괄 적용',
-                          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                  child: Text('$n개 일괄 적용',
+                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
                 ),
               ]),
             ],
