@@ -6,7 +6,7 @@ ds - DS(데이터서비스) 업로드/조회/내보내기/잡 관리 엔드포�
 엔드포인트:
     GET  /ds/region-codes
     GET  /ds/upload-presign, /ds/xlsx-upload-presign, /ds/export-presign
-    GET  /ds/xlsx-build-status, /ds/city-hdqt-map
+    GET  /ds/xlsx-build-status, /ds/xlsx-build-status-bulk, /ds/city-hdqt-map
     GET  /ds/proxy-xlsx, /ds/proxy-raw-zip
     POST /ds/upload-init, /ds/upload-chunk, /ds/upload-finalize
     GET  /ds/stats, /ds/export, /ds/data
@@ -3042,6 +3042,50 @@ async def ds_xlsx_build_status(request: Request, divisionId: str, divisionCode: 
     }
 
 
+@router.get("/ds/xlsx-build-status-bulk")
+async def ds_xlsx_build_status_bulk(request: Request, items: str = Query(default="")):
+    """여러 업로드의 xlsx 빌드 상태 일괄 조회.
+
+    items: 'divisionId:divisionCode:importDate' 형태를 쉼표로 구분한 문자열
+    응답: {"results": {"divId:dc:date": "building"|"completed"|"unknown", ...}}
+    """
+    await _verify_auth(request)
+    if not items.strip():
+        return {"results": {}}
+
+    parsed = [s.strip() for s in items.split(",") if s.strip()]
+    if not parsed:
+        return {"results": {}}
+
+    s3 = get_s3_client()
+
+    def _check_one_sync(key: str):
+        parts = key.split(":")
+        if len(parts) != 3:
+            return key, "unknown"
+        division_id, division_code, import_date = parts
+        s3_key = f"ds-exports/{division_id}/{division_code}_{import_date}.xlsx"
+        cached = False
+        try:
+            s3.head_object(Bucket=S3_BUCKET_NAME, Key=s3_key)
+            cached = True
+        except Exception:
+            pass
+        _target = (division_id, division_code, import_date)
+        is_building = _xlsx_build_current == _target
+        in_queue = _target in _xlsx_build_queue
+        if cached:
+            return key, "completed"
+        if is_building or in_queue:
+            return key, "building"
+        return key, "unknown"
+
+    # S3 head_object는 IO bound → 스레드 풀 병렬 실행
+    tasks = [asyncio.to_thread(_check_one_sync, k) for k in parsed]
+    results_list = await asyncio.gather(*tasks)
+    return {"results": dict(results_list)}
+
+
 _city_hdqt_cache: dict | None = None
 _city_hdqt_cache_ts: float = 0.0
 _CITY_HDQT_CACHE_TTL = 3600 * 6  # 6시간
@@ -4494,10 +4538,19 @@ async def ds_preview_partial_update(request: Request, file: UploadFile = File(..
 
     def _preview():
         import xlrd as _xlrd
+        import zipfile as _zf
+        import io as _io
+        xls_bytes = file_bytes
+        if _zf.is_zipfile(_io.BytesIO(xls_bytes)):
+            with _zf.ZipFile(_io.BytesIO(xls_bytes)) as zf:
+                xls_names = [n for n in zf.namelist() if n.lower().endswith('.xls') and not n.lower().endswith('.xlsx')]
+                if not xls_names:
+                    raise HTTPException(400, "ZIP 내부에 XLS 파일이 없습니다")
+                xls_bytes = zf.read(xls_names[0])
         try:
-            wb = _xlrd.open_workbook(file_contents=file_bytes)
+            wb = _xlrd.open_workbook(file_contents=xls_bytes)
         except Exception as e:
-            raise HTTPException(400, "파일 파싱에 실패했습니다. 올바른 XLS 형식인지 확인하세요")
+            raise HTTPException(400, "파일 파싱에 실패했습니다. 올바른 XLS/ZIP 형식인지 확인하세요")
 
         def _norm_hn(val):
             if isinstance(val, float) and val == int(val):

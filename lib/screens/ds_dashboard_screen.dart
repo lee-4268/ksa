@@ -62,6 +62,9 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
   // DS 변경이력 — 본부별 카운트 (divisionId → 활성 건수)
   Map<String, int> _changeHistoryCountByDivision = {};
 
+  // xlsx 빌드 상태 (key: 'divId:dc:date', value: 'building'|'completed'|'unknown')
+  Map<String, String> _xlsxBuildStatus = {};
+
   bool _initialized = false;
 
   @override
@@ -97,9 +100,15 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
   void _scheduleAutoRefresh() {
     _autoRefreshTimer?.cancel();
     final hasUploading = _stats?.uploads.any((u) => u.status == 'uploading') ?? false;
-    if (hasUploading) {
+    final hasBuilding = _xlsxBuildStatus.values.any((s) => s == 'building');
+    if (hasUploading || hasBuilding) {
       _autoRefreshTimer = Timer.periodic(const Duration(seconds: 10), (_) {
-        if (mounted && !_isLoading) _loadStats();
+        if (!mounted || _isLoading) return;
+        if (hasUploading) {
+          _loadStats(); // _loadStats가 내부적으로 _loadXlsxBuildStatus 호출
+        } else {
+          _loadXlsxBuildStatus();
+        }
       });
     }
   }
@@ -118,6 +127,7 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
           _isLoading = false;
         });
         _scheduleAutoRefresh();
+        _loadXlsxBuildStatus();
       }
     } catch (e) {
       if (mounted) {
@@ -127,6 +137,27 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
         });
       }
     }
+  }
+
+  Future<void> _loadXlsxBuildStatus() async {
+    if (_stats == null || _stats!.uploads.isEmpty) return;
+    final token = context.read<AuthService>().authToken ?? '';
+    final items = _stats!.uploads
+        .map((u) => '${u.divisionId}:${u.divisionCode}:${u.actualDate}')
+        .join(',');
+    try {
+      final uri = Uri.parse('$_baseUrl/ds/xlsx-build-status-bulk')
+          .replace(queryParameters: {'items': items});
+      final resp = await http.get(uri, headers: {'Authorization': 'Bearer $token'});
+      if (resp.statusCode == 200 && mounted) {
+        final data = jsonDecode(resp.body) as Map<String, dynamic>;
+        final results = (data['results'] as Map<String, dynamic>?) ?? {};
+        setState(() {
+          _xlsxBuildStatus = results.map((k, v) => MapEntry(k, v.toString()));
+        });
+        _scheduleAutoRefresh();
+      }
+    } catch (_) {}
   }
 
   Future<void> _loadChangeHistoryCount() async {
@@ -863,6 +894,8 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
     final statusColor = isCompleted ? Colors.green : Colors.orange;
     final exportId = '${upload.divisionId}_${upload.actualDate}_${upload.divisionCode}';
     final isExporting = _exportingId == exportId;
+    final xlsxKey = '${upload.divisionId}:${upload.divisionCode}:${upload.actualDate}';
+    final xlsxStatus = _xlsxBuildStatus[xlsxKey];
 
     return Container(
       width: double.infinity,
@@ -916,6 +949,10 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
                     style: TextStyle(fontSize: 12, color: statusColor, fontWeight: FontWeight.w600),
                   ),
                 ),
+                if (xlsxStatus != null && xlsxStatus != 'unknown') ...[
+                  const SizedBox(width: 6),
+                  _buildXlsxBadge(xlsxStatus),
+                ],
               ],
             ),
           ),
@@ -1078,10 +1115,46 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
     );
   }
 
+  Widget _buildXlsxBadge(String status) {
+    if (status == 'building') {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        decoration: BoxDecoration(
+          color: Colors.orange.withValues(alpha: 0.10),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.orange.withValues(alpha: 0.35)),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          SizedBox(
+            width: 10,
+            height: 10,
+            child: CircularProgressIndicator(strokeWidth: 1.5, color: Colors.orange.shade700),
+          ),
+          const SizedBox(width: 5),
+          Text('xlsx 빌드 중', style: TextStyle(fontSize: 11, color: Colors.orange.shade800, fontWeight: FontWeight.w600)),
+        ]),
+      );
+    }
+    // completed
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: Colors.green.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.green.withValues(alpha: 0.35)),
+      ),
+      child: const Row(mainAxisSize: MainAxisSize.min, children: [
+        Icon(Icons.check_circle_outline, size: 12, color: Colors.green),
+        SizedBox(width: 4),
+        Text('xlsx 완료', style: TextStyle(fontSize: 11, color: Colors.green, fontWeight: FontWeight.w600)),
+      ]),
+    );
+  }
+
   Future<void> _showPartialDsUploadDialog() async {
     final picked = await FilePicker.platform.pickFiles(
       type: FileType.custom,
-      allowedExtensions: ['xls', 'xlsx'],
+      allowedExtensions: ['xls', 'xlsx', 'zip'],
       withData: true,
     );
     if (picked == null || picked.files.isEmpty) return;
