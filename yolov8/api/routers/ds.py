@@ -2180,21 +2180,22 @@ def _upload_xlsx_file_to_s3_sync(xlsx_path: str, division_id: str,
 def _build_v2_xlsx_sync(division_id: str, division_code: str, import_date: str) -> None:
     """v1 xlsx를 S3에서 다운로드 후 활성 변경이력만 셀 패치하여 v2로 업로드.
 
-    DynamoDB 읽기 없음. 처리 흐름:
-      1. SQLite ds_변경이력에서 활성 변경 조회
-      2. S3에서 v1 xlsx 다운로드
-      3. ZIP 내 sharedStrings.xml → 문자열 테이블 구성
-      4. 각 시트 XML iterparse → 허가번호/장치번호 매칭 행 탐색
-      5. 매칭 셀 regex 교체 + sharedStrings 신규 항목 추가
-      6. 수정된 ZIP을 v2로 S3 업로드
+    DynamoDB 읽기 없음. 대용량(400MB+) 파일 대응 스트리밍 처리:
+      - sharedStrings.xml: mmap 기반 (메모리 로드 없음)
+      - 시트 XML: iterparse (Pass 1) + 라인별 스트리밍 패치 (Pass 2)
+      - ZIP 출력: 스트리밍 복사 (전체 멤버 메모리 적재 없음)
     활성 변경 0건이면 v2 삭제. v1 없으면 아무것도 하지 않음.
     """
     import xml.etree.ElementTree as ET
+    import mmap as _mmap_mod
+    import struct as _struct
+    import tempfile
     from xml.sax.saxutils import escape as _xml_escape
 
     _NS_MAIN = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
     _NS_REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
     _CR_RE = re.compile(r'^([A-Z]+)(\d+)$')
+    _ROW_RE = re.compile(r'<row\b[^>]*\br="(\d+)"')
 
     _FIELD_KEYWORDS: dict = {
         '기기일련번호': ['일련번호'],
@@ -2250,14 +2251,18 @@ def _build_v2_xlsx_sync(division_id: str, division_code: str, import_date: str) 
         return
 
     # 2. v1 xlsx S3에서 다운로드
-    v1_tmp = f"/tmp/ds_v1_{division_id}_{division_code}_{import_date}_{uuid.uuid4().hex[:6]}.xlsx"
+    _uid = uuid.uuid4().hex[:6]
+    v1_tmp = f"/tmp/ds_v1_{division_id}_{division_code}_{import_date}_{_uid}.xlsx"
+    v2_tmp = f"/tmp/ds_v2_{division_id}_{division_code}_{import_date}_{_uid}.xlsx"
+    ss_tmp_path = None
+    ss_fh = None
+    ss_mmap_obj = None
+
     try:
         s3.download_file(S3_BUCKET_NAME, v1_key, v1_tmp)
     except ClientError as e:
         code = e.response.get('Error', {}).get('Code', '')
-        if code in ('404', 'NoSuchKey'):
-            logger.warning(f"DS v2 build: v1 없음 ({v1_key})")
-        else:
+        logger.warning(f"DS v2 build: v1 없음 ({v1_key})") if code in ('404', 'NoSuchKey') else \
             logger.error(f"DS v2 build: S3 다운로드 실패 ({code})")
         return
     except Exception as e:
@@ -2265,13 +2270,14 @@ def _build_v2_xlsx_sync(division_id: str, division_code: str, import_date: str) 
         return
 
     try:
-        # 3. ZIP 전체 멤버 읽기
-        with zipfile.ZipFile(v1_tmp, 'r') as _zf:
-            member_names = _zf.namelist()
-            members: dict = {n: _zf.read(n) for n in member_names}
+        # 3. ZIP 멤버 목록 + 메타 파일(소형) 읽기
+        with zipfile.ZipFile(v1_tmp, 'r') as zf_meta:
+            member_names = zf_meta.namelist()
+            rels_data = zf_meta.read('xl/_rels/workbook.xml.rels') if 'xl/_rels/workbook.xml.rels' in member_names else b''
+            wb_data = zf_meta.read('xl/workbook.xml') if 'xl/workbook.xml' in member_names else b''
+            ss_path = next((n for n in member_names if n.endswith('sharedStrings.xml')), None)
 
         # 4. workbook.xml + rels → sheet_name to xml_path
-        rels_data = members.get('xl/_rels/workbook.xml.rels', b'')
         rid_to_path: dict = {}
         if rels_data:
             for rel in ET.fromstring(rels_data):
@@ -2281,8 +2287,7 @@ def _build_v2_xlsx_sync(division_id: str, division_code: str, import_date: str) 
                     target = 'xl/' + target
                 rid_to_path[rid] = target
 
-        sheet_map: dict = {}  # sheet_name → xml_path in zip
-        wb_data = members.get('xl/workbook.xml', b'')
+        sheet_map: dict = {}
         if wb_data:
             for el in ET.fromstring(wb_data).iter():
                 if el.tag.rsplit('}', 1)[-1] == 'sheet':
@@ -2292,196 +2297,238 @@ def _build_v2_xlsx_sync(division_id: str, division_code: str, import_date: str) 
                     if sname and path:
                         sheet_map[sname] = path
 
-        # 5. sharedStrings.xml → ss_list (문자열 테이블)
-        ss_path = next((n for n in member_names if n.endswith('sharedStrings.xml')), None)
-        ss_list: list = []
-        ss_index: dict = {}  # text → idx
+        # 5. sharedStrings.xml → mmap (대용량 파일 메모리 최소화)
+        ss_offsets: list = []  # index → byte offset in ss_tmp
         if ss_path:
-            for _, elem in ET.iterparse(io.BytesIO(members[ss_path]), events=('end',)):
-                if elem.tag.rsplit('}', 1)[-1] == 'si':
-                    text = ''.join(
-                        ch.text for ch in elem.iter()
-                        if ch.tag.rsplit('}', 1)[-1] == 't' and ch.text
-                    )
-                    if text not in ss_index:
-                        ss_index[text] = len(ss_list)
-                        ss_list.append(text)
-                    elem.clear()
+            ss_tmp_f = tempfile.NamedTemporaryFile(delete=False, suffix='.ss')
+            ss_tmp_path = ss_tmp_f.name
+            with zipfile.ZipFile(v1_tmp, 'r') as zf_ss:
+                with zf_ss.open(ss_path) as ssf:
+                    for _, elem in ET.iterparse(ssf, events=('end',)):
+                        if elem.tag.rsplit('}', 1)[-1] == 'si':
+                            text = ''.join(
+                                ch.text for ch in elem.iter()
+                                if ch.tag.rsplit('}', 1)[-1] == 't' and ch.text
+                            )
+                            encoded = text.encode('utf-8')
+                            ss_offsets.append(ss_tmp_f.tell())
+                            ss_tmp_f.write(_struct.pack('<I', len(encoded)))
+                            ss_tmp_f.write(encoded)
+                            elem.clear()
+            ss_tmp_f.close()
+            ss_file_sz = os.path.getsize(ss_tmp_path)
+            if ss_file_sz > 0:
+                ss_fh = open(ss_tmp_path, 'rb')
+                ss_mmap_obj = _mmap_mod.mmap(ss_fh.fileno(), 0, access=_mmap_mod.ACCESS_READ)
 
-        orig_ss_count = len(ss_list)
+        orig_ss_count = len(ss_offsets)
+
+        def _get_ss(idx: int) -> str:
+            if ss_mmap_obj and 0 <= idx < len(ss_offsets):
+                off = ss_offsets[idx]
+                length = _struct.unpack_from('<I', ss_mmap_obj, off)[0]
+                return ss_mmap_obj[off + 4:off + 4 + length].decode('utf-8')
+            return ''
+
+        # 신규 문자열은 항상 append (중복 허용 - Excel 호환)
+        new_ss_list: list = []
+        new_ss_index: dict = {}
 
         def _get_or_add(text: str) -> int:
-            if text in ss_index:
-                return ss_index[text]
-            idx = len(ss_list)
-            ss_index[text] = idx
-            ss_list.append(text)
+            if text in new_ss_index:
+                return new_ss_index[text]
+            idx = orig_ss_count + len(new_ss_list)
+            new_ss_index[text] = idx
+            new_ss_list.append(text)
             return idx
 
-        # 6. 각 시트 패치
-        modified: dict = {}  # zip_path → new bytes
+        # 6. Pass 1: 각 시트 iterparse → 패치 플랜 수집
+        # patch_plan: {zip_path: {row_num: {cell_ref: new_ss_idx}}}
+        patch_plan: dict = {}
 
         for sheet_kw, key_map in raw_changes.items():
             target_sname = next((s for s in sheet_map if sheet_kw in s), None)
             if not target_sname:
                 continue
             target_path = sheet_map[target_sname]
-            if target_path not in members:
+            if target_path not in member_names:
                 continue
 
-            sheet_bytes = members[target_path]
-
-            # Pass 1: 헤더 행(row 1) 파싱 → col_letter → header_str
             col_hdr: dict = {}
-            for _, elem in ET.iterparse(io.BytesIO(sheet_bytes), events=('end',)):
-                tag = elem.tag.rsplit('}', 1)[-1]
-                if tag == 'row':
-                    if int(elem.get('r', '0')) == 1:
-                        for c in elem:
-                            if c.tag.rsplit('}', 1)[-1] != 'c':
-                                continue
-                            m = _CR_RE.match(c.get('r', ''))
-                            if not m:
-                                continue
-                            letter = m.group(1)
-                            v_el = c.find('{%s}v' % _NS_MAIN)
-                            if c.get('t', '') == 's' and v_el is not None and v_el.text:
-                                idx = int(v_el.text)
-                                col_hdr[letter] = ss_list[idx] if idx < len(ss_list) else ''
-                            else:
-                                col_hdr[letter] = (v_el.text or '') if v_el is not None else ''
-                        elem.clear()
-                        break
-                    elem.clear()
-
-            hn_col = next((lt for lt, h in col_hdr.items() if '허가번호' in h), None)
-            jn_col = next(
-                (lt for kw in ['장치번호', '설치장소구분', '구분']
-                 for lt, h in col_hdr.items() if kw in h),
-                None
-            )
-
-            # 필드명 → col_letter 매핑
+            hn_col = None
+            jn_col = None
             field_col: dict = {}
-            for fmap in key_map.values():
-                for 필드명, (col_kws, _) in fmap.items():
-                    if 필드명 not in field_col:
-                        lt = next(
-                            (lt for lt, h in col_hdr.items() if any(kw in h for kw in col_kws)),
-                            None
-                        )
-                        if lt:
-                            field_col[필드명] = lt
+            sheet_patch: dict = {}  # {row_num: {cell_ref: new_ss_idx}}
 
-            if not hn_col or not field_col:
-                continue
-
-            # Pass 2: 데이터 행 iterparse → 매칭 셀 참조 수집
-            patch_cells: dict = {}  # cell_ref → new_ss_idx
-
-            for _, elem in ET.iterparse(io.BytesIO(sheet_bytes), events=('end',)):
-                tag = elem.tag.rsplit('}', 1)[-1]
-                if tag == 'row':
-                    rn = int(elem.get('r', '0'))
-                    if rn <= 1:
-                        elem.clear()
-                        continue
-
-                    row_vals: dict = {}  # col_letter → (cell_ref, type, val_str)
-                    for c in elem:
-                        if c.tag.rsplit('}', 1)[-1] != 'c':
+            with zipfile.ZipFile(v1_tmp, 'r') as zf_p1:
+                with zf_p1.open(target_path) as f:
+                    for _, elem in ET.iterparse(f, events=('end',)):
+                        if elem.tag.rsplit('}', 1)[-1] != 'row':
+                            elem.clear()
                             continue
-                        m = _CR_RE.match(c.get('r', ''))
-                        if not m:
-                            continue
-                        letter = m.group(1)
-                        ct = c.get('t', '')
-                        v_el = c.find('{%s}v' % _NS_MAIN)
-                        if ct == 's' and v_el is not None and v_el.text:
-                            val = ss_list[int(v_el.text)] if int(v_el.text) < len(ss_list) else ''
+                        rn = int(elem.get('r', '0'))
+
+                        if rn == 1:
+                            # 헤더 행: 컬럼 위치 결정
+                            for c in elem:
+                                if c.tag.rsplit('}', 1)[-1] != 'c':
+                                    continue
+                                m = _CR_RE.match(c.get('r', ''))
+                                if not m:
+                                    continue
+                                letter = m.group(1)
+                                v_el = c.find('{%s}v' % _NS_MAIN)
+                                if c.get('t', '') == 's' and v_el is not None and v_el.text:
+                                    col_hdr[letter] = _get_ss(int(v_el.text))
+                                else:
+                                    col_hdr[letter] = (v_el.text or '') if v_el is not None else ''
+                            hn_col = next((lt for lt, h in col_hdr.items() if '허가번호' in h), None)
+                            jn_col = next(
+                                (lt for kw in ['장치번호', '설치장소구분', '구분']
+                                 for lt, h in col_hdr.items() if kw in h), None
+                            )
+                            for fmap in key_map.values():
+                                for 필드명, (col_kws, _) in fmap.items():
+                                    if 필드명 not in field_col:
+                                        lt = next(
+                                            (lt for lt, h in col_hdr.items() if any(kw in h for kw in col_kws)), None
+                                        )
+                                        if lt:
+                                            field_col[필드명] = lt
+                            elem.clear()
+                            if not hn_col or not field_col:
+                                break
+
+                        elif rn > 1:
+                            # 데이터 행: 매칭 여부 확인
+                            row_vals: dict = {}
+                            for c in elem:
+                                if c.tag.rsplit('}', 1)[-1] != 'c':
+                                    continue
+                                m = _CR_RE.match(c.get('r', ''))
+                                if not m:
+                                    continue
+                                letter = m.group(1)
+                                ct = c.get('t', '')
+                                v_el = c.find('{%s}v' % _NS_MAIN)
+                                if ct == 's' and v_el is not None and v_el.text:
+                                    val = _get_ss(int(v_el.text))
+                                else:
+                                    val = (v_el.text or '') if v_el is not None else ''
+                                row_vals[letter] = val
+
+                            hn_val = row_vals.get(hn_col, '').replace('-', '').strip()
+                            jn_raw_val = row_vals.get(jn_col, '').strip() if jn_col else ''
+                            try:
+                                jf = float(jn_raw_val)
+                                jn_val = str(int(jf)) if jf == int(jf) else jn_raw_val
+                            except (ValueError, TypeError):
+                                jn_val = jn_raw_val
+
+                            if (hn_val, jn_val) in key_map:
+                                for 필드명, (_, new_val) in key_map[(hn_val, jn_val)].items():
+                                    lt = field_col.get(필드명)
+                                    if lt:
+                                        sheet_patch.setdefault(rn, {})[f"{lt}{rn}"] = _get_or_add(new_val)
+
+                            elem.clear()
                         else:
-                            val = (v_el.text or '') if v_el is not None else ''
-                        row_vals[letter] = (c.get('r', ''), ct, val)
+                            elem.clear()
 
-                    # 허가번호 정규화 (하이픈 제거)
-                    hn_val = row_vals.get(hn_col, ('', '', ''))[2].replace('-', '').strip()
-                    # 장치번호 정규화 (숫자형 → 정수 문자열)
-                    jn_raw_val = row_vals.get(jn_col, ('', '', ''))[2].strip() if jn_col else ''
-                    try:
-                        jf = float(jn_raw_val)
-                        jn_val = str(int(jf)) if jf == int(jf) else jn_raw_val
-                    except (ValueError, TypeError):
-                        jn_val = jn_raw_val
+            if sheet_patch:
+                patch_plan[target_path] = sheet_patch
+                logger.info(f"DS v2 패치 플랜: {target_sname} {len(sheet_patch)}행")
 
-                    if (hn_val, jn_val) in key_map:
-                        for 필드명, (_, new_val) in key_map[(hn_val, jn_val)].items():
-                            lt = field_col.get(필드명)
-                            if lt:
-                                patch_cells[f"{lt}{rn}"] = _get_or_add(new_val)
-
-                    elem.clear()
-
-            if not patch_cells:
-                continue
-
-            # 7. raw XML 바이트에 regex 교체
-            xml_text = sheet_bytes.decode('utf-8')
-            for cell_ref, new_idx in patch_cells.items():
-                new_idx_str = str(new_idx)
-
-                def _repl(m, _ref=cell_ref, _idx=new_idx_str):
-                    tag_end = m.group(0).index('>')
-                    opening = m.group(0)[:tag_end]  # <c ... attrs (without >)
-                    if 't="s"' not in opening:
-                        opening = opening + ' t="s"'
-                    return f'{opening}><v>{_idx}</v></c>'
-
-                xml_text, n = re.subn(
-                    r'<c\b[^>]*\br="' + re.escape(cell_ref) + r'"[^>]*><v>[^<]*</v></c>',
-                    _repl, xml_text, count=1
-                )
-                if n == 0:
-                    logger.warning(f"DS v2 patch: 셀 미발견 {cell_ref} ({target_sname})")
-
-            modified[target_path] = xml_text.encode('utf-8')
-
-        if not modified:
+        if not patch_plan and not new_ss_list:
             return
 
-        # 8. sharedStrings.xml 신규 항목 추가
-        if ss_path and len(ss_list) > orig_ss_count:
-            ss_text = members[ss_path].decode('utf-8')
-            new_sis = ''.join(
-                f'<si><t{" xml:space=\"preserve\"" if ss_list[i] != ss_list[i].strip() else ""}>'
-                f'{_xml_escape(ss_list[i])}</t></si>'
-                for i in range(orig_ss_count, len(ss_list))
-            )
-            ss_text = re.sub(r'uniqueCount="(\d+)"', f'uniqueCount="{len(ss_list)}"', ss_text, count=1)
-            ss_text = ss_text.replace('</sst>', new_sis + '</sst>', 1)
-            modified[ss_path] = ss_text.encode('utf-8')
+        # 7. v2 ZIP 스트리밍 생성 (멤버별 on-the-fly 처리)
+        with zipfile.ZipFile(v2_tmp, 'w', zipfile.ZIP_DEFLATED) as zf_out:
+            with zipfile.ZipFile(v1_tmp, 'r') as zf_in:
+                for name in member_names:
+                    zi = zipfile.ZipInfo(filename=name)
+                    zi.compress_type = zipfile.ZIP_DEFLATED
 
-        # 9. v2 ZIP 생성 (메모리)
-        v2_buf = io.BytesIO()
-        with zipfile.ZipFile(v2_buf, 'w', zipfile.ZIP_DEFLATED) as _zf_out:
-            for name in member_names:
-                _zf_out.writestr(name, modified.get(name, members[name]))
-        v2_bytes = v2_buf.getvalue()
-        v2_buf.close()
+                    if name in patch_plan:
+                        # 시트 XML: 라인별 스트리밍 패치
+                        sheet_patch = patch_plan[name]
+                        with zf_in.open(name) as f_in, zf_out.open(zi, 'w') as f_out:
+                            for line in f_in:
+                                line_str = line.decode('utf-8')
+                                row_m = _ROW_RE.search(line_str)
+                                if row_m:
+                                    rn = int(row_m.group(1))
+                                    if rn in sheet_patch:
+                                        for cell_ref, new_idx in sheet_patch[rn].items():
+                                            new_idx_str = str(new_idx)
 
-        # 10. S3 업로드
-        s3.put_object(
-            Bucket=S3_BUCKET_NAME, Key=v2_key, Body=v2_bytes,
-            ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                            def _repl(m, _idx=new_idx_str):
+                                                t = m.group(0)
+                                                end = t.index('>')
+                                                opening = t[:end]
+                                                if 't="s"' not in opening:
+                                                    opening += ' t="s"'
+                                                return f'{opening}><v>{_idx}</v></c>'
+
+                                            line_str, n_sub = re.subn(
+                                                r'<c\b[^>]*\br="' + re.escape(cell_ref) + r'"[^>]*><v>[^<]*</v></c>',
+                                                _repl, line_str, count=1
+                                            )
+                                            if n_sub == 0:
+                                                logger.warning(f"DS v2 patch: 셀 미발견 {cell_ref}")
+                                f_out.write(line_str.encode('utf-8'))
+
+                    elif ss_path and name == ss_path and new_ss_list:
+                        # sharedStrings.xml: 신규 항목 append 스트리밍
+                        new_sis = ''.join(
+                            f'<si><t{" xml:space=\"preserve\"" if s != s.strip() else ""}>'
+                            f'{_xml_escape(s)}</t></si>'
+                            for s in new_ss_list
+                        )
+                        with zf_in.open(name) as f_in, zf_out.open(zi, 'w') as f_out:
+                            for line in f_in:
+                                line_str = line.decode('utf-8')
+                                if 'uniqueCount=' in line_str:
+                                    line_str = re.sub(
+                                        r'uniqueCount="(\d+)"',
+                                        f'uniqueCount="{orig_ss_count + len(new_ss_list)}"',
+                                        line_str, count=1
+                                    )
+                                if '</sst>' in line_str:
+                                    line_str = line_str.replace('</sst>', new_sis + '</sst>', 1)
+                                f_out.write(line_str.encode('utf-8'))
+
+                    else:
+                        # 나머지: 무수정 스트리밍 복사 (2MB 청크)
+                        with zf_in.open(name) as f_in, zf_out.open(zi, 'w') as f_out:
+                            shutil.copyfileobj(f_in, f_out, length=2 * 1024 * 1024)
+
+        # 8. S3 업로드 (upload_file: 스트리밍, 메모리 최소)
+        s3.upload_file(
+            v2_tmp, S3_BUCKET_NAME, v2_key,
+            ExtraArgs={"ContentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},
         )
         logger.info(f"DS v2 xlsx 빌드 완료: {v2_key} ({len(changes)}건 적용)")
 
     except Exception as e:
         logger.error(f"DS v2 xlsx 빌드 실패: {e}")
     finally:
-        try:
-            os.remove(v1_tmp)
-        except Exception:
-            pass
+        if ss_mmap_obj:
+            try:
+                ss_mmap_obj.close()
+            except Exception:
+                pass
+        if ss_fh:
+            try:
+                ss_fh.close()
+            except Exception:
+                pass
+        for tmp in [v1_tmp, v2_tmp, ss_tmp_path]:
+            if tmp and os.path.exists(tmp):
+                try:
+                    os.remove(tmp)
+                except Exception:
+                    pass
 
 
 async def _trigger_v2_rebuild(division_id: str, division_code: str, import_date: str) -> None:
