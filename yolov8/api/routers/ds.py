@@ -4997,10 +4997,19 @@ async def ds_apply_partial_update(request: Request, file: UploadFile = File(...)
 
     def _process():
         import xlrd as _xlrd
+        import zipfile as _zf
+        import io as _io
+        xls_bytes = file_bytes
+        if _zf.is_zipfile(_io.BytesIO(xls_bytes)):
+            with _zf.ZipFile(_io.BytesIO(xls_bytes)) as zf:
+                xls_names = [n for n in zf.namelist() if n.lower().endswith('.xls') and not n.lower().endswith('.xlsx')]
+                if not xls_names:
+                    raise HTTPException(400, "ZIP 내부에 XLS 파일이 없습니다")
+                xls_bytes = zf.read(xls_names[0])
         try:
-            wb = _xlrd.open_workbook(file_contents=file_bytes)
+            wb = _xlrd.open_workbook(file_contents=xls_bytes)
         except Exception as e:
-            raise HTTPException(400, "파일 파싱에 실패했습니다. 올바른 XLS 형식인지 확인하세요")
+            raise HTTPException(400, "파일 파싱에 실패했습니다. 올바른 XLS/ZIP 형식인지 확인하세요")
 
         def _norm_hn(val):
             if isinstance(val, float) and val == int(val):
