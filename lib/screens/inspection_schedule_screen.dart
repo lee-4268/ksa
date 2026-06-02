@@ -2739,22 +2739,13 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                   ),
                 ])
               : needsRecheck
-                  ? Wrap(spacing: 4, runSpacing: 2, children: [
+                  ? Row(mainAxisSize: MainAxisSize.min, children: [
                       _buildStatusBadge(status, schedulePk: pk),
+                      const SizedBox(width: 3),
                       Tooltip(
                         message: '검사 결과 합격이 아님 — 재점검 필요',
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFE17055).withValues(alpha: 0.15),
-                            borderRadius: BorderRadius.circular(8),
-                            border: Border.all(color: const Color(0xFFE17055), width: 1),
-                          ),
-                          child: const Text('재점검',
-                              style: TextStyle(
-                                  fontSize: 9, color: Color(0xFFE17055),
-                                  fontWeight: FontWeight.w700)),
-                        ),
+                        child: const Icon(Icons.warning_amber_rounded,
+                            size: 13, color: Color(0xFFE17055)),
                       ),
                     ])
                   : _buildStatusBadge(status, schedulePk: pk),
