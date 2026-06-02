@@ -5067,20 +5067,31 @@ async def upsert_override(request: Request, req: MappingOverrideReq):
 
 @router.delete("/inspection/overrides/{override_id}")
 async def delete_override(request: Request, override_id: int):
-    """보정 취소 (admin 전용) — 원래 주소기반 매핑으로 복원."""
+    """보정 취소 — admin: 전체, manager: 본인이 등록한 것만."""
     empno = await _verify_auth(request)
     role = await asyncio.to_thread(_get_user_role_sync, empno)
-    if role != "admin":
-        raise HTTPException(403, "관리자만 가능")
+    if role not in {"admin", "manager"}:
+        raise HTTPException(403, "관리자/매니저만 가능")
 
-    def _delete():
+    def _get_ov():
         conn = sqlite3.connect(_INSP_DB, timeout=60)
         conn.row_factory = sqlite3.Row
         ov = conn.execute(
             'SELECT * FROM inspection_target_overrides WHERE id=?', (override_id,)
         ).fetchone()
-        if not ov:
-            conn.close(); return
+        conn.close()
+        return dict(ov) if ov else None
+
+    ov = await asyncio.to_thread(_get_ov)
+    if not ov:
+        return {"success": True}
+
+    # manager는 본인이 등록한 보정만 취소 가능
+    if role == "manager" and ov.get("changed_by") != empno:
+        raise HTTPException(403, "본인이 등록한 보정만 취소할 수 있습니다")
+
+    def _delete():
+        conn = sqlite3.connect(_INSP_DB, timeout=60)
         # 원래값으로 복원 (original_value가 None이 아니면 빈 문자열도 복원)
         if ov['original_value'] is not None:
             conn.execute(

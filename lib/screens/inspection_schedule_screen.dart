@@ -187,6 +187,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
   late bool _isDivisionAdmin;
   late String _myHdqt;
   late String _myTeam;
+  late String _myEmpno;
 
   void _cacheAuthValues() {
     final auth = context.read<AuthService>();
@@ -197,6 +198,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     final dept = auth.userDepartment ?? '';
     _myHdqt = dept.replaceAll('Access담당', '').trim();
     _myTeam = auth.userTeam ?? '';
+    _myEmpno = auth.userId ?? '';
   }
 
   /// 해당 item에 대해 일정 등록/체크 권한이 있는지 (admin/manager 전용)
@@ -3029,6 +3031,11 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
 
   Future<void> _showBulkMappingDialog() async {
     final licenseNos = _selectedLicenseNos.toList();
+    // admin: 전체 취소 가능 / manager: 본인 등록분이 있으면 취소 가능
+    final canRevert = _isSuperAdmin ||
+        (_isDivisionAdmin && licenseNos.any((no) =>
+            _overridesIndex[no]?.values.any(
+                (ov) => (ov['changed_by'] as String? ?? '') == _myEmpno) == true));
     final result = await showDialog<Map<String, dynamic>>(
       context: context,
       builder: (ctx) => _BulkMappingDialog(
@@ -3036,6 +3043,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
         licenseNos: licenseNos,
         orgMap: _orgMap,
         isAdmin: _isSuperAdmin,
+        canRevert: canRevert,
         myHdqt: _myHdqt,
         overridesIndex: _overridesIndex,
       ),
@@ -3054,6 +3062,9 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
           final ovs = _overridesIndex[licNo];
           if (ovs == null || ovs.isEmpty) continue;
           for (final ov in ovs.values) {
+            // manager: 본인 등록분만 취소
+            if (!_isSuperAdmin &&
+                (ov['changed_by'] as String? ?? '') != _myEmpno) continue;
             final id = (ov['id'] as num?)?.toInt();
             if (id != null) {
               try { await _svc.deleteOverride(id); } catch (_) {}
@@ -3343,6 +3354,10 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
   Future<void> _showMappingDialog(Map<String, dynamic> item) async {
     final licenseNo = '${item['허가번호'] ?? ''}';
     final overrides = _overridesIndex[licenseNo] ?? {};
+    // admin: 전체 취소 가능 / manager: 본인이 등록한 것이 있으면 취소 가능
+    final canRevert = _isSuperAdmin ||
+        (_isDivisionAdmin && overrides.values.any(
+            (ov) => (ov['changed_by'] as String? ?? '') == _myEmpno));
     final result = await showDialog<Map<String, dynamic>>(
       context: context,
       builder: (ctx) => _MappingCorrectionDialog(
@@ -3350,6 +3365,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
         item: item,
         orgMap: _orgMap,
         isAdmin: _isSuperAdmin,
+        canRevert: canRevert,
         myHdqt: _myHdqt,
         overrides: overrides,
       ),
@@ -3364,6 +3380,9 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
       try {
         for (final ov in overrides.values) {
           final id = (ov['id'] as num?)?.toInt();
+          // manager: 본인 등록분만 취소
+          if (!_isSuperAdmin &&
+              (ov['changed_by'] as String? ?? '') != _myEmpno) continue;
           if (id != null) await _svc.deleteOverride(id);
         }
         await dialog.complete(message: '보정 취소 완료');
@@ -3377,7 +3396,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
       dialog.show(message: '관할 변경 중...');
       try {
         await _svc.upsertOverride(_year, licenseNo, '품질개선팀', team, reason: reason);
-        if (_isAdmin && hdqt.isNotEmpty) {
+        if (_isSuperAdmin && hdqt.isNotEmpty) {
           await _svc.upsertOverride(_year, licenseNo, 'access담당', hdqt, reason: reason);
         }
         await dialog.complete(message: '관할 변경 완료');
@@ -6741,6 +6760,7 @@ class _MappingCorrectionDialog extends StatefulWidget {
   final Map<String, dynamic> item;
   final Map<String, List<String>> orgMap;
   final bool isAdmin;
+  final bool canRevert;
   final String myHdqt;
   final Map<String, Map<String, dynamic>> overrides; // { field: { id, value, ... } }
 
@@ -6749,6 +6769,7 @@ class _MappingCorrectionDialog extends StatefulWidget {
     required this.item,
     required this.orgMap,
     required this.isAdmin,
+    required this.canRevert,
     required this.myHdqt,
     required this.overrides,
   });
@@ -6971,7 +6992,7 @@ class _MappingCorrectionDialogState extends State<_MappingCorrectionDialog> {
 
               // 버튼
               Row(children: [
-                if (_hasOverride && widget.isAdmin) ...[
+                if (_hasOverride && widget.canRevert) ...[
                   OutlinedButton.icon(
                     onPressed: () => Navigator.pop(context, {'action': 'revert'}),
                     icon: const Icon(Icons.undo_rounded, size: 16),
@@ -7025,6 +7046,7 @@ class _BulkMappingDialog extends StatefulWidget {
   final List<String> licenseNos;
   final Map<String, List<String>> orgMap;
   final bool isAdmin;
+  final bool canRevert;
   final String myHdqt;
   final Map<String, Map<String, Map<String, dynamic>>> overridesIndex;
 
@@ -7033,6 +7055,7 @@ class _BulkMappingDialog extends StatefulWidget {
     required this.licenseNos,
     required this.orgMap,
     required this.isAdmin,
+    required this.canRevert,
     required this.myHdqt,
     required this.overridesIndex,
   });
@@ -7207,7 +7230,7 @@ class _BulkMappingDialogState extends State<_BulkMappingDialog> {
 
               // 버튼
               Row(children: [
-                if (widget.isAdmin && _overrideCount > 0)
+                if (widget.canRevert && _overrideCount > 0)
                   OutlinedButton.icon(
                     onPressed: () => Navigator.pop(context, {'action': 'revert'}),
                     icon: const Icon(Icons.undo_rounded, size: 16),
