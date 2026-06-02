@@ -1741,6 +1741,14 @@ async def inspection_staging_confirm(request: Request, req: InspStagingConfirmRe
                         f'UPDATE inspection_targets SET "{ov[1]}"=? WHERE year=? AND 허가번호=?',
                         (ov[2], req.year, ov[0])
                     )
+                    # access담당 재적용 시 skt본부도 연동
+                    if ov[1] == 'access담당':
+                        new_skt = _ACCESS_TO_SKT_HDQT.get(ov[2], '')
+                        if new_skt:
+                            c2.execute(
+                                'UPDATE inspection_targets SET skt본부=? WHERE year=? AND 허가번호=?',
+                                (new_skt, req.year, ov[0])
+                            )
                 c2.commit(); c2.close()
                 logger.info(f'[overrides 재적용] {req.year}년 {len(ovs)}건')
             await asyncio.to_thread(_reapply)
@@ -4994,7 +5002,7 @@ async def upsert_override(request: Request, req: MappingOverrideReq):
 
     def _upsert():
         conn = sqlite3.connect(_INSP_DB, timeout=60)
-        # 현재값 저장
+        # 현재값 저장 (original_value는 최초 저장 시만 의미 있음 — ON CONFLICT 시 갱신 안 함)
         cur = conn.execute(
             f'SELECT "{req.field}" FROM inspection_targets WHERE year=? AND 허가번호=?',
             (req.year, req.허가번호)
@@ -5013,15 +5021,29 @@ async def upsert_override(request: Request, req: MappingOverrideReq):
             f'UPDATE inspection_targets SET "{req.field}"=? WHERE year=? AND 허가번호=?',
             (req.value, req.year, req.허가번호)
         )
-        # 팀 변경 시 본부도 연동
+        # 본부 변경 시 skt본부 연동
+        if req.field == "access담당":
+            new_skt = _ACCESS_TO_SKT_HDQT.get(req.value, '')
+            if new_skt:
+                conn.execute(
+                    'UPDATE inspection_targets SET skt본부=? WHERE year=? AND 허가번호=?',
+                    (new_skt, req.year, req.허가번호)
+                )
+        # 팀 변경 시 본부·skt본부도 연동
         if req.field == "품질개선팀":
             new_hdqt = INSP_TEAM_TO_HDQT.get(req.value, '')
             if new_hdqt:
+                # 현재 access담당 원본값 조회 (override original_value 보존)
+                cur_hdqt = conn.execute(
+                    'SELECT access담당 FROM inspection_targets WHERE year=? AND 허가번호=?',
+                    (req.year, req.허가번호)
+                ).fetchone()
+                orig_hdqt = cur_hdqt[0] if cur_hdqt else ''
                 conn.execute(
                     'UPDATE inspection_targets SET access담당=? WHERE year=? AND 허가번호=?',
                     (new_hdqt, req.year, req.허가번호)
                 )
-                # 본부 override도 저장 (팀 변경 시 본부 자동 연동)
+                # 본부 override 저장 — original_value 올바르게 보존
                 conn.execute('''
                     INSERT INTO inspection_target_overrides
                         (year, 허가번호, field, value, original_value, changed_by, changed_at, reason)
@@ -5029,7 +5051,14 @@ async def upsert_override(request: Request, req: MappingOverrideReq):
                     ON CONFLICT(year, 허가번호, field) DO UPDATE SET
                         value=excluded.value, changed_by=excluded.changed_by,
                         changed_at=excluded.changed_at, reason=excluded.reason
-                ''', (req.year, req.허가번호, 'access담당', new_hdqt, '', empno, now, req.reason))
+                ''', (req.year, req.허가번호, 'access담당', new_hdqt, orig_hdqt, empno, now, req.reason))
+                # skt본부 연동
+                new_skt = _ACCESS_TO_SKT_HDQT.get(new_hdqt, '')
+                if new_skt:
+                    conn.execute(
+                        'UPDATE inspection_targets SET skt본부=? WHERE year=? AND 허가번호=?',
+                        (new_skt, req.year, req.허가번호)
+                    )
         conn.commit(); conn.close()
 
     await asyncio.to_thread(_upsert)
@@ -5052,12 +5081,20 @@ async def delete_override(request: Request, override_id: int):
         ).fetchone()
         if not ov:
             conn.close(); return
-        # 원래값으로 복원
-        if ov['original_value']:
+        # 원래값으로 복원 (original_value가 None이 아니면 빈 문자열도 복원)
+        if ov['original_value'] is not None:
             conn.execute(
                 f'UPDATE inspection_targets SET "{ov["field"]}"=? WHERE year=? AND 허가번호=?',
                 (ov['original_value'], ov['year'], ov['허가번호'])
             )
+            # access담당 원복 시 skt본부도 연동
+            if ov['field'] == 'access담당':
+                orig_skt = _ACCESS_TO_SKT_HDQT.get(ov['original_value'] or '', '')
+                if orig_skt:
+                    conn.execute(
+                        'UPDATE inspection_targets SET skt본부=? WHERE year=? AND 허가번호=?',
+                        (orig_skt, ov['year'], ov['허가번호'])
+                    )
         conn.execute('DELETE FROM inspection_target_overrides WHERE id=?', (override_id,))
         conn.commit(); conn.close()
 
