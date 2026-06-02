@@ -2587,7 +2587,13 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
         padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
         child: Row(
           mainAxisAlignment: MainAxisAlignment.end,
-          children: [_buildColumnToggleButton()],
+          children: [
+            if (_selectedLicenseNos.isNotEmpty && (_isAdmin || _isDivisionAdmin)) ...[
+              _buildBulkMappingButton(),
+              const SizedBox(width: 8),
+            ],
+            _buildColumnToggleButton(),
+          ],
         ),
       ),
       Expanded(
@@ -2997,6 +3003,57 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
         ]),
       ),
     );
+  }
+
+  Widget _buildBulkMappingButton() {
+    final n = _selectedLicenseNos.length;
+    return InkWell(
+      onTap: _showBulkMappingDialog,
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        decoration: BoxDecoration(
+          color: const Color(0xFF2563EB).withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: const Color(0xFF2563EB).withValues(alpha: 0.3)),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          const Icon(Icons.swap_horiz_rounded, size: 15, color: Color(0xFF2563EB)),
+          const SizedBox(width: 5),
+          const Text('관할 변경',
+              style: TextStyle(fontSize: 12, color: Color(0xFF2563EB), fontWeight: FontWeight.w600)),
+          const SizedBox(width: 6),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+            decoration: BoxDecoration(
+              color: const Color(0xFF2563EB),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Text('$n개 선택됨',
+                style: const TextStyle(fontSize: 10, color: Colors.white, fontWeight: FontWeight.w600)),
+          ),
+        ]),
+      ),
+    );
+  }
+
+  Future<void> _showBulkMappingDialog() async {
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => _BulkMappingDialog(
+        svc: _svc,
+        year: _year,
+        licenseNos: _selectedLicenseNos.toList(),
+        orgMap: _orgMap,
+        isAdmin: _isAdmin,
+        myHdqt: _myHdqt,
+      ),
+    );
+    if (result == true && mounted) {
+      setState(() => _selectedLicenseNos.clear());
+      await _loadOverrides();
+      await _loadData();
+    }
   }
 
   // ── 커스텀 테이블 헤더 ────────────────────────────────────
@@ -6936,6 +6993,269 @@ class _MappingCorrectionDialogState extends State<_MappingCorrectionDialog> {
                       ? const SizedBox(width: 16, height: 16,
                           child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                       : const Text('저장', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                ),
+              ]),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _BulkMappingDialog extends StatefulWidget {
+  final InspectionService svc;
+  final int year;
+  final List<String> licenseNos;
+  final Map<String, List<String>> orgMap;
+  final bool isAdmin;
+  final String myHdqt;
+
+  const _BulkMappingDialog({
+    required this.svc,
+    required this.year,
+    required this.licenseNos,
+    required this.orgMap,
+    required this.isAdmin,
+    required this.myHdqt,
+  });
+
+  @override
+  State<_BulkMappingDialog> createState() => _BulkMappingDialogState();
+}
+
+class _BulkMappingDialogState extends State<_BulkMappingDialog> {
+  late String _hdqt;
+  String _team = '';
+  final _reasonCtrl = TextEditingController();
+  bool _saving = false;
+  int _savedCount = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _hdqt = widget.isAdmin ? '' : widget.myHdqt;
+  }
+
+  @override
+  void dispose() {
+    _reasonCtrl.dispose();
+    super.dispose();
+  }
+
+  List<String> get _hdqtOptions => widget.orgMap.keys.toList()..sort();
+  List<String> get _teamOptions => widget.orgMap[_hdqt] ?? [];
+
+  Future<void> _save() async {
+    if (_team.isEmpty) return;
+    setState(() { _saving = true; _savedCount = 0; });
+    int success = 0;
+    for (final licNo in widget.licenseNos) {
+      try {
+        await widget.svc.upsertOverride(
+          widget.year, licNo, '품질개선팀', _team,
+          reason: _reasonCtrl.text.trim(),
+        );
+        if (widget.isAdmin && _hdqt.isNotEmpty) {
+          await widget.svc.upsertOverride(
+            widget.year, licNo, 'access담당', _hdqt,
+            reason: _reasonCtrl.text.trim(),
+          );
+        }
+        success++;
+        if (mounted) setState(() => _savedCount = success);
+      } catch (_) {}
+    }
+    if (mounted) Navigator.pop(context, success > 0);
+  }
+
+  Widget _fieldLabel(String label) => Padding(
+    padding: const EdgeInsets.only(bottom: 6),
+    child: Text(label,
+      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF374151))),
+  );
+
+  @override
+  Widget build(BuildContext context) {
+    final n = widget.licenseNos.length;
+    return Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      insetPadding: const EdgeInsets.symmetric(horizontal: 40, vertical: 24),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 440),
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // 헤더
+              Row(children: [
+                Container(
+                  padding: const EdgeInsets.all(7),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF2563EB).withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: const Icon(Icons.swap_horiz_rounded, size: 18, color: Color(0xFF2563EB)),
+                ),
+                const SizedBox(width: 10),
+                const Expanded(
+                  child: Text('관할 일괄 변경',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.close, size: 20, color: Color(0xFF6B7280)),
+                  onPressed: _saving ? null : () => Navigator.pop(context, false),
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(),
+                ),
+              ]),
+              const SizedBox(height: 12),
+
+              // 선택 건수 안내
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF2563EB).withValues(alpha: 0.06),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: const Color(0xFF2563EB).withValues(alpha: 0.2)),
+                ),
+                child: Row(children: [
+                  const Icon(Icons.info_outline_rounded, size: 15, color: Color(0xFF2563EB)),
+                  const SizedBox(width: 8),
+                  Text('선택한 $n개 국소에 동일하게 적용됩니다.',
+                    style: const TextStyle(fontSize: 13, color: Color(0xFF2563EB))),
+                ]),
+              ),
+
+              const SizedBox(height: 16),
+              const Divider(height: 1, color: Color(0xFFE5E7EB)),
+              const SizedBox(height: 16),
+
+              // 본부 (admin only)
+              if (widget.isAdmin) ...[
+                _fieldLabel('본부 (Access담당)'),
+                Container(
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    border: Border.all(color: const Color(0xFFD1D5DB)),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                  child: DropdownButtonHideUnderline(
+                    child: DropdownButton<String>(
+                      isExpanded: true, isDense: true,
+                      value: _hdqtOptions.contains(_hdqt) ? _hdqt : null,
+                      hint: const Text('본부 선택', style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
+                      icon: const Icon(Icons.arrow_drop_down, color: Color(0xFF2563EB), size: 20),
+                      dropdownColor: Colors.white,
+                      borderRadius: BorderRadius.circular(12),
+                      style: const TextStyle(fontSize: 13, color: Color(0xFF111827)),
+                      items: _hdqtOptions.map((h) => DropdownMenuItem(value: h, child: Text(h))).toList(),
+                      onChanged: _saving ? null : (v) => setState(() { _hdqt = v ?? ''; _team = ''; }),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+              ],
+
+              // 팀
+              _fieldLabel('팀 (품질개선팀)'),
+              Container(
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  border: Border.all(color: const Color(0xFFD1D5DB)),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                child: DropdownButtonHideUnderline(
+                  child: DropdownButton<String>(
+                    isExpanded: true, isDense: true,
+                    value: _teamOptions.contains(_team) ? _team : null,
+                    hint: Text(
+                      _hdqt.isEmpty ? '본부를 먼저 선택하세요' : '팀 선택',
+                      style: const TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
+                    icon: const Icon(Icons.arrow_drop_down, color: Color(0xFF2563EB), size: 20),
+                    dropdownColor: Colors.white,
+                    borderRadius: BorderRadius.circular(12),
+                    style: const TextStyle(fontSize: 13, color: Color(0xFF111827)),
+                    items: _teamOptions.map((t) => DropdownMenuItem(value: t, child: Text(t))).toList(),
+                    onChanged: (_saving || _teamOptions.isEmpty) ? null
+                        : (v) => setState(() => _team = v ?? ''),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+
+              // 사유
+              _fieldLabel('보정 사유 (선택)'),
+              Container(
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  border: Border.all(color: const Color(0xFFD1D5DB)),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: TextField(
+                  controller: _reasonCtrl,
+                  enabled: !_saving,
+                  style: const TextStyle(fontSize: 13),
+                  decoration: const InputDecoration(
+                    hintText: '예: 경계지역으로 실제 담당팀과 다름',
+                    hintStyle: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)),
+                    contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                    border: InputBorder.none,
+                  ),
+                  maxLines: 2,
+                ),
+              ),
+              const SizedBox(height: 20),
+
+              // 저장 진행 표시
+              if (_saving) ...[
+                Row(children: [
+                  const SizedBox(width: 2),
+                  SizedBox(
+                    width: 120,
+                    child: LinearProgressIndicator(
+                      value: n > 0 ? _savedCount / n : 0,
+                      backgroundColor: const Color(0xFFE5E7EB),
+                      color: const Color(0xFF2563EB),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Text('$_savedCount / $n 처리 중...',
+                    style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+                ]),
+                const SizedBox(height: 12),
+              ],
+
+              // 버튼
+              Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+                TextButton(
+                  onPressed: _saving ? null : () => Navigator.pop(context, false),
+                  style: TextButton.styleFrom(
+                    foregroundColor: const Color(0xFF6B7280),
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                  ),
+                  child: const Text('취소', style: TextStyle(fontSize: 13)),
+                ),
+                const SizedBox(width: 8),
+                ElevatedButton(
+                  onPressed: (_saving || _team.isEmpty) ? null : _save,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF2563EB),
+                    foregroundColor: Colors.white,
+                    elevation: 0,
+                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  ),
+                  child: _saving
+                      ? const SizedBox(width: 16, height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                      : Text('$n개 일괄 적용',
+                          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
                 ),
               ]),
             ],
