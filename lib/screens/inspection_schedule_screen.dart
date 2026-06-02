@@ -2739,9 +2739,8 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                   ),
                 ])
               : needsRecheck
-                  ? Row(mainAxisSize: MainAxisSize.min, children: [
+                  ? Wrap(spacing: 4, runSpacing: 2, children: [
                       _buildStatusBadge(status, schedulePk: pk),
-                      const SizedBox(width: 4),
                       Tooltip(
                         message: '검사 결과 합격이 아님 — 재점검 필요',
                         child: Container(
