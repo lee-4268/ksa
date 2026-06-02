@@ -2531,13 +2531,21 @@ def _build_v2_xlsx_sync(division_id: str, division_code: str, import_date: str) 
                     pass
 
 
+# v2 빌드 태스크 강한 참조 보관 (GC 방지)
+_v2_build_tasks: set = set()
+
+
 async def _trigger_v2_rebuild(division_id: str, division_code: str, import_date: str) -> None:
     """v2 xlsx 재빌드를 백그라운드 태스크로 실행."""
     if not division_id or not division_code or not import_date:
+        logger.warning(f"DS v2 트리거 스킵: 파라미터 누락 ({division_id}/{division_code}/{import_date})")
         return
-    asyncio.create_task(
+    logger.info(f"DS v2 rebuild 트리거: {division_id}/{division_code}/{import_date}")
+    task = asyncio.create_task(
         asyncio.to_thread(_build_v2_xlsx_sync, division_id, division_code, import_date)
     )
+    _v2_build_tasks.add(task)
+    task.add_done_callback(_v2_build_tasks.discard)
 
 
 async def _trigger_v2_rebuild_by_division(division_id: str) -> None:
