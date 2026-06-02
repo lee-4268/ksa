@@ -2000,7 +2000,8 @@ def _finalize_upload_record_sync(division_id: str, division_code: str,
 
 def _build_xlsx_sync(division_id: str, division_code: str, import_date: str,
                       sheet_stats: dict,
-                      sheet_headers: Optional[dict] = None) -> str:
+                      sheet_headers: Optional[dict] = None,
+                      cell_overrides: Optional[dict] = None) -> str:
     """동기: DynamoDB → xlsxwriter → xlsx 파일 경로 반환 (디스크 기반, 메모리 최소화)
 
     서식: Arial 10pt, 가운데정렬, 얇은 테두리, 행 높이 12.75
@@ -2009,6 +2010,9 @@ def _build_xlsx_sync(division_id: str, division_code: str, import_date: str,
     헤더 결정 방식:
       1. sheet_headers[sheet_name] 있으면 그대로 사용 (업로드 시 원본 XLS 순서 보존)
       2. 없으면 전체 스캔으로 수집 (하위 호환 fallback)
+
+    cell_overrides: {sheet_name: {(hn_no_hyphen, jn_or_gubun): {col_name: new_val}}}
+      지정된 행의 특정 컬럼 값을 DynamoDB 원본 대신 override 값으로 씀 (v2 빌드용)
     """
     if not HAS_XLSXWRITER:
         raise RuntimeError("xlsxwriter not installed on server")
@@ -2036,6 +2040,16 @@ def _build_xlsx_sync(division_id: str, division_code: str, import_date: str,
             "align": "center", "valign": "vcenter",
             "border": 1,
         })
+
+        # cell_overrides 사용 시 시트별 보조키 컬럼명 미리 계산
+        _sec_key_col: dict = {}  # sheet_name → 보조키 컬럼명 (장치번호 or 설치장소구분)
+        if cell_overrides and sheet_headers:
+            for _sn, _hdrs in sheet_headers.items():
+                for _kw in ['장치번호', '설치장소구분', '구분']:
+                    _col = next((h for h in _hdrs if _kw in h), None)
+                    if _col:
+                        _sec_key_col[_sn] = _col
+                        break
 
         for sheet_name in sheet_stats.keys():
             xws = xwb.add_worksheet(sheet_name[:31])
@@ -2096,6 +2110,16 @@ def _build_xlsx_sync(division_id: str, division_code: str, import_date: str,
 
                 for item in items:
                     data = item.get("data", {})
+                    if cell_overrides and sheet_name in cell_overrides:
+                        raw_hn = str(data.get('허가번호', '') or '').replace('-', '').strip()
+                        raw_sec = data.get(_sec_key_col.get(sheet_name, '장치번호'), '') or ''
+                        if isinstance(raw_sec, float) and raw_sec == int(raw_sec):
+                            raw_sec = str(int(raw_sec))
+                        else:
+                            raw_sec = str(raw_sec).strip()
+                        ovr = cell_overrides[sheet_name].get((raw_hn, raw_sec))
+                        if ovr:
+                            data = {**data, **ovr}
                     xws.set_row(row_idx, 12.75)
                     for ci, h in enumerate(headers):
                         xws.write(row_idx, ci, data.get(h, ""), data_fmt)
@@ -2150,6 +2174,155 @@ def _upload_xlsx_file_to_s3_sync(xlsx_path: str, division_id: str,
         ExtraArgs={"ContentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},
     )
     return key
+
+
+def _build_v2_xlsx_sync(division_id: str, division_code: str, import_date: str) -> None:
+    """활성 변경이력을 v1 xlsx에 반영한 v2 xlsx를 S3에 저장.
+    활성 변경이 0건이면 v2를 삭제. v1이 없으면 아무것도 하지 않음.
+    """
+    v2_key = f"ds-exports/{division_id}/{division_code}_{import_date}_v2.xlsx"
+    s3 = get_s3_client()
+
+    # 활성 변경이력 조회
+    if not os.path.exists(_DS_DETAIL_DB):
+        return
+    dc = sqlite3.connect(_DS_DETAIL_DB, timeout=10)
+    dc.row_factory = sqlite3.Row
+    try:
+        changes = dc.execute(
+            "SELECT 허가번호, 장치번호, 시트, 필드명, 변경후값 FROM ds_변경이력 "
+            "WHERE division_id=? AND (cancelled IS NULL OR cancelled='0')",
+            (division_id,)
+        ).fetchall()
+    finally:
+        dc.close()
+
+    if not changes:
+        try:
+            s3.delete_object(Bucket=S3_BUCKET_NAME, Key=v2_key)
+        except Exception:
+            pass
+        return
+
+    # DynamoDB에서 sheetHeaders + sheetStats 조회
+    sk = f"{division_code}#{import_date}" if division_code else import_date
+    uploads_table = get_dynamodb_resource().Table(DYNAMODB_TABLES["ds_uploads"])
+    resp = uploads_table.get_item(Key={"divisionId": division_id, "importDate": sk})
+    meta = resp.get("Item", {})
+    sheet_headers: dict = meta.get("sheetHeaders", {})
+    sheet_stats: dict = meta.get("sheetStats", {})
+    if not sheet_headers or not sheet_stats:
+        logger.warning(f"v2 build: sheetHeaders/sheetStats 없음 ({division_id}/{sk})")
+        return
+
+    # 필드명 → xlsx 컬럼 키워드 매핑
+    _FIELD_KEYWORDS: dict = {
+        '기기일련번호': ['일련번호'],
+        '형식검정번호': ['형식검정번호'],
+        '설치형태': ['설치형태명', '설치형태'],
+        '설치장소': ['설치장소입력주소', '설치장소주소'],
+    }
+    # 시트 구분자 → 실제 시트명 키워드
+    _SHEET_KEYWORDS: dict = {
+        '부분DS장치': '장치',
+        '부분DS안테나': '안테나',
+        '부분DS설치장소': '설치장소',
+    }
+
+    def _find_sheet(keyword: str) -> Optional[str]:
+        for sn in sheet_headers:
+            if keyword in sn:
+                return sn
+        return None
+
+    def _find_col(headers: list, *keywords) -> Optional[str]:
+        for kw in keywords:
+            for h in headers:
+                if kw in h:
+                    return h
+        return None
+
+    # cell_overrides 빌드
+    cell_overrides: dict = {}
+    for row in changes:
+        hn = (row['허가번호'] or '').replace('-', '').strip()
+        jn = (row['장치번호'] or '').strip()
+        시트 = row['시트'] or ''
+        필드명 = row['필드명'] or ''
+        val = row['변경후값'] or ''
+
+        sheet_kw = _SHEET_KEYWORDS.get(시트)
+        if not sheet_kw:
+            continue
+        sn = _find_sheet(sheet_kw)
+        if not sn:
+            continue
+        col = _find_col(sheet_headers.get(sn, []), *_FIELD_KEYWORDS.get(필드명, []))
+        if not col:
+            continue
+
+        cell_overrides.setdefault(sn, {}).setdefault((hn, jn), {})[col] = val
+
+    if not cell_overrides:
+        return
+
+    # v2 xlsx 빌드
+    xlsx_path = None
+    try:
+        xlsx_path = _build_xlsx_sync(
+            division_id, division_code, import_date,
+            sheet_stats, sheet_headers, cell_overrides
+        )
+        s3.upload_file(
+            xlsx_path, S3_BUCKET_NAME, v2_key,
+            ExtraArgs={"ContentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},
+        )
+        logger.info(f"DS v2 xlsx 빌드 완료: {v2_key} ({len(changes)}건 적용)")
+    except Exception as e:
+        logger.error(f"DS v2 xlsx 빌드 실패: {e}")
+    finally:
+        if xlsx_path and os.path.exists(xlsx_path):
+            try:
+                os.remove(xlsx_path)
+            except Exception:
+                pass
+
+
+async def _trigger_v2_rebuild(division_id: str, division_code: str, import_date: str) -> None:
+    """v2 xlsx 재빌드를 백그라운드 태스크로 실행."""
+    if not division_id or not division_code or not import_date:
+        return
+    asyncio.create_task(
+        asyncio.to_thread(_build_v2_xlsx_sync, division_id, division_code, import_date)
+    )
+
+
+async def _trigger_v2_rebuild_by_division(division_id: str) -> None:
+    """division_id로 최신 업로드 메타를 DynamoDB에서 조회해 v2 재빌드."""
+    def _get_meta():
+        try:
+            uploads_table = get_dynamodb_resource().Table(DYNAMODB_TABLES["ds_uploads"])
+            resp = uploads_table.query(
+                KeyConditionExpression="divisionId = :did",
+                ExpressionAttributeValues={":did": division_id},
+                ScanIndexForward=False,
+                Limit=1,
+                ProjectionExpression="importDate, divisionCode",
+            )
+            items = resp.get("Items", [])
+            if not items:
+                return None, None
+            item = items[0]
+            sk = item.get("importDate", "")
+            dc = item.get("divisionCode") or (sk.split("#", 1)[0] if "#" in sk else "")
+            dt = sk.split("#", 1)[1] if "#" in sk else sk
+            return dc, dt
+        except Exception:
+            return None, None
+
+    division_code, import_date = await asyncio.to_thread(_get_meta)
+    if division_code and import_date:
+        await _trigger_v2_rebuild(division_id, division_code, import_date)
 
 
 async def _process_ds_job(job_id: str, job_item: dict):
@@ -2962,24 +3135,25 @@ async def ds_export_presign(
     try:
         s3 = get_s3_client()
 
-        # 1순위: 미리 생성된 xlsx → EC2 프록시로 반환 (S3 CORS 우회)
-        xlsx_key = f"ds-exports/{divisionId}/{divisionCode}_{importDate}.xlsx"
-        _validate_s3_key(xlsx_key, ALLOWED_S3_READ_PREFIXES)
-        try:
-            s3.head_object(Bucket=S3_BUCKET_NAME, Key=xlsx_key)
-            # EC2 프록시 URL — X-Forwarded-Host 기준으로 origin 추정
-            forwarded_proto = request.headers.get("x-forwarded-proto", "https")
-            forwarded_host = request.headers.get("x-forwarded-host") or request.headers.get("host", "")
-            origin = f"{forwarded_proto}://{forwarded_host}"
-            qs = f"divisionId={divisionId}&importDate={importDate}&divisionCode={divisionCode}"
-            # 토큰을 쿼리파라미터로 포함 (브라우저 fetch 시 헤더 설정 불필요)
-            raw_token = request.headers.get("Authorization", "")[7:]  # "Bearer " 제거
-            if raw_token:
-                qs += f"&token={raw_token}"
-            proxy_url = f"{origin}/ds/proxy-xlsx?{qs}"
-            return {"success": True, "url": proxy_url, "type": "xlsx"}
-        except ClientError:
-            pass
+        # 1순위: 미리 생성된 xlsx (v2 우선, v1 fallback) → EC2 프록시로 반환 (S3 CORS 우회)
+        forwarded_proto = request.headers.get("x-forwarded-proto", "https")
+        forwarded_host = request.headers.get("x-forwarded-host") or request.headers.get("host", "")
+        origin = f"{forwarded_proto}://{forwarded_host}"
+        raw_token = request.headers.get("Authorization", "")[7:]
+        for _suffix, _ver in [("_v2.xlsx", "v2"), (".xlsx", "xlsx")]:
+            _key = f"ds-exports/{divisionId}/{divisionCode}_{importDate}{_suffix}"
+            _validate_s3_key(_key, ALLOWED_S3_READ_PREFIXES)
+            try:
+                s3.head_object(Bucket=S3_BUCKET_NAME, Key=_key)
+                qs = f"divisionId={divisionId}&importDate={importDate}&divisionCode={divisionCode}"
+                if _ver == "v2":
+                    qs += "&v2=1"
+                if raw_token:
+                    qs += f"&token={raw_token}"
+                proxy_url = f"{origin}/ds/proxy-xlsx?{qs}"
+                return {"success": True, "url": proxy_url, "type": "xlsx", "version": _ver}
+            except ClientError:
+                pass
 
         # 2순위: 원본 ZIP → 브라우저에서 병합 (hdqt 있으면 JS 필터링)
         zip_key = f"ds-raw/{divisionId}/{divisionCode}_{importDate}.zip"
@@ -3154,9 +3328,11 @@ async def ds_proxy_xlsx(
     importDate: str = Query(...),
     divisionCode: str = Query(""),
     token: str = Query(""),
+    v2: str = Query(""),
 ):
     """S3 캐시 xlsx → EC2 프록시 스트리밍 (브라우저 CORS 우회)
     Authorization 헤더 또는 token 쿼리파라미터로 인증.
+    v2=1 이면 _v2.xlsx 키 사용.
     """
     # 헤더에 없으면 쿼리파라미터 token으로 fallback
     if token and not request.headers.get("Authorization"):
@@ -3165,7 +3341,8 @@ async def ds_proxy_xlsx(
             raise HTTPException(status_code=401, detail="토큰이 만료되었거나 유효하지 않습니다")
     else:
         await _verify_auth(request)
-    s3_key = f"ds-exports/{divisionId}/{divisionCode}_{importDate}.xlsx"
+    suffix = "_v2.xlsx" if v2 == "1" else ".xlsx"
+    s3_key = f"ds-exports/{divisionId}/{divisionCode}_{importDate}{suffix}"
     _validate_s3_key(s3_key, ALLOWED_S3_READ_PREFIXES)
     s3 = get_s3_client()
     try:
@@ -4861,11 +5038,15 @@ async def ds_change_history_bulk_cancel(request: Request, req: BulkCancelReq):
         raise HTTPException(400, "ids 비어있음")
 
     results = {"succeeded": 0, "failed": 0, "skipped": 0, "errors": []}
-    # 단건 cancel 라우터 로직을 재사용해 일관성 유지
+    affected_divisions: set = set()
+    # 단건 cancel 라우터 로직을 재사용 (v2 트리거는 bulk에서 일괄 처리)
     for hid in req.ids:
         try:
-            await ds_change_history_cancel(hid, request)
+            r = await ds_change_history_cancel(hid, request, _skip_v2=True)
             results["succeeded"] += 1
+            div_id = (r or {}).get('division_id', '')
+            if div_id:
+                affected_divisions.add(div_id)
         except HTTPException as he:
             if he.status_code == 400 and '이미 취소된' in (he.detail or ''):
                 results["skipped"] += 1
@@ -4875,11 +5056,14 @@ async def ds_change_history_bulk_cancel(request: Request, req: BulkCancelReq):
         except Exception as e:
             results["failed"] += 1
             results["errors"].append({"id": hid, "detail": str(e)})
+    # 영향받은 본부별로 v2 재빌드 (중복 방지)
+    for div_id in affected_divisions:
+        await _trigger_v2_rebuild_by_division(div_id)
     return {"success": True, **results}
 
 
 @router.post("/ds/change-history/{history_id}/cancel")
-async def ds_change_history_cancel(history_id: int, request: Request):
+async def ds_change_history_cancel(history_id: int, request: Request, _skip_v2: bool = False):
     """DS 변경 이력 단건 취소(되돌리기).
 
     - admin/manager만 수행 가능
@@ -4955,7 +5139,8 @@ async def ds_change_history_cancel(history_id: int, request: Request):
                 "WHERE id=?",
                 (now, empno, history_id))
             dc.commit()
-            return {"허가번호": hn, "field": field, "장치번호": jn, "restored_to": before}
+            return {"허가번호": hn, "field": field, "장치번호": jn, "restored_to": before,
+                    "division_id": d.get('division_id', '')}
         finally:
             if ic is not None:
                 ic.close()
@@ -4965,12 +5150,17 @@ async def ds_change_history_cancel(history_id: int, request: Request):
     await asyncio.to_thread(_record_audit_log_sync,
                            "ds_change_cancel", "ds_변경이력",
                            f"id={history_id},field={result['field']}", empno)
+    if not _skip_v2:
+        div_id = result.get('division_id', '')
+        if div_id:
+            await _trigger_v2_rebuild_by_division(div_id)
     return {"success": True, **result}
 
 
 @router.post("/ds/apply-partial-update")
 async def ds_apply_partial_update(request: Request, file: UploadFile = File(...),
-                                   excluded: str = Form(""), division_id: str = Form("")):
+                                   excluded: str = Form(""), division_id: str = Form(""),
+                                   division_code: str = Form(""), import_date: str = Form("")):
     """변경개설 신고 후 전파관리소 회신 부분 DS 파일 업로드 → ds_detail.db 갱신 + 자동 재비교 + 워크플로우 전환.
 
     - 파일은 변경개설 신고한 허가번호들만 포함된 DS 파일 (전파관리소 회신본)
@@ -5333,6 +5523,8 @@ async def ds_apply_partial_update(request: Request, file: UploadFile = File(...)
                            "ds_partial_update", "ds_detail",
                            f"updated={result['applied']},cr_applied={result['matched_changes']},done={len(result['schedule_done'])}",
                            empno)
+    if result['applied'] > 0:
+        await _trigger_v2_rebuild(division_id, division_code, import_date)
     return {"success": True, **result}
 
 

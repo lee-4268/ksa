@@ -551,13 +551,16 @@ class InspectionService {
 
   /// 부분 DS 업로드 → DB 패치 + 자동 재비교
   Future<Map<String, dynamic>> applyPartialDsUpdate(Uint8List bytes, String filename,
-      {List<String> excludedKeys = const [], String divisionId = ''}) async {
+      {List<String> excludedKeys = const [], String divisionId = '',
+       String divisionCode = '', String importDate = ''}) async {
     final uri = Uri.parse('$_baseUrl/ds/apply-partial-update');
     final req = http.MultipartRequest('POST', uri)
       ..headers['Authorization'] = 'Bearer ${_authToken ?? ''}'
       ..files.add(http.MultipartFile.fromBytes('file', bytes, filename: filename))
       ..fields['excluded'] = excludedKeys.isEmpty ? '' : json.encode(excludedKeys)
-      ..fields['division_id'] = divisionId;
+      ..fields['division_id'] = divisionId
+      ..fields['division_code'] = divisionCode
+      ..fields['import_date'] = importDate;
     final streamed = await req.send().timeout(_uploadTimeout);
     final body = json.decode(utf8.decode(await streamed.stream.toBytes())) as Map<String, dynamic>;
     if (streamed.statusCode != 200) {
