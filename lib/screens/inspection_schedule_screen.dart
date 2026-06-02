@@ -138,6 +138,8 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
   int? _sortColIdx;
   bool _sortAsc = true;
   int? _hoveredSchedRow;
+  // { 허가번호: { field: { id, value, original_value, reason, changed_by, changed_at } } }
+  Map<String, Map<String, Map<String, dynamic>>> _overridesIndex = {};
 
   void _onScheduleSort(int si, bool asc) {
     final col = _kInspCols.firstWhere((c) => c.si == si,
@@ -354,6 +356,21 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
         _progressByHdqt = List<Map<String, dynamic>>.from(progRes['by_hdqt'] ?? []);
       });
     }));
+    unawaited(_loadOverrides());
+  }
+
+  Future<void> _loadOverrides() async {
+    try {
+      final list = await _svc.getOverrides(_year);
+      final idx = <String, Map<String, Map<String, dynamic>>>{};
+      for (final ov in list) {
+        final hn = ov['허가번호'] as String? ?? '';
+        final field = ov['field'] as String? ?? '';
+        if (hn.isEmpty || field.isEmpty) continue;
+        idx.putIfAbsent(hn, () => {})[field] = ov;
+      }
+      if (mounted) setState(() => _overridesIndex = idx);
+    } catch (_) {}
   }
 
   Future<Map<String, dynamic>?> _fetchProgressByResult() async {
@@ -3144,7 +3161,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                       maxHeight: double.infinity,
                       alignment: Alignment.centerLeft,
                       child: _buildCellContent(
-                          col.key, item, licenseNo, isChecked),
+                          col.key, item, licenseNo, isChecked, hovered: hovered),
                     ),
                   ),
                 ),
@@ -3157,7 +3174,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
   }
 
   Widget _buildCellContent(String key, Map<String, dynamic> item,
-      String licenseNo, bool isChecked) {
+      String licenseNo, bool isChecked, {bool hovered = false}) {
     const cs = TextStyle(fontSize: 13, color: Color(0xFF111827));
     switch (key) {
       case '__chk':
@@ -3185,9 +3202,69 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
       case '검사결과':
         return _buildResultChip('${item['검사결과'] ?? ''}',
             wfStatus: _scheduleStatusMap[licenseNo]);
+      case 'access담당':
+      case '품질개선팀':
+        final val = '${item[key] ?? ''}';
+        final isOverridden = _overridesIndex[licenseNo]?[key] != null;
+        final canEdit = _isAdmin || key == '품질개선팀';
+        if (!canEdit) return Text(val, style: cs, overflow: TextOverflow.ellipsis);
+        return GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: hovered ? () => _showMappingDialog(item) : null,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Flexible(
+                child: Text(val,
+                  style: cs.copyWith(
+                    color: isOverridden ? const Color(0xFF2563EB) : null,
+                    fontWeight: isOverridden ? FontWeight.w600 : null,
+                  ),
+                  overflow: TextOverflow.ellipsis),
+              ),
+              if (isOverridden) ...[
+                const SizedBox(width: 4),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF2563EB).withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: const Text('보정',
+                    style: TextStyle(fontSize: 9, color: Color(0xFF2563EB), fontWeight: FontWeight.w700)),
+                ),
+              ],
+              if (hovered && canEdit) ...[
+                const SizedBox(width: 4),
+                const Icon(Icons.edit_rounded, size: 12, color: Color(0xFF9CA3AF)),
+              ],
+            ],
+          ),
+        );
       default:
         return Text('${item[key] ?? ''}',
             style: cs, overflow: TextOverflow.ellipsis);
+    }
+  }
+
+  Future<void> _showMappingDialog(Map<String, dynamic> item) async {
+    final licenseNo = '${item['허가번호'] ?? ''}';
+    final overrides = _overridesIndex[licenseNo] ?? {};
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => _MappingCorrectionDialog(
+        svc: _svc,
+        year: _year,
+        item: item,
+        orgMap: _orgMap,
+        isAdmin: _isAdmin,
+        myHdqt: _myHdqt,
+        overrides: overrides,
+      ),
+    );
+    if (result == true && mounted) {
+      await _loadOverrides();
+      await _loadData();
     }
   }
 
@@ -6530,6 +6607,341 @@ class _SchedSislPhotoViewerState extends State<_SchedSislPhotoViewer> {
             )),
           ),
       ]),
+    );
+  }
+}
+
+
+class _MappingCorrectionDialog extends StatefulWidget {
+  final InspectionService svc;
+  final int year;
+  final Map<String, dynamic> item;
+  final Map<String, List<String>> orgMap;
+  final bool isAdmin;
+  final String myHdqt;
+  final Map<String, Map<String, dynamic>> overrides; // { field: { id, value, ... } }
+
+  const _MappingCorrectionDialog({
+    required this.svc,
+    required this.year,
+    required this.item,
+    required this.orgMap,
+    required this.isAdmin,
+    required this.myHdqt,
+    required this.overrides,
+  });
+
+  @override
+  State<_MappingCorrectionDialog> createState() => _MappingCorrectionDialogState();
+}
+
+class _MappingCorrectionDialogState extends State<_MappingCorrectionDialog> {
+  late String _hdqt;
+  late String _team;
+  final _reasonCtrl = TextEditingController();
+  bool _saving = false;
+  bool _reverting = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _hdqt = widget.overrides['access담당']?['value'] as String?
+        ?? '${widget.item['access담당'] ?? ''}';
+    _team = widget.overrides['품질개선팀']?['value'] as String?
+        ?? '${widget.item['품질개선팀'] ?? ''}';
+    _reasonCtrl.text = widget.overrides['품질개선팀']?['reason'] as String?
+        ?? widget.overrides['access담당']?['reason'] as String? ?? '';
+  }
+
+  @override
+  void dispose() {
+    _reasonCtrl.dispose();
+    super.dispose();
+  }
+
+  List<String> get _teamOptions => widget.orgMap[_hdqt] ?? [];
+  List<String> get _hdqtOptions => widget.orgMap.keys.toList()..sort();
+
+  bool get _hasOverride =>
+      widget.overrides.containsKey('access담당') ||
+      widget.overrides.containsKey('품질개선팀');
+
+  bool get _changed {
+    final origHdqt = '${widget.item['access담당'] ?? ''}';
+    final origTeam = '${widget.item['품질개선팀'] ?? ''}';
+    return _hdqt != origHdqt || _team != origTeam;
+  }
+
+  Future<void> _save() async {
+    if (_team.isEmpty) return;
+    setState(() => _saving = true);
+    try {
+      // 팀 저장 (백엔드에서 본부도 자동 연동)
+      await widget.svc.upsertOverride(
+        widget.year, '${widget.item['허가번호']}', '품질개선팀', _team,
+        reason: _reasonCtrl.text.trim(),
+      );
+      // admin이 본부도 직접 변경한 경우
+      if (widget.isAdmin) {
+        await widget.svc.upsertOverride(
+          widget.year, '${widget.item['허가번호']}', 'access담당', _hdqt,
+          reason: _reasonCtrl.text.trim(),
+        );
+      }
+      if (mounted) Navigator.pop(context, true);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('저장 실패: $e'), backgroundColor: Colors.red));
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Future<void> _revert() async {
+    setState(() => _reverting = true);
+    try {
+      for (final ov in widget.overrides.values) {
+        final id = (ov['id'] as num?)?.toInt();
+        if (id != null) await widget.svc.deleteOverride(id);
+      }
+      if (mounted) Navigator.pop(context, true);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('취소 실패: $e'), backgroundColor: Colors.red));
+      }
+    } finally {
+      if (mounted) setState(() => _reverting = false);
+    }
+  }
+
+  Widget _infoRow(String label, String value) => Padding(
+    padding: const EdgeInsets.only(bottom: 4),
+    child: Row(children: [
+      SizedBox(width: 72,
+        child: Text(label, style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)))),
+      Expanded(child: Text(value,
+        style: const TextStyle(fontSize: 13, color: Color(0xFF111827), fontWeight: FontWeight.w500),
+        overflow: TextOverflow.ellipsis)),
+    ]),
+  );
+
+  Widget _fieldLabel(String label) => Padding(
+    padding: const EdgeInsets.only(bottom: 6),
+    child: Text(label,
+      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF374151))),
+  );
+
+  @override
+  Widget build(BuildContext context) {
+    final licenseNo = '${widget.item['허가번호'] ?? ''}';
+    final callname = '${widget.item['호출명칭'] ?? ''}';
+
+    return Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      insetPadding: const EdgeInsets.symmetric(horizontal: 40, vertical: 24),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 440),
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // 헤더
+              Row(children: [
+                Container(
+                  padding: const EdgeInsets.all(7),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF2563EB).withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: const Icon(Icons.tune_rounded, size: 18, color: Color(0xFF2563EB)),
+                ),
+                const SizedBox(width: 10),
+                const Expanded(
+                  child: Text('매핑 보정',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.close, size: 20, color: Color(0xFF6B7280)),
+                  onPressed: () => Navigator.pop(context, false),
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(),
+                ),
+              ]),
+              const SizedBox(height: 16),
+
+              // 국소 정보
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF9FAFB),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: const Color(0xFFE5E7EB)),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _infoRow('허가번호', licenseNo),
+                    _infoRow('호출명칭', callname),
+                  ],
+                ),
+              ),
+
+              if (_hasOverride) ...[
+                const SizedBox(height: 10),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF2563EB).withValues(alpha: 0.06),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: const Color(0xFF2563EB).withValues(alpha: 0.2)),
+                  ),
+                  child: Row(children: [
+                    const Icon(Icons.info_outline_rounded, size: 14, color: Color(0xFF2563EB)),
+                    const SizedBox(width: 6),
+                    Text(
+                      '보정 적용 중 · ${widget.overrides['품질개선팀']?['changed_by'] ?? widget.overrides['access담당']?['changed_by'] ?? ''}',
+                      style: const TextStyle(fontSize: 12, color: Color(0xFF2563EB)),
+                    ),
+                  ]),
+                ),
+              ],
+
+              const SizedBox(height: 16),
+              const Divider(height: 1, color: Color(0xFFE5E7EB)),
+              const SizedBox(height: 16),
+
+              // 본부 (admin only)
+              if (widget.isAdmin) ...[
+                _fieldLabel('본부 (Access담당)'),
+                Container(
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    border: Border.all(color: const Color(0xFFD1D5DB)),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                  child: DropdownButtonHideUnderline(
+                    child: DropdownButton<String>(
+                      isExpanded: true, isDense: true,
+                      value: _hdqtOptions.contains(_hdqt) ? _hdqt : null,
+                      hint: const Text('본부 선택', style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
+                      icon: const Icon(Icons.arrow_drop_down, color: Color(0xFF2563EB), size: 20),
+                      dropdownColor: Colors.white,
+                      borderRadius: BorderRadius.circular(12),
+                      style: const TextStyle(fontSize: 13, color: Color(0xFF111827)),
+                      items: _hdqtOptions.map((h) => DropdownMenuItem(value: h, child: Text(h))).toList(),
+                      onChanged: (v) => setState(() {
+                        _hdqt = v ?? '';
+                        _team = '';  // 본부 바뀌면 팀 초기화
+                      }),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+              ],
+
+              // 팀
+              _fieldLabel('팀 (품질개선팀)'),
+              Container(
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  border: Border.all(color: const Color(0xFFD1D5DB)),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                child: DropdownButtonHideUnderline(
+                  child: DropdownButton<String>(
+                    isExpanded: true, isDense: true,
+                    value: _teamOptions.contains(_team) ? _team : null,
+                    hint: Text(
+                      _hdqt.isEmpty ? '본부를 먼저 선택하세요' : '팀 선택',
+                      style: const TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
+                    icon: const Icon(Icons.arrow_drop_down, color: Color(0xFF2563EB), size: 20),
+                    dropdownColor: Colors.white,
+                    borderRadius: BorderRadius.circular(12),
+                    style: const TextStyle(fontSize: 13, color: Color(0xFF111827)),
+                    items: _teamOptions.map((t) => DropdownMenuItem(value: t, child: Text(t))).toList(),
+                    onChanged: _teamOptions.isEmpty ? null : (v) => setState(() => _team = v ?? ''),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+
+              // 사유
+              _fieldLabel('보정 사유 (선택)'),
+              Container(
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  border: Border.all(color: const Color(0xFFD1D5DB)),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: TextField(
+                  controller: _reasonCtrl,
+                  style: const TextStyle(fontSize: 13),
+                  decoration: const InputDecoration(
+                    hintText: '예: 경계지역으로 실제 담당팀과 다름',
+                    hintStyle: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)),
+                    contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                    border: InputBorder.none,
+                  ),
+                  maxLines: 2,
+                ),
+              ),
+              const SizedBox(height: 20),
+
+              // 버튼
+              Row(children: [
+                if (_hasOverride && widget.isAdmin) ...[
+                  OutlinedButton.icon(
+                    onPressed: _reverting ? null : _revert,
+                    icon: _reverting
+                        ? const SizedBox(width: 14, height: 14,
+                            child: CircularProgressIndicator(strokeWidth: 2))
+                        : const Icon(Icons.undo_rounded, size: 16),
+                    label: const Text('보정 취소', style: TextStyle(fontSize: 13)),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: const Color(0xFF6B7280),
+                      side: const BorderSide(color: Color(0xFFD1D5DB)),
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    ),
+                  ),
+                  const Spacer(),
+                ] else
+                  const Spacer(),
+                TextButton(
+                  onPressed: () => Navigator.pop(context, false),
+                  style: TextButton.styleFrom(
+                    foregroundColor: const Color(0xFF6B7280),
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                  ),
+                  child: const Text('취소', style: TextStyle(fontSize: 13)),
+                ),
+                const SizedBox(width: 8),
+                ElevatedButton(
+                  onPressed: (_saving || _team.isEmpty || !_changed) ? null : _save,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF2563EB),
+                    foregroundColor: Colors.white,
+                    elevation: 0,
+                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  ),
+                  child: _saving
+                      ? const SizedBox(width: 16, height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                      : const Text('저장', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                ),
+              ]),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

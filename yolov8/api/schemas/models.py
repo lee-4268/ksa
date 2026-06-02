@@ -495,3 +495,11 @@ class InadequateUpdateReq(BaseModel):
     id: int
     status: str = ""  # 완료/미완료/대상제외
     심의차수: str = ""
+
+
+class MappingOverrideReq(BaseModel):
+    year: int
+    허가번호: str
+    field: str        # 'access담당' | '품질개선팀'
+    value: str
+    reason: str = ""

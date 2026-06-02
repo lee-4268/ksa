@@ -47,6 +47,7 @@ import core.cert_cache as _cert_cache_mod
 from core.cert_cache import _cert_cache_load
 from core.s3 import get_s3_client
 from core.db import get_dynamodb_resource
+from schemas.models import MappingOverrideReq
 
 try:
     import psutil
@@ -1727,6 +1728,24 @@ async def inspection_staging_confirm(request: Request, req: InspStagingConfirmRe
                 logger.warning("[auto-remap] learned_map 비어있음 — 재매핑 생략")
         except Exception as e:
             logger.error(f"[auto-remap] 오류: {e}")
+        # 수동 보정값 재적용 (auto-remap 이후에도 보정값 유지)
+        try:
+            def _reapply():
+                c2 = sqlite3.connect(_INSP_DB, timeout=60)
+                ovs = c2.execute(
+                    'SELECT 허가번호, field, value FROM inspection_target_overrides WHERE year=?',
+                    (req.year,)
+                ).fetchall()
+                for ov in ovs:
+                    c2.execute(
+                        f'UPDATE inspection_targets SET "{ov[1]}"=? WHERE year=? AND 허가번호=?',
+                        (ov[2], req.year, ov[0])
+                    )
+                c2.commit(); c2.close()
+                logger.info(f'[overrides 재적용] {req.year}년 {len(ovs)}건')
+            await asyncio.to_thread(_reapply)
+        except Exception as e:
+            logger.error(f'[overrides 재적용] 오류: {e}')
         await _auto_geocode_background(req.year)
 
     asyncio.create_task(_post_confirm_bg())
@@ -4924,3 +4943,123 @@ async def inspection_add_from_staging(request: Request, req: InspAddFromStagingR
         raise HTTPException(403, str(pe))
 
     return {"success": True, "item": result}
+
+
+# ── 매핑 보정 (inspection_target_overrides) ─────────────────────
+
+@router.get("/inspection/overrides")
+async def get_overrides(
+    request: Request,
+    year: int = Query(...),
+    허가번호: str = Query(""),
+):
+    """본부/팀 수동 보정 목록 조회."""
+    await _verify_auth(request)
+
+    def _read():
+        conn = sqlite3.connect(_INSP_DB, timeout=60)
+        conn.row_factory = sqlite3.Row
+        if 허가번호:
+            rows = conn.execute(
+                'SELECT * FROM inspection_target_overrides WHERE year=? AND 허가번호=?',
+                (year, 허가번호)
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                'SELECT * FROM inspection_target_overrides WHERE year=?',
+                (year,)
+            ).fetchall()
+        conn.close()
+        return [dict(r) for r in rows]
+
+    return await asyncio.to_thread(_read)
+
+
+@router.post("/inspection/overrides")
+async def upsert_override(request: Request, req: MappingOverrideReq):
+    """본부/팀 수동 보정 저장. manager=팀만, admin=본부+팀."""
+    empno = await _verify_auth(request)
+    role = await asyncio.to_thread(_get_user_role_sync, empno)
+    if role not in {"admin", "manager"}:
+        raise HTTPException(403, "관리자/매니저만 가능")
+    if req.field not in {"access담당", "품질개선팀"}:
+        raise HTTPException(400, "field는 'access담당' 또는 '품질개선팀'만 허용")
+    if role == "manager" and req.field == "access담당":
+        raise HTTPException(403, "매니저는 본부 이관 권한이 없습니다")
+    if req.field == "access담당" and req.value not in INSP_ORG_MAP:
+        raise HTTPException(400, f"유효하지 않은 본부: {req.value}")
+    if req.field == "품질개선팀" and req.value not in INSP_TEAM_TO_HDQT:
+        raise HTTPException(400, f"유효하지 않은 팀: {req.value}")
+    now = datetime.now(timezone.utc).isoformat()
+
+    def _upsert():
+        conn = sqlite3.connect(_INSP_DB, timeout=60)
+        # 현재값 저장
+        cur = conn.execute(
+            f'SELECT "{req.field}" FROM inspection_targets WHERE year=? AND 허가번호=?',
+            (req.year, req.허가번호)
+        ).fetchone()
+        original = cur[0] if cur else ''
+        conn.execute('''
+            INSERT INTO inspection_target_overrides
+                (year, 허가번호, field, value, original_value, changed_by, changed_at, reason)
+            VALUES (?,?,?,?,?,?,?,?)
+            ON CONFLICT(year, 허가번호, field) DO UPDATE SET
+                value=excluded.value, changed_by=excluded.changed_by,
+                changed_at=excluded.changed_at, reason=excluded.reason
+        ''', (req.year, req.허가번호, req.field, req.value, original, empno, now, req.reason))
+        # 즉시 적용
+        conn.execute(
+            f'UPDATE inspection_targets SET "{req.field}"=? WHERE year=? AND 허가번호=?',
+            (req.value, req.year, req.허가번호)
+        )
+        # 팀 변경 시 본부도 연동
+        if req.field == "품질개선팀":
+            new_hdqt = INSP_TEAM_TO_HDQT.get(req.value, '')
+            if new_hdqt:
+                conn.execute(
+                    'UPDATE inspection_targets SET access담당=? WHERE year=? AND 허가번호=?',
+                    (new_hdqt, req.year, req.허가번호)
+                )
+                # 본부 override도 저장 (팀 변경 시 본부 자동 연동)
+                conn.execute('''
+                    INSERT INTO inspection_target_overrides
+                        (year, 허가번호, field, value, original_value, changed_by, changed_at, reason)
+                    VALUES (?,?,?,?,?,?,?,?)
+                    ON CONFLICT(year, 허가번호, field) DO UPDATE SET
+                        value=excluded.value, changed_by=excluded.changed_by,
+                        changed_at=excluded.changed_at, reason=excluded.reason
+                ''', (req.year, req.허가번호, 'access담당', new_hdqt, '', empno, now, req.reason))
+        conn.commit(); conn.close()
+
+    await asyncio.to_thread(_upsert)
+    return {"success": True}
+
+
+@router.delete("/inspection/overrides/{override_id}")
+async def delete_override(request: Request, override_id: int):
+    """보정 취소 (admin 전용) — 원래 주소기반 매핑으로 복원."""
+    empno = await _verify_auth(request)
+    role = await asyncio.to_thread(_get_user_role_sync, empno)
+    if role != "admin":
+        raise HTTPException(403, "관리자만 가능")
+
+    def _delete():
+        conn = sqlite3.connect(_INSP_DB, timeout=60)
+        conn.row_factory = sqlite3.Row
+        ov = conn.execute(
+            'SELECT * FROM inspection_target_overrides WHERE id=?', (override_id,)
+        ).fetchone()
+        if not ov:
+            conn.close(); return
+        # 원래값으로 복원
+        if ov['original_value']:
+            conn.execute(
+                f'UPDATE inspection_targets SET "{ov["field"]}"=? WHERE year=? AND 허가번호=?',
+                (ov['original_value'], ov['year'], ov['허가번호'])
+            )
+        conn.execute('DELETE FROM inspection_target_overrides WHERE id=?', (override_id,))
+        conn.commit(); conn.close()
+
+    await asyncio.to_thread(_delete)
+    return {"success": True}

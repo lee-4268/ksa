@@ -276,6 +276,20 @@ def _init_inspection_db():
     )''')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_inad_year ON inadequate_management(year)')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_inad_region ON inadequate_management(region)')
+    conn.execute('''CREATE TABLE IF NOT EXISTS inspection_target_overrides (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        year INTEGER NOT NULL,
+        허가번호 TEXT NOT NULL,
+        field TEXT NOT NULL,
+        value TEXT NOT NULL,
+        original_value TEXT DEFAULT '',
+        changed_by TEXT DEFAULT '',
+        changed_at TEXT DEFAULT '',
+        reason TEXT DEFAULT '',
+        UNIQUE(year, 허가번호, field)
+    )''')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_ito_year ON inspection_target_overrides(year)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_ito_hn ON inspection_target_overrides(year, 허가번호)')
     conn.execute('''CREATE TABLE IF NOT EXISTS menu_usage_log (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id TEXT,

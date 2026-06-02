@@ -1219,4 +1219,39 @@ class InspectionService {
     if (resp.statusCode != 200) throw Exception(body['detail'] ?? '빌드 실패');
     return body['jobId'] as String;
   }
+
+  // ── 매핑 보정 ─────────────────────────────────────────────
+
+  Future<List<Map<String, dynamic>>> getOverrides(int year, {String licenseNo = ''}) async {
+    final uri = Uri.parse('$_baseUrl/inspection/overrides').replace(queryParameters: {
+      'year': '$year',
+      if (licenseNo.isNotEmpty) '허가번호': licenseNo,
+    });
+    final resp = await http.get(uri, headers: _headers).timeout(_apiTimeout);
+    final body = json.decode(utf8.decode(resp.bodyBytes));
+    return List<Map<String, dynamic>>.from(body as List);
+  }
+
+  Future<void> upsertOverride(int year, String licenseNo, String field, String value, {String reason = ''}) async {
+    final resp = await http.post(
+      Uri.parse('$_baseUrl/inspection/overrides'),
+      headers: _headers,
+      body: json.encode({'year': year, '허가번호': licenseNo, 'field': field, 'value': value, 'reason': reason}),
+    ).timeout(_apiTimeout);
+    if (resp.statusCode != 200) {
+      final b = json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+      throw Exception(b['detail'] ?? '보정 저장 실패');
+    }
+  }
+
+  Future<void> deleteOverride(int id) async {
+    final resp = await http.delete(
+      Uri.parse('$_baseUrl/inspection/overrides/$id'),
+      headers: _headers,
+    ).timeout(_apiTimeout);
+    if (resp.statusCode != 200) {
+      final b = json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+      throw Exception(b['detail'] ?? '보정 취소 실패');
+    }
+  }
 }
