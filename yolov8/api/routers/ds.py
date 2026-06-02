@@ -2202,13 +2202,24 @@ def _build_v2_xlsx_sync(division_id: str, division_code: str, import_date: str) 
     _FIELD_KEYWORDS: dict = {
         '기기일련번호': ['일련번호'],
         '형식검정번호': ['형식검정번호'],
-        '설치형태': ['설치형태명', '설치형태'],
+        '설치형태명': ['설치형태명', '설치형태'],        # 한글명칭 컬럼
+        '설치형태코드': ['설치형태코드', '설치형태번호'],  # 숫자코드 컬럼
         '설치장소': ['설치장소입력주소', '설치장소주소'],
     }
     _SHEET_KEYWORDS: dict = {
         '부분DS장치': '장치',
         '부분DS안테나': '안테나',
         '부분DS설치장소': '설치장소',
+    }
+    # 설치형태 한글명칭 → 숫자코드 역매핑 (document.py 동일 매핑)
+    _설치형태_역매핑: dict = {
+        '철탑(지면)': '1', '철탑': '1', '강관주': '2', '통신주': '3',
+        '원폴(건물)': '4', '원폴': '4',
+        '옥내,터널,지하, 차량 또는 임시': '6', '옥내': '6', '터널': '6', '지하': '6', '차량': '6',
+        '쌍통신주': '8', '기설물': '9', '옥내외 혼합형': '11', '옥내외혼합형': '11',
+        '간이폴 및 비기준 설치대': '12', '간이폴': '12', '간이폴, 분산폴 및 비기준 설치대': '12',
+        '한전주(KT통신주)': '13', '한전주': '13', '철탑(건물)': '14', '프레임': '15',
+        '복합형(원폴,분산프레임 등)': '21', '복합형': '21', '모노폴': '25',
     }
 
     v1_key = f"ds-exports/{division_id}/{division_code}_{import_date}.xlsx"
@@ -2250,8 +2261,18 @@ def _build_v2_xlsx_sync(division_id: str, division_code: str, import_date: str) 
         sheet_kw = _SHEET_KEYWORDS.get(row['시트'] or '')
         if not sheet_kw:
             continue
-        col_kws = _FIELD_KEYWORDS.get(row['필드명'] or '', [row['필드명'] or ''])
-        raw_changes.setdefault(sheet_kw, {}).setdefault((hn, jn), {})[row['필드명'] or ''] = (col_kws, row['변경후값'] or '')
+        필드명 = row['필드명'] or ''
+        변경후값 = row['변경후값'] or ''
+        key_entry = raw_changes.setdefault(sheet_kw, {}).setdefault((hn, jn), {})
+        if 필드명 == '설치형태':
+            # 명칭 컬럼과 코드 컬럼 동시 패치
+            key_entry['설치형태명'] = (_FIELD_KEYWORDS['설치형태명'], 변경후값)
+            code = _설치형태_역매핑.get(변경후값, '')
+            if code:
+                key_entry['설치형태코드'] = (_FIELD_KEYWORDS['설치형태코드'], code)
+        else:
+            col_kws = _FIELD_KEYWORDS.get(필드명, [필드명])
+            key_entry[필드명] = (col_kws, 변경후값)
 
     if not raw_changes:
         logger.warning(f"[v2] 매핑 가능한 시트 없음 (changes={len(changes)}건)")
