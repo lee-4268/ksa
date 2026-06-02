@@ -209,7 +209,13 @@ async def _verify_auth(request: Request) -> str:
 # ══════════════════════════════════════════════════════════════
 
 def _get_user_role_sync(empno: str) -> str:
-    """kca-user-roles 테이블에서 role 조회. 없으면 'member' 반환."""
+    """kca-user-roles 테이블에서 role 조회. 없으면 'member' 반환.
+    dev 로그인 계정은 DynamoDB 대신 _dev_users 메모리에서 조회."""
+    # dev 로그인 계정 우선 확인
+    dev = _dev_users.get(empno)
+    if dev:
+        role = dev.get("role", "member")
+        return role if role in VALID_ROLES else "member"
     try:
         dynamodb = get_dynamodb_resource()
         table = dynamodb.Table(DYNAMODB_TABLES["user_roles"])
