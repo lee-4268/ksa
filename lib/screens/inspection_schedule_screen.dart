@@ -3047,6 +3047,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
         orgMap: _orgMap,
         isAdmin: _isAdmin,
         myHdqt: _myHdqt,
+        overridesIndex: _overridesIndex,
       ),
     );
     if (result == true && mounted) {
@@ -7010,6 +7011,7 @@ class _BulkMappingDialog extends StatefulWidget {
   final Map<String, List<String>> orgMap;
   final bool isAdmin;
   final String myHdqt;
+  final Map<String, Map<String, Map<String, dynamic>>> overridesIndex;
 
   const _BulkMappingDialog({
     required this.svc,
@@ -7018,6 +7020,7 @@ class _BulkMappingDialog extends StatefulWidget {
     required this.orgMap,
     required this.isAdmin,
     required this.myHdqt,
+    required this.overridesIndex,
   });
 
   @override
@@ -7029,6 +7032,7 @@ class _BulkMappingDialogState extends State<_BulkMappingDialog> {
   String _team = '';
   final _reasonCtrl = TextEditingController();
   bool _saving = false;
+  bool _reverting = false;
   int _savedCount = 0;
 
   @override
@@ -7045,6 +7049,29 @@ class _BulkMappingDialogState extends State<_BulkMappingDialog> {
 
   List<String> get _hdqtOptions => widget.orgMap.keys.toList()..sort();
   List<String> get _teamOptions => widget.orgMap[_hdqt] ?? [];
+
+  // 보정이 있는 선택 항목 수
+  int get _overrideCount => widget.licenseNos
+      .where((no) => widget.overridesIndex[no]?.isNotEmpty == true)
+      .length;
+
+  Future<void> _revert() async {
+    setState(() { _reverting = true; _savedCount = 0; });
+    int success = 0;
+    for (final licNo in widget.licenseNos) {
+      final ovs = widget.overridesIndex[licNo];
+      if (ovs == null || ovs.isEmpty) continue;
+      for (final ov in ovs.values) {
+        final id = (ov['id'] as num?)?.toInt();
+        if (id != null) {
+          try { await widget.svc.deleteOverride(id); } catch (_) {}
+        }
+      }
+      success++;
+      if (mounted) setState(() => _savedCount = success);
+    }
+    if (mounted) Navigator.pop(context, success > 0);
+  }
 
   Future<void> _save() async {
     if (_team.isEmpty) return;
@@ -7232,9 +7259,27 @@ class _BulkMappingDialogState extends State<_BulkMappingDialog> {
               ],
 
               // 버튼
-              Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+              Row(children: [
+                // 보정 취소 (admin + 보정 항목 있을 때)
+                if (widget.isAdmin && _overrideCount > 0)
+                  OutlinedButton.icon(
+                    onPressed: (_saving || _reverting) ? null : _revert,
+                    icon: _reverting
+                        ? const SizedBox(width: 14, height: 14,
+                            child: CircularProgressIndicator(strokeWidth: 2))
+                        : const Icon(Icons.undo_rounded, size: 16),
+                    label: Text('보정 취소 ($_overrideCount개)',
+                        style: const TextStyle(fontSize: 13)),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: const Color(0xFF6B7280),
+                      side: const BorderSide(color: Color(0xFFD1D5DB)),
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    ),
+                  ),
+                const Spacer(),
                 TextButton(
-                  onPressed: _saving ? null : () => Navigator.pop(context, false),
+                  onPressed: (_saving || _reverting) ? null : () => Navigator.pop(context, false),
                   style: TextButton.styleFrom(
                     foregroundColor: const Color(0xFF6B7280),
                     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
@@ -7243,7 +7288,7 @@ class _BulkMappingDialogState extends State<_BulkMappingDialog> {
                 ),
                 const SizedBox(width: 8),
                 ElevatedButton(
-                  onPressed: (_saving || _team.isEmpty) ? null : _save,
+                  onPressed: (_saving || _reverting || _team.isEmpty) ? null : _save,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: const Color(0xFF2563EB),
                     foregroundColor: Colors.white,
