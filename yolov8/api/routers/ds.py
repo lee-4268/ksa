@@ -1166,8 +1166,8 @@ def _process_zip_to_multiple_xlsx_sync(zip_temp_path: str, hdqts: list, progress
                 xls_tmp = f"/tmp/ds_xls_p1_{id(zf)}_{fname.replace('/', '_')}.xls"
                 try:
                     with zf.open(fname) as src, open(xls_tmp, "wb") as dst: shutil.copyfileobj(src, dst)
-                    try: wb = xlrd.open_workbook(xls_tmp)
-                    except: wb = xlrd.open_workbook(xls_tmp, ignore_workbook_corruption=True)
+                    try: wb = xlrd.open_workbook(xls_tmp, on_demand=True)
+                    except: wb = xlrd.open_workbook(xls_tmp, on_demand=True, ignore_workbook_corruption=True)
                 except Exception:
                     if os.path.exists(xls_tmp): os.remove(xls_tmp)
                     continue
@@ -1175,12 +1175,16 @@ def _process_zip_to_multiple_xlsx_sync(zip_temp_path: str, hdqts: list, progress
                 for sheet_idx in range(wb.nsheets):
                     sheet = wb.sheet_by_index(sheet_idx)
                     orig_sheet_name = sheet.name.strip()
-                    if sheet.nrows < 2: continue
+                    if sheet.nrows < 2:
+                        wb.unload_sheet(sheet_idx)
+                        continue
                     sheet_name = f"{orig_sheet_name}(검사전)" if fname in hundred_files else orig_sheet_name
 
                     headers = [_xlrd_cell_to_str(sheet, 0, c) for c in range(sheet.ncols)]
                     headers = [h for h in headers if h]
-                    if not headers: continue
+                    if not headers:
+                        wb.unload_sheet(sheet_idx)
+                        continue
 
                     if sheet_name not in global_sheet_headers:
                         global_sheet_headers[sheet_name] = list(headers)
@@ -1204,6 +1208,7 @@ def _process_zip_to_multiple_xlsx_sync(zip_temp_path: str, hdqts: list, progress
                                         (_xlrd_cell_to_str(sheet, ri, inp_col) if inp_col >= 0 else ''))
                                 hd = _addr_to_hdqt(addr.strip())
                                 if hd in hdqts: lic_to_hdqt[lic] = hd
+                    wb.unload_sheet(sheet_idx)
 
                 wb.release_resources()
                 del wb
@@ -1242,8 +1247,8 @@ def _process_zip_to_multiple_xlsx_sync(zip_temp_path: str, hdqts: list, progress
                 xls_tmp_path = f"/tmp/ds_xls_{id(zf)}_{file_idx}.xls"
                 try:
                     with zf.open(fname) as src, open(xls_tmp_path, "wb") as dst: shutil.copyfileobj(src, dst)
-                    try: wb = xlrd.open_workbook(xls_tmp_path)
-                    except: wb = xlrd.open_workbook(xls_tmp_path, ignore_workbook_corruption=True)
+                    try: wb = xlrd.open_workbook(xls_tmp_path, on_demand=True)
+                    except: wb = xlrd.open_workbook(xls_tmp_path, on_demand=True, ignore_workbook_corruption=True)
                 except Exception:
                     if os.path.exists(xls_tmp_path): os.remove(xls_tmp_path)
                     continue
@@ -1252,14 +1257,20 @@ def _process_zip_to_multiple_xlsx_sync(zip_temp_path: str, hdqts: list, progress
                 for sheet_idx in range(wb.nsheets):
                     sheet = wb.sheet_by_index(sheet_idx)
                     orig_sheet_name = sheet.name.strip()
-                    if sheet.nrows < 2: continue
+                    if sheet.nrows < 2:
+                        wb.unload_sheet(sheet_idx)
+                        continue
                     sheet_name = f"{orig_sheet_name}(검사전)" if fname in hundred_files else orig_sheet_name
-                    if sheet_name not in global_sheet_headers: continue
+                    if sheet_name not in global_sheet_headers:
+                        wb.unload_sheet(sheet_idx)
+                        continue
 
                     col_map = header_col_maps[sheet_name]
                     num_cols = len(global_sheet_headers[sheet_name])
                     xls_col_map = [(col, col_map[col_h]) for col in range(sheet.ncols) if (col_h := _xlrd_cell_to_str(sheet, 0, col)) and col_h in col_map]
-                    if not xls_col_map: continue
+                    if not xls_col_map:
+                        wb.unload_sheet(sheet_idx)
+                        continue
 
                     lic_xlsx_col = header_col_maps[sheet_name].get('허가번호', -1)
 
@@ -1281,6 +1292,7 @@ def _process_zip_to_multiple_xlsx_sync(zip_temp_path: str, hdqts: list, progress
                         file_rows += 1
                         if len(row_buffer) >= BATCH_SIZE:
                             _flush_buffer()
+                    wb.unload_sheet(sheet_idx)
 
                 wb.release_resources()
                 del wb
@@ -1988,8 +2000,8 @@ def _finalize_upload_record_sync(division_id: str, division_code: str,
 
 def _build_xlsx_sync(division_id: str, division_code: str, import_date: str,
                       sheet_stats: dict,
-                      sheet_headers: Optional[dict] = None) -> bytes:
-    """동기: DynamoDB → xlsxwriter → xlsx 바이트
+                      sheet_headers: Optional[dict] = None) -> str:
+    """동기: DynamoDB → xlsxwriter → xlsx 파일 경로 반환 (디스크 기반, 메모리 최소화)
 
     서식: Arial 10pt, 가운데정렬, 얇은 테두리, 행 높이 12.75
     헤더 행: 볼드 + #BFBFBF 배경, 모든 열 너비 = 20
@@ -2004,91 +2016,114 @@ def _build_xlsx_sync(division_id: str, division_code: str, import_date: str,
     records_table = get_dynamodb_resource().Table(DYNAMODB_TABLES["ds_records"])
     dc_part = f"#{division_code}" if division_code else ""
 
-    buf = io.BytesIO()
-    xwb = xlsxwriter.Workbook(buf, {"in_memory": True})
+    _uid = uuid.uuid4().hex[:8]
+    xlsx_out_path = f"/tmp/ds_export_{division_id}_{division_code}_{import_date}_{_uid}.xlsx"
+    _xlsxwriter_tmpdir = f"/tmp/ds_export_build_{division_id}_{division_code}_{import_date}_{_uid}"
+    _xwb_ref = None
+    try:
+        os.makedirs(_xlsxwriter_tmpdir, exist_ok=True)
+        xwb = xlsxwriter.Workbook(xlsx_out_path, {"constant_memory": True, "tmpdir": _xlsxwriter_tmpdir})
+        _xwb_ref = xwb
 
-    header_fmt = xwb.add_format({
-        "font_name": "Arial", "font_size": 10, "bold": True,
-        "align": "center", "valign": "vcenter",
-        "bg_color": "#BFBFBF",
-        "border": 1,
-    })
-    data_fmt = xwb.add_format({
-        "font_name": "Arial", "font_size": 10,
-        "align": "center", "valign": "vcenter",
-        "border": 1,
-    })
+        header_fmt = xwb.add_format({
+            "font_name": "Arial", "font_size": 10, "bold": True,
+            "align": "center", "valign": "vcenter",
+            "bg_color": "#BFBFBF",
+            "border": 1,
+        })
+        data_fmt = xwb.add_format({
+            "font_name": "Arial", "font_size": 10,
+            "align": "center", "valign": "vcenter",
+            "border": 1,
+        })
 
-    for sheet_name in sheet_stats.keys():
-        xws = xwb.add_worksheet(sheet_name[:31])
-        sk_prefix = f"{sheet_name}#{import_date}{dc_part}"
+        for sheet_name in sheet_stats.keys():
+            xws = xwb.add_worksheet(sheet_name[:31])
+            sk_prefix = f"{sheet_name}#{import_date}{dc_part}"
 
-        # ── 1단계: headers 결정 ──────────────────────────────────────────────
-        if sheet_headers and sheet_name in sheet_headers:
-            headers = list(sheet_headers[sheet_name])
-        else:
-            headers = []
-            seen: set = set()
-            scan_key = None
+            # ── 1단계: headers 결정 ──────────────────────────────────────────────
+            if sheet_headers and sheet_name in sheet_headers:
+                headers = list(sheet_headers[sheet_name])
+            else:
+                headers = []
+                seen: set = set()
+                scan_key = None
+                while True:
+                    kw: dict = {
+                        "KeyConditionExpression": "divisionId = :did AND begins_with(sk, :skp)",
+                        "ExpressionAttributeValues": {":did": division_id, ":skp": sk_prefix},
+                        "ProjectionExpression": "#d",
+                        "ExpressionAttributeNames": {"#d": "data"},
+                        "Limit": 500,
+                    }
+                    if scan_key:
+                        kw["ExclusiveStartKey"] = scan_key
+                    r = records_table.query(**kw)
+                    for item in r.get("Items", []):
+                        for k in item.get("data", {}).keys():
+                            if k not in seen:
+                                headers.append(k)
+                                seen.add(k)
+                    scan_key = r.get("LastEvaluatedKey")
+                    if not scan_key:
+                        break
+
+            if not headers:
+                continue
+
+            # ── 2단계: 헤더 행 쓰기 + 열 너비 ───────────────────────────────────
+            xws.set_row(0, 12.75)
+            for ci, h in enumerate(headers):
+                xws.set_column(ci, ci, 20)
+                xws.write(0, ci, h, header_fmt)
+
+            # ── 3단계: 데이터 행 쓰기 (DynamoDB 페이지네이션) ────────────────────
+            row_idx = 1
+            last_key = None
             while True:
-                kw: dict = {
+                kwargs: dict = {
                     "KeyConditionExpression": "divisionId = :did AND begins_with(sk, :skp)",
                     "ExpressionAttributeValues": {":did": division_id, ":skp": sk_prefix},
                     "ProjectionExpression": "#d",
                     "ExpressionAttributeNames": {"#d": "data"},
                     "Limit": 500,
                 }
-                if scan_key:
-                    kw["ExclusiveStartKey"] = scan_key
-                r = records_table.query(**kw)
-                for item in r.get("Items", []):
-                    for k in item.get("data", {}).keys():
-                        if k not in seen:
-                            headers.append(k)
-                            seen.add(k)
-                scan_key = r.get("LastEvaluatedKey")
-                if not scan_key:
+                if last_key:
+                    kwargs["ExclusiveStartKey"] = last_key
+
+                resp = records_table.query(**kwargs)
+                items = resp.get("Items", [])
+
+                for item in items:
+                    data = item.get("data", {})
+                    xws.set_row(row_idx, 12.75)
+                    for ci, h in enumerate(headers):
+                        xws.write(row_idx, ci, data.get(h, ""), data_fmt)
+                    row_idx += 1
+
+                last_key = resp.get("LastEvaluatedKey")
+                if not last_key:
                     break
 
-        if not headers:
-            continue
+        xwb.close()
+        _xwb_ref = None
+    except Exception:
+        if _xwb_ref is not None:
+            try:
+                _xwb_ref.close()
+            except Exception:
+                pass
+        if os.path.exists(xlsx_out_path):
+            try:
+                os.remove(xlsx_out_path)
+            except Exception:
+                pass
+        raise
+    finally:
+        if os.path.isdir(_xlsxwriter_tmpdir):
+            shutil.rmtree(_xlsxwriter_tmpdir, ignore_errors=True)
 
-        # ── 2단계: 헤더 행 쓰기 + 열 너비 ───────────────────────────────────
-        xws.set_row(0, 12.75)
-        for ci, h in enumerate(headers):
-            xws.set_column(ci, ci, 20)
-            xws.write(0, ci, h, header_fmt)
-
-        # ── 3단계: 데이터 행 쓰기 (DynamoDB 페이지네이션) ────────────────────
-        row_idx = 1
-        last_key = None
-        while True:
-            kwargs: dict = {
-                "KeyConditionExpression": "divisionId = :did AND begins_with(sk, :skp)",
-                "ExpressionAttributeValues": {":did": division_id, ":skp": sk_prefix},
-                "ProjectionExpression": "#d",
-                "ExpressionAttributeNames": {"#d": "data"},
-                "Limit": 500,
-            }
-            if last_key:
-                kwargs["ExclusiveStartKey"] = last_key
-
-            resp = records_table.query(**kwargs)
-            items = resp.get("Items", [])
-
-            for item in items:
-                data = item.get("data", {})
-                xws.set_row(row_idx, 12.75)
-                for ci, h in enumerate(headers):
-                    xws.write(row_idx, ci, data.get(h, ""), data_fmt)
-                row_idx += 1
-
-            last_key = resp.get("LastEvaluatedKey")
-            if not last_key:
-                break
-
-    xwb.close()
-    return buf.getvalue()
+    return xlsx_out_path
 
 
 def _upload_xlsx_to_s3_sync(xlsx_bytes: bytes, division_id: str,
@@ -4314,30 +4349,47 @@ async def ds_export_xlsx(
                     pass
             raise HTTPException(status_code=500, detail="서버 내부 오류")
 
-    # ── DynamoDB fallback: 기존 빌드 경로 ──
-    xlsx_bytes = await asyncio.to_thread(
+    # ── DynamoDB fallback: 기존 빌드 경로 (파일 기반, 메모리 최소화) ──
+    xlsx_path = await asyncio.to_thread(
         _build_xlsx_sync, divisionId, divisionCode, importDate,
         sheet_stats, sheet_headers
     )
 
-    # S3에 저장 (비치명적 — 이후 presign 경로로 빠르게 다운로드 가능)
+    content_length = os.path.getsize(xlsx_path)
+
+    # S3에 저장 + 임시파일 정리 (비치명적)
     async def _save_to_s3():
         try:
             await asyncio.to_thread(
-                _upload_xlsx_to_s3_sync, xlsx_bytes, divisionId, divisionCode, importDate
+                _upload_xlsx_file_to_s3_sync, xlsx_path, divisionId, divisionCode, importDate
             )
             logger.info(f"DS export-xlsx: S3 저장 완료 {xlsx_s3_key}")
         except Exception as e:
             logger.warning(f"DS export-xlsx: S3 저장 실패 (non-fatal): {e}")
+        finally:
+            await asyncio.sleep(30)
+            try:
+                if os.path.exists(xlsx_path):
+                    os.remove(xlsx_path)
+            except Exception:
+                pass
 
     asyncio.create_task(_save_to_s3())
 
+    def _stream_xlsx_fallback():
+        with open(xlsx_path, "rb") as f:
+            while True:
+                chunk = f.read(1024 * 1024)
+                if not chunk:
+                    break
+                yield chunk
+
     return StreamingResponse(
-        iter([xlsx_bytes]),
+        _stream_xlsx_fallback(),
         media_type=xlsx_media,
         headers={
             "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}",
-            "Content-Length": str(len(xlsx_bytes)),
+            "Content-Length": str(content_length),
         },
     )
 
