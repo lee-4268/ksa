@@ -2186,6 +2186,8 @@ def _build_v2_xlsx_sync(division_id: str, division_code: str, import_date: str) 
       - ZIP 출력: 스트리밍 복사 (전체 멤버 메모리 적재 없음)
     활성 변경 0건이면 v2 삭제. v1 없으면 아무것도 하지 않음.
     """
+    logger.info(f"[v2] 시작: {division_id}/{division_code}/{import_date}")
+
     import xml.etree.ElementTree as ET
     import mmap as _mmap_mod
     import struct as _struct
@@ -2212,8 +2214,6 @@ def _build_v2_xlsx_sync(division_id: str, division_code: str, import_date: str) 
     v1_key = f"ds-exports/{division_id}/{division_code}_{import_date}.xlsx"
     v2_key = f"ds-exports/{division_id}/{division_code}_{import_date}_v2.xlsx"
     s3 = get_s3_client()
-
-    logger.info(f"[v2] 시작: {division_id}/{division_code}/{import_date}")
 
     # 1. 활성 변경이력 조회 (SQLite)
     if not os.path.exists(_DS_DETAIL_DB):
