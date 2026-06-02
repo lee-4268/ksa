@@ -2177,25 +2177,50 @@ def _upload_xlsx_file_to_s3_sync(xlsx_path: str, division_id: str,
 
 
 def _build_v2_xlsx_sync(division_id: str, division_code: str, import_date: str) -> None:
-    """활성 변경이력을 v1 xlsx에 반영한 v2 xlsx를 S3에 저장.
-    활성 변경이 0건이면 v2를 삭제. v1이 없으면 아무것도 하지 않음.
+    """v1 xlsx를 S3에서 다운로드 후 활성 변경이력만 셀 패치하여 v2로 업로드.
+
+    DynamoDB 읽기 없음. 처리 흐름:
+      1. SQLite ds_변경이력에서 활성 변경 조회
+      2. S3에서 v1 xlsx 다운로드
+      3. ZIP 내 sharedStrings.xml → 문자열 테이블 구성
+      4. 각 시트 XML iterparse → 허가번호/장치번호 매칭 행 탐색
+      5. 매칭 셀 regex 교체 + sharedStrings 신규 항목 추가
+      6. 수정된 ZIP을 v2로 S3 업로드
+    활성 변경 0건이면 v2 삭제. v1 없으면 아무것도 하지 않음.
     """
+    import xml.etree.ElementTree as ET
+    from xml.sax.saxutils import escape as _xml_escape
+
+    _NS_MAIN = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+    _NS_REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+    _CR_RE = re.compile(r'^([A-Z]+)(\d+)$')
+
+    _FIELD_KEYWORDS: dict = {
+        '기기일련번호': ['일련번호'],
+        '형식검정번호': ['형식검정번호'],
+        '설치형태': ['설치형태명', '설치형태'],
+        '설치장소': ['설치장소입력주소', '설치장소주소'],
+    }
+    _SHEET_KEYWORDS: dict = {
+        '부분DS장치': '장치',
+        '부분DS안테나': '안테나',
+        '부분DS설치장소': '설치장소',
+    }
+
+    v1_key = f"ds-exports/{division_id}/{division_code}_{import_date}.xlsx"
     v2_key = f"ds-exports/{division_id}/{division_code}_{import_date}_v2.xlsx"
     s3 = get_s3_client()
 
-    # 활성 변경이력 조회
+    # 1. 활성 변경이력 조회 (SQLite)
     if not os.path.exists(_DS_DETAIL_DB):
         return
-    dc = sqlite3.connect(_DS_DETAIL_DB, timeout=10)
-    dc.row_factory = sqlite3.Row
-    try:
-        changes = dc.execute(
+    with sqlite3.connect(_DS_DETAIL_DB, timeout=10) as _dc:
+        _dc.row_factory = sqlite3.Row
+        changes = _dc.execute(
             "SELECT 허가번호, 장치번호, 시트, 필드명, 변경후값 FROM ds_변경이력 "
             "WHERE division_id=? AND (cancelled IS NULL OR cancelled='0')",
             (division_id,)
         ).fetchall()
-    finally:
-        dc.close()
 
     if not changes:
         try:
@@ -2204,88 +2229,258 @@ def _build_v2_xlsx_sync(division_id: str, division_code: str, import_date: str) 
             pass
         return
 
-    # DynamoDB에서 sheetHeaders + sheetStats 조회
-    sk = f"{division_code}#{import_date}" if division_code else import_date
-    uploads_table = get_dynamodb_resource().Table(DYNAMODB_TABLES["ds_uploads"])
-    resp = uploads_table.get_item(Key={"divisionId": division_id, "importDate": sk})
-    meta = resp.get("Item", {})
-    sheet_headers: dict = meta.get("sheetHeaders", {})
-    sheet_stats: dict = meta.get("sheetStats", {})
-    if not sheet_headers or not sheet_stats:
-        logger.warning(f"v2 build: sheetHeaders/sheetStats 없음 ({division_id}/{sk})")
-        return
-
-    # 필드명 → xlsx 컬럼 키워드 매핑
-    _FIELD_KEYWORDS: dict = {
-        '기기일련번호': ['일련번호'],
-        '형식검정번호': ['형식검정번호'],
-        '설치형태': ['설치형태명', '설치형태'],
-        '설치장소': ['설치장소입력주소', '설치장소주소'],
-    }
-    # 시트 구분자 → 실제 시트명 키워드
-    _SHEET_KEYWORDS: dict = {
-        '부분DS장치': '장치',
-        '부분DS안테나': '안테나',
-        '부분DS설치장소': '설치장소',
-    }
-
-    def _find_sheet(keyword: str) -> Optional[str]:
-        for sn in sheet_headers:
-            if keyword in sn:
-                return sn
-        return None
-
-    def _find_col(headers: list, *keywords) -> Optional[str]:
-        for kw in keywords:
-            for h in headers:
-                if kw in h:
-                    return h
-        return None
-
-    # cell_overrides 빌드
-    cell_overrides: dict = {}
+    # raw_changes: {sheet_kw: {(hn_no_hyphen, jn_str): {필드명: (col_keywords, new_val)}}}
+    raw_changes: dict = {}
     for row in changes:
         hn = (row['허가번호'] or '').replace('-', '').strip()
-        jn = (row['장치번호'] or '').strip()
-        시트 = row['시트'] or ''
-        필드명 = row['필드명'] or ''
-        val = row['변경후값'] or ''
-
-        sheet_kw = _SHEET_KEYWORDS.get(시트)
+        jn_raw = (row['장치번호'] or '').strip()
+        try:
+            jf = float(jn_raw)
+            jn = str(int(jf)) if jf == int(jf) else jn_raw
+        except (ValueError, TypeError):
+            jn = jn_raw
+        sheet_kw = _SHEET_KEYWORDS.get(row['시트'] or '')
         if not sheet_kw:
             continue
-        sn = _find_sheet(sheet_kw)
-        if not sn:
-            continue
-        col = _find_col(sheet_headers.get(sn, []), *_FIELD_KEYWORDS.get(필드명, []))
-        if not col:
-            continue
+        col_kws = _FIELD_KEYWORDS.get(row['필드명'] or '', [row['필드명'] or ''])
+        raw_changes.setdefault(sheet_kw, {}).setdefault((hn, jn), {})[row['필드명'] or ''] = (col_kws, row['변경후값'] or '')
 
-        cell_overrides.setdefault(sn, {}).setdefault((hn, jn), {})[col] = val
-
-    if not cell_overrides:
+    if not raw_changes:
         return
 
-    # v2 xlsx 빌드
-    xlsx_path = None
+    # 2. v1 xlsx S3에서 다운로드
+    v1_tmp = f"/tmp/ds_v1_{division_id}_{division_code}_{import_date}_{uuid.uuid4().hex[:6]}.xlsx"
     try:
-        xlsx_path = _build_xlsx_sync(
-            division_id, division_code, import_date,
-            sheet_stats, sheet_headers, cell_overrides
-        )
-        s3.upload_file(
-            xlsx_path, S3_BUCKET_NAME, v2_key,
-            ExtraArgs={"ContentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},
+        s3.download_file(S3_BUCKET_NAME, v1_key, v1_tmp)
+    except ClientError as e:
+        code = e.response.get('Error', {}).get('Code', '')
+        if code in ('404', 'NoSuchKey'):
+            logger.warning(f"DS v2 build: v1 없음 ({v1_key})")
+        else:
+            logger.error(f"DS v2 build: S3 다운로드 실패 ({code})")
+        return
+    except Exception as e:
+        logger.error(f"DS v2 build: S3 다운로드 실패 ({type(e).__name__})")
+        return
+
+    try:
+        # 3. ZIP 전체 멤버 읽기
+        with zipfile.ZipFile(v1_tmp, 'r') as _zf:
+            member_names = _zf.namelist()
+            members: dict = {n: _zf.read(n) for n in member_names}
+
+        # 4. workbook.xml + rels → sheet_name to xml_path
+        rels_data = members.get('xl/_rels/workbook.xml.rels', b'')
+        rid_to_path: dict = {}
+        if rels_data:
+            for rel in ET.fromstring(rels_data):
+                rid = rel.get('Id', '')
+                target = rel.get('Target', '')
+                if target and not target.startswith('/') and not target.startswith('http'):
+                    target = 'xl/' + target
+                rid_to_path[rid] = target
+
+        sheet_map: dict = {}  # sheet_name → xml_path in zip
+        wb_data = members.get('xl/workbook.xml', b'')
+        if wb_data:
+            for el in ET.fromstring(wb_data).iter():
+                if el.tag.rsplit('}', 1)[-1] == 'sheet':
+                    sname = el.get('name', '')
+                    rid = el.get(f'{{{_NS_REL}}}id', '')
+                    path = rid_to_path.get(rid, '')
+                    if sname and path:
+                        sheet_map[sname] = path
+
+        # 5. sharedStrings.xml → ss_list (문자열 테이블)
+        ss_path = next((n for n in member_names if n.endswith('sharedStrings.xml')), None)
+        ss_list: list = []
+        ss_index: dict = {}  # text → idx
+        if ss_path:
+            for _, elem in ET.iterparse(io.BytesIO(members[ss_path]), events=('end',)):
+                if elem.tag.rsplit('}', 1)[-1] == 'si':
+                    text = ''.join(
+                        ch.text for ch in elem.iter()
+                        if ch.tag.rsplit('}', 1)[-1] == 't' and ch.text
+                    )
+                    if text not in ss_index:
+                        ss_index[text] = len(ss_list)
+                        ss_list.append(text)
+                    elem.clear()
+
+        orig_ss_count = len(ss_list)
+
+        def _get_or_add(text: str) -> int:
+            if text in ss_index:
+                return ss_index[text]
+            idx = len(ss_list)
+            ss_index[text] = idx
+            ss_list.append(text)
+            return idx
+
+        # 6. 각 시트 패치
+        modified: dict = {}  # zip_path → new bytes
+
+        for sheet_kw, key_map in raw_changes.items():
+            target_sname = next((s for s in sheet_map if sheet_kw in s), None)
+            if not target_sname:
+                continue
+            target_path = sheet_map[target_sname]
+            if target_path not in members:
+                continue
+
+            sheet_bytes = members[target_path]
+
+            # Pass 1: 헤더 행(row 1) 파싱 → col_letter → header_str
+            col_hdr: dict = {}
+            for _, elem in ET.iterparse(io.BytesIO(sheet_bytes), events=('end',)):
+                tag = elem.tag.rsplit('}', 1)[-1]
+                if tag == 'row':
+                    if int(elem.get('r', '0')) == 1:
+                        for c in elem:
+                            if c.tag.rsplit('}', 1)[-1] != 'c':
+                                continue
+                            m = _CR_RE.match(c.get('r', ''))
+                            if not m:
+                                continue
+                            letter = m.group(1)
+                            v_el = c.find('{%s}v' % _NS_MAIN)
+                            if c.get('t', '') == 's' and v_el is not None and v_el.text:
+                                idx = int(v_el.text)
+                                col_hdr[letter] = ss_list[idx] if idx < len(ss_list) else ''
+                            else:
+                                col_hdr[letter] = (v_el.text or '') if v_el is not None else ''
+                        elem.clear()
+                        break
+                    elem.clear()
+
+            hn_col = next((lt for lt, h in col_hdr.items() if '허가번호' in h), None)
+            jn_col = next(
+                (lt for kw in ['장치번호', '설치장소구분', '구분']
+                 for lt, h in col_hdr.items() if kw in h),
+                None
+            )
+
+            # 필드명 → col_letter 매핑
+            field_col: dict = {}
+            for fmap in key_map.values():
+                for 필드명, (col_kws, _) in fmap.items():
+                    if 필드명 not in field_col:
+                        lt = next(
+                            (lt for lt, h in col_hdr.items() if any(kw in h for kw in col_kws)),
+                            None
+                        )
+                        if lt:
+                            field_col[필드명] = lt
+
+            if not hn_col or not field_col:
+                continue
+
+            # Pass 2: 데이터 행 iterparse → 매칭 셀 참조 수집
+            patch_cells: dict = {}  # cell_ref → new_ss_idx
+
+            for _, elem in ET.iterparse(io.BytesIO(sheet_bytes), events=('end',)):
+                tag = elem.tag.rsplit('}', 1)[-1]
+                if tag == 'row':
+                    rn = int(elem.get('r', '0'))
+                    if rn <= 1:
+                        elem.clear()
+                        continue
+
+                    row_vals: dict = {}  # col_letter → (cell_ref, type, val_str)
+                    for c in elem:
+                        if c.tag.rsplit('}', 1)[-1] != 'c':
+                            continue
+                        m = _CR_RE.match(c.get('r', ''))
+                        if not m:
+                            continue
+                        letter = m.group(1)
+                        ct = c.get('t', '')
+                        v_el = c.find('{%s}v' % _NS_MAIN)
+                        if ct == 's' and v_el is not None and v_el.text:
+                            val = ss_list[int(v_el.text)] if int(v_el.text) < len(ss_list) else ''
+                        else:
+                            val = (v_el.text or '') if v_el is not None else ''
+                        row_vals[letter] = (c.get('r', ''), ct, val)
+
+                    # 허가번호 정규화 (하이픈 제거)
+                    hn_val = row_vals.get(hn_col, ('', '', ''))[2].replace('-', '').strip()
+                    # 장치번호 정규화 (숫자형 → 정수 문자열)
+                    jn_raw_val = row_vals.get(jn_col, ('', '', ''))[2].strip() if jn_col else ''
+                    try:
+                        jf = float(jn_raw_val)
+                        jn_val = str(int(jf)) if jf == int(jf) else jn_raw_val
+                    except (ValueError, TypeError):
+                        jn_val = jn_raw_val
+
+                    if (hn_val, jn_val) in key_map:
+                        for 필드명, (_, new_val) in key_map[(hn_val, jn_val)].items():
+                            lt = field_col.get(필드명)
+                            if lt:
+                                patch_cells[f"{lt}{rn}"] = _get_or_add(new_val)
+
+                    elem.clear()
+
+            if not patch_cells:
+                continue
+
+            # 7. raw XML 바이트에 regex 교체
+            xml_text = sheet_bytes.decode('utf-8')
+            for cell_ref, new_idx in patch_cells.items():
+                new_idx_str = str(new_idx)
+
+                def _repl(m, _ref=cell_ref, _idx=new_idx_str):
+                    tag_end = m.group(0).index('>')
+                    opening = m.group(0)[:tag_end]  # <c ... attrs (without >)
+                    if 't="s"' not in opening:
+                        opening = opening + ' t="s"'
+                    return f'{opening}><v>{_idx}</v></c>'
+
+                xml_text, n = re.subn(
+                    r'<c\b[^>]*\br="' + re.escape(cell_ref) + r'"[^>]*><v>[^<]*</v></c>',
+                    _repl, xml_text, count=1
+                )
+                if n == 0:
+                    logger.warning(f"DS v2 patch: 셀 미발견 {cell_ref} ({target_sname})")
+
+            modified[target_path] = xml_text.encode('utf-8')
+
+        if not modified:
+            return
+
+        # 8. sharedStrings.xml 신규 항목 추가
+        if ss_path and len(ss_list) > orig_ss_count:
+            ss_text = members[ss_path].decode('utf-8')
+            new_sis = ''.join(
+                f'<si><t{" xml:space=\"preserve\"" if ss_list[i] != ss_list[i].strip() else ""}>'
+                f'{_xml_escape(ss_list[i])}</t></si>'
+                for i in range(orig_ss_count, len(ss_list))
+            )
+            ss_text = re.sub(r'uniqueCount="(\d+)"', f'uniqueCount="{len(ss_list)}"', ss_text, count=1)
+            ss_text = ss_text.replace('</sst>', new_sis + '</sst>', 1)
+            modified[ss_path] = ss_text.encode('utf-8')
+
+        # 9. v2 ZIP 생성 (메모리)
+        v2_buf = io.BytesIO()
+        with zipfile.ZipFile(v2_buf, 'w', zipfile.ZIP_DEFLATED) as _zf_out:
+            for name in member_names:
+                _zf_out.writestr(name, modified.get(name, members[name]))
+        v2_bytes = v2_buf.getvalue()
+        v2_buf.close()
+
+        # 10. S3 업로드
+        s3.put_object(
+            Bucket=S3_BUCKET_NAME, Key=v2_key, Body=v2_bytes,
+            ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
         logger.info(f"DS v2 xlsx 빌드 완료: {v2_key} ({len(changes)}건 적용)")
+
     except Exception as e:
         logger.error(f"DS v2 xlsx 빌드 실패: {e}")
     finally:
-        if xlsx_path and os.path.exists(xlsx_path):
-            try:
-                os.remove(xlsx_path)
-            except Exception:
-                pass
+        try:
+            os.remove(v1_tmp)
+        except Exception:
+            pass
 
 
 async def _trigger_v2_rebuild(division_id: str, division_code: str, import_date: str) -> None:
