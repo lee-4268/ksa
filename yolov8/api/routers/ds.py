@@ -2213,8 +2213,11 @@ def _build_v2_xlsx_sync(division_id: str, division_code: str, import_date: str) 
     v2_key = f"ds-exports/{division_id}/{division_code}_{import_date}_v2.xlsx"
     s3 = get_s3_client()
 
+    logger.info(f"[v2] 시작: {division_id}/{division_code}/{import_date}")
+
     # 1. 활성 변경이력 조회 (SQLite)
     if not os.path.exists(_DS_DETAIL_DB):
+        logger.warning(f"[v2] SQLite DB 없음: {_DS_DETAIL_DB}")
         return
     with sqlite3.connect(_DS_DETAIL_DB, timeout=10) as _dc:
         _dc.row_factory = sqlite3.Row
@@ -2224,9 +2227,12 @@ def _build_v2_xlsx_sync(division_id: str, division_code: str, import_date: str) 
             (division_id,)
         ).fetchall()
 
+    logger.info(f"[v2] SQLite 조회: {len(changes)}건 활성 변경이력")
+
     if not changes:
         try:
             s3.delete_object(Bucket=S3_BUCKET_NAME, Key=v2_key)
+            logger.info(f"[v2] 변경이력 없음 → v2 삭제: {v2_key}")
         except Exception:
             pass
         return
@@ -2248,7 +2254,10 @@ def _build_v2_xlsx_sync(division_id: str, division_code: str, import_date: str) 
         raw_changes.setdefault(sheet_kw, {}).setdefault((hn, jn), {})[row['필드명'] or ''] = (col_kws, row['변경후값'] or '')
 
     if not raw_changes:
+        logger.warning(f"[v2] 매핑 가능한 시트 없음 (changes={len(changes)}건)")
         return
+
+    logger.info(f"[v2] 패치 대상 시트: {list(raw_changes.keys())}")
 
     # 2. v1 xlsx S3에서 다운로드
     _uid = uuid.uuid4().hex[:6]
@@ -2258,6 +2267,7 @@ def _build_v2_xlsx_sync(division_id: str, division_code: str, import_date: str) 
     ss_fh = None
     ss_mmap_obj = None
 
+    logger.info(f"[v2] S3 다운로드 시작: {v1_key}")
     try:
         s3.download_file(S3_BUCKET_NAME, v1_key, v1_tmp)
     except ClientError as e:
@@ -2268,6 +2278,9 @@ def _build_v2_xlsx_sync(division_id: str, division_code: str, import_date: str) 
     except Exception as e:
         logger.error(f"DS v2 build: S3 다운로드 실패 ({type(e).__name__})")
         return
+
+    v1_sz = os.path.getsize(v1_tmp)
+    logger.info(f"[v2] S3 다운로드 완료: {v1_sz / 1024 / 1024:.1f}MB → {v1_tmp}")
 
     try:
         # 3. ZIP 멤버 목록 + 메타 파일(소형) 읽기
@@ -2297,9 +2310,12 @@ def _build_v2_xlsx_sync(division_id: str, division_code: str, import_date: str) 
                     if sname and path:
                         sheet_map[sname] = path
 
+        logger.info(f"[v2] ZIP 멤버 {len(member_names)}개, sharedStrings={'있음' if ss_path else '없음'}")
+
         # 5. sharedStrings.xml → mmap (대용량 파일 메모리 최소화)
         ss_offsets: list = []  # index → byte offset in ss_tmp
         if ss_path:
+            logger.info(f"[v2] sharedStrings 파싱 시작: {ss_path}")
             ss_tmp_f = tempfile.NamedTemporaryFile(delete=False, suffix='.ss')
             ss_tmp_path = ss_tmp_f.name
             with zipfile.ZipFile(v1_tmp, 'r') as zf_ss:
@@ -2317,6 +2333,7 @@ def _build_v2_xlsx_sync(division_id: str, division_code: str, import_date: str) 
                             elem.clear()
             ss_tmp_f.close()
             ss_file_sz = os.path.getsize(ss_tmp_path)
+            logger.info(f"[v2] sharedStrings 파싱 완료: {len(ss_offsets)}개, tmpfile={ss_file_sz / 1024:.0f}KB")
             if ss_file_sz > 0:
                 ss_fh = open(ss_tmp_path, 'rb')
                 ss_mmap_obj = _mmap_mod.mmap(ss_fh.fileno(), 0, access=_mmap_mod.ACCESS_READ)
@@ -2349,10 +2366,14 @@ def _build_v2_xlsx_sync(division_id: str, division_code: str, import_date: str) 
         for sheet_kw, key_map in raw_changes.items():
             target_sname = next((s for s in sheet_map if sheet_kw in s), None)
             if not target_sname:
+                logger.warning(f"[v2] 시트 미발견: '{sheet_kw}' (가용 시트: {list(sheet_map.keys())})")
                 continue
             target_path = sheet_map[target_sname]
             if target_path not in member_names:
+                logger.warning(f"[v2] ZIP에 시트 경로 없음: {target_path}")
                 continue
+
+            logger.info(f"[v2] 시트 iterparse 시작: '{target_sname}' ({len(key_map)}개 대상 행)")
 
             col_hdr: dict = {}
             hn_col = None
@@ -2435,13 +2456,16 @@ def _build_v2_xlsx_sync(division_id: str, division_code: str, import_date: str) 
                         else:
                             elem.clear()
 
+            matched_rows = sum(len(v) for v in sheet_patch.values())
+            logger.info(f"[v2] 시트 iterparse 완료: '{target_sname}' → {len(sheet_patch)}행, {matched_rows}셀 패치 예정")
             if sheet_patch:
                 patch_plan[target_path] = sheet_patch
-                logger.info(f"DS v2 패치 플랜: {target_sname} {len(sheet_patch)}행")
 
         if not patch_plan and not new_ss_list:
+            logger.warning(f"[v2] 패치 플랜 비어있음 → 빌드 스킵")
             return
 
+        logger.info(f"[v2] ZIP 빌드 시작: 패치시트={len(patch_plan)}개, 신규SS={len(new_ss_list)}개")
         # 7. v2 ZIP 스트리밍 생성 (멤버별 on-the-fly 처리)
         with zipfile.ZipFile(v2_tmp, 'w', zipfile.ZIP_DEFLATED) as zf_out:
             with zipfile.ZipFile(v1_tmp, 'r') as zf_in:
@@ -2503,12 +2527,16 @@ def _build_v2_xlsx_sync(division_id: str, division_code: str, import_date: str) 
                         with zf_in.open(name) as f_in, zf_out.open(zi, 'w') as f_out:
                             shutil.copyfileobj(f_in, f_out, length=2 * 1024 * 1024)
 
+        v2_sz = os.path.getsize(v2_tmp)
+        logger.info(f"[v2] ZIP 빌드 완료: {v2_sz / 1024 / 1024:.1f}MB → {v2_tmp}")
+
         # 8. S3 업로드 (upload_file: 스트리밍, 메모리 최소)
+        logger.info(f"[v2] S3 업로드 시작: {v2_key}")
         s3.upload_file(
             v2_tmp, S3_BUCKET_NAME, v2_key,
             ExtraArgs={"ContentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},
         )
-        logger.info(f"DS v2 xlsx 빌드 완료: {v2_key} ({len(changes)}건 적용)")
+        logger.info(f"[v2] 완료: {v2_key} ({len(changes)}건 적용)")
 
     except Exception as e:
         logger.error(f"DS v2 xlsx 빌드 실패: {e}")
@@ -2531,19 +2559,47 @@ def _build_v2_xlsx_sync(division_id: str, division_code: str, import_date: str) 
                     pass
 
 
-# v2 빌드 태스크 강한 참조 보관 (GC 방지)
-_v2_build_tasks: set = set()
+# v2 빌드 동시성 제어: division 단위 lock + 대기 큐
+_v2_build_locks: dict = {}    # division_id → asyncio.Lock
+_v2_build_pending: dict = {}  # division_id → (division_code, import_date) | None
+_v2_build_tasks: set = set()  # GC 방지 강한 참조
 
 
 async def _trigger_v2_rebuild(division_id: str, division_code: str, import_date: str) -> None:
-    """v2 xlsx 재빌드를 백그라운드 태스크로 실행."""
+    """v2 xlsx 재빌드를 division 단위 lock으로 순차 실행.
+
+    빌드 중 새 요청이 오면 pending에 보관 → 현재 빌드 완료 후 자동 실행.
+    pending은 최신 파라미터 1건만 유지 (중간 요청은 덮어씀).
+    """
     if not division_id or not division_code or not import_date:
-        logger.warning(f"DS v2 트리거 스킵: 파라미터 누락 ({division_id}/{division_code}/{import_date})")
+        logger.warning(f"[v2] 트리거 스킵: 파라미터 누락 ({division_id}/{division_code}/{import_date})")
         return
-    logger.info(f"DS v2 rebuild 트리거: {division_id}/{division_code}/{import_date}")
-    task = asyncio.create_task(
-        asyncio.to_thread(_build_v2_xlsx_sync, division_id, division_code, import_date)
-    )
+
+    if division_id not in _v2_build_locks:
+        _v2_build_locks[division_id] = asyncio.Lock()
+    lock = _v2_build_locks[division_id]
+
+    if lock.locked():
+        _v2_build_pending[division_id] = (division_code, import_date)
+        logger.info(f"[v2] 대기 등록: {division_id}/{division_code}/{import_date} (현재 빌드 완료 후 실행)")
+        return
+
+    async def _run_with_lock():
+        async with lock:
+            cur_dc, cur_dt = division_code, import_date
+            while True:
+                logger.info(f"[v2] 트리거: {division_id}/{cur_dc}/{cur_dt}")
+                try:
+                    await asyncio.to_thread(_build_v2_xlsx_sync, division_id, cur_dc, cur_dt)
+                except Exception as e:
+                    logger.error(f"[v2] 빌드 예외: {division_id}/{cur_dc}/{cur_dt} - {e}")
+                pending = _v2_build_pending.pop(division_id, None)
+                if not pending:
+                    break
+                cur_dc, cur_dt = pending
+                logger.info(f"[v2] 대기 빌드 실행: {division_id}/{cur_dc}/{cur_dt}")
+
+    task = asyncio.create_task(_run_with_lock())
     _v2_build_tasks.add(task)
     task.add_done_callback(_v2_build_tasks.discard)
 
