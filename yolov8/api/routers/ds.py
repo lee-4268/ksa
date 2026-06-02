@@ -2520,11 +2520,13 @@ def _build_v2_xlsx_sync(division_id: str, division_code: str, import_date: str) 
                                                     opening = re.sub(r'\s+t="[^"]*"', '', m.group(0)[:end]) + ' t="s"'
                                                     return f'{opening}><v>{_idx}</v></c>'
                                             else:
+                                                # sharedStrings 없는 파일 → inlineStr 형식으로 패치 (Excel 호환성 최대)
                                                 _esc = _xml_escape(new_val)
-                                                def _repl(m, _v=_esc):
+                                                _preserve = ' xml:space="preserve"' if (new_val != new_val.strip() or '\n' in new_val) else ''
+                                                def _repl(m, _v=_esc, _p=_preserve):
                                                     end = m.group(0).index('>')
-                                                    opening = re.sub(r'\s+t="[^"]*"', '', m.group(0)[:end]) + ' t="str"'
-                                                    return f'{opening}><v>{_v}</v></c>'
+                                                    opening = re.sub(r'\s+t="[^"]*"', '', m.group(0)[:end]) + ' t="inlineStr"'
+                                                    return f'{opening}><is><t{_p}>{_v}</t></is></c>'
                                             line_str, n_sub = re.subn(_cell_pat, _repl, line_str, count=1)
                                             if n_sub == 0:
                                                 logger.warning(f"[v2] patch: 셀 미발견 {cell_ref}")
