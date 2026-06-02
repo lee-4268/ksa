@@ -1185,8 +1185,19 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
     } catch (e) {
       if (!mounted) return;
       Navigator.pop(context);
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('미리보기 실패: $e'), backgroundColor: Colors.red));
+      await showDialog(
+        context: context,
+        builder: (_) => AlertDialog(
+          title: const Text('업로드 실패'),
+          content: Text('$e'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('확인'),
+            ),
+          ],
+        ),
+      );
       return;
     }
     if (!mounted) return;

@@ -4557,6 +4557,25 @@ async def ds_preview_partial_update(request: Request, file: UploadFile = File(..
                 return str(int(val))
             return str(val).strip().replace('-', '')
 
+        _설치형태_CODE_MAP = {
+            '1': '철탑(지면)', '2': '강관주', '3': '통신주', '4': '원폴(건물)',
+            '6': '옥내,터널,지하, 차량 또는 임시', '8': '쌍통신주', '9': '기설물',
+            '11': '옥내외 혼합형', '12': '간이폴, 분산폴 및 비기준 설치대',
+            '13': '한전주(KT통신주)', '14': '철탑(건물)', '15': '프레임',
+            '21': '복합형(원폴,분산프레임 등)', '25': '모노폴',
+        }
+
+        def _normalize_설치형태(raw: str) -> str:
+            v = raw.strip()
+            if not v:
+                return v
+            # xlrd가 숫자셀을 float으로 읽는 경우 처리 (예: '1.0' → '1')
+            try:
+                v = str(int(float(v)))
+            except ValueError:
+                pass
+            return _설치형태_CODE_MAP.get(v, v)
+
         def _find_col(ws, *keywords):
             for keyword in keywords:
                 for c in range(ws.ncols):
@@ -4987,6 +5006,24 @@ async def ds_apply_partial_update(request: Request, file: UploadFile = File(...)
             if isinstance(val, float) and val == int(val):
                 return str(int(val))
             return str(val).strip().replace('-', '')
+
+        _설치형태_CODE_MAP = {
+            '1': '철탑(지면)', '2': '강관주', '3': '통신주', '4': '원폴(건물)',
+            '6': '옥내,터널,지하, 차량 또는 임시', '8': '쌍통신주', '9': '기설물',
+            '11': '옥내외 혼합형', '12': '간이폴, 분산폴 및 비기준 설치대',
+            '13': '한전주(KT통신주)', '14': '철탑(건물)', '15': '프레임',
+            '21': '복합형(원폴,분산프레임 등)', '25': '모노폴',
+        }
+
+        def _normalize_설치형태(raw: str) -> str:
+            v = raw.strip()
+            if not v:
+                return v
+            try:
+                v = str(int(float(v)))
+            except ValueError:
+                pass
+            return _설치형태_CODE_MAP.get(v, v)
 
         def _find_col(ws, *keywords):
             # 첫 번째로 매치되는 키워드의 컬럼 인덱스 반환 (폴백 키워드 지원)
