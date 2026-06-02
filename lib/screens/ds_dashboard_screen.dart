@@ -87,7 +87,6 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
     if (!_initialized) {
       _initialized = true;
       _loadStats();
-      _loadChangeHistoryCount();
     }
   }
 
@@ -128,6 +127,7 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
         });
         _scheduleAutoRefresh();
         _loadXlsxBuildStatus();
+        _loadChangeHistoryCount();
       }
     } catch (e) {
       if (mounted) {
