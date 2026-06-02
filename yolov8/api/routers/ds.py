@@ -2421,8 +2421,7 @@ def _build_v2_xlsx_sync(division_id: str, division_code: str, import_date: str) 
                 with zf_p1.open(target_path) as f:
                     for _, elem in ET.iterparse(f, events=('end',)):
                         if elem.tag.rsplit('}', 1)[-1] != 'row':
-                            elem.clear()
-                            continue
+                            continue  # c/v/is/t 요소는 row 처리 후 row.clear()로 한번에 해제
                         rn = int(elem.get('r', '0'))
 
                         if rn == 1:
