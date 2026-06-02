@@ -2359,8 +2359,23 @@ def _build_v2_xlsx_sync(division_id: str, division_code: str, import_date: str) 
             new_ss_list.append(text)
             return idx
 
+        def _read_cell_val(c_elem: 'ET.Element') -> str:
+            """셀 요소에서 문자열 값 추출 (shared/inlineStr/direct 모두 처리)."""
+            ct = c_elem.get('t', '')
+            if ct == 's':
+                v_el = c_elem.find(f'{{{_NS_MAIN}}}v')
+                return _get_ss(int(v_el.text)) if v_el is not None and v_el.text else ''
+            elif ct == 'inlineStr':
+                is_el = c_elem.find(f'{{{_NS_MAIN}}}is')
+                if is_el is None:
+                    return ''
+                return ''.join(t.text or '' for t in is_el.iter(f'{{{_NS_MAIN}}}t'))
+            else:
+                v_el = c_elem.find(f'{{{_NS_MAIN}}}v')
+                return (v_el.text or '') if v_el is not None else ''
+
         # 6. Pass 1: 각 시트 iterparse → 패치 플랜 수집
-        # patch_plan: {zip_path: {row_num: {cell_ref: new_ss_idx}}}
+        # patch_plan: {zip_path: {row_num: {cell_ref: new_str_val}}}
         patch_plan: dict = {}
 
         for sheet_kw, key_map in raw_changes.items():
@@ -2390,7 +2405,7 @@ def _build_v2_xlsx_sync(division_id: str, division_code: str, import_date: str) 
                         rn = int(elem.get('r', '0'))
 
                         if rn == 1:
-                            # 헤더 행: 컬럼 위치 결정
+                            # 헤더 행: 컬럼 위치 결정 (shared/inlineStr/direct 모두 처리)
                             for c in elem:
                                 if c.tag.rsplit('}', 1)[-1] != 'c':
                                     continue
@@ -2398,11 +2413,7 @@ def _build_v2_xlsx_sync(division_id: str, division_code: str, import_date: str) 
                                 if not m:
                                     continue
                                 letter = m.group(1)
-                                v_el = c.find('{%s}v' % _NS_MAIN)
-                                if c.get('t', '') == 's' and v_el is not None and v_el.text:
-                                    col_hdr[letter] = _get_ss(int(v_el.text))
-                                else:
-                                    col_hdr[letter] = (v_el.text or '') if v_el is not None else ''
+                                col_hdr[letter] = _read_cell_val(c)
                             hn_col = next((lt for lt, h in col_hdr.items() if '허가번호' in h), None)
                             jn_col = next(
                                 (lt for kw in ['장치번호', '설치장소구분', '구분']
@@ -2416,8 +2427,10 @@ def _build_v2_xlsx_sync(division_id: str, division_code: str, import_date: str) 
                                         )
                                         if lt:
                                             field_col[필드명] = lt
+                            logger.info(f"[v2] '{target_sname}' 헤더: hn_col={hn_col}, jn_col={jn_col}, field_col={field_col}")
                             elem.clear()
                             if not hn_col or not field_col:
+                                logger.warning(f"[v2] '{target_sname}' 컬럼 미발견 → 스킵 (col_hdr 샘플: {dict(list(col_hdr.items())[:5])})")
                                 break
 
                         elif rn > 1:
@@ -2430,13 +2443,7 @@ def _build_v2_xlsx_sync(division_id: str, division_code: str, import_date: str) 
                                 if not m:
                                     continue
                                 letter = m.group(1)
-                                ct = c.get('t', '')
-                                v_el = c.find('{%s}v' % _NS_MAIN)
-                                if ct == 's' and v_el is not None and v_el.text:
-                                    val = _get_ss(int(v_el.text))
-                                else:
-                                    val = (v_el.text or '') if v_el is not None else ''
-                                row_vals[letter] = val
+                                row_vals[letter] = _read_cell_val(c)
 
                             hn_val = row_vals.get(hn_col, '').replace('-', '').strip()
                             jn_raw_val = row_vals.get(jn_col, '').strip() if jn_col else ''
@@ -2450,7 +2457,8 @@ def _build_v2_xlsx_sync(division_id: str, division_code: str, import_date: str) 
                                 for 필드명, (_, new_val) in key_map[(hn_val, jn_val)].items():
                                     lt = field_col.get(필드명)
                                     if lt:
-                                        sheet_patch.setdefault(rn, {})[f"{lt}{rn}"] = _get_or_add(new_val)
+                                        # 문자열 값 직접 저장 (ss_path 유무에 따라 ZIP 빌드 시 처리)
+                                        sheet_patch.setdefault(rn, {})[f"{lt}{rn}"] = new_val
 
                             elem.clear()
                         else:
@@ -2483,23 +2491,23 @@ def _build_v2_xlsx_sync(division_id: str, division_code: str, import_date: str) 
                                 if row_m:
                                     rn = int(row_m.group(1))
                                     if rn in sheet_patch:
-                                        for cell_ref, new_idx in sheet_patch[rn].items():
-                                            new_idx_str = str(new_idx)
-
-                                            def _repl(m, _idx=new_idx_str):
-                                                t = m.group(0)
-                                                end = t.index('>')
-                                                opening = t[:end]
-                                                if 't="s"' not in opening:
-                                                    opening += ' t="s"'
-                                                return f'{opening}><v>{_idx}</v></c>'
-
-                                            line_str, n_sub = re.subn(
-                                                r'<c\b[^>]*\br="' + re.escape(cell_ref) + r'"[^>]*><v>[^<]*</v></c>',
-                                                _repl, line_str, count=1
-                                            )
+                                        for cell_ref, new_val in sheet_patch[rn].items():
+                                            _cell_pat = r'<c\b[^>]*\br="' + re.escape(cell_ref) + r'"[^>]*>.*?</c>'
+                                            if ss_path:
+                                                _new_idx = str(_get_or_add(new_val))
+                                                def _repl(m, _idx=_new_idx):
+                                                    end = m.group(0).index('>')
+                                                    opening = re.sub(r'\s+t="[^"]*"', '', m.group(0)[:end]) + ' t="s"'
+                                                    return f'{opening}><v>{_idx}</v></c>'
+                                            else:
+                                                _esc = _xml_escape(new_val)
+                                                def _repl(m, _v=_esc):
+                                                    end = m.group(0).index('>')
+                                                    opening = re.sub(r'\s+t="[^"]*"', '', m.group(0)[:end]) + ' t="str"'
+                                                    return f'{opening}><v>{_v}</v></c>'
+                                            line_str, n_sub = re.subn(_cell_pat, _repl, line_str, count=1)
                                             if n_sub == 0:
-                                                logger.warning(f"DS v2 patch: 셀 미발견 {cell_ref}")
+                                                logger.warning(f"[v2] patch: 셀 미발견 {cell_ref}")
                                 f_out.write(line_str.encode('utf-8'))
 
                     elif ss_path and name == ss_path and new_ss_list:
