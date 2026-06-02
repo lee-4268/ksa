@@ -5719,8 +5719,10 @@ async def ds_apply_partial_update(request: Request, file: UploadFile = File(...)
                            "ds_partial_update", "ds_detail",
                            f"updated={result['applied']},cr_applied={result['matched_changes']},done={len(result['schedule_done'])}",
                            empno)
-    if result['applied'] > 0:
+    if division_id and division_code and import_date:
         await _trigger_v2_rebuild(division_id, division_code, import_date)
+    elif division_id:
+        await _trigger_v2_rebuild_by_division(division_id)
     return {"success": True, **result}
 
 
