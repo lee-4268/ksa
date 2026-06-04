@@ -1400,26 +1400,22 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
     if (excludedKeys == null || !mounted) return;
 
     // 3. 적용
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => AppLoader.centered(),
-    );
+    final progress = ProgressDialog(context);
+    progress.show(message: '변경 적용 중...');
     try {
       final result = await svc.applyPartialDsUpdate(Uint8List.fromList(bytes), f.name,
           excludedKeys: excludedKeys, divisionId: divisionId,
           divisionCode: divisionCode, importDate: importDate);
       if (!mounted) return;
-      Navigator.pop(context);
       final applied = result['applied'] ?? 0;
       final matched = result['matched_changes'] ?? 0;
       final done = (result['schedule_done'] as List?)?.length ?? 0;
       final warnings = (result['warnings'] as List?)?.map((e) => e.toString()).toList() ?? const [];
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('패치 $applied/$matched건 · 점검완료 자동 전환 $done건'),
-        backgroundColor: const Color(0xFF1A8754),
-        duration: const Duration(seconds: 5),
-      ));
+      await progress.complete(
+        message: '패치 $applied/$matched건\n점검완료 자동 전환 $done건',
+        delayMs: 1800,
+      );
+      if (!mounted) return;
       // 신고-반영 불일치 경고가 있으면 별도 다이얼로그로 명확히 안내 (적용은 이미 완료됨)
       if (warnings.isNotEmpty) {
         _showApplyWarnings(warnings);
@@ -1427,10 +1423,7 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
       _loadChangeHistoryCount();
     } catch (e) {
       if (!mounted) return;
-      Navigator.pop(context);
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('적용 실패: $e'), backgroundColor: Colors.red,
-      ));
+      await progress.error(message: '적용 실패: $e');
     }
   }
 
@@ -1811,22 +1804,26 @@ class _DsChangeHistoryBulkDialogState extends State<_DsChangeHistoryBulkDialog> 
         ),
       ),
     );
-    if (ok != true) return;
+    if (ok != true || !mounted) return;
+    final progress = ProgressDialog(context);
+    progress.show(message: '되돌리기 중...');
     try {
       final res = await widget.svc.bulkCancelDsChanges(_selected.toList());
       if (!mounted) return;
       final succeeded = (res['succeeded'] as num?)?.toInt() ?? 0;
       final failed = (res['failed'] as num?)?.toInt() ?? 0;
       final skipped = (res['skipped'] as num?)?.toInt() ?? 0;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('되돌리기 완료: 성공 $succeeded · 실패 $failed · 스킵 $skipped'),
-      ));
+      await progress.complete(
+        message: '되돌리기 완료\n성공 $succeeded · 실패 $failed · 스킵 $skipped',
+        delayMs: 1800,
+      );
+      if (!mounted) return;
       _selected.clear();
       _itemsByUpload.clear();
       await _load();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('일괄 되돌리기 실패: $e')));
+      await progress.error(message: '일괄 되돌리기 실패: $e');
     }
   }
 
