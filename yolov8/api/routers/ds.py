@@ -2463,10 +2463,11 @@ def _build_v2_xlsx_sync(division_id: str, division_code: str, import_date: str) 
                                             )
                                         if lt:
                                             field_col[필드명] = lt
-                            # 안테나 시트면 안테나일련번호 컬럼도 찾기 (정확 매칭)
+                            # 안테나 시트면 안테나일련번호 컬럼도 찾기 (v1은 '공중선일련번호'로 저장됨)
                             if is_antenna_sheet:
                                 antenna_sn_col = next(
-                                    (lt for lt, h in col_hdr.items() if h.strip() == '안테나일련번호'), None
+                                    (lt for lt, h in col_hdr.items()
+                                     if h.strip() in ('공중선일련번호', '안테나일련번호')), None
                                 )
                             logger.info(f"[v2] '{target_sname}' 헤더: hn_col={hn_col}, jn_col={jn_col}, field_col={field_col}"
                                         + (f", sn_col={antenna_sn_col}" if is_antenna_sheet else ""))
