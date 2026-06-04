@@ -575,6 +575,8 @@ class _ChangeNotificationScreenState extends State<ChangeNotificationScreen> {
 
   Widget _buildScheduleSection(String schedulePk, List<Map<String, dynamic>> items) {
     final license = items.first['허가번호'] ?? '';
+    // 카드 단위 메모: 같은 카드의 항목들은 모두 동일한 memo를 갖고 INSERT됨 (erp_ds_compare_screen 참조)
+    final cardMemo = (items.first['memo'] ?? '').toString().trim();
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Container(
@@ -587,6 +589,15 @@ class _ChangeNotificationScreenState extends State<ChangeNotificationScreen> {
           Text('$license', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFFB85B3D))),
           const SizedBox(height: 4),
           ...items.map((it) => _buildRequestItemRow(it)),
+          if (cardMemo.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Text('📝 $cardMemo',
+                  style: TextStyle(
+                      fontSize: 11,
+                      color: Colors.grey.shade600,
+                      fontStyle: FontStyle.italic)),
+            ),
         ]),
       ),
     );
@@ -700,7 +711,7 @@ class _ChangeNotificationScreenState extends State<ChangeNotificationScreen> {
         ],
       ),
     );
-    if (ok != true) return;
+    if (ok != true || !mounted) return;
     try {
       _inspectionSvc.setAuthToken(context.read<AuthService>().authToken);
       final result = await _inspectionSvc.markChangeRequestFiled(schedulePks: schedulePks);
