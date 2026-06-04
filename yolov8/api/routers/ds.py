@@ -3558,7 +3558,22 @@ async def ds_export_presign(
                 if raw_token:
                     qs += f"&token={raw_token}"
                 proxy_url = f"{origin}/ds/proxy-xlsx?{qs}"
-                return {"success": True, "url": proxy_url, "type": "xlsx", "version": _ver}
+                # v2면 변경이력 최신 날짜 조회 (파일명 suffix 용)
+                last_change_date = ""
+                if _ver == "v2" and os.path.exists(_DS_DETAIL_DB):
+                    try:
+                        with sqlite3.connect(_DS_DETAIL_DB, timeout=5) as _dc:
+                            row = _dc.execute(
+                                "SELECT MAX(변경일자) FROM ds_변경이력 "
+                                "WHERE division_id=? AND (cancelled IS NULL OR cancelled='0')",
+                                (divisionId,)
+                            ).fetchone()
+                            if row and row[0]:
+                                last_change_date = str(row[0])
+                    except Exception:
+                        pass
+                return {"success": True, "url": proxy_url, "type": "xlsx",
+                        "version": _ver, "lastChangeDate": last_change_date}
             except ClientError:
                 pass
 

@@ -270,7 +270,7 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
         'importDate': upload.actualDate,
         'divisionCode': upload.divisionCode,
       };
-      final filename = '${upload.divisionName}_${upload.actualDate}_DS.xlsx';
+      String filename = '${upload.divisionName}_${upload.actualDate}_DS.xlsx';
 
       void onProgress(String stage, double percent) {
         if (mounted) {
@@ -332,6 +332,12 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
 
             // 2. pre-built xlsx → EC2 프록시 다운로드
             if (type == 'xlsx') {
+              // v2면 변경이력 최신날짜를 파일명에 포함
+              final isV2 = (data['version'] as String?) == 'v2';
+              final lastChange = (data['lastChangeDate'] as String?) ?? '';
+              if (isV2 && lastChange.isNotEmpty) {
+                filename = '${upload.divisionName}_${upload.actualDate}_DS_v2_$lastChange.xlsx';
+              }
               onProgress('Excel 파일 다운로드 중...', 10);
               final result = await platform_export.downloadXlsxFromUrl(
                 url: data['url'] as String,
