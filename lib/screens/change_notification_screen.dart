@@ -644,23 +644,79 @@ class _ChangeNotificationScreenState extends State<ChangeNotificationScreen> {
   Future<void> _cancelChangeRequest(int crId, String label) async {
     final ok = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        title: const Text('변경 요청 취소', style: TextStyle(fontSize: 16)),
-        content: Text(
-          '"$label" 변경 요청을 취소하시겠습니까?\n\n'
-          '같은 일정의 변경 요청이 모두 취소되면 [사전점검중] 상태로 원복됩니다.',
-          style: const TextStyle(fontSize: 13),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('취소')),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFFB85B3D), foregroundColor: Colors.white),
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('확인'),
+      builder: (ctx) => Dialog(
+        insetPadding: const EdgeInsets.symmetric(horizontal: 32),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 380),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 32, 20, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: const BoxDecoration(
+                    color: Color(0xFFFEF2F2),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(Icons.close_rounded,
+                      color: Color(0xFFB85B3D), size: 24),
+                ),
+                const SizedBox(height: 16),
+                const Text(
+                  '변경 요청 취소',
+                  style: TextStyle(
+                    fontSize: 17,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: -0.5,
+                    color: Color(0xFF111827),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  '"$label" 항목을 취소합니다.\n같은 일정의 모든 요청이 취소되면\n[사전점검중] 상태로 원복됩니다.',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    height: 1.5,
+                    color: Color(0xFF6B7280),
+                  ),
+                ),
+                const SizedBox(height: 24),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: () => Navigator.pop(ctx, true),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFFB85B3D),
+                      foregroundColor: Colors.white,
+                      elevation: 0,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12)),
+                    ),
+                    child: const Text('취소하기',
+                        style: TextStyle(fontWeight: FontWeight.bold)),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                SizedBox(
+                  width: double.infinity,
+                  child: TextButton(
+                    onPressed: () => Navigator.pop(ctx, false),
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                    ),
+                    child: const Text('닫기',
+                        style: TextStyle(
+                            color: Color(0xFF9CA3AF), fontSize: 13)),
+                  ),
+                ),
+              ],
+            ),
           ),
-        ],
+        ),
       ),
     );
     if (ok != true || !mounted) return;
