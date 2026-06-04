@@ -2421,12 +2421,6 @@ def _build_v2_xlsx_sync(division_id: str, division_code: str, import_date: str) 
             field_col: dict = {}
             sheet_patch: dict = {}  # {row_num: {cell_ref: new_str_val}}
 
-            # 안테나 시트 shared antenna 처리용
-            is_antenna_sheet = (sheet_kw == '안테나')
-            antenna_sn_col = None  # 안테나일련번호 컬럼
-            antenna_rows_info: list = []  # [(rn, hn, jn, antenna_sn, is_empty_antenna), ...]
-            _ANT_FIELDS_FOR_EMPTY = ['설치형태명', '설치형태코드', '지상고', '노출고']
-
             with zipfile.ZipFile(v1_tmp, 'r') as zf_p1:
                 with zf_p1.open(target_path) as f:
                     for _, elem in ET.iterparse(f, events=('end',)):
@@ -2463,14 +2457,7 @@ def _build_v2_xlsx_sync(division_id: str, division_code: str, import_date: str) 
                                             )
                                         if lt:
                                             field_col[필드명] = lt
-                            # 안테나 시트면 안테나일련번호 컬럼도 찾기 (v1은 '공중선일련번호'로 저장됨)
-                            if is_antenna_sheet:
-                                antenna_sn_col = next(
-                                    (lt for lt, h in col_hdr.items()
-                                     if h.strip() in ('공중선일련번호', '안테나일련번호')), None
-                                )
-                            logger.info(f"[v2] '{target_sname}' 헤더: hn_col={hn_col}, jn_col={jn_col}, field_col={field_col}"
-                                        + (f", sn_col={antenna_sn_col}" if is_antenna_sheet else ""))
+                            logger.info(f"[v2] '{target_sname}' 헤더: hn_col={hn_col}, jn_col={jn_col}, field_col={field_col}")
                             elem.clear()
                             if not hn_col or not field_col:
                                 logger.warning(f"[v2] '{target_sname}' 컬럼 미발견 → 스킵 (col_hdr 샘플: {dict(list(col_hdr.items())[:5])})")
@@ -2503,54 +2490,9 @@ def _build_v2_xlsx_sync(division_id: str, division_code: str, import_date: str) 
                                         # 문자열 값 직접 저장 (ss_path 유무에 따라 ZIP 빌드 시 처리)
                                         sheet_patch.setdefault(rn, {})[f"{lt}{rn}"] = new_val
 
-                            # 안테나 시트: 그룹 정보 수집 (shared antenna 처리용)
-                            if is_antenna_sheet and antenna_sn_col:
-                                asn = row_vals.get(antenna_sn_col, '').strip()
-                                # 안테나 필드(설치형태명/코드/지상고/노출고)가 모두 비어있는지 판정
-                                is_empty = True
-                                for fname in _ANT_FIELDS_FOR_EMPTY:
-                                    lt = field_col.get(fname)
-                                    if lt and row_vals.get(lt, '').strip():
-                                        is_empty = False
-                                        break
-                                antenna_rows_info.append((rn, hn_val, jn_val, asn, is_empty))
-
                             elem.clear()
                         else:
                             elem.clear()
-
-            # 안테나 시트 shared antenna 처리: 같은 (hn, 안테나일련번호) 그룹 내 빈 행에 primary 값 상속
-            shared_added = 0
-            if is_antenna_sheet and antenna_sn_col and antenna_rows_info:
-                groups: dict = {}
-                for rn_, hn_, jn_, asn_, empty_ in antenna_rows_info:
-                    groups.setdefault((hn_, asn_), []).append((rn_, jn_, empty_))
-                empty_total = sum(1 for r in antenna_rows_info if r[4])
-                matched_groups = sum(
-                    1 for (g_hn, g_asn), members in groups.items()
-                    if any((g_hn, jn_) in key_map for rn_, jn_, _ in members)
-                )
-                logger.info(
-                    f"[v2] '{target_sname}' shared 진단: 전체행={len(antenna_rows_info)}, "
-                    f"빈행={empty_total}, 그룹={len(groups)}, 매칭그룹={matched_groups}, "
-                    f"샘플3={list(groups.items())[:3]}"
-                )
-                for (g_hn, g_asn), members in groups.items():
-                    # 그룹 내 변경이력 매칭된 (hn, jn) primary 찾기
-                    primary_jn = next((jn_ for rn_, jn_, _ in members if (g_hn, jn_) in key_map), None)
-                    if primary_jn is None:
-                        continue
-                    primary_fmap = key_map[(g_hn, primary_jn)]
-                    # 그룹 내 빈 행에 primary 패치 그대로 복사
-                    for rn_, jn_, empty_ in members:
-                        if jn_ == primary_jn or not empty_:
-                            continue
-                        for 필드명, (_, new_val) in primary_fmap.items():
-                            lt = field_col.get(필드명)
-                            if lt:
-                                sheet_patch.setdefault(rn_, {})[f"{lt}{rn_}"] = new_val
-                                shared_added += 1
-                logger.info(f"[v2] '{target_sname}' shared antenna 추가 패치: {shared_added}셀")
 
             matched_rows = sum(len(v) for v in sheet_patch.values())
             logger.info(f"[v2] 시트 iterparse 완료: '{target_sname}' → {len(sheet_patch)}행, {matched_rows}셀 패치 예정")
@@ -5250,32 +5192,52 @@ async def ds_preview_partial_update(request: Request, file: UploadFile = File(..
             # '지상고'와 '노출고'는 정확 매칭 (안테나지상고도 회피)
             지상고_col = _find_col_exact(ws, '지상고')
             노출고_col = _find_col_exact(ws, '노출고')
+            # 안테나일련번호 컬럼 (shared antenna 그룹화)
+            sn_col_a = _find_col_exact(ws, '안테나일련번호')
+
+            def _read_num(ri, ci):
+                if ci < 0 or ws.ncols <= ci:
+                    return ''
+                raw = ws.cell_value(ri, ci)
+                if isinstance(raw, float) and raw == int(raw):
+                    return str(int(raw))
+                return str(raw or '').strip()
+
+            ant_rows: list = []
             for ri in range(1, ws.nrows):
                 hn = _norm_hn(ws.cell_value(ri, 0))
                 if not hn: continue
                 license_set.add(hn)
                 jn = (_norm_hn(ws.cell_value(ri, jn_col_a))
                       if jn_col_a >= 0 and ws.ncols > jn_col_a else '')
-                key = (hn, jn)
+                sn = _read_num(ri, sn_col_a) if sn_col_a >= 0 else ''
                 fields: dict[str, str] = {}
                 if ws.ncols > 설치형태_col:
                     raw = str(ws.cell_value(ri, 설치형태_col) or '').strip()
                     v = _normalize_설치형태(raw)
                     if v: fields['설치형태'] = v
-                if 지상고_col >= 0 and ws.ncols > 지상고_col:
-                    raw = ws.cell_value(ri, 지상고_col)
-                    if isinstance(raw, float) and raw == int(raw):
-                        raw = str(int(raw))
-                    v = str(raw or '').strip()
-                    if v: fields['지상고'] = v
-                if 노출고_col >= 0 and ws.ncols > 노출고_col:
-                    raw = ws.cell_value(ri, 노출고_col)
-                    if isinstance(raw, float) and raw == int(raw):
-                        raw = str(int(raw))
-                    v = str(raw or '').strip()
-                    if v: fields['노출고'] = v
-                if fields and key not in antenna_data:
+                v_g = _read_num(ri, 지상고_col)
+                if v_g: fields['지상고'] = v_g
+                v_o = _read_num(ri, 노출고_col)
+                if v_o: fields['노출고'] = v_o
+                ant_rows.append((hn, jn, sn, fields))
+
+            # 같은 (hn, sn) 그룹의 primary → 빈 행 상속
+            group_primary: dict[tuple[str, str], dict[str, str]] = {}
+            for hn, jn, sn, fields in ant_rows:
+                if not sn:
+                    continue
+                gk = (hn, sn)
+                if fields and gk not in group_primary:
+                    group_primary[gk] = fields
+            for hn, jn, sn, fields in ant_rows:
+                key = (hn, jn)
+                if key in antenna_data:
+                    continue
+                if fields:
                     antenna_data[key] = fields
+                elif sn and (hn, sn) in group_primary:
+                    antenna_data[key] = dict(group_primary[(hn, sn)])
 
         # 설치장소: 같은 허가번호에 여러 행 가능 — (허가번호, 설치장소구분) 단위로 모두 수집
         # location_rows: list[(허가번호, 설치장소구분, 설치장소주소)]
@@ -5756,7 +5718,7 @@ async def ds_apply_partial_update(request: Request, file: UploadFile = File(...)
                 if d: device_data[(hn, jn)] = d
 
         # ── 안테나 시트: (허가번호, 장치번호) → {설치형태, 지상고, 노출고}
-        # 장치별로 안테나가 다를 수 있어 행별 처리
+        # 같은 (허가번호, 안테나일련번호) 그룹 내 빈 행도 primary 값으로 채워서 INSERT
         antenna_data: dict[tuple[str, str], dict[str, str]] = {}
 
         if 안테나_si >= 0:
@@ -5770,34 +5732,59 @@ async def ds_apply_partial_update(request: Request, file: UploadFile = File(...)
             # '지상고'와 '노출고'는 정확 매칭 (안테나지상고도 회피)
             지상고_col = _find_col_exact(ws, '지상고')
             노출고_col = _find_col_exact(ws, '노출고')
+            # 안테나일련번호 컬럼 (shared antenna 그룹화 키)
+            sn_col_a = _find_col_exact(ws, '안테나일련번호')
 
+            def _read_num(ri, ci):
+                """float 정수값 '16.0' → '16' 정규화"""
+                if ci < 0 or ws.ncols <= ci:
+                    return ''
+                raw = ws.cell_value(ri, ci)
+                if isinstance(raw, float) and raw == int(raw):
+                    return str(int(raw))
+                return str(raw or '').strip()
+
+            # 1단계: 모든 행 수집 (jn, sn, fields) 단위
+            # ant_rows: [(hn, jn, sn, fields_dict)]
+            ant_rows: list = []
             for ri in range(1, ws.nrows):
                 hn = _norm_hn(ws.cell_value(ri, 0))
                 if not hn: continue
                 license_set.add(hn)
                 jn = (_norm_hn(ws.cell_value(ri, jn_col_a))
                       if jn_col_a >= 0 and ws.ncols > jn_col_a else '')
-                key = (hn, jn)
+                sn = _read_num(ri, sn_col_a) if sn_col_a >= 0 else ''
                 fields: dict[str, str] = {}
                 if ws.ncols > 설치형태_col:
                     raw = str(ws.cell_value(ri, 설치형태_col) or '').strip()
-                    v = _normalize_설치형태(raw)  # 숫자코드 → 텍스트
+                    v = _normalize_설치형태(raw)
                     if v: fields['설치형태'] = v
-                if 지상고_col >= 0 and ws.ncols > 지상고_col:
-                    raw = ws.cell_value(ri, 지상고_col)
-                    # 숫자/문자 모두 처리, 빈 문자열 제외
-                    if isinstance(raw, float) and raw == int(raw):
-                        raw = str(int(raw))
-                    v = str(raw or '').strip()
-                    if v: fields['지상고'] = v
-                if 노출고_col >= 0 and ws.ncols > 노출고_col:
-                    raw = ws.cell_value(ri, 노출고_col)
-                    if isinstance(raw, float) and raw == int(raw):
-                        raw = str(int(raw))
-                    v = str(raw or '').strip()
-                    if v: fields['노출고'] = v
-                if fields and key not in antenna_data:
+                v_g = _read_num(ri, 지상고_col)
+                if v_g: fields['지상고'] = v_g
+                v_o = _read_num(ri, 노출고_col)
+                if v_o: fields['노출고'] = v_o
+                ant_rows.append((hn, jn, sn, fields))
+
+            # 2단계: 같은 (hn, sn) 그룹의 primary fields를 빈 행에 복사
+            # sn이 빈 문자열이면 그룹화 불가 → 자기 자신만의 그룹으로 처리
+            group_primary: dict[tuple[str, str], dict[str, str]] = {}
+            for hn, jn, sn, fields in ant_rows:
+                if not sn:
+                    continue
+                gk = (hn, sn)
+                if fields and gk not in group_primary:
+                    group_primary[gk] = fields
+
+            # 3단계: antenna_data 생성 (빈 행에 primary 상속)
+            for hn, jn, sn, fields in ant_rows:
+                key = (hn, jn)
+                if key in antenna_data:
+                    continue
+                if fields:
                     antenna_data[key] = fields
+                elif sn and (hn, sn) in group_primary:
+                    # 빈 행: 같은 그룹의 primary 값 상속
+                    antenna_data[key] = dict(group_primary[(hn, sn)])
 
         # ── 설치장소 시트: (허가번호, 설치장소구분) 단위로 모든 행 수집
         location_rows: list[tuple[str, str, str]] = []
