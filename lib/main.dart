@@ -14,6 +14,7 @@ import 'services/admin_service.dart';
 import 'services/division_data_service.dart';
 import 'services/notification_service.dart';
 import 'widgets/app_loader.dart';
+import 'widgets/progress_dialog.dart';
 import 'services/photo_storage_service.dart';
 import 'theme/app_theme.dart';
 
@@ -143,15 +144,9 @@ class _AuthWrapperState extends State<AuthWrapper> {
     // 세션 만료 시 메시지 표시 (한 번만)
     if (authService.isSessionExpired && !_sessionExpiredShown) {
       _sessionExpiredShown = true;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('세션이 만료되어 자동 로그아웃되었습니다.'),
-              backgroundColor: Colors.orange,
-              duration: Duration(seconds: 3),
-            ),
-          );
+          await ProgressDialog(context).error(message: '세션이 만료되어 자동 로그아웃되었습니다.');
         }
       });
     }

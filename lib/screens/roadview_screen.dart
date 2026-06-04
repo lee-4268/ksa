@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
+import '../widgets/progress_dialog.dart';
 
 class RoadviewScreen extends StatefulWidget {
   final double latitude;
@@ -35,14 +36,8 @@ class _RoadviewScreenState extends State<RoadviewScreen> {
     if (await canLaunchUrl(kakaoMapUri)) {
       await launchUrl(kakaoMapUri, mode: LaunchMode.externalApplication);
     } else {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('카카오맵을 열 수 없습니다.'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
+      if (!mounted) return;
+      await ProgressDialog(context).error(message: '카카오맵을 열 수 없습니다.');
     }
   }
 
@@ -52,14 +47,8 @@ class _RoadviewScreenState extends State<RoadviewScreen> {
     if (await canLaunchUrl(roadviewUri)) {
       await launchUrl(roadviewUri, mode: LaunchMode.externalApplication);
     } else {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('로드뷰를 열 수 없습니다.'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
+      if (!mounted) return;
+      await ProgressDialog(context).error(message: '로드뷰를 열 수 없습니다.');
     }
   }
 

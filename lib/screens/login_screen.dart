@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../services/auth_service.dart';
+import '../widgets/progress_dialog.dart';
 
 /// 로그인 화면 - i-NET 계정 로그인 + SMS OTP 2차 인증
 class LoginScreen extends StatefulWidget {
@@ -136,9 +137,7 @@ class _LoginScreenState extends State<LoginScreen> {
       return;
     }
     if (!success && auth.errorMessage != null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(auth.errorMessage!), backgroundColor: Colors.red),
-      );
+      await ProgressDialog(context).error(message: auth.errorMessage!);
     }
   }
 
@@ -171,17 +170,9 @@ class _LoginScreenState extends State<LoginScreen> {
       _digitFocusNodes[0].requestFocus();
       setState(() => _otpError = null);
       _startResendCooldown(60);
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('인증번호가 재발송되었습니다'),
-          backgroundColor: Color(0xFF4CAF50),
-          duration: Duration(seconds: 2),
-        ),
-      );
+      await ProgressDialog(context).complete(message: '인증번호가 재발송되었습니다');
     } else if (auth.errorMessage != null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(auth.errorMessage!), backgroundColor: Colors.red),
-      );
+      await ProgressDialog(context).error(message: auth.errorMessage!);
     }
   }
 
@@ -740,10 +731,7 @@ class _LoginScreenState extends State<LoginScreen> {
     );
     if (!mounted) return;
     if (!success && auth.errorMessage != null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-            content: Text(auth.errorMessage!), backgroundColor: Colors.red),
-      );
+      await ProgressDialog(context).error(message: auth.errorMessage!);
     }
   }
 }

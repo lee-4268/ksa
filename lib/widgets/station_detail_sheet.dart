@@ -11,6 +11,7 @@ import '../providers/station_provider.dart';
 import '../screens/tower_classification_screen.dart';
 import '../services/auth_service.dart';
 import '../services/photo_storage_service.dart';
+import 'progress_dialog.dart';
 
 class StationDetailSheet extends StatefulWidget {
   final RadioStation station;
@@ -619,23 +620,11 @@ class _StationDetailSheetState extends State<StationDetailSheet> {
         _saveInstallationType(result.installationType!);
       }
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Row(
-            children: [
-              const Icon(Icons.check_circle, color: Colors.white, size: 20),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  result.installationType != null
-                      ? '설치대가 "${result.installationType}"(으)로 업데이트되었습니다.'
-                      : '철탑형태 분류가 완료되었습니다.',
-                ),
-              ),
-            ],
-          ),
-          backgroundColor: Colors.green,
-        ),
+      if (!mounted) return;
+      await ProgressDialog(context).complete(
+        message: result.installationType != null
+            ? '설치대가 "${result.installationType}"(으)로 업데이트되었습니다.'
+            : '철탑형태 분류가 완료되었습니다.',
       );
     }
   }
@@ -903,14 +892,10 @@ class _StationDetailSheetState extends State<StationDetailSheet> {
       fit: StackFit.expand,
       children: [
         GestureDetector(
-          onTap: () {
+          onTap: () async {
             if (!isValidUrl) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text('이 사진은 세션이 만료되어 더 이상 표시할 수 없습니다.'),
-                  backgroundColor: Colors.orange,
-                ),
-              );
+              if (!mounted) return;
+              await ProgressDialog(context).error(message: '이 사진은 세션이 만료되어 더 이상 표시할 수 없습니다.');
             } else {
               _showPhotoViewer(index);
             }
@@ -1097,15 +1082,11 @@ class _StationDetailSheetState extends State<StationDetailSheet> {
       _savePhotos();
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('사진이 추가되었습니다.')),
-        );
+        await ProgressDialog(context).complete(message: '사진이 추가되었습니다.');
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('사진 추가 실패: $e')),
-        );
+        await ProgressDialog(context).error(message: '사진 추가 실패: $e');
       }
     }
   }
@@ -1154,9 +1135,7 @@ class _StationDetailSheetState extends State<StationDetailSheet> {
               _savePhotos();
 
               if (mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('사진이 삭제되었습니다.')),
-                );
+                await ProgressDialog(context).complete(message: '사진이 삭제되었습니다.');
               }
             },
             style: TextButton.styleFrom(foregroundColor: Colors.red),
@@ -1291,7 +1270,7 @@ class _StationDetailSheetState extends State<StationDetailSheet> {
     );
   }
 
-  void _saveMemo() {
+  Future<void> _saveMemo() async {
     final provider = context.read<StationProvider>();
     final newMemo = _memoController.text;
     provider.updateMemo(widget.station.id, newMemo);
@@ -1301,9 +1280,8 @@ class _StationDetailSheetState extends State<StationDetailSheet> {
       _currentMemo = newMemo;
     });
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('메모가 저장되었습니다.')),
-    );
+    if (!mounted) return;
+    await ProgressDialog(context).complete(message: '메모가 저장되었습니다.');
   }
 
   Future<void> _setInspectionStatus(BuildContext context, InspectionStatus status) async {
@@ -1331,9 +1309,7 @@ class _StationDetailSheetState extends State<StationDetailSheet> {
           break;
       }
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(message)),
-      );
+      await ProgressDialog(context).complete(message: message);
     }
   }
 

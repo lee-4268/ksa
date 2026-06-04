@@ -107,16 +107,12 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
       final inserted = res['inserted'] ?? 0;
       final updated = res['updated'] ?? 0;
       final skipped = res['skipped'] ?? 0;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('SISL 사진 임포트 완료 — 총 $total건 (신규 $inserted · 갱신 $updated · 스킵 $skipped)'),
-      ));
+      await ProgressDialog(context).complete(message: 'SISL 사진 임포트 완료 — 총 $total건 (신규 $inserted · 갱신 $updated · 스킵 $skipped)');
+      if (!mounted) return;
       await _loadSislStats();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('SISL 임포트 실패: $e'),
-        backgroundColor: Colors.red,
-      ));
+      await ProgressDialog(context).error(message: 'SISL 임포트 실패: $e');
     } finally {
       if (mounted) setState(() {
         _sislImporting = false;
@@ -141,8 +137,7 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
 
   Future<void> _showDsDetailBuildDialog() async {
     if (_dsUploads.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('DS 업로드 목록을 불러오는 중입니다.')));
+      await ProgressDialog(context).complete(message: 'DS 업로드 목록을 불러오는 중입니다.');
       return;
     }
 
@@ -261,16 +256,10 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
     try {
       final jobId = await _inspSvc.buildDsDetail(selected!.divisionId, selected!.importDateSk);
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('재빌드 시작 (jobId: $jobId)\n완료까지 수분 소요될 수 있습니다.'),
-        backgroundColor: const Color(0xFF1A8754),
-        duration: const Duration(seconds: 6),
-      ));
+      await ProgressDialog(context).complete(message: '재빌드 시작 (jobId: $jobId)\n완료까지 수분 소요될 수 있습니다.');
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('재빌드 실패: $e'), backgroundColor: Colors.red,
-      ));
+      await ProgressDialog(context).error(message: '재빌드 실패: $e');
     } finally {
       if (mounted) setState(() => _dsDetailBuilding = false);
     }

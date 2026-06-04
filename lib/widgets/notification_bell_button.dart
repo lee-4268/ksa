@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/inspection_service.dart';
 import 'app_loader.dart';
+import 'progress_dialog.dart';
 
 /// 로그인 직후 알림 팝업을 띄울지 결정.
 /// - 안 읽음 > 0 이고 오늘 '보지 않기' 플래그가 없으면 표시.
@@ -176,9 +177,7 @@ class _NotificationPanelState extends State<NotificationPanel> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _loading = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('알림 조회 실패: $e')),
-      );
+      await ProgressDialog(context).error(message: '알림 조회 실패: $e');
     }
   }
 
@@ -188,9 +187,7 @@ class _NotificationPanelState extends State<NotificationPanel> {
       await _load();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('일괄 읽음 실패: $e')),
-      );
+      await ProgressDialog(context).error(message: '일괄 읽음 실패: $e');
     }
   }
 

@@ -288,9 +288,7 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _loadingAzimuth = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('방위각 조회 실패: $e')),
-      );
+      await ProgressDialog(context).error(message: '방위각 조회 실패: $e');
     }
   }
 
@@ -1630,11 +1628,8 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
                                 setSheetState(() { isEditMode = false; isSaving = false; });
                               } catch (e) {
                                 setSheetState(() => isSaving = false);
-                                if (mounted) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(content: Text('저장 실패: $e'), backgroundColor: Colors.red),
-                                  );
-                                }
+                                if (!mounted) return;
+                                await ProgressDialog(context).error(message: '저장 실패: $e');
                               }
                             } : null,
                             style: ElevatedButton.styleFrom(
@@ -2181,7 +2176,8 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
         if (_activeBasketId == null) _mapKey.currentState?.clearRouteOverlay();
       }
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('삭제 실패: $e'), backgroundColor: Colors.red));
+      if (!mounted) return;
+      await ProgressDialog(context).error(message: '삭제 실패: $e');
     }
   }
 
@@ -2203,7 +2199,7 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
 
   void _onPolygonVerticesReceived(List<List<double>> vertices) {
     if (vertices.length < 3) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('꼭짓점이 3개 이상 필요합니다.')));
+      ProgressDialog(context).error(message: '꼭짓점이 3개 이상 필요합니다.');
       return;
     }
     // 폴리곤 내 국소 필터 (좌표 없는 국소 제외)
@@ -2307,7 +2303,8 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
       _mapKey.currentState?.drawRouteOverlay(orderedStations: orderedStations, polylineCoords: polylineCoords);
     } catch (e) {
       setState(() => _polygonPhase = _PolygonPhase.selectEndpoints);
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('경로 계산 실패: $e'), backgroundColor: Colors.red));
+      if (!mounted) return;
+      await ProgressDialog(context).error(message: '경로 계산 실패: $e');
     }
   }
 
@@ -2905,14 +2902,14 @@ class _InspectionMyListScreenState extends State<InspectionMyListScreen> {
           _routeBaskets.insert(0, entry);
           _savingBasket = false;
         });
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('경로가 "${entry.title}"으로 저장됐습니다.'), backgroundColor: Colors.green));
         _resetPolygonMode();
+        if (!mounted) return;
+        await ProgressDialog(context).complete(message: '경로가 "${entry.title}"으로 저장됐습니다.');
       }
     } catch (e) {
-      if (mounted) {
-        setState(() => _savingBasket = false);
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('저장 실패: $e'), backgroundColor: Colors.red));
-      }
+      if (!mounted) return;
+      setState(() => _savingBasket = false);
+      await ProgressDialog(context).error(message: '저장 실패: $e');
     }
   }
 

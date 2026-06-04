@@ -8,6 +8,7 @@ import '../providers/station_provider.dart';
 import '../services/auth_service.dart';
 import '../services/cloud_data_service.dart';
 import '../widgets/station_detail_sheet.dart';
+import '../widgets/progress_dialog.dart';
 import 'roadview_screen.dart';
 import 'login_screen.dart';
 import '../widgets/user_profile_button.dart';
@@ -1853,12 +1854,7 @@ class _MapScreenState extends State<MapScreen>
       statusNotifier.dispose();
 
       // 완료 메시지
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('$category가 삭제되었습니다.'),
-          backgroundColor: Colors.green,
-        ),
-      );
+      await ProgressDialog(context).complete(message: '$category가 삭제되었습니다.');
     } catch (e) {
       if (!mounted) return;
 
@@ -1868,20 +1864,14 @@ class _MapScreenState extends State<MapScreen>
       statusNotifier.dispose();
 
       // 오류 메시지
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('삭제 실패: $e'),
-          backgroundColor: Colors.red,
-        ),
-      );
+      await ProgressDialog(context).error(message: '삭제 실패: $e');
     }
   }
 
-  void _openRoadview(RadioStation station) {
+  Future<void> _openRoadview(RadioStation station) async {
     if (!station.hasCoordinates) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('좌표 정보가 없습니다.')),
-      );
+      if (!mounted) return;
+      await ProgressDialog(context).error(message: '좌표 정보가 없습니다.');
       return;
     }
 
@@ -2100,11 +2090,10 @@ class _MapScreenState extends State<MapScreen>
     });
   }
 
-  void _toggleRouteStation(RadioStation station) {
+  Future<void> _toggleRouteStation(RadioStation station) async {
     if (!station.hasCoordinates) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('좌표가 없는 국소는 선택할 수 없습니다.')),
-      );
+      if (!mounted) return;
+      await ProgressDialog(context).error(message: '좌표가 없는 국소는 선택할 수 없습니다.');
       return;
     }
     setState(() {
@@ -2126,9 +2115,8 @@ class _MapScreenState extends State<MapScreen>
 
   Future<void> _calculateOptimalRoute() async {
     if (_routeSelectedStations.length < 2) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('최소 2개 이상의 국소를 선택하세요.')),
-      );
+      if (!mounted) return;
+      await ProgressDialog(context).error(message: '최소 2개 이상의 국소를 선택하세요.');
       return;
     }
 
@@ -2210,11 +2198,8 @@ class _MapScreenState extends State<MapScreen>
       );
     } catch (e) {
       setState(() => _isCalculatingRoute = false);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('경로 계산 실패: $e'), backgroundColor: Colors.red),
-        );
-      }
+      if (!mounted) return;
+      await ProgressDialog(context).error(message: '경로 계산 실패: $e');
     }
   }
 
@@ -2450,15 +2435,9 @@ class _MapScreenState extends State<MapScreen>
           customBorder: const CircleBorder(),
           onTap: () {
             // GPS 오류 콜백 설정
-            mapKey.currentState?.onGeolocationError = (error) {
-              if (mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text(error),
-                    backgroundColor: Colors.red,
-                  ),
-                );
-              }
+            mapKey.currentState?.onGeolocationError = (error) async {
+              if (!mounted) return;
+              await ProgressDialog(context).error(message: error);
             };
             // 현재 위치로 이동
             mapKey.currentState?.moveToCurrentLocation();
@@ -2480,13 +2459,8 @@ class _MapScreenState extends State<MapScreen>
     final provider = context.read<StationProvider>();
     await provider.importFromExcel();
 
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('${provider.stations.length}개의 무선국을 가져왔습니다.'),
-        ),
-      );
-    }
+    if (!mounted) return;
+    await ProgressDialog(context).complete(message: '${provider.stations.length}개의 무선국을 가져왔습니다.');
   }
 
   /// 로그아웃 처리 (팝업 없이 바로 로그아웃)
@@ -2773,12 +2747,8 @@ class _MapScreenState extends State<MapScreen>
       if (!mounted) return;
       Navigator.pop(context); // 로딩 다이얼로그 닫기
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Excel 내보내기 실패: $e'),
-          backgroundColor: Colors.red,
-        ),
-      );
+      if (!mounted) return;
+      await ProgressDialog(context).error(message: 'Excel 내보내기 실패: $e');
     }
   }
 }
@@ -2871,15 +2841,10 @@ class _WelcomeHeaderWidgetState extends State<_WelcomeHeaderWidget> {
                         const SizedBox(width: 6),
                         // 세션 연장 버튼
                         GestureDetector(
-                          onTap: () {
+                          onTap: () async {
                             authService.extendSession();
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text('세션이 2시간 연장되었습니다.'),
-                                duration: Duration(seconds: 2),
-                                backgroundColor: Colors.green,
-                              ),
-                            );
+                            if (!mounted) return;
+                            await ProgressDialog(context).complete(message: '세션이 2시간 연장되었습니다.');
                           },
                           child: Container(
                             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),

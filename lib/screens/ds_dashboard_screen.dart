@@ -1171,8 +1171,7 @@ class _DsDashboardScreenState extends State<DsDashboardScreen> {
     final bytes = f.bytes;
     if (bytes == null) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('파일을 읽을 수 없습니다.')));
+      await ProgressDialog(context).error(message: '파일을 읽을 수 없습니다.');
       return;
     }
 
@@ -1704,7 +1703,7 @@ class _DsChangeHistoryBulkDialogState extends State<_DsChangeHistoryBulkDialog> 
     } catch (e) {
       if (!mounted) return;
       setState(() => _loading = false);
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('조회 실패: $e')));
+      await ProgressDialog(context).error(message: '조회 실패: $e');
     }
   }
 
@@ -1721,7 +1720,7 @@ class _DsChangeHistoryBulkDialogState extends State<_DsChangeHistoryBulkDialog> 
         _itemsByUpload[uploadId] = items;
       } catch (e) {
         if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('상세 조회 실패: $e')));
+        await ProgressDialog(context).error(message: '상세 조회 실패: $e');
         return;
       }
     }
@@ -1835,7 +1834,7 @@ class _DsChangeHistoryBulkDialogState extends State<_DsChangeHistoryBulkDialog> 
       await _load();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('되돌리기 실패: $e')));
+      await ProgressDialog(context).error(message: '되돌리기 실패: $e');
     }
   }
 

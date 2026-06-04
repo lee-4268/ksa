@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'dart:typed_data';
 import '../services/tower_classification_service.dart';
+import '../widgets/progress_dialog.dart';
 
 /// 철탑형태 분류 결과 (상세정보에서 사용)
 class TowerClassificationResult {
@@ -1400,42 +1401,18 @@ class _TowerClassificationScreenState extends State<TowerClassificationScreen>
       if (mounted) Navigator.of(context).pop();
 
       // 결과 표시
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Row(
-              children: [
-                Icon(
-                  result.success ? Icons.check_circle : Icons.error,
-                  color: Colors.white,
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    result.success
-                        ? '피드백이 저장되었습니다. (수정: $correctedClassKr)'
-                        : result.message,
-                  ),
-                ),
-              ],
-            ),
-            backgroundColor: result.success ? Colors.green : Colors.red,
-            duration: const Duration(seconds: 3),
-          ),
-        );
+      if (!mounted) return;
+      if (result.success) {
+        await ProgressDialog(context).complete(message: '피드백이 저장되었습니다. (수정: $correctedClassKr)');
+      } else {
+        await ProgressDialog(context).error(message: result.message);
       }
     } catch (e) {
       // 로딩 다이얼로그 닫기
       if (mounted) Navigator.of(context).pop();
 
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('피드백 저장 실패: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
+      if (!mounted) return;
+      await ProgressDialog(context).error(message: '피드백 저장 실패: $e');
     }
   }
 }

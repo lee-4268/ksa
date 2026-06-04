@@ -41,13 +41,15 @@ class ProgressDialog {
   }
 
   /// 완료 애니메이션 후 자동 닫기
+  /// `show()` 호출 없이 단독으로도 사용 가능 (SnackBar 대체용)
   Future<void> complete({String message = '완료', int delayMs = 1200}) async {
-    if (!_isShowing) return;
-    // 로딩 다이얼로그 닫기
-    if (Navigator.of(_context, rootNavigator: true).canPop()) {
-      Navigator.of(_context, rootNavigator: true).pop();
+    // 로딩 다이얼로그가 떠 있다면 먼저 닫기
+    if (_isShowing) {
+      if (Navigator.of(_context, rootNavigator: true).canPop()) {
+        Navigator.of(_context, rootNavigator: true).pop();
+      }
+      _isShowing = false;
     }
-    _isShowing = false;
 
     // 완료 다이얼로그 표시
     showGeneralDialog(

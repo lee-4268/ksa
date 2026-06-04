@@ -1553,10 +1553,11 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
     final msg = failed.isEmpty
         ? '점검완료 회신 성공: $success/${pks.length}건'
         : '회신 결과: $success/${pks.length}건 성공\n실패: ${failed.length}건';
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(msg),
-      backgroundColor: failed.isEmpty ? const Color(0xFF1A8754) : _primaryColor,
-    ));
+    if (failed.isEmpty) {
+      await ProgressDialog(context).complete(message: msg);
+    } else {
+      await ProgressDialog(context).error(message: msg);
+    }
   }
 
   // 변경개설 요청 작성 다이얼로그 (Phase 2)
@@ -1750,16 +1751,10 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
           : schedules > 0
               ? '사전점검완료 처리: $schedules건 → 점검완료(PRE_CHECK_DONE) 전환'
               : '사전점검완료 표시: $targets건';
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(msg),
-        backgroundColor: const Color(0xFF00897B),
-      ));
+      await ProgressDialog(context).complete(message: msg);
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('실패: $e'),
-        backgroundColor: Colors.red,
-      ));
+      await ProgressDialog(context).error(message: '실패: $e');
     } finally {
       if (mounted) setState(() => _markingPreCheck = false);
     }
@@ -1810,9 +1805,7 @@ class _TowerMismatchModalState extends State<TowerMismatchModal> {
     // 2순위: 주소 지오코딩
     final address = item.address;
     if (address.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('위치 정보가 없어 로드뷰를 열 수 없습니다.')),
-      );
+      await ProgressDialog(context).error(message: '위치 정보가 없어 로드뷰를 열 수 없습니다.');
       return;
     }
     setState(() => _roadviewLoading = true);
@@ -1820,9 +1813,7 @@ class _TowerMismatchModalState extends State<TowerMismatchModal> {
     if (!mounted) return;
     setState(() => _roadviewLoading = false);
     if (coords == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('위치를 찾을 수 없습니다.')),
-      );
+      await ProgressDialog(context).error(message: '위치를 찾을 수 없습니다.');
       return;
     }
     showDialog(

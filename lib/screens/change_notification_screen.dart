@@ -662,9 +662,7 @@ class _ChangeNotificationScreenState extends State<ChangeNotificationScreen> {
       html.Url.revokeObjectUrl(url);
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('다운로드 실패: $e'),
-      ));
+      await ProgressDialog(context).error(message: '다운로드 실패: $e');
     }
   }
 
@@ -697,14 +695,12 @@ class _ChangeNotificationScreenState extends State<ChangeNotificationScreen> {
       if (!mounted) return;
       final succeeded = (result['succeeded'] as num?)?.toInt() ?? 0;
       final total = (result['total'] as num?)?.toInt() ?? schedulePks.length;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('묶음 신고 완료: $succeeded/$total건 → 재점검 대기'),
-        backgroundColor: const Color(0xFF1A8754),
-      ));
+      await ProgressDialog(context).complete(message: '묶음 신고 완료: $succeeded/$total건 → 재점검 대기');
+      if (!mounted) return;
       await _loadRequests();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('실패: $e')));
+      await ProgressDialog(context).error(message: '실패: $e');
     }
   }
 

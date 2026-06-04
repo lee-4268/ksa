@@ -603,7 +603,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
       if (_detailLicenseNo != null) await _loadDetail(_detailLicenseNo!);
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('되돌리기 실패: $e')));
+      await ProgressDialog(context).error(message: '되돌리기 실패: $e');
     }
   }
 
