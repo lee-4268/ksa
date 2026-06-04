@@ -635,7 +635,7 @@ def _init_ds_detail_db():
         기 TEXT, 이득 TEXT, 공중선주설치형태명 TEXT,
         공중선일련번호 TEXT, 공중선형식명 TEXT
     )''')
-    for _mc in ('공중선일련번호 TEXT', '공중선형식명 TEXT'):
+    for _mc in ('공중선일련번호 TEXT', '공중선형식명 TEXT', '지상고 TEXT', '노출고 TEXT'):
         try: conn.execute(f'ALTER TABLE ds_안테나 ADD COLUMN {_mc}'); conn.commit()
         except Exception: pass
     conn.execute('''CREATE TABLE IF NOT EXISTS ds_전파형식 (
