@@ -577,6 +577,8 @@ class _ChangeNotificationScreenState extends State<ChangeNotificationScreen> {
     final license = items.first['허가번호'] ?? '';
     // 카드 단위 메모: 같은 카드의 항목들은 모두 동일한 memo를 갖고 INSERT됨 (erp_ds_compare_screen 참조)
     final cardMemo = (items.first['memo'] ?? '').toString().trim();
+    // REQUESTED 상태 항목이 2건 이상이면 "전체 취소" 버튼 노출
+    final requestedCount = items.where((it) => (it['status'] ?? '') == 'REQUESTED').length;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Container(
@@ -586,7 +588,31 @@ class _ChangeNotificationScreenState extends State<ChangeNotificationScreen> {
           borderRadius: BorderRadius.circular(6),
         ),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text('$license', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFFB85B3D))),
+          Row(children: [
+            Expanded(child: Text('$license',
+                style: const TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    color: Color(0xFFB85B3D)))),
+            if (requestedCount >= 2)
+              InkWell(
+                onTap: () => _cancelChangeRequestBulk(schedulePk, '$license', requestedCount),
+                borderRadius: BorderRadius.circular(6),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    Icon(Icons.delete_sweep_outlined,
+                        size: 13, color: Colors.grey.shade600),
+                    const SizedBox(width: 3),
+                    Text('전체 취소 ($requestedCount)',
+                        style: TextStyle(
+                            fontSize: 11,
+                            color: Colors.grey.shade600,
+                            fontWeight: FontWeight.w500)),
+                  ]),
+                ),
+              ),
+          ]),
           const SizedBox(height: 4),
           ...items.map((it) => _buildRequestItemRow(it)),
           if (cardMemo.isNotEmpty)
@@ -601,6 +627,108 @@ class _ChangeNotificationScreenState extends State<ChangeNotificationScreen> {
         ]),
       ),
     );
+  }
+
+  Future<void> _cancelChangeRequestBulk(
+      String schedulePk, String license, int count) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => Dialog(
+        insetPadding: const EdgeInsets.symmetric(horizontal: 32),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 380),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 32, 20, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: const BoxDecoration(
+                    color: Color(0xFFFEF2F2),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(Icons.delete_sweep_rounded,
+                      color: Color(0xFFB85B3D), size: 24),
+                ),
+                const SizedBox(height: 16),
+                const Text(
+                  '카드 전체 취소',
+                  style: TextStyle(
+                    fontSize: 17,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: -0.5,
+                    color: Color(0xFF111827),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  '$license 의 변경 요청 $count건을 모두 취소합니다.\n[사전점검중] 상태로 원복됩니다.',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    height: 1.5,
+                    color: Color(0xFF6B7280),
+                  ),
+                ),
+                const SizedBox(height: 24),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: () => Navigator.pop(ctx, true),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFFB85B3D),
+                      foregroundColor: Colors.white,
+                      elevation: 0,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12)),
+                    ),
+                    child: Text('$count건 모두 취소',
+                        style: const TextStyle(fontWeight: FontWeight.bold)),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                SizedBox(
+                  width: double.infinity,
+                  child: TextButton(
+                    onPressed: () => Navigator.pop(ctx, false),
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                    ),
+                    child: const Text('닫기',
+                        style: TextStyle(
+                            color: Color(0xFF9CA3AF), fontSize: 13)),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    if (ok != true || !mounted) return;
+    _inspectionSvc.setAuthToken(context.read<AuthService>().authToken);
+    final progress = ProgressDialog(context);
+    progress.show(message: '취소 중...');
+    try {
+      final res = await _inspectionSvc.cancelChangeRequestBulk(
+          schedulePks: [schedulePk]);
+      if (!mounted) return;
+      final cancelled = (res['cancelled'] as num?)?.toInt() ?? 0;
+      final reverted = (res['reverted_pks'] as List?)?.isNotEmpty ?? false;
+      await progress.complete(
+        message: reverted
+            ? '$cancelled건 취소 완료\n사전점검중으로 원복됨'
+            : '$cancelled건 취소 완료',
+      );
+      if (!mounted) return;
+      await _loadRequests();
+    } catch (e) {
+      if (!mounted) return;
+      await progress.error(message: '일괄 취소 실패: $e');
+    }
   }
 
   Widget _buildRequestItemRow(Map<String, dynamic> item) {

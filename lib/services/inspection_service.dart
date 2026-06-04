@@ -422,6 +422,26 @@ class InspectionService {
     return json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
   }
 
+  /// 변경개설 요청 일괄 취소 — schedule_pks 또는 ids
+  Future<Map<String, dynamic>> cancelChangeRequestBulk({
+    List<String> schedulePks = const [],
+    List<int> ids = const [],
+  }) async {
+    final body = <String, dynamic>{};
+    if (schedulePks.isNotEmpty) body['schedule_pks'] = schedulePks;
+    if (ids.isNotEmpty) body['ids'] = ids;
+    final resp = await http.post(
+      Uri.parse('$_baseUrl/change-request/cancel-bulk'),
+      headers: _headers,
+      body: json.encode(body),
+    ).timeout(_apiTimeout);
+    if (resp.statusCode != 200) {
+      final b = json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+      throw Exception(b['detail'] ?? '일괄 취소 실패');
+    }
+    return json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+  }
+
   Future<Map<String, dynamic>> markChangeRequestFiled({
     String schedulePk = '',
     List<String> schedulePks = const [],

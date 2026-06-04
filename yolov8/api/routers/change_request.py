@@ -185,6 +185,105 @@ async def change_request_list(
     return {"items": items}
 
 
+@router.post("/change-request/cancel-bulk")
+async def change_request_cancel_bulk(request: Request):
+    """변경개설 요청 일괄 취소 (soft delete).
+
+    Body: { "schedule_pks": [...] }   — 일정 단위 (각 일정의 모든 REQUESTED 취소)
+       또는 { "ids": [...] }          — 특정 요청 id들만 취소
+       둘 다 합쳐서 처리 가능.
+
+    동작:
+    - REQUESTED + cancelled='0' 인 row만 취소 (그 외는 skip)
+    - 권한: 요청자 본인 OR admin/manager (요청자 본인이 아닌 row는 admin/manager만 가능)
+    - 영향받은 각 schedule_pk에 대해 활성 REQUESTED가 0개면 workflow 원복
+    """
+    empno = await _verify_auth(request)
+    role = await asyncio.to_thread(_get_user_role_sync, empno)
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    schedule_pks = [str(x) for x in (body.get("schedule_pks") or []) if x]
+    ids = [int(x) for x in (body.get("ids") or []) if x]
+    if not schedule_pks and not ids:
+        raise HTTPException(400, "schedule_pks 또는 ids 중 최소 하나는 필수")
+
+    def _do():
+        c = sqlite3.connect(_INSP_DB, timeout=60)
+        c.row_factory = sqlite3.Row
+        try:
+            # 1. schedule_pks 기반으로 활성 REQUESTED row id 수집
+            target_ids: set = set(ids)
+            if schedule_pks:
+                ph = ','.join('?' * len(schedule_pks))
+                for r in c.execute(
+                    f"SELECT id FROM change_request "
+                    f"WHERE schedule_pk IN ({ph}) AND status='REQUESTED' "
+                    f"AND (cancelled IS NULL OR cancelled='0')",
+                    schedule_pks
+                ):
+                    target_ids.add(r['id'])
+            if not target_ids:
+                return {"cancelled": 0, "skipped": 0, "reverted_pks": []}
+
+            # 2. 권한 + 상태 체크 후 cancel
+            cancelled = 0
+            skipped = 0
+            affected_pks: set = set()
+            for tid in target_ids:
+                row = c.execute(
+                    'SELECT id, schedule_pk, status, requested_by, cancelled '
+                    'FROM change_request WHERE id=?', (tid,)
+                ).fetchone()
+                if not row:
+                    skipped += 1
+                    continue
+                d = dict(row)
+                if (d.get('cancelled') or '0') == '1' or d['status'] != 'REQUESTED':
+                    skipped += 1
+                    continue
+                if role not in {"admin", "manager"} and (d.get('requested_by') or '') != empno:
+                    skipped += 1
+                    continue
+                c.execute(
+                    "UPDATE change_request SET cancelled='1', cancelled_at=?, cancelled_by=? "
+                    "WHERE id=?",
+                    (now, empno, tid))
+                cancelled += 1
+                affected_pks.add(d['schedule_pk'])
+
+            # 3. 영향받은 일정의 workflow_status 원복 (활성 REQUESTED 0개 → PRE_CHECK)
+            reverted_pks: list = []
+            for pk in affected_pks:
+                remain = c.execute(
+                    "SELECT COUNT(*) FROM change_request "
+                    "WHERE schedule_pk=? AND status='REQUESTED' "
+                    "AND (cancelled IS NULL OR cancelled='0')",
+                    (pk,)
+                ).fetchone()[0]
+                if remain == 0:
+                    cur_row = c.execute(
+                        'SELECT workflow_status FROM inspection_schedules WHERE pk=?', (pk,)
+                    ).fetchone()
+                    if cur_row and (cur_row[0] or '') == WF_CHANGE_FILING:
+                        c.execute(
+                            'UPDATE inspection_schedules SET workflow_status=?, '
+                            'status_updated_at=?, status_updated_by=? WHERE pk=?',
+                            (WF_PRE_CHECK, now, empno, pk))
+                        _wf_record_log_sync(c, pk, WF_CHANGE_FILING, WF_PRE_CHECK, empno,
+                                            "변경개설 요청 일괄 취소 → 사전점검으로 원복")
+                        reverted_pks.append(pk)
+            c.commit()
+            return {"cancelled": cancelled, "skipped": skipped, "reverted_pks": reverted_pks}
+        finally:
+            c.close()
+
+    info = await asyncio.to_thread(_do)
+    return {"success": True, **info}
+
+
 @router.delete("/change-request/{cr_id:int}")
 async def change_request_cancel(cr_id: int, request: Request):
     """변경개설 요청 단건 취소 (soft delete).
