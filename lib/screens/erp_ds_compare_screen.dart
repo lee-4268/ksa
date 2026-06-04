@@ -2126,8 +2126,9 @@ class _ChangeRequestDialogState extends State<_ChangeRequestDialog> {
       }
     }
     if (!mounted) return;
-    Navigator.pop(context);
+    // ProgressDialog는 다이얼로그 pop 전에 생성 (NavigatorState 캐시 위해)
     final d = ProgressDialog(context);
+    Navigator.pop(context);
     if (failed.isEmpty) {
       await d.complete(message: '요청 등록 완료\n$total건');
     } else {

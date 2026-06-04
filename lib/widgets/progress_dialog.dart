@@ -13,9 +13,17 @@ import 'app_loader.dart';
 /// ```
 class ProgressDialog {
   final BuildContext _context;
+  // 생성 시점의 root NavigatorState를 캐시 — context가 나중에 dispose되어도 안전하게 pop 가능
+  late final NavigatorState? _rootNav;
   bool _isShowing = false;
 
-  ProgressDialog(this._context);
+  ProgressDialog(this._context) {
+    try {
+      _rootNav = Navigator.of(_context, rootNavigator: true);
+    } catch (_) {
+      _rootNav = null;
+    }
+  }
 
   /// 로딩 다이얼로그 표시
   void show({required String message}) {
@@ -101,12 +109,12 @@ class ProgressDialog {
     _safePop();
   }
 
-  /// 안전한 pop — context 무효/이미 닫힘 등 모든 예외 무시
+  /// 안전한 pop — 캐시된 NavigatorState 사용 (context dispose돼도 안전)
   void _safePop() {
     try {
-      final nav = Navigator.of(_context, rootNavigator: true);
-      if (nav.canPop()) nav.pop();
-    } catch (_) {/* context 무효 등 무시 */}
+      final nav = _rootNav;
+      if (nav != null && nav.mounted && nav.canPop()) nav.pop();
+    } catch (_) {/* 모든 예외 무시 */}
   }
 
   /// 강제 닫기

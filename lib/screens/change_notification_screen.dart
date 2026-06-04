@@ -598,20 +598,32 @@ class _ChangeNotificationScreenState extends State<ChangeNotificationScreen> {
     final before = item['before_value'] ?? '';
     final after = item['after_value'] ?? '';
     final status = item['status'] ?? '';
+    final memo = (item['memo'] ?? '').toString().trim();
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        SizedBox(width: 92, child: Text(field,
-            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600))),
-        if (dev.isNotEmpty)
-          SizedBox(width: 70, child: Text('장치 $dev',
-              style: const TextStyle(fontSize: 12, color: Colors.grey)))
-        else
-          const SizedBox(width: 70),
-        Expanded(child: Text('$before  →  $after',
-            style: const TextStyle(fontSize: 12))),
-        const SizedBox(width: 8),
-        _buildStatusPill(status, small: true),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          SizedBox(width: 92, child: Text(field,
+              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600))),
+          if (dev.isNotEmpty)
+            SizedBox(width: 70, child: Text('장치 $dev',
+                style: const TextStyle(fontSize: 12, color: Colors.grey)))
+          else
+            const SizedBox(width: 70),
+          Expanded(child: Text('$before  →  $after',
+              style: const TextStyle(fontSize: 12))),
+          const SizedBox(width: 8),
+          _buildStatusPill(status, small: true),
+        ]),
+        if (memo.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 3, left: 92),
+            child: Text('📝 $memo',
+                style: TextStyle(
+                    fontSize: 11,
+                    color: Colors.grey.shade600,
+                    fontStyle: FontStyle.italic)),
+          ),
       ]),
     );
   }
