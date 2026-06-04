@@ -748,13 +748,27 @@ def _build_ds_detail_from_zip_sync(zip_path: str):
                         pi = _col_idx(ws, '공중선주 설치형태명', '공중선주설치형태명')
                         ai = _col_idx(ws, '공중선일련번호')
                         ni = _col_idx(ws, '공중선형식명')
+                        # _col_idx는 정확 매칭이므로 '지상고'와 '안테나지상고도' 구분됨
+                        gi = _col_idx(ws, '지상고')
+                        oi = _col_idx(ws, '노출고')
+
+                        def _sv_num(r_, ci_):
+                            """float 정수값은 '16.0' → '16' 정규화 (apply-partial-update와 일치)"""
+                            if ci_ < 0:
+                                return ''
+                            raw = ws.cell_value(r_, ci_)
+                            if isinstance(raw, float) and raw == int(raw):
+                                return str(int(raw))
+                            return str(raw or '').strip()
+
                         if hi >= 0:
                             for r in range(1, ws.nrows):
                                 h = _hn(ws, r, hi)
                                 if h:
                                     _seen_licenses.add(h)
                                     batches['안테나'].append((h, _sv(ws, r, ji), _sv(ws, r, ki), _sv(ws, r, ei),
-                                                             _sv(ws, r, pi), _sv(ws, r, ai), _sv(ws, r, ni)))
+                                                             _sv(ws, r, pi), _sv(ws, r, ai), _sv(ws, r, ni),
+                                                             _sv_num(r, gi), _sv_num(r, oi)))
 
                     if '전파형식' in sheet_names:
                         ws = wb.sheet_by_name('전파형식')
@@ -809,7 +823,7 @@ def _build_ds_detail_from_zip_sync(zip_path: str):
                     conn.execute(f'DELETE FROM {tbl} WHERE 허가번호 IN ({ph})', chunk)
             conn.executemany('INSERT OR REPLACE INTO ds_일반사항(허가번호,무선국명,호출명칭,통합시설명칭,공용화구분코드명) VALUES(?,?,?,?,?)', batches['일반사항'])
             conn.executemany('INSERT INTO ds_장치(허가번호,장치번호,기기일련번호,형식검정번호,장치상태) VALUES(?,?,?,?,?)', batches['장치'])
-            conn.executemany('INSERT INTO ds_안테나(허가번호,장치번호,기,이득,공중선주설치형태명,공중선일련번호,공중선형식명) VALUES(?,?,?,?,?,?,?)', batches['안테나'])
+            conn.executemany('INSERT INTO ds_안테나(허가번호,장치번호,기,이득,공중선주설치형태명,공중선일련번호,공중선형식명,지상고,노출고) VALUES(?,?,?,?,?,?,?,?,?)', batches['안테나'])
             conn.executemany('INSERT INTO ds_전파형식(허가번호,장치번호,공중선전력) VALUES(?,?,?)', batches['전파형식'])
             conn.executemany('INSERT INTO ds_주파수(허가번호,장치번호,주파수,송수신구분) VALUES(?,?,?,?)', batches['주파수'])
             if batches['설치장소_rows']:
