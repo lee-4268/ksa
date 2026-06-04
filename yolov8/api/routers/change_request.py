@@ -453,8 +453,11 @@ async def change_request_generate_form(
             raise HTTPException(404, "묶음 일정 없음")
         sched_pks = [s['pk'] for s in scheds]
         ph = ','.join('?' * len(sched_pks))
+        # 취소된 요청(cancelled='1') 제외 — 신고서에 포함되면 안 됨
         rows = c.execute(
-            f"SELECT * FROM change_request WHERE schedule_pk IN ({ph}) ORDER BY schedule_pk, id",
+            f"SELECT * FROM change_request WHERE schedule_pk IN ({ph}) "
+            f"AND (cancelled IS NULL OR cancelled='0') "
+            f"ORDER BY schedule_pk, id",
             sched_pks
         ).fetchall()
         c.close()
