@@ -2504,33 +2504,45 @@ def _build_v2_xlsx_sync(division_id: str, division_code: str, import_date: str) 
                     if name in patch_plan:
                         # 시트 XML: 라인별 스트리밍 패치
                         sheet_patch = patch_plan[name]
+                        applied = 0
+                        attempted = 0
+                        sample_logged = False
                         with zf_in.open(name) as f_in, zf_out.open(zi, 'w') as f_out:
                             for line in f_in:
                                 line_str = line.decode('utf-8')
-                                row_m = _ROW_RE.search(line_str)
-                                if row_m:
-                                    rn = int(row_m.group(1))
-                                    if rn in sheet_patch:
-                                        for cell_ref, new_val in sheet_patch[rn].items():
-                                            _cell_pat = r'<c\b[^>]*\br="' + re.escape(cell_ref) + r'"[^>]*>.*?</c>'
-                                            if ss_path:
-                                                _new_idx = str(_get_or_add(new_val))
-                                                def _repl(m, _idx=_new_idx):
-                                                    end = m.group(0).index('>')
-                                                    opening = re.sub(r'\s+t="[^"]*"', '', m.group(0)[:end]) + ' t="s"'
-                                                    return f'{opening}><v>{_idx}</v></c>'
+                                # 한 라인에 여러 row가 있을 수도 있으므로 finditer로 모두 탐색
+                                row_nums = [int(rm.group(1)) for rm in _ROW_RE.finditer(line_str)]
+                                target_rns = [r for r in row_nums if r in sheet_patch]
+                                for rn in target_rns:
+                                    for cell_ref, new_val in sheet_patch[rn].items():
+                                        attempted += 1
+                                        _cell_pat = r'<c\b[^>]*\br="' + re.escape(cell_ref) + r'"[^>]*>.*?</c>'
+                                        if ss_path:
+                                            _new_idx = str(_get_or_add(new_val))
+                                            def _repl(m, _idx=_new_idx):
+                                                end = m.group(0).index('>')
+                                                opening = re.sub(r'\s+t="[^"]*"', '', m.group(0)[:end]) + ' t="s"'
+                                                return f'{opening}><v>{_idx}</v></c>'
+                                        else:
+                                            _esc = _xml_escape(new_val)
+                                            _preserve = ' xml:space="preserve"' if (new_val != new_val.strip() or '\n' in new_val) else ''
+                                            def _repl(m, _v=_esc, _p=_preserve):
+                                                end = m.group(0).index('>')
+                                                opening = re.sub(r'\s+t="[^"]*"', '', m.group(0)[:end]) + ' t="inlineStr"'
+                                                return f'{opening}><is><t{_p}>{_v}</t></is></c>'
+                                        new_line, n_sub = re.subn(_cell_pat, _repl, line_str, count=1)
+                                        if n_sub == 0:
+                                            if not sample_logged:
+                                                snippet = line_str[:500] if len(line_str) > 500 else line_str
+                                                logger.warning(f"[v2] '{name}' 셀 미발견 {cell_ref} (라인 샘플 500자: {snippet!r})")
+                                                sample_logged = True
                                             else:
-                                                # sharedStrings 없는 파일 → inlineStr 형식으로 패치 (Excel 호환성 최대)
-                                                _esc = _xml_escape(new_val)
-                                                _preserve = ' xml:space="preserve"' if (new_val != new_val.strip() or '\n' in new_val) else ''
-                                                def _repl(m, _v=_esc, _p=_preserve):
-                                                    end = m.group(0).index('>')
-                                                    opening = re.sub(r'\s+t="[^"]*"', '', m.group(0)[:end]) + ' t="inlineStr"'
-                                                    return f'{opening}><is><t{_p}>{_v}</t></is></c>'
-                                            line_str, n_sub = re.subn(_cell_pat, _repl, line_str, count=1)
-                                            if n_sub == 0:
-                                                logger.warning(f"[v2] patch: 셀 미발견 {cell_ref}")
+                                                logger.warning(f"[v2] '{name}' 셀 미발견 {cell_ref}")
+                                        else:
+                                            applied += 1
+                                            line_str = new_line
                                 f_out.write(line_str.encode('utf-8'))
+                        logger.info(f"[v2] '{name}' 패치 적용 결과: {applied}/{attempted}건 성공")
 
                     elif ss_path and name == ss_path and new_ss_list:
                         # sharedStrings.xml: 신규 항목 append 스트리밍
