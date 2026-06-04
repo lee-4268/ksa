@@ -45,16 +45,14 @@ class ProgressDialog {
   Future<void> complete({String message = '완료', int delayMs = 1200}) async {
     // 로딩 다이얼로그가 떠 있다면 먼저 닫기
     if (_isShowing) {
-      if (Navigator.of(_context, rootNavigator: true).canPop()) {
-        Navigator.of(_context, rootNavigator: true).pop();
-      }
+      _safePop();
       _isShowing = false;
     }
 
-    // 완료 다이얼로그 표시
+    // 완료 다이얼로그 표시 — barrier/박스 클릭으로 닫기 가능 (자동 dismiss 실패 대비)
     showGeneralDialog(
       context: _context,
-      barrierDismissible: false,
+      barrierDismissible: true,
       barrierColor: Colors.black38,
       transitionDuration: const Duration(milliseconds: 250),
       transitionBuilder: (ctx, anim, _, child) {
@@ -71,23 +69,19 @@ class ProgressDialog {
     );
 
     await Future.delayed(Duration(milliseconds: delayMs));
-    if (Navigator.of(_context, rootNavigator: true).canPop()) {
-      Navigator.of(_context, rootNavigator: true).pop();
-    }
+    _safePop();
   }
 
   /// 에러 표시 후 자동 닫기
   Future<void> error({String message = '오류가 발생했습니다', int delayMs = 1500}) async {
     if (_isShowing) {
-      if (Navigator.of(_context, rootNavigator: true).canPop()) {
-        Navigator.of(_context, rootNavigator: true).pop();
-      }
+      _safePop();
       _isShowing = false;
     }
 
     showGeneralDialog(
       context: _context,
-      barrierDismissible: false,
+      barrierDismissible: true,
       barrierColor: Colors.black38,
       transitionDuration: const Duration(milliseconds: 250),
       transitionBuilder: (ctx, anim, _, child) {
@@ -104,17 +98,21 @@ class ProgressDialog {
     );
 
     await Future.delayed(Duration(milliseconds: delayMs));
-    if (Navigator.of(_context, rootNavigator: true).canPop()) {
-      Navigator.of(_context, rootNavigator: true).pop();
-    }
+    _safePop();
+  }
+
+  /// 안전한 pop — context 무효/이미 닫힘 등 모든 예외 무시
+  void _safePop() {
+    try {
+      final nav = Navigator.of(_context, rootNavigator: true);
+      if (nav.canPop()) nav.pop();
+    } catch (_) {/* context 무효 등 무시 */}
   }
 
   /// 강제 닫기
   void dismiss() {
     if (_isShowing) {
-      if (Navigator.of(_context, rootNavigator: true).canPop()) {
-        Navigator.of(_context, rootNavigator: true).pop();
-      }
+      _safePop();
       _isShowing = false;
     }
   }
