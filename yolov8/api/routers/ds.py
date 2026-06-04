@@ -2525,6 +2525,16 @@ def _build_v2_xlsx_sync(division_id: str, division_code: str, import_date: str) 
                 groups: dict = {}
                 for rn_, hn_, jn_, asn_, empty_ in antenna_rows_info:
                     groups.setdefault((hn_, asn_), []).append((rn_, jn_, empty_))
+                empty_total = sum(1 for r in antenna_rows_info if r[4])
+                matched_groups = sum(
+                    1 for (g_hn, g_asn), members in groups.items()
+                    if any((g_hn, jn_) in key_map for rn_, jn_, _ in members)
+                )
+                logger.info(
+                    f"[v2] '{target_sname}' shared 진단: 전체행={len(antenna_rows_info)}, "
+                    f"빈행={empty_total}, 그룹={len(groups)}, 매칭그룹={matched_groups}, "
+                    f"샘플3={list(groups.items())[:3]}"
+                )
                 for (g_hn, g_asn), members in groups.items():
                     # 그룹 내 변경이력 매칭된 (hn, jn) primary 찾기
                     primary_jn = next((jn_ for rn_, jn_, _ in members if (g_hn, jn_) in key_map), None)
@@ -2540,8 +2550,7 @@ def _build_v2_xlsx_sync(division_id: str, division_code: str, import_date: str) 
                             if lt:
                                 sheet_patch.setdefault(rn_, {})[f"{lt}{rn_}"] = new_val
                                 shared_added += 1
-                if shared_added:
-                    logger.info(f"[v2] '{target_sname}' shared antenna 추가 패치: {shared_added}셀")
+                logger.info(f"[v2] '{target_sname}' shared antenna 추가 패치: {shared_added}셀")
 
             matched_rows = sum(len(v) for v in sheet_patch.values())
             logger.info(f"[v2] 시트 iterparse 완료: '{target_sname}' → {len(sheet_patch)}행, {matched_rows}셀 패치 예정")
