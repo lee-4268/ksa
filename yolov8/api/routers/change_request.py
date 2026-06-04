@@ -481,7 +481,7 @@ async def change_request_generate_form(
     wb = xlwt.Workbook(encoding='utf-8')
     ws = wb.add_sheet(sheet_name)
 
-    col_widths = [947, 5401, 4915, 2304, 13952, 13952, 13952, 1331, 1331, 2304, 3379, 1689]
+    col_widths = [947, 5401, 4915, 2304, 13952, 13952, 13952, 1331, 1331, 2304, 3379, 1689, 8000]
     for ci, w in enumerate(col_widths):
         ws.col(ci).width = w
 
@@ -538,9 +538,18 @@ async def change_request_generate_form(
 
     ws.write(0, 0, '○ 무선국 변경개설신고', style_title)
     headers = ['순\n번', '호출명칭', '허가번호', '장치번호', '변경내역', '변경전', '변경후',
-               '위도', '경도', '준공기한', '심의차수', '허가\n종류']
+               '위도', '경도', '준공기한', '심의차수', '허가\n종류', '비고\n(수기처리)']
     for ci, h in enumerate(headers):
         ws.write_merge(1, 2, ci, ci, h, style_header)
+
+    # 비고는 카드(schedule_pk) 단위 메모 — 같은 카드의 첫 row에만 표시 (반복 노이즈 방지)
+    seen_pks: set = set()
+
+    # 비고 셀은 좌측 정렬 + wrap (메모가 여러 줄일 수 있음)
+    style_data_memo = xlwt.XFStyle()
+    style_data_memo.font = _font(200)
+    style_data_memo.alignment = _align('left', 'center', True)
+    style_data_memo.borders = _border()
 
     for idx, it in enumerate(items):
         ri = idx + 3
@@ -555,6 +564,12 @@ async def change_request_generate_form(
         변경후 = _wf_format_change_value(field, it.get('after_value', ''))
         # 장치번호는 장치 단위 변경(일련번호/형식검정번호)에만 의미 — 그 외 항목은 빈 칸
         장치번호 = (it.get('장치번호') or '').strip() if field in WF_CHANGE_DEVICE_FIELDS else ''
+        # 비고: 카드 첫 등장 row에만 표시 (memo는 카드 내 모든 row가 동일)
+        pk_key = it.get('schedule_pk') or ''
+        memo = ''
+        if pk_key and pk_key not in seen_pks:
+            memo = (it.get('memo') or '').strip()
+            seen_pks.add(pk_key)
         ws.write(ri, 0, idx + 1, style_data)
         ws.write(ri, 1, 호출명칭, style_data)
         ws.write(ri, 2, 허가번호, style_data)
@@ -567,6 +582,7 @@ async def change_request_generate_form(
         ws.write(ri, 9, '', style_data)
         ws.write(ri, 10, '', style_data)
         ws.write(ri, 11, '운용', style_data)
+        ws.write(ri, 12, memo, style_data_memo)
 
     buf = io.BytesIO()
     wb.save(buf)
