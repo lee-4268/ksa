@@ -3555,7 +3555,7 @@ class ChangeRequestItem(BaseModel):
 
 
 class ChangeRequestCreateReq(BaseModel):
-    items: list = []
+    items: list[ChangeRequestItem] = []
 
 
 @router.post("/inspection/schedule/{pk:path}/change-request")
