@@ -529,7 +529,20 @@ class _ChangeNotificationScreenState extends State<ChangeNotificationScreen> {
           // 국소별 항목 리스트
           ...byPk.entries.map((e) => _buildScheduleSection(e.key, e.value)),
           const SizedBox(height: 12),
-          Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+          Row(children: [
+            // 묶음 내 REQUESTED 1건 이상이면 묶음 전체 취소 가능 (위험 액션은 좌측)
+            if (anyRequested)
+              OutlinedButton.icon(
+                icon: const Icon(Icons.delete_sweep_outlined, size: 14, color: Color(0xFFB85B3D)),
+                label: Text('묶음 전체 취소 (${items.where((it) => (it['status'] ?? '') == 'REQUESTED').length})',
+                    style: const TextStyle(color: Color(0xFFB85B3D))),
+                style: OutlinedButton.styleFrom(
+                  side: const BorderSide(color: Color(0xFFB85B3D)),
+                ),
+                onPressed: () => _cancelBundle(byPk.keys.toList(), bundleKey,
+                    items.where((it) => (it['status'] ?? '') == 'REQUESTED').length),
+              ),
+            const Spacer(),
             OutlinedButton.icon(
               icon: const Icon(Icons.download, size: 14),
               label: const Text('묶음 A파일 다운로드'),
@@ -627,6 +640,108 @@ class _ChangeNotificationScreenState extends State<ChangeNotificationScreen> {
         ]),
       ),
     );
+  }
+
+  Future<void> _cancelBundle(
+      List<String> schedulePks, String bundleKey, int count) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => Dialog(
+        insetPadding: const EdgeInsets.symmetric(horizontal: 32),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 380),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 32, 20, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: const BoxDecoration(
+                    color: Color(0xFFFEF2F2),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(Icons.delete_sweep_rounded,
+                      color: Color(0xFFB85B3D), size: 24),
+                ),
+                const SizedBox(height: 16),
+                const Text(
+                  '묶음 전체 취소',
+                  style: TextStyle(
+                    fontSize: 17,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: -0.5,
+                    color: Color(0xFF111827),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  '"$bundleKey" 묶음 ${schedulePks.length}국소의\n변경 요청 $count건을 모두 취소합니다.\n각 일정은 [사전점검중] 상태로 원복됩니다.',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    height: 1.5,
+                    color: Color(0xFF6B7280),
+                  ),
+                ),
+                const SizedBox(height: 24),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: () => Navigator.pop(ctx, true),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFFB85B3D),
+                      foregroundColor: Colors.white,
+                      elevation: 0,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12)),
+                    ),
+                    child: Text('$count건 모두 취소',
+                        style: const TextStyle(fontWeight: FontWeight.bold)),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                SizedBox(
+                  width: double.infinity,
+                  child: TextButton(
+                    onPressed: () => Navigator.pop(ctx, false),
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                    ),
+                    child: const Text('닫기',
+                        style: TextStyle(
+                            color: Color(0xFF9CA3AF), fontSize: 13)),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    if (ok != true || !mounted) return;
+    _inspectionSvc.setAuthToken(context.read<AuthService>().authToken);
+    final progress = ProgressDialog(context);
+    progress.show(message: '취소 중...');
+    try {
+      final res = await _inspectionSvc.cancelChangeRequestBulk(
+          schedulePks: schedulePks);
+      if (!mounted) return;
+      final cancelled = (res['cancelled'] as num?)?.toInt() ?? 0;
+      final reverted = (res['reverted_pks'] as List?)?.length ?? 0;
+      await progress.complete(
+        message: reverted > 0
+            ? '$cancelled건 취소 완료\n$reverted개 국소 사전점검중으로 원복됨'
+            : '$cancelled건 취소 완료',
+      );
+      if (!mounted) return;
+      await _loadRequests();
+    } catch (e) {
+      if (!mounted) return;
+      await progress.error(message: '묶음 취소 실패: $e');
+    }
   }
 
   Future<void> _cancelChangeRequestBulk(
