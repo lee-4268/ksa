@@ -153,7 +153,8 @@ async def change_request_list(
     def _read():
         c = sqlite3.connect(_INSP_DB, timeout=60)
         c.row_factory = sqlite3.Row
-        wheres: list = []
+        # 취소된 요청은 기본적으로 제외 (soft delete)
+        wheres: list = ["(cr.cancelled IS NULL OR cr.cancelled='0')"]
         params: list = []
         if schedule_pk:
             wheres.append('cr.schedule_pk=?')
@@ -174,8 +175,7 @@ async def change_request_list(
                 wheres.append('s.year=?')
                 params.append(year)
         sql = f'SELECT cr.* FROM change_request cr{join}'
-        if wheres:
-            sql += ' WHERE ' + ' AND '.join(wheres)
+        sql += ' WHERE ' + ' AND '.join(wheres)
         sql += ' ORDER BY cr.requested_at DESC'
         rows = c.execute(sql, params).fetchall()
         c.close()
@@ -183,6 +183,76 @@ async def change_request_list(
 
     items = await asyncio.to_thread(_read)
     return {"items": items}
+
+
+@router.delete("/change-request/{cr_id:int}")
+async def change_request_cancel(cr_id: int, request: Request):
+    """변경개설 요청 단건 취소 (soft delete).
+
+    - REQUESTED 상태만 취소 가능 (FILED 이상은 거부)
+    - 권한: 요청자 본인 또는 admin/manager
+    - 해당 일정의 활성 REQUESTED가 0개가 되면 일정 workflow_status를
+      CHANGE_FILING → PRE_CHECK로 원복
+    """
+    empno = await _verify_auth(request)
+    role = await asyncio.to_thread(_get_user_role_sync, empno)
+    now = datetime.now(timezone.utc).isoformat()
+
+    def _do():
+        c = sqlite3.connect(_INSP_DB, timeout=60)
+        c.row_factory = sqlite3.Row
+        try:
+            row = c.execute(
+                'SELECT id, schedule_pk, status, requested_by, cancelled '
+                'FROM change_request WHERE id=?', (cr_id,)
+            ).fetchone()
+            if not row:
+                return False, "변경 요청을 찾을 수 없습니다", None
+            d = dict(row)
+            if (d.get('cancelled') or '0') == '1':
+                return False, "이미 취소된 요청입니다", None
+            if d['status'] != 'REQUESTED':
+                return False, f"취소 불가 (현재 상태: {d['status']}, REQUESTED만 가능)", None
+            # 권한: 본인 OR admin/manager
+            if role not in {"admin", "manager"} and (d.get('requested_by') or '') != empno:
+                return False, "본인이 등록한 요청만 취소할 수 있습니다", None
+
+            c.execute(
+                "UPDATE change_request SET cancelled='1', cancelled_at=?, cancelled_by=? WHERE id=?",
+                (now, empno, cr_id))
+
+            pk = d['schedule_pk']
+            # 해당 일정에 남은 활성 REQUESTED 개수 확인
+            remain = c.execute(
+                "SELECT COUNT(*) FROM change_request "
+                "WHERE schedule_pk=? AND status='REQUESTED' "
+                "AND (cancelled IS NULL OR cancelled='0')",
+                (pk,)
+            ).fetchone()[0]
+
+            reverted = False
+            if remain == 0:
+                # 일정 workflow_status 원복: CHANGE_FILING → PRE_CHECK
+                cur_row = c.execute(
+                    'SELECT workflow_status FROM inspection_schedules WHERE pk=?', (pk,)
+                ).fetchone()
+                if cur_row and (cur_row[0] or '') == WF_CHANGE_FILING:
+                    c.execute(
+                        'UPDATE inspection_schedules SET workflow_status=?, '
+                        'status_updated_at=?, status_updated_by=? WHERE pk=?',
+                        (WF_PRE_CHECK, now, empno, pk))
+                    _wf_record_log_sync(c, pk, WF_CHANGE_FILING, WF_PRE_CHECK, empno,
+                                        "변경개설 요청 전체 취소 → 사전점검으로 원복")
+                    reverted = True
+            c.commit()
+            return True, "ok", {"schedule_pk": pk, "reverted_workflow": reverted, "remaining": remain}
+        finally:
+            c.close()
+
+    ok, msg, info = await asyncio.to_thread(_do)
+    if not ok:
+        raise HTTPException(400, msg)
+    return {"success": True, **(info or {})}
 
 
 @router.patch("/change-request/file")

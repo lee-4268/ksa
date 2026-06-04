@@ -409,6 +409,19 @@ class InspectionService {
     return List<Map<String, dynamic>>.from(body['items'] ?? []);
   }
 
+  /// 변경개설 요청 단건 취소 (REQUESTED 상태만 가능)
+  Future<Map<String, dynamic>> cancelChangeRequest(int crId) async {
+    final resp = await http.delete(
+      Uri.parse('$_baseUrl/change-request/$crId'),
+      headers: _headers,
+    ).timeout(_apiTimeout);
+    if (resp.statusCode != 200) {
+      final b = json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+      throw Exception(b['detail'] ?? '취소 실패');
+    }
+    return json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+  }
+
   Future<Map<String, dynamic>> markChangeRequestFiled({
     String schedulePk = '',
     List<String> schedulePks = const [],

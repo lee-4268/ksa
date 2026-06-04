@@ -133,6 +133,14 @@ def _init_inspection_db():
     conn.execute('CREATE INDEX IF NOT EXISTS idx_cr_pk ON change_request(schedule_pk)')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_cr_status ON change_request(status)')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_cr_license ON change_request(허가번호)')
+    # 변경 요청 soft delete (REQUESTED 상태에서만 취소 가능)
+    for _col, _dflt in [
+        ('cancelled', "'0'"), ('cancelled_at', "''"), ('cancelled_by', "''"),
+    ]:
+        try:
+            conn.execute(f"ALTER TABLE change_request ADD COLUMN {_col} TEXT DEFAULT {_dflt}")
+        except Exception:
+            pass
     conn.execute('''CREATE TABLE IF NOT EXISTS notifications (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id TEXT NOT NULL,

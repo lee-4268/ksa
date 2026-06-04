@@ -608,7 +608,8 @@ class _ChangeNotificationScreenState extends State<ChangeNotificationScreen> {
     final dev = (item['장치번호'] ?? '').toString();
     final before = item['before_value'] ?? '';
     final after = item['after_value'] ?? '';
-    final status = item['status'] ?? '';
+    final status = (item['status'] ?? '').toString();
+    final crId = (item['id'] as num?)?.toInt() ?? 0;
     // memo는 카드 단위라 _buildScheduleSection에서 한 번만 표시 (여기 중복 표시 X)
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
@@ -624,8 +625,59 @@ class _ChangeNotificationScreenState extends State<ChangeNotificationScreen> {
             style: const TextStyle(fontSize: 12))),
         const SizedBox(width: 8),
         _buildStatusPill(status, small: true),
+        // REQUESTED 상태만 취소 가능
+        if (status == 'REQUESTED' && crId > 0) ...[
+          const SizedBox(width: 6),
+          InkWell(
+            onTap: () => _cancelChangeRequest(crId, '$field ${dev.isNotEmpty ? "(장치$dev)" : ""}'),
+            borderRadius: BorderRadius.circular(10),
+            child: const Padding(
+              padding: EdgeInsets.all(2),
+              child: Icon(Icons.close, size: 16, color: Color(0xFFB85B3D)),
+            ),
+          ),
+        ],
       ]),
     );
+  }
+
+  Future<void> _cancelChangeRequest(int crId, String label) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        title: const Text('변경 요청 취소', style: TextStyle(fontSize: 16)),
+        content: Text(
+          '"$label" 변경 요청을 취소하시겠습니까?\n\n'
+          '같은 일정의 변경 요청이 모두 취소되면 [사전점검중] 상태로 원복됩니다.',
+          style: const TextStyle(fontSize: 13),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('취소')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFB85B3D), foregroundColor: Colors.white),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('확인'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    _inspectionSvc.setAuthToken(context.read<AuthService>().authToken);
+    try {
+      final res = await _inspectionSvc.cancelChangeRequest(crId);
+      if (!mounted) return;
+      final reverted = res['reverted_workflow'] == true;
+      await ProgressDialog(context).complete(
+        message: reverted ? '취소 완료\n사전점검중으로 원복됨' : '취소 완료',
+      );
+      if (!mounted) return;
+      await _loadRequests();
+    } catch (e) {
+      if (!mounted) return;
+      await ProgressDialog(context).error(message: '취소 실패: $e');
+    }
   }
 
   Widget _buildStatusPill(String status, {bool small = false}) {
