@@ -2225,6 +2225,16 @@ class _ChangeRequestDialogState extends State<_ChangeRequestDialog> {
               style: TextStyle(fontSize: 12, color: Colors.grey.shade500, height: 1.5),
             ),
           ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 6, 20, 4),
+            child: Text(
+              '기수, 이득 변경의 경우 메모 예시\n'
+              'ㅇ 기수변경 : 기수 3 > 2\n'
+              'ㅇ 이득변경 : 이득 13.5 > 12',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 12, color: Colors.grey.shade500, height: 1.5),
+            ),
+          ),
           const Divider(height: 20),
           // ── 카드 목록
           Flexible(
