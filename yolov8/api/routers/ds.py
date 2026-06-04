@@ -2204,8 +2204,12 @@ def _build_v2_xlsx_sync(division_id: str, division_code: str, import_date: str) 
         '형식검정번호': ['형식검정번호'],
         '설치형태명': ['설치형태명'],                   # 한글명칭 컬럼 (설치형태코드 컬럼과 겹치지 않도록 명칭만 사용)
         '설치형태코드': ['설치형태코드', '설치형태번호'],  # 숫자코드 컬럼
+        '지상고': ['지상고'],                            # ⚠ 정확 매칭만 (안테나지상고도와 구분)
+        '노출고': ['노출고'],
         '설치장소': ['설치장소입력주소', '설치장소주소'],
     }
+    # 정확 매칭만 허용하는 필드 (substring 매칭 시 다른 컬럼과 충돌)
+    _EXACT_MATCH_FIELDS = {'지상고', '노출고'}
     _SHEET_KEYWORDS: dict = {
         '부분DS장치': '장치',
         '부분DS안테나': '안테나',
@@ -2415,7 +2419,13 @@ def _build_v2_xlsx_sync(division_id: str, division_code: str, import_date: str) 
             hn_col = None
             jn_col = None
             field_col: dict = {}
-            sheet_patch: dict = {}  # {row_num: {cell_ref: new_ss_idx}}
+            sheet_patch: dict = {}  # {row_num: {cell_ref: new_str_val}}
+
+            # 안테나 시트 shared antenna 처리용
+            is_antenna_sheet = (sheet_kw == '안테나')
+            antenna_sn_col = None  # 안테나일련번호 컬럼
+            antenna_rows_info: list = []  # [(rn, hn, jn, antenna_sn, is_empty_antenna), ...]
+            _ANT_FIELDS_FOR_EMPTY = ['설치형태명', '설치형태코드', '지상고', '노출고']
 
             with zipfile.ZipFile(v1_tmp, 'r') as zf_p1:
                 with zf_p1.open(target_path) as f:
@@ -2442,12 +2452,24 @@ def _build_v2_xlsx_sync(division_id: str, division_code: str, import_date: str) 
                             for fmap in key_map.values():
                                 for 필드명, (col_kws, _) in fmap.items():
                                     if 필드명 not in field_col:
-                                        lt = next(
-                                            (lt for lt, h in col_hdr.items() if any(kw in h for kw in col_kws)), None
-                                        )
+                                        if 필드명 in _EXACT_MATCH_FIELDS:
+                                            # 정확 매칭만 (substring 회피: 지상고 → 안테나지상고도 X)
+                                            lt = next(
+                                                (lt for lt, h in col_hdr.items() if h.strip() in col_kws), None
+                                            )
+                                        else:
+                                            lt = next(
+                                                (lt for lt, h in col_hdr.items() if any(kw in h for kw in col_kws)), None
+                                            )
                                         if lt:
                                             field_col[필드명] = lt
-                            logger.info(f"[v2] '{target_sname}' 헤더: hn_col={hn_col}, jn_col={jn_col}, field_col={field_col}")
+                            # 안테나 시트면 안테나일련번호 컬럼도 찾기 (정확 매칭)
+                            if is_antenna_sheet:
+                                antenna_sn_col = next(
+                                    (lt for lt, h in col_hdr.items() if h.strip() == '안테나일련번호'), None
+                                )
+                            logger.info(f"[v2] '{target_sname}' 헤더: hn_col={hn_col}, jn_col={jn_col}, field_col={field_col}"
+                                        + (f", sn_col={antenna_sn_col}" if is_antenna_sheet else ""))
                             elem.clear()
                             if not hn_col or not field_col:
                                 logger.warning(f"[v2] '{target_sname}' 컬럼 미발견 → 스킵 (col_hdr 샘플: {dict(list(col_hdr.items())[:5])})")
@@ -2480,9 +2502,45 @@ def _build_v2_xlsx_sync(division_id: str, division_code: str, import_date: str) 
                                         # 문자열 값 직접 저장 (ss_path 유무에 따라 ZIP 빌드 시 처리)
                                         sheet_patch.setdefault(rn, {})[f"{lt}{rn}"] = new_val
 
+                            # 안테나 시트: 그룹 정보 수집 (shared antenna 처리용)
+                            if is_antenna_sheet and antenna_sn_col:
+                                asn = row_vals.get(antenna_sn_col, '').strip()
+                                # 안테나 필드(설치형태명/코드/지상고/노출고)가 모두 비어있는지 판정
+                                is_empty = True
+                                for fname in _ANT_FIELDS_FOR_EMPTY:
+                                    lt = field_col.get(fname)
+                                    if lt and row_vals.get(lt, '').strip():
+                                        is_empty = False
+                                        break
+                                antenna_rows_info.append((rn, hn_val, jn_val, asn, is_empty))
+
                             elem.clear()
                         else:
                             elem.clear()
+
+            # 안테나 시트 shared antenna 처리: 같은 (hn, 안테나일련번호) 그룹 내 빈 행에 primary 값 상속
+            shared_added = 0
+            if is_antenna_sheet and antenna_sn_col and antenna_rows_info:
+                groups: dict = {}
+                for rn_, hn_, jn_, asn_, empty_ in antenna_rows_info:
+                    groups.setdefault((hn_, asn_), []).append((rn_, jn_, empty_))
+                for (g_hn, g_asn), members in groups.items():
+                    # 그룹 내 변경이력 매칭된 (hn, jn) primary 찾기
+                    primary_jn = next((jn_ for rn_, jn_, _ in members if (g_hn, jn_) in key_map), None)
+                    if primary_jn is None:
+                        continue
+                    primary_fmap = key_map[(g_hn, primary_jn)]
+                    # 그룹 내 빈 행에 primary 패치 그대로 복사
+                    for rn_, jn_, empty_ in members:
+                        if jn_ == primary_jn or not empty_:
+                            continue
+                        for 필드명, (_, new_val) in primary_fmap.items():
+                            lt = field_col.get(필드명)
+                            if lt:
+                                sheet_patch.setdefault(rn_, {})[f"{lt}{rn_}"] = new_val
+                                shared_added += 1
+                if shared_added:
+                    logger.info(f"[v2] '{target_sname}' shared antenna 추가 패치: {shared_added}셀")
 
             matched_rows = sum(len(v) for v in sheet_patch.values())
             logger.info(f"[v2] 시트 iterparse 완료: '{target_sname}' → {len(sheet_patch)}행, {matched_rows}셀 패치 예정")
@@ -5109,6 +5167,14 @@ async def ds_preview_partial_update(request: Request, file: UploadFile = File(..
                         return c
             return -1
 
+        def _find_col_exact(ws, *keywords):
+            # 정확 매칭 (substring 아님). '지상고' vs '안테나지상고도' 구분용
+            for keyword in keywords:
+                for c in range(ws.ncols):
+                    if str(ws.cell_value(0, c)).strip() == keyword:
+                        return c
+            return -1
+
         def _find_sheet(keyword):
             for sn in wb.sheet_names():
                 if keyword in sn:
@@ -5121,9 +5187,8 @@ async def ds_preview_partial_update(request: Request, file: UploadFile = File(..
 
         # 장치: (허가번호, 장치번호) → {기기일련번호, 형식검정번호}  (장치상태 제외)
         device_data: dict[tuple, dict] = {}
-        # 안테나: (허가번호, 장치번호) → 설치형태 텍스트 (숫자 코드 정규화)
-        # 장치번호별로 다른 안테나가 연결될 수 있어 행별 처리
-        antenna_data: dict[tuple[str, str], str] = {}
+        # 안테나: (허가번호, 장치번호) → {설치형태, 지상고, 노출고}
+        antenna_data: dict[tuple[str, str], dict[str, str]] = {}
         # 설치장소: 허가번호 → 설치장소주소
         location_data: dict[str, str] = {}
         license_set: set[str] = set()
@@ -5152,18 +5217,35 @@ async def ds_preview_partial_update(request: Request, file: UploadFile = File(..
             설치형태_col = _find_col(ws, '설치형태명', '설치형태')
             if 설치형태_col < 0: 설치형태_col = 28
             jn_col_a = _find_col(ws, '장치번호')
+            # '지상고'와 '노출고'는 정확 매칭 (안테나지상고도 회피)
+            지상고_col = _find_col_exact(ws, '지상고')
+            노출고_col = _find_col_exact(ws, '노출고')
             for ri in range(1, ws.nrows):
                 hn = _norm_hn(ws.cell_value(ri, 0))
                 if not hn: continue
                 license_set.add(hn)
+                jn = (_norm_hn(ws.cell_value(ri, jn_col_a))
+                      if jn_col_a >= 0 and ws.ncols > jn_col_a else '')
+                key = (hn, jn)
+                fields: dict[str, str] = {}
                 if ws.ncols > 설치형태_col:
                     raw = str(ws.cell_value(ri, 설치형태_col) or '').strip()
-                    v = _normalize_설치형태(raw)  # 숫자코드 → 텍스트
-                    jn = (_norm_hn(ws.cell_value(ri, jn_col_a))
-                          if jn_col_a >= 0 and ws.ncols > jn_col_a else '')
-                    key = (hn, jn)
-                    if v and key not in antenna_data:
-                        antenna_data[key] = v
+                    v = _normalize_설치형태(raw)
+                    if v: fields['설치형태'] = v
+                if 지상고_col >= 0 and ws.ncols > 지상고_col:
+                    raw = ws.cell_value(ri, 지상고_col)
+                    if isinstance(raw, float) and raw == int(raw):
+                        raw = str(int(raw))
+                    v = str(raw or '').strip()
+                    if v: fields['지상고'] = v
+                if 노출고_col >= 0 and ws.ncols > 노출고_col:
+                    raw = ws.cell_value(ri, 노출고_col)
+                    if isinstance(raw, float) and raw == int(raw):
+                        raw = str(int(raw))
+                    v = str(raw or '').strip()
+                    if v: fields['노출고'] = v
+                if fields and key not in antenna_data:
+                    antenna_data[key] = fields
 
         # 설치장소: 같은 허가번호에 여러 행 가능 — (허가번호, 설치장소구분) 단위로 모두 수집
         # location_rows: list[(허가번호, 설치장소구분, 설치장소주소)]
@@ -5206,22 +5288,30 @@ async def ds_preview_partial_update(request: Request, file: UploadFile = File(..
                 if old_val != new_val:
                     diffs.append({"허가번호": hn, "장치번호": jn, "필드명": col, "변경전": old_val, "변경후": new_val})
 
-        # 설치형태: (허가번호, 장치번호) 단위로 행별 비교
-        # 장치번호별로 안테나가 다를 수 있어 행별 매칭
-        for (hn, jn), new_형태 in antenna_data.items():
-            existing = dc.execute(
-                'SELECT 공중선주설치형태명 FROM ds_안테나 WHERE 허가번호=? AND 장치번호=? LIMIT 1',
-                (hn, jn)
-            ).fetchone()
-            old_val = str(existing['공중선주설치형태명'] or '') if existing else ''
-            if old_val != new_형태:
-                diffs.append({
-                    "허가번호": hn,
-                    "장치번호": jn,
-                    "필드명": "설치형태",
-                    "변경전": old_val,
-                    "변경후": new_형태,
-                })
+        # 안테나: (허가번호, 장치번호) 단위로 행별 비교 (설치형태/지상고/노출고)
+        _ANT_FIELD_TO_DB = {'설치형태': '공중선주설치형태명', '지상고': '지상고', '노출고': '노출고'}
+        # ds_안테나에 지상고/노출고 컬럼 없을 수도 있어 schema 확인
+        ant_cols = set(r[1] for r in dc.execute('PRAGMA table_info(ds_안테나)').fetchall())
+        for (hn, jn), ant_fields in antenna_data.items():
+            for field_name, new_val in ant_fields.items():
+                db_col = _ANT_FIELD_TO_DB[field_name]
+                if db_col not in ant_cols:
+                    # 컬럼 없으면 비교 불가 (apply 시점에 ALTER로 추가됨)
+                    old_val = ''
+                else:
+                    existing = dc.execute(
+                        f'SELECT "{db_col}" FROM ds_안테나 WHERE 허가번호=? AND 장치번호=? LIMIT 1',
+                        (hn, jn)
+                    ).fetchone()
+                    old_val = str(existing[db_col] or '') if existing else ''
+                if old_val != new_val:
+                    diffs.append({
+                        "허가번호": hn,
+                        "장치번호": jn,
+                        "필드명": field_name,
+                        "변경전": old_val,
+                        "변경후": new_val,
+                    })
 
         # 설치장소: (허가번호, 설치장소구분) 단위로 행별 비교
         # 신고서 파일 각 행에 대해 ds_설치장소의 동일 (허가번호, 설치장소구분) 행과 비교
@@ -5459,6 +5549,16 @@ async def ds_change_history_cancel(history_id: int, request: Request, _skip_v2: 
                     dc.execute(
                         'UPDATE ds_안테나 SET 공중선주설치형태명=? WHERE 허가번호=?',
                         (before, hn))
+            elif field in ('지상고', '노출고'):
+                # 행별 되돌리기 (이력의 장치번호 컬럼 사용)
+                if jn:
+                    dc.execute(
+                        f'UPDATE ds_안테나 SET "{field}"=? WHERE 허가번호=? AND 장치번호=?',
+                        (before, hn, jn))
+                else:
+                    dc.execute(
+                        f'UPDATE ds_안테나 SET "{field}"=? WHERE 허가번호=?',
+                        (before, hn))
             elif field == '설치장소':
                 # 행별 되돌리기: 이력의 장치번호 컬럼이 설치장소구분으로 사용됨
                 gubun = jn
@@ -5574,10 +5674,18 @@ async def ds_apply_partial_update(request: Request, file: UploadFile = File(...)
             return _설치형태_CODE_MAP.get(v, v)
 
         def _find_col(ws, *keywords):
-            # 첫 번째로 매치되는 키워드의 컬럼 인덱스 반환 (폴백 키워드 지원)
+            # 첫 번째로 매치되는 키워드의 컬럼 인덱스 반환 (폴백 키워드 지원, substring)
             for keyword in keywords:
                 for c in range(ws.ncols):
                     if keyword in str(ws.cell_value(0, c)).strip():
+                        return c
+            return -1
+
+        def _find_col_exact(ws, *keywords):
+            # 정확 매칭 (substring 아님). '지상고' vs '안테나지상고도' 구분용
+            for keyword in keywords:
+                for c in range(ws.ncols):
+                    if str(ws.cell_value(0, c)).strip() == keyword:
                         return c
             return -1
 
@@ -5617,9 +5725,9 @@ async def ds_apply_partial_update(request: Request, file: UploadFile = File(...)
                     if v: d['형식검정번호'] = v
                 if d: device_data[(hn, jn)] = d
 
-        # ── 안테나 시트: (허가번호, 장치번호) → 공중선주설치형태명 (숫자코드 정규화)
+        # ── 안테나 시트: (허가번호, 장치번호) → {설치형태, 지상고, 노출고}
         # 장치별로 안테나가 다를 수 있어 행별 처리
-        antenna_data: dict[tuple[str, str], str] = {}
+        antenna_data: dict[tuple[str, str], dict[str, str]] = {}
 
         if 안테나_si >= 0:
             ws = wb.sheet_by_index(안테나_si)
@@ -5629,19 +5737,37 @@ async def ds_apply_partial_update(request: Request, file: UploadFile = File(...)
             jn_col_a = _find_col(ws, '장치번호')
             if jn_col_a < 0:
                 raise HTTPException(400, "안테나 시트에 '장치번호' 컬럼이 없습니다. 올바른 DS 양식인지 확인하세요")
+            # '지상고'와 '노출고'는 정확 매칭 (안테나지상고도 회피)
+            지상고_col = _find_col_exact(ws, '지상고')
+            노출고_col = _find_col_exact(ws, '노출고')
 
             for ri in range(1, ws.nrows):
                 hn = _norm_hn(ws.cell_value(ri, 0))
                 if not hn: continue
                 license_set.add(hn)
+                jn = (_norm_hn(ws.cell_value(ri, jn_col_a))
+                      if jn_col_a >= 0 and ws.ncols > jn_col_a else '')
+                key = (hn, jn)
+                fields: dict[str, str] = {}
                 if ws.ncols > 설치형태_col:
                     raw = str(ws.cell_value(ri, 설치형태_col) or '').strip()
                     v = _normalize_설치형태(raw)  # 숫자코드 → 텍스트
-                    jn = (_norm_hn(ws.cell_value(ri, jn_col_a))
-                          if jn_col_a >= 0 and ws.ncols > jn_col_a else '')
-                    key = (hn, jn)
-                    if v and key not in antenna_data:
-                        antenna_data[key] = v
+                    if v: fields['설치형태'] = v
+                if 지상고_col >= 0 and ws.ncols > 지상고_col:
+                    raw = ws.cell_value(ri, 지상고_col)
+                    # 숫자/문자 모두 처리, 빈 문자열 제외
+                    if isinstance(raw, float) and raw == int(raw):
+                        raw = str(int(raw))
+                    v = str(raw or '').strip()
+                    if v: fields['지상고'] = v
+                if 노출고_col >= 0 and ws.ncols > 노출고_col:
+                    raw = ws.cell_value(ri, 노출고_col)
+                    if isinstance(raw, float) and raw == int(raw):
+                        raw = str(int(raw))
+                    v = str(raw or '').strip()
+                    if v: fields['노출고'] = v
+                if fields and key not in antenna_data:
+                    antenna_data[key] = fields
 
         # ── 설치장소 시트: (허가번호, 설치장소구분) 단위로 모든 행 수집
         location_rows: list[tuple[str, str, str]] = []
@@ -5683,6 +5809,12 @@ async def ds_apply_partial_update(request: Request, file: UploadFile = File(...)
         ]:
             try:
                 dc.execute(f"ALTER TABLE ds_변경이력 ADD COLUMN {_col} TEXT DEFAULT {_dflt}")
+            except Exception:
+                pass
+        # ds_안테나에 지상고/노출고 컬럼 추가 (구버전 DB 호환)
+        for _col in ['지상고', '노출고']:
+            try:
+                dc.execute(f"ALTER TABLE ds_안테나 ADD COLUMN {_col} TEXT DEFAULT ''")
             except Exception:
                 pass
 
@@ -5738,27 +5870,30 @@ async def ds_apply_partial_update(request: Request, file: UploadFile = File(...)
                          _div(hn), upload_id, empno, upload_ts, upload_filename)
                     )
 
-        # 설치형태: (허가번호, 장치번호) 단위로 행별 적용
-        for (hn, jn), 설치형태 in antenna_data.items():
-            if f"{hn}#설치형태#{jn}" in excluded_set: continue
-            existing = dc.execute(
-                'SELECT 공중선주설치형태명 FROM ds_안테나 WHERE 허가번호=? AND 장치번호=? LIMIT 1',
-                (hn, jn)
-            ).fetchone()
-            old_val = str(existing['공중선주설치형태명'] or '') if existing else ''
-            if old_val == 설치형태: continue
-            cur = dc.execute(
-                'UPDATE ds_안테나 SET 공중선주설치형태명=? WHERE 허가번호=? AND 장치번호=?',
-                (설치형태, hn, jn))
-            if cur.rowcount > 0:
-                updated_count += 1
-                dc.execute(
-                    'INSERT INTO ds_변경이력(허가번호,변경일자,시트,필드명,변경전값,변경후값,장치번호,'
-                    'division_id,upload_id,uploaded_by,uploaded_at,uploaded_filename) '
-                    'VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
-                    (hn, applied_date, '부분DS안테나', '설치형태', old_val, 설치형태, jn,
-                     _div(hn), upload_id, empno, upload_ts, upload_filename)
-                )
+        # 안테나: (허가번호, 장치번호) 단위로 행별 적용 (설치형태/지상고/노출고)
+        _ANT_FIELD_TO_DB = {'설치형태': '공중선주설치형태명', '지상고': '지상고', '노출고': '노출고'}
+        for (hn, jn), ant_fields in antenna_data.items():
+            for field_name, new_val in ant_fields.items():
+                if f"{hn}#{field_name}#{jn}" in excluded_set: continue
+                db_col = _ANT_FIELD_TO_DB[field_name]
+                existing = dc.execute(
+                    f'SELECT "{db_col}" FROM ds_안테나 WHERE 허가번호=? AND 장치번호=? LIMIT 1',
+                    (hn, jn)
+                ).fetchone()
+                old_val = str(existing[db_col] or '') if existing else ''
+                if old_val == new_val: continue
+                cur = dc.execute(
+                    f'UPDATE ds_안테나 SET "{db_col}"=? WHERE 허가번호=? AND 장치번호=?',
+                    (new_val, hn, jn))
+                if cur.rowcount > 0:
+                    updated_count += 1
+                    dc.execute(
+                        'INSERT INTO ds_변경이력(허가번호,변경일자,시트,필드명,변경전값,변경후값,장치번호,'
+                        'division_id,upload_id,uploaded_by,uploaded_at,uploaded_filename) '
+                        'VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
+                        (hn, applied_date, '부분DS안테나', field_name, old_val, new_val, jn,
+                         _div(hn), upload_id, empno, upload_ts, upload_filename)
+                    )
 
         # 설치장소: (허가번호, 설치장소구분) 단위로 행별 적용
         for hn, gubun, new_addr in location_rows:
