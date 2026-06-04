@@ -2574,19 +2574,24 @@ def _build_v2_xlsx_sync(division_id: str, division_code: str, import_date: str) 
                                 for rn in target_rns:
                                     for cell_ref, new_val in sheet_patch[rn].items():
                                         attempted += 1
-                                        _cell_pat = r'<c\b[^>]*\br="' + re.escape(cell_ref) + r'"[^>]*>.*?</c>'
+                                        # 빈 셀은 self-closing(<c .../>), 값 있는 셀은 <c ...>...</c>
+                                        _cell_pat = (r'<c\b[^>]*\br="' + re.escape(cell_ref)
+                                                     + r'"[^>]*(?:/>|>.*?</c>)')
+                                        def _opening_from(full: str) -> str:
+                                            """매치된 셀 문자열에서 opening tag만 추출 (self-closing/일반 모두)"""
+                                            if full.endswith('/>'):
+                                                return full[:-2]
+                                            return full[:full.index('>')]
                                         if ss_path:
                                             _new_idx = str(_get_or_add(new_val))
                                             def _repl(m, _idx=_new_idx):
-                                                end = m.group(0).index('>')
-                                                opening = re.sub(r'\s+t="[^"]*"', '', m.group(0)[:end]) + ' t="s"'
+                                                opening = re.sub(r'\s+t="[^"]*"', '', _opening_from(m.group(0))) + ' t="s"'
                                                 return f'{opening}><v>{_idx}</v></c>'
                                         else:
                                             _esc = _xml_escape(new_val)
                                             _preserve = ' xml:space="preserve"' if (new_val != new_val.strip() or '\n' in new_val) else ''
                                             def _repl(m, _v=_esc, _p=_preserve):
-                                                end = m.group(0).index('>')
-                                                opening = re.sub(r'\s+t="[^"]*"', '', m.group(0)[:end]) + ' t="inlineStr"'
+                                                opening = re.sub(r'\s+t="[^"]*"', '', _opening_from(m.group(0))) + ' t="inlineStr"'
                                                 return f'{opening}><is><t{_p}>{_v}</t></is></c>'
                                         new_line, n_sub = re.subn(_cell_pat, _repl, line_str, count=1)
                                         if n_sub == 0:
