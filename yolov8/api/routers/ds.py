@@ -1847,6 +1847,20 @@ def _process_zip_to_xlsx_sync(zip_temp_path: str, progress_cb=None,
     return xlsx_out_path, sheet_stats, total_rows, sheet_headers
 
 
+def _delete_ds_change_history_sync(division_id: str) -> int:
+    """해당 본부(division_id)의 변경이력을 DB에서 완전 삭제. 삭제 건수 반환.
+
+    새 달 v1 업로드 시 호출 — 지난달 변경요청은 새 달 v1에 이미 반영돼 있으므로
+    이력과 v2를 모두 초기화한다. 같은 달 재업로드 시에는 호출되지 않는다.
+    """
+    if not division_id or not os.path.exists(_DS_DETAIL_DB):
+        return 0
+    with sqlite3.connect(_DS_DETAIL_DB, timeout=30) as dc:
+        cur = dc.execute("DELETE FROM ds_변경이력 WHERE division_id=?", (division_id,))
+        dc.commit()
+        return cur.rowcount
+
+
 def _init_upload_record_sync(division_id: str, division_code: str, import_date: str,
                               file_name: str, uploaded_by: str, job_id: str):
     """동기: 업로드 레코드 초기화 (같은 본부+코드 기존 모두 삭제 후 새로 생성)"""
@@ -1861,6 +1875,8 @@ def _init_upload_record_sync(division_id: str, division_code: str, import_date: 
             ExpressionAttributeValues={":did": division_id, ":prefix": f"{division_code}#"},
             ProjectionExpression="importDate, sheetStats, storageType, divisionCode",
         )
+        new_yyyymm = import_date[:6]  # 새 업로드의 연월 (YYYYMM)
+        crossed_month = False  # 이전 업로드 중 다른 연월이 하나라도 있으면 True
         for old_item in old_resp.get("Items", []):
             old_sk = old_item["importDate"]
             if old_sk == sk:
@@ -1869,11 +1885,17 @@ def _init_upload_record_sync(division_id: str, division_code: str, import_date: 
             old_dc = old_item.get("divisionCode", division_code)
             old_sheets = list(old_item.get("sheetStats", {}).keys())
             old_storage = old_item.get("storageType", "")
+            if old_date[:6] != new_yyyymm:
+                crossed_month = True  # 연월이 바뀜 → 변경이력/v2 초기화 대상
             logger.info(f"DS init: 이전 날짜 삭제 {division_id}/{old_sk}")
             try:
                 s3 = get_s3_client()
-                for s3k in [f"ds-exports/{division_id}/{old_dc}_{old_date}.xlsx",
-                            f"ds-raw/{division_id}/{old_dc}_{old_date}.zip"]:
+                # 새 달이면 이전 달 v2도 함께 삭제 (같은 달 재업로드면 v2는 유지)
+                _del_keys = [f"ds-exports/{division_id}/{old_dc}_{old_date}.xlsx",
+                             f"ds-raw/{division_id}/{old_dc}_{old_date}.zip"]
+                if old_date[:6] != new_yyyymm:
+                    _del_keys.append(f"ds-exports/{division_id}/{old_dc}_{old_date}_v2.xlsx")
+                for s3k in _del_keys:
                     try:
                         s3.delete_object(Bucket=S3_BUCKET_NAME, Key=s3k)
                     except Exception:
@@ -1885,6 +1907,15 @@ def _init_upload_record_sync(division_id: str, division_code: str, import_date: 
                 _delete_ds_records_targeted(records_table, uploads_table,
                                             division_id, old_date, old_dc, old_sheets)
             uploads_table.delete_item(Key={"divisionId": division_id, "importDate": old_sk})
+
+        # 연월이 바뀐 새 달 업로드 → 이 본부(division_id)의 변경이력 전체 삭제
+        # (같은 달 재업로드는 crossed_month=False → 변경이력/v2 유지)
+        if crossed_month:
+            try:
+                deleted = _delete_ds_change_history_sync(division_id)
+                logger.info(f"DS init: 새 달 업로드 → {division_id} 변경이력 {deleted}건 삭제")
+            except Exception as _che:
+                logger.warning(f"DS init: 변경이력 삭제 실패 (non-fatal): {_che}")
 
     # ── 파트너 코드 정리 (30→70, 50→55 등 같은 본부의 다른 코드 데이터 삭제) ──
     partner_codes = DS_PARTNER_CODES.get(division_code, [])
@@ -2881,6 +2912,7 @@ async def _process_ds_job(job_id: str, job_item: dict):
             logger.info(f"DS job {job_id}: xlsx 빌드 중복 스킵 (이미 빌드 중 또는 큐에 존재)")
 
         # 9.5. ds_detail.db 갱신 (검사내역서 export용 — non-fatal)
+        #      (새 달 업로드 시 변경이력 초기화는 _init_upload_record_sync에서 이미 처리됨)
         try:
             await asyncio.to_thread(_build_ds_detail_from_zip_sync, zip_temp_path)
             logger.info(f"DS job {job_id}: ds_detail.db 갱신 완료")
@@ -3313,6 +3345,14 @@ async def _build_xlsx_cache_background(division_id: str, division_code: str, imp
             division_id, division_code, import_date,
             zip_temp, cancel_ev,
         )
+        # v1 xlsx 캐시 빌드 완료 → 남은 활성 변경이력으로 v2 재빌드 트리거 (non-fatal)
+        # 새 달 업로드면 변경이력이 _init_upload_record_sync에서 비워졌으므로 v2는 생성 안 됨(0건→삭제),
+        # 같은 달 재업로드면 기존 변경이력이 유지되어 새 v1 기준으로 v2가 다시 패치됨.
+        if not cancel_ev.is_set():
+            try:
+                await _trigger_v2_rebuild(division_id, division_code, import_date)
+            except Exception as _ve:
+                logger.warning(f"DS xlsx build: v2 재빌드 트리거 실패 (non-fatal): {_ve}")
     except asyncio.CancelledError:
         logger.warning(f"DS bg xlsx cache CancelledError: {division_id}/{division_code}_{import_date} — 태스크 취소됨")
         raise  # 상위 _xlsx_build_worker도 중단시켜야 함
