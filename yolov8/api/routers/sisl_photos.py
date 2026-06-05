@@ -37,10 +37,14 @@ from core.cert_cache import _cert_cache_load
 router = APIRouter(tags=["sisl_photos"])
 logger = logging.getLogger(__name__)
 
-# inline 표시(<img src=>)용 정적 호스트. CORS 막혀 브라우저 직접 fetch 는 안 되지만
-# 우리 백엔드가 프록시할 때는 사용 가능.
+# inline 표시(<img src=>)용 정적 호스트 — 사내망 전용(사내망 PC에서만 열림).
 _SISL_PHOTO_BASE_URL = os.environ.get(
     "SISL_PHOTO_BASE_URL", "https://static-int.skons.co.kr/SKO-OCEAN"
+)
+# 외부망 전용 호스트 — 경로 체계는 사내망과 동일, 호스트만 다름(외부망에서만 열림).
+# 프론트 <img> 가 url_ext(외부망) 먼저 시도 → 실패 시 url(사내망)로 폴백.
+_SISL_PHOTO_BASE_URL_EXT = os.environ.get(
+    "SISL_PHOTO_BASE_URL_EXT", "https://static.skons.co.kr/SKO-OCEAN"
 )
 # 다운로드용 — EC2 외부망에서도 200 응답 확인. URL 인코딩된 백슬래시 키.
 _SISL_DOWNLOAD_URL = os.environ.get(
@@ -50,11 +54,11 @@ _SISL_DOWNLOAD_URL = os.environ.get(
 _SISL_DEFAULT_YEARS_BACK = 3
 
 
-def _build_sisl_photo_url(file_path: str, guid: str) -> str:
-    """엑셀의 FilePath + Guid 를 URL 로 조립 (사내망 inline 조회용)."""
+def _build_sisl_photo_url(file_path: str, guid: str, base: str = None) -> str:
+    """엑셀의 FilePath + Guid 를 URL 로 조립. base 미지정 시 사내망."""
     path = (file_path or '').replace('\\', '/').strip('/')
-    base = _SISL_PHOTO_BASE_URL.rstrip('/')
-    return f"{base}/{path}/{guid}"
+    b = (base or _SISL_PHOTO_BASE_URL).rstrip('/')
+    return f"{b}/{path}/{guid}"
 
 
 def _build_sisl_download_url(file_path: str, guid: str) -> str:
@@ -221,6 +225,7 @@ async def sisl_photos_list(
             for r in rows:
                 d = dict(r)
                 d["url"] = _build_sisl_photo_url(d["file_path"], d["guid"])
+                d["url_ext"] = _build_sisl_photo_url(d["file_path"], d["guid"], _SISL_PHOTO_BASE_URL_EXT)
                 out.append(d)
             return out
         finally:
@@ -411,6 +416,7 @@ async def sisl_photos_search(
                     d = dict(pr)
                     n = d["neos_code"]
                     d["url"] = _build_sisl_photo_url(d["file_path"], d["guid"])
+                    d["url_ext"] = _build_sisl_photo_url(d["file_path"], d["guid"], _SISL_PHOTO_BASE_URL_EXT)
                     bucket = photos_by_neos.get(n)
                     if bucket is None:
                         continue

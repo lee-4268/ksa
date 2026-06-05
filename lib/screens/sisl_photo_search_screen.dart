@@ -453,6 +453,7 @@ class _SislPhotoSearchScreenState extends State<SislPhotoSearchScreen> {
   Widget _photoCard(List<Map<String, dynamic>> photos, int i) {
     final p = photos[i];
     final url = (p['url'] ?? '').toString();
+    final urlExt = (p['url_ext'] ?? '').toString();
     final name = (p['국소명'] ?? '').toString();
     final addr = (p['주소'] ?? '').toString();
     final date = fmtSislDate(p['upload_date']);
@@ -468,6 +469,7 @@ class _SislPhotoSearchScreenState extends State<SislPhotoSearchScreen> {
             borderRadius: const BorderRadius.vertical(top: Radius.circular(10)),
             child: SislPhotoTile(
               url: url,
+              urlExt: urlExt,
               label: '',
               onTap: () => _openViewer(photos, i),
             ),

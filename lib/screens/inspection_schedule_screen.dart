@@ -4653,12 +4653,14 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
             itemBuilder: (_, i) {
               final p = _sislPhotos[i];
               final url = (p['url'] ?? '').toString();
+              final urlExt = (p['url_ext'] ?? '').toString();
               final dt = (p['upload_date'] ?? '').toString();
               final label = dt.length == 8
                   ? '${dt.substring(0,4)}-${dt.substring(4,6)}-${dt.substring(6,8)}'
                   : dt;
               return _SchedSislPhotoTile(
                 url: url,
+                urlExt: urlExt,
                 label: label,
                 onTap: () => _showSchedSislPhotoViewer(i),
               );
@@ -6436,7 +6438,7 @@ String _schedViewType(String url) {
   return 'sched-sisl-${last.replaceAll(RegExp(r'[^A-Za-z0-9-]'), '')}';
 }
 
-void _ensureSchedSislRegistered(String url, {String fit = 'cover'}) {
+void _ensureSchedSislRegistered(String url, {String fit = 'cover', String fallbackUrl = ''}) {
   final viewType = _schedViewType(url) + (fit == 'cover' ? '-cv' : '-ct');
   if (_schedSislRegistered.contains(viewType)) return;
   _schedSislRegistered.add(viewType);
@@ -6452,7 +6454,14 @@ void _ensureSchedSislRegistered(String url, {String fit = 'cover'}) {
       ..style.height = '100%'
       ..style.objectFit = fit
       ..style.display = 'block';
+    // 1순위(url=외부망) 실패 시 2순위(fallbackUrl=사내망)로 1회만 교체 — 무한루프 방지
+    var tried = false;
     img.onError.listen((_) {
+      if (!tried && fallbackUrl.isNotEmpty && fallbackUrl != url) {
+        tried = true;
+        img.src = fallbackUrl;
+        return;
+      }
       img.remove();
       final ph = html.DivElement()
         ..style.width = '100%'
@@ -6473,14 +6482,17 @@ void _ensureSchedSislRegistered(String url, {String fit = 'cover'}) {
 
 class _SchedSislPhotoTile extends StatelessWidget {
   final String url;
+  final String urlExt;
   final String label;
   final VoidCallback onTap;
-  const _SchedSislPhotoTile({required this.url, required this.label, required this.onTap});
+  const _SchedSislPhotoTile({required this.url, this.urlExt = '', required this.label, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
-    _ensureSchedSislRegistered(url, fit: 'cover');
-    final viewType = '${_schedViewType(url)}-cv';
+    // 외부망(urlExt) 먼저, 실패 시 사내망(url) 폴백. urlExt 없으면 url 단독.
+    final primary = urlExt.isNotEmpty ? urlExt : url;
+    _ensureSchedSislRegistered(primary, fit: 'cover', fallbackUrl: url);
+    final viewType = '${_schedViewType(primary)}-cv';
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(6),
@@ -6638,8 +6650,10 @@ class _SchedSislPhotoViewerState extends State<_SchedSislPhotoViewer> {
                 onPageChanged: (i) => setState(() => _idx = i),
                 itemBuilder: (_, i) {
                   final url = (widget.items[i]['url'] ?? '').toString();
-                  _ensureSchedSislRegistered(url, fit: 'contain');
-                  final viewType = '${_schedViewType(url)}-ct';
+                  final urlExt = (widget.items[i]['url_ext'] ?? '').toString();
+                  final primary = urlExt.isNotEmpty ? urlExt : url;
+                  _ensureSchedSislRegistered(primary, fit: 'contain', fallbackUrl: url);
+                  final viewType = '${_schedViewType(primary)}-ct';
                   final rot = _rotations[i] ?? 0;
                   return InteractiveViewer(
                     transformationController: _txCtrl(i),

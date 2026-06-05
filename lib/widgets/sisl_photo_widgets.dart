@@ -18,8 +18,10 @@ String _viewTypeForUrl(String url) {
 }
 
 /// HTML <img> 태그를 platform view 로 등록.
+/// url(1순위) 로딩 실패 시 fallbackUrl(2순위)로 1회 교체, 그것도 실패하면 placeholder.
+/// 외부망/사내망 호스트가 상호 배타적이라 url=외부망, fallbackUrl=사내망 으로 넘김.
 /// fit: 'cover' 또는 'contain'.
-void _ensureSislImageRegistered(String url, {String fit = 'cover'}) {
+void _ensureSislImageRegistered(String url, {String fit = 'cover', String fallbackUrl = ''}) {
   final viewType = _viewTypeForUrl(url) + (fit == 'cover' ? '-cv' : '-ct');
   if (_sislRegisteredViewTypes.contains(viewType)) return;
   _sislRegisteredViewTypes.add(viewType);
@@ -35,8 +37,15 @@ void _ensureSislImageRegistered(String url, {String fit = 'cover'}) {
       ..style.height = '100%'
       ..style.objectFit = fit
       ..style.display = 'block';
-    // 로드 실패 시 placeholder 아이콘 SVG 로 대체
+    // 1순위(url) 실패 시 2순위(fallbackUrl)로 1회만 교체 — 무한루프 방지
+    var tried = false;
     img.onError.listen((_) {
+      if (!tried && fallbackUrl.isNotEmpty && fallbackUrl != url) {
+        tried = true;
+        img.src = fallbackUrl;
+        return;
+      }
+      // 둘 다 실패 → placeholder 아이콘 SVG 로 대체
       img.remove();
       final placeholder = html.DivElement()
         ..style.width = '100%'
@@ -86,14 +95,17 @@ String fmtSislDate(dynamic raw) {
 /// SKO-OCEAN 사진 썸네일 타일. HTML <img> 기반(CORS 우회).
 class SislPhotoTile extends StatelessWidget {
   final String url;
+  final String urlExt;
   final String label;
   final VoidCallback onTap;
-  const SislPhotoTile({super.key, required this.url, required this.label, required this.onTap});
+  const SislPhotoTile({super.key, required this.url, this.urlExt = '', required this.label, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
-    _ensureSislImageRegistered(url, fit: 'cover');
-    final viewType = '${_viewTypeForUrl(url)}-cv';
+    // 외부망(urlExt) 먼저, 실패 시 사내망(url) 폴백. urlExt 없으면 url 단독.
+    final primary = urlExt.isNotEmpty ? urlExt : url;
+    _ensureSislImageRegistered(primary, fit: 'cover', fallbackUrl: url);
+    final viewType = '${_viewTypeForUrl(primary)}-cv';
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(8),
@@ -228,8 +240,10 @@ class _SislPhotoViewerState extends State<SislPhotoViewer> {
                 onPageChanged: (i) => setState(() => _idx = i),
                 itemBuilder: (_, i) {
                   final url = (widget.items[i]['url'] ?? '').toString();
-                  _ensureSislImageRegistered(url, fit: 'contain');
-                  final viewType = '${_viewTypeForUrl(url)}-ct';
+                  final urlExt = (widget.items[i]['url_ext'] ?? '').toString();
+                  final primary = urlExt.isNotEmpty ? urlExt : url;
+                  _ensureSislImageRegistered(primary, fit: 'contain', fallbackUrl: url);
+                  final viewType = '${_viewTypeForUrl(primary)}-ct';
                   final rot = _rotations[i] ?? 0;
                   return InteractiveViewer(
                     transformationController: _txCtrl(i),

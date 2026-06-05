@@ -1528,11 +1528,13 @@ class _SislPickerDialogState extends State<_SislPickerDialog> {
                     // 외부망에선 보이지 않아도 체크박스 선택은 가능. '선택 완료' 시
                     // 백엔드 프록시로 바이트를 받아오므로 다운로드 자체는 어디서나 동작.
                     final url = (p['url'] ?? '').toString();
+                    final urlExt = (p['url_ext'] ?? '').toString();
                     final dt = fmtSislDate(p['upload_date']);
                     final checked = _selected.contains(i);
                     return Stack(fit: StackFit.expand, children: [
                       SislPhotoTile(
                         url: url,
+                        urlExt: urlExt,
                         label: dt,
                         onTap: () => _toggle(i),
                       ),

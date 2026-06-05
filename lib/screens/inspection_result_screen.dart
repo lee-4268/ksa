@@ -840,9 +840,11 @@ class _InspectionResultScreenState extends State<InspectionResultScreen> {
                       itemBuilder: (_, i) {
                         final p = _sislPhotos[i];
                         final url = (p['url'] ?? '').toString();
+                        final urlExt = (p['url_ext'] ?? '').toString();
                         final dt = fmtSislDate(p['upload_date']);
                         return SislPhotoTile(
                           url: url,
+                          urlExt: urlExt,
                           label: dt,
                           onTap: () => _showSislPhotoViewer(i),
                         );
