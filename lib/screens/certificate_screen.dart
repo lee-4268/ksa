@@ -260,8 +260,8 @@ class _IndividualTabState extends State<_IndividualTab>
 
   void _removePhoto(int index) {
     setState(() {
-      _photoBytes.removeAt(index);
-      _photoNames.removeAt(index);
+      if (index < _photoBytes.length) _photoBytes.removeAt(index);
+      if (index < _photoNames.length) _photoNames.removeAt(index);
     });
   }
 
@@ -304,6 +304,7 @@ class _IndividualTabState extends State<_IndividualTab>
     progress.show(message: '사진 ${selectedIndices.length}장 가져오는 중...');
     try {
       final added = <Uint8List>[];
+      final addedNames = <String>[];
       for (final i in selectedIndices) {
         final p = items[i];
         final fp = (p['file_path'] ?? '').toString();
@@ -311,10 +312,14 @@ class _IndividualTabState extends State<_IndividualTab>
         if (fp.isEmpty || guid.isEmpty) continue;
         final bytes = await widget.service.downloadSislPhoto(filePath: fp, guid: guid);
         added.add(bytes);
+        addedNames.add('$guid.jpg');
       }
       if (!mounted) return;
       setState(() {
+        // _photoBytes 와 _photoNames 는 항상 쌍으로 — 길이 어긋나면 _removePhoto 의
+        // removeAt 에서 RangeError 가 나 X버튼 삭제가 실패한다.
         _photoBytes.addAll(added.take(remainingSlots));
+        _photoNames.addAll(addedNames.take(remainingSlots));
       });
       await progress.complete(message: '${added.length}장 첨부 완료');
     } catch (e) {
