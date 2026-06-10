@@ -95,7 +95,7 @@ SSO_VERIFY_URL = os.environ.get(
 )
 SSO_RESEND_URL = os.environ.get(
     "SSO_RESEND_URL",
-    "https://auth2.skons.net/auth/resend-otp",
+    "https://auth2.skons.net/auth/sms/resend",
 )
 # 향후 인프라가 공개키 엔드포인트(JWKS) 제공하면 systemd Environment 로 주입.
 # 비어있으면 sso_verify 가 검증을 skip 한다(현재 운영 상태).
