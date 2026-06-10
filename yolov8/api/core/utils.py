@@ -99,31 +99,54 @@ def _disk_free_gb(path: str = "/tmp") -> float:
         return float('inf')
 
 
-def _ensure_disk_space(operation: str = "작업", min_free_gb: float = None, path: str = "/tmp"):
-    """디스크 여유 공간 체크. 임계치 미만이면 자동 정리 시도 후 재확인, 그래도 부족하면 503.
+def _ensure_disk_space(
+    operation: str = "작업",
+    min_free_gb: float = None,
+    path: str = "/tmp",
+    retry: int = 3,
+    retry_wait_seconds: float = 30.0,
+):
+    """디스크 여유 공간 체크 — 백오프 재시도 후 503.
+
+    동작:
+      1차: 즉시 체크 → 부족하면 자동 정리(stale temp) 시도
+      2차~N차: retry_wait_seconds 만큼 대기 후 재정리·재체크 (다른 작업의 임시파일 회수 기대)
+      모두 실패: HTTPException(503)
 
     DS xlsx 빌드처럼 수 GB 임시 파일을 만드는 작업 전에 호출.
+    사용자가 다시 업로드할 필요 없도록 가능한 한 대기 후 진행.
     """
     threshold = min_free_gb if min_free_gb is not None else DISK_FREE_MIN_GB
-    free_gb = _disk_free_gb(path)
-    if free_gb >= threshold:
-        return free_gb
+    last_free = _disk_free_gb(path)
+    if last_free >= threshold:
+        return last_free
 
-    logger.warning(f"디스크 여유 부족 ({free_gb:.2f}GB < {threshold}GB) — {operation} 전 자동 정리 시도")
-    try:
-        _cleanup_stale_temp_files(max_age_seconds=300)  # 5분 이상된 임시파일 정리
-    except Exception as e:
-        logger.warning(f"자동 정리 실패: {e}")
-
-    free_gb_after = _disk_free_gb(path)
-    if free_gb_after < threshold:
-        logger.error(f"디스크 여전히 부족 ({free_gb_after:.2f}GB) — {operation} 차단")
-        raise HTTPException(
-            status_code=503,
-            detail=f"서버 디스크 부족 ({free_gb_after:.2f}GB 가용). 운영자에게 문의하세요."
+    for attempt in range(1, retry + 1):
+        logger.warning(
+            f"[disk] 부족 ({last_free:.2f}GB < {threshold}GB) — {operation} "
+            f"자동 정리 시도 {attempt}/{retry}"
         )
-    logger.info(f"디스크 정리 후 회복 ({free_gb:.2f}GB → {free_gb_after:.2f}GB)")
-    return free_gb_after
+        try:
+            _cleanup_stale_temp_files(max_age_seconds=300)
+        except Exception as e:
+            logger.warning(f"[disk] 자동 정리 실패: {e}")
+        free_gb_after = _disk_free_gb(path)
+        if free_gb_after >= threshold:
+            logger.info(f"[disk] 회복 ({last_free:.2f}GB → {free_gb_after:.2f}GB, 시도 {attempt}/{retry})")
+            return free_gb_after
+        last_free = free_gb_after
+        if attempt < retry:
+            logger.info(f"[disk] {retry_wait_seconds:.0f}초 후 재시도 ({free_gb_after:.2f}GB 가용)")
+            _time_mod.sleep(retry_wait_seconds)
+
+    logger.error(f"[disk] {retry}회 시도 후 여전히 부족 ({last_free:.2f}GB) — {operation} 차단")
+    raise HTTPException(
+        status_code=503,
+        detail=(
+            f"서버 디스크 부족 ({last_free:.2f}GB 가용, {threshold:.1f}GB 필요). "
+            f"잠시 후 자동 재시도되거나 운영자에게 문의하세요."
+        )
+    )
 
 
 # ── 임시파일 정리 ─────────────────────────────────────────────

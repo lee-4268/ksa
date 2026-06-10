@@ -2982,6 +2982,7 @@ _xlsx_build_cancel_event: Optional[threading.Event] = None  # xlsx 빌드 취소
 _xlsx_build_current: Optional[tuple] = None  # 현재 빌드 중인 (division_id, division_code, import_date)
 _xlsx_build_process: Optional[multiprocessing.Process] = None  # 현재 빌드 서브프로세스
 _xlsx_build_start_time: Optional[float] = None  # 현재 빌드 시작 epoch time
+_xlsx_build_retry_count: dict = {}  # {key: n} — 디스크 부족 등 503 재시도 횟수 추적 (최대 3회)
 
 
 
@@ -3369,6 +3370,23 @@ async def _build_xlsx_cache_background(division_id: str, division_code: str, imp
         raise  # 상위 _xlsx_build_worker도 중단시켜야 함
     except InterruptedError as e:
         logger.info(f"DS bg xlsx cache 중단: {division_id}/{division_code}_{import_date} ({e})")
+    except HTTPException as he:
+        # 디스크 부족 503 등 일시적 거부 → 큐 끝에 다시 enqueue (최대 3회까지 자동 재시도)
+        if he.status_code == 503:
+            _retry_key = f"{division_id}/{division_code}/{import_date}"
+            _retries = _xlsx_build_retry_count.get(_retry_key, 0)
+            if _retries < 3:
+                _xlsx_build_retry_count[_retry_key] = _retries + 1
+                _xlsx_build_queue.append((division_id, division_code, import_date))
+                logger.warning(
+                    f"DS bg xlsx cache 일시 거부 ({he.detail}) → 큐 재진입 "
+                    f"{_retries + 1}/3: {_retry_key}"
+                )
+            else:
+                logger.error(f"DS bg xlsx cache 재시도 한도 초과: {_retry_key}")
+                _xlsx_build_retry_count.pop(_retry_key, None)
+        else:
+            logger.warning(f"DS bg xlsx cache HTTPException (non-fatal): {he.detail}")
     except Exception as e:
         logger.warning(f"DS bg xlsx cache 실패 (non-fatal, export 시 on-demand 빌드): {e}")
     finally:
