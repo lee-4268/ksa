@@ -102,6 +102,7 @@ class OtpVerifyRequest(BaseModel):
 
 class OtpResendRequest(BaseModel):
     pre_auth_token: str
+    password: str
 
 
 class DevLoginRequest(BaseModel):

@@ -32,6 +32,9 @@ class AuthService extends ChangeNotifier {
   String? _preAuthToken;
   String? _maskedPhone;
   int _resendCooldownSeconds = 60;
+  // 재발송용 비밀번호 — OTP 윈도우 동안만 RAM 보관, 디스크 저장 X.
+  // signIn 에서 otp_required 시 저장, verifyOtp 성공/signOut/취소 시 즉시 폐기.
+  String? _otpResendPassword;
 
   /// 세션 타임아웃 (1시간 — 보안 정책)
   static const Duration sessionTimeout = Duration(hours: 1);
@@ -227,6 +230,7 @@ class AuthService extends ChangeNotifier {
           _maskedPhone  = data['masked_phone']   as String?;
           _awaitingOtp  = true;
           _userId       = username.toUpperCase(); // verifyOtp() 에서 사번 사용
+          _otpResendPassword = password; // 재발송용 RAM 보관
           _isLoading    = false;
           notifyListeners();
           return true; // 화면은 awaitingOtp를 보고 OTP 입력 UI 표시
@@ -241,6 +245,7 @@ class AuthService extends ChangeNotifier {
           _awaitingOtp = false;
           _preAuthToken = null;
           _maskedPhone  = null;
+          _otpResendPassword = null;
           _isLoading    = false;
 
           debugPrint('로그인 성공: $_userId, isSignedIn=$_isSignedIn');
@@ -428,6 +433,7 @@ class AuthService extends ChangeNotifier {
           _awaitingOtp  = false;
           _preAuthToken = null;
           _maskedPhone  = null;
+          _otpResendPassword = null;
           _isLoading    = false;
           notifyListeners();
           Future.microtask(() => notifyListeners());
@@ -456,7 +462,7 @@ class AuthService extends ChangeNotifier {
 
   /// OTP 재발송
   Future<bool> resendOtp() async {
-    if (_preAuthToken == null) {
+    if (_preAuthToken == null || _otpResendPassword == null) {
       _errorMessage = '인증 세션이 유효하지 않습니다. 다시 로그인해주세요.';
       notifyListeners();
       return false;
@@ -470,7 +476,10 @@ class AuthService extends ChangeNotifier {
       final response = await http.post(
         Uri.parse('$_loginUrl/auth/resend-otp'),
         headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'pre_auth_token': _preAuthToken}),
+        body: jsonEncode({
+          'pre_auth_token': _preAuthToken,
+          'password': _otpResendPassword,
+        }),
       );
 
       debugPrint('OTP 재발송 응답 [${response.statusCode}]: ${response.body}');
@@ -524,6 +533,7 @@ class AuthService extends ChangeNotifier {
     _awaitingOtp  = false;
     _preAuthToken = null;
     _maskedPhone  = null;
+    _otpResendPassword = null;
     _userId       = null;
     _userName     = null;
     _userDepartment = null;
