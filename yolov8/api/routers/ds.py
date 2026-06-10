@@ -1098,6 +1098,12 @@ def _process_zip_to_multiple_xlsx_sync(zip_temp_path: str, hdqts: list, progress
     import copy, sqlite3, json
     if not HAS_XLRD or not HAS_XLSXWRITER:
         raise RuntimeError("xlrd or xlsxwriter not installed")
+    # 빌드 시작 전 디스크 여유 체크 (본부 N개 × 수 GB 임시파일 → 더 큰 여유 필요)
+    from core.utils import _ensure_disk_space
+    _ensure_disk_space(
+        operation=f"DS xlsx 다중본부 빌드 [{os.path.basename(zip_temp_path or '?')}, {len(hdqts)}본부]",
+        min_free_gb=max(3.0, 1.5 * len(hdqts)),  # 본부당 약 1.5GB 여유 권장
+    )
 
     results = {h: {"stats": {}, "rows": 0, "headers": {}} for h in hdqts}
     _xwb_refs = {}
@@ -1318,7 +1324,8 @@ def _process_zip_to_multiple_xlsx_sync(zip_temp_path: str, hdqts: list, progress
             if cancel_event and cancel_event.is_set(): raise InterruptedError("xlsx build cancelled")
 
             h_key = h if h is not None else "full"
-            logger.info(f"DS xlsx Phase B [{h_idx+1}/{len(hdqts)}] 시작: hdqt={h_key}")
+            _zip_id = os.path.basename(zip_temp_path) if zip_temp_path else '?'
+            logger.info(f"DS xlsx Phase B[{_zip_id}] [{h_idx+1}/{len(hdqts)}] 시작: hdqt={h_key}")
             out_path = f"/tmp/ds_xlsx_multi_{h_key}_{id(zip_temp_path)}.xlsx"
             results[h]["path"] = out_path
             tmpdir = f"/tmp/ds_xlsxbuild_{h_key}_{os.getpid()}"
@@ -1373,7 +1380,7 @@ def _process_zip_to_multiple_xlsx_sync(zip_temp_path: str, hdqts: list, progress
 
             xwb.close()
             del _xwb_refs[h]
-            logger.info(f"DS xlsx Phase B 완료: hdqt={h_key} ({results[h]['rows']}행)")
+            logger.info(f"DS xlsx Phase B[{_zip_id}] 완료: hdqt={h_key} ({results[h]['rows']}행)")
             _release_memory()
 
         for tmpdir in _xlsxwriter_tmpdirs:
@@ -1420,6 +1427,9 @@ def _process_zip_to_xlsx_sync(zip_temp_path: str, progress_cb=None,
         raise RuntimeError("xlrd not installed on server")
     if not HAS_XLSXWRITER:
         raise RuntimeError("xlsxwriter not installed on server")
+    # 빌드 시작 전 디스크 여유 체크 (xlsx 빌드는 수 GB 임시파일 생성)
+    from core.utils import _ensure_disk_space
+    _ensure_disk_space(operation=f"DS xlsx 빌드 [{os.path.basename(zip_temp_path or '?')}]")
 
     sheet_stats: Dict[str, int] = {}
     sheet_headers: Dict[str, list] = {}
@@ -1816,7 +1826,8 @@ def _process_zip_to_xlsx_sync(zip_temp_path: str, progress_cb=None,
                 rows_in_sheet += 1
 
             sheet_stats[sname] = rows_in_sheet
-            logger.info(f"DS xlsx PhaseB: {sname} → {rows_in_sheet}행")
+            _zip_id = os.path.basename(zip_temp_path) if zip_temp_path else '?'
+            logger.info(f"DS xlsx PhaseB[{_zip_id}]: {sname} → {rows_in_sheet}행")
 
         xwb.close()
         _xwb_ref = None

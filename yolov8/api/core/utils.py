@@ -84,6 +84,48 @@ def _check_memory(operation: str = "작업"):
         )
 
 
+# ── 디스크 모니터링 ────────────────────────────────────────────
+
+DISK_FREE_MIN_GB = float(os.environ.get("DISK_FREE_MIN_GB", "3.0"))
+
+
+def _disk_free_gb(path: str = "/tmp") -> float:
+    """지정 경로의 디스크 여유 공간(GB) 반환. 실패 시 무한대로 간주."""
+    try:
+        import shutil as _shutil
+        usage = _shutil.disk_usage(path)
+        return usage.free / (1024 ** 3)
+    except Exception:
+        return float('inf')
+
+
+def _ensure_disk_space(operation: str = "작업", min_free_gb: float = None, path: str = "/tmp"):
+    """디스크 여유 공간 체크. 임계치 미만이면 자동 정리 시도 후 재확인, 그래도 부족하면 503.
+
+    DS xlsx 빌드처럼 수 GB 임시 파일을 만드는 작업 전에 호출.
+    """
+    threshold = min_free_gb if min_free_gb is not None else DISK_FREE_MIN_GB
+    free_gb = _disk_free_gb(path)
+    if free_gb >= threshold:
+        return free_gb
+
+    logger.warning(f"디스크 여유 부족 ({free_gb:.2f}GB < {threshold}GB) — {operation} 전 자동 정리 시도")
+    try:
+        _cleanup_stale_temp_files(max_age_seconds=300)  # 5분 이상된 임시파일 정리
+    except Exception as e:
+        logger.warning(f"자동 정리 실패: {e}")
+
+    free_gb_after = _disk_free_gb(path)
+    if free_gb_after < threshold:
+        logger.error(f"디스크 여전히 부족 ({free_gb_after:.2f}GB) — {operation} 차단")
+        raise HTTPException(
+            status_code=503,
+            detail=f"서버 디스크 부족 ({free_gb_after:.2f}GB 가용). 운영자에게 문의하세요."
+        )
+    logger.info(f"디스크 정리 후 회복 ({free_gb:.2f}GB → {free_gb_after:.2f}GB)")
+    return free_gb_after
+
+
 # ── 임시파일 정리 ─────────────────────────────────────────────
 
 def _cleanup_stale_temp_files(max_age_seconds: int = 3600):
