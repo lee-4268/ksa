@@ -169,7 +169,7 @@ class _LoginScreenState extends State<LoginScreen> {
       for (final c in _digitControllers) { c.clear(); }
       _digitFocusNodes[0].requestFocus();
       setState(() => _otpError = null);
-      _startResendCooldown(60);
+      _startResendCooldown(auth.resendCooldownSeconds);
       await ProgressDialog(context).complete(message: '인증번호가 재발송되었습니다');
     } else if (auth.errorMessage != null) {
       await ProgressDialog(context).error(message: auth.errorMessage!);

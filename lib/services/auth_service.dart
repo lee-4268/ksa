@@ -31,6 +31,7 @@ class AuthService extends ChangeNotifier {
   bool _awaitingOtp = false;
   String? _preAuthToken;
   String? _maskedPhone;
+  int _resendCooldownSeconds = 60;
 
   /// 세션 타임아웃 (1시간 — 보안 정책)
   static const Duration sessionTimeout = Duration(hours: 1);
@@ -60,6 +61,7 @@ class AuthService extends ChangeNotifier {
   // OTP 2차 인증 getter
   bool get awaitingOtp => _awaitingOtp;
   String? get maskedPhone => _maskedPhone;
+  int get resendCooldownSeconds => _resendCooldownSeconds;
 
   // 토큰
   String? get authToken => _authToken;
@@ -476,7 +478,9 @@ class AuthService extends ChangeNotifier {
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body) as Map<String, dynamic>;
         if (data['result'] == 'ok') {
-          _maskedPhone = data['masked_phone'] as String? ?? _maskedPhone;
+          _maskedPhone = (data['masked_phone'] ?? data['phone_masked']) as String? ?? _maskedPhone;
+          final cd = data['resend_cooldown'];
+          if (cd is int && cd > 0) _resendCooldownSeconds = cd;
           _isLoading   = false;
           notifyListeners();
           return true;

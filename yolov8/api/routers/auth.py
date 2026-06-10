@@ -36,7 +36,7 @@ from core.auth import (
     _pre_auth_store, _sms_rate_store, _dev_users,
 )
 from core.config import (
-    SSO_LOGIN_URL, SSO_VERIFY_URL, DEV_LOGIN_ENABLED, IS_PROD, VALID_ROLES,
+    SSO_LOGIN_URL, SSO_VERIFY_URL, SSO_RESEND_URL, DEV_LOGIN_ENABLED, IS_PROD, VALID_ROLES,
     AUTH_TOKEN_EXPIRY,
 )
 from core.sso_verify import verify_access_token
@@ -210,16 +210,89 @@ async def auth_verify_otp(req: OtpVerifyRequest, request: Request):
 
 @router.post("/resend-otp")
 async def auth_resend_otp(req: OtpResendRequest, request: Request):
-    """재발송 — 인프라 측에 별도 resend 엔드포인트가 없어 클라이언트에 1차 재시도 안내."""
+    """OTP 재발송 — 인프라 SMS resend 엔드포인트로 프록시.
+
+    pre_auth_token 으로 login_session 쿠키를 꺼내 인프라에 재발송 요청.
+    인프라가 새 login_session 쿠키를 발급하면 갱신 저장.
+    """
     _check_rate_limit(request, "resend_otp", 5, 60)
     entry = _pre_auth_store.get(req.pre_auth_token)
     if not entry:
         raise HTTPException(401, "인증 세션이 유효하지 않습니다. 다시 로그인해주세요")
-    # 의도적으로 비활성화. 사용자가 1차부터 다시 입력하도록 안내.
-    raise HTTPException(
-        status_code=400,
-        detail="SMS 가 도착하지 않으면 첫 로그인 화면에서 다시 시도해 주세요.",
-    )
+    now = _time_mod.time()
+    if now > entry["expiry"]:
+        _pre_auth_store.pop(req.pre_auth_token, None)
+        raise HTTPException(401, "인증 시간이 만료되었습니다. 다시 로그인해주세요")
+
+    empno = entry["empno"]
+    login_session = entry["login_session"]
+
+    # 우리 측 SMS 발송 횟수 제한 (1차 로그인과 동일 카운터 공유)
+    rate_ts = [t for t in _sms_rate_store.get(empno, []) if now - t < SMS_RATE_WINDOW]
+    if len(rate_ts) >= SMS_RATE_MAX:
+        raise HTTPException(
+            status_code=429,
+            detail=f"SMS 발송 횟수를 초과했습니다. {SMS_RATE_WINDOW // 60}분 후 재시도하세요.",
+        )
+
+    # 인프라 resend 호출
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resend_resp = await client.post(
+                SSO_RESEND_URL,
+                json={"username": empno},
+                cookies={"login_session": login_session},
+                headers={"Content-Type": "application/json"},
+            )
+    except httpx.TimeoutException:
+        raise HTTPException(504, "SSO 응답 시간 초과")
+    except Exception as e:
+        logger.error(f"SSO resend 호출 실패: {e}")
+        raise HTTPException(502, "SSO 서버 연결 실패")
+
+    if resend_resp.status_code != 200:
+        logger.warning(
+            f"SSO resend 거절 [{resend_resp.status_code}] empno={empno} "
+            f"body={resend_resp.text[:200]}"
+        )
+        try:
+            body = resend_resp.json()
+            msg = body.get("message") or body.get("detail") or "재발송에 실패했습니다."
+        except Exception:
+            msg = "재발송에 실패했습니다. 잠시 후 다시 시도해주세요."
+        raise HTTPException(status_code=resend_resp.status_code, detail=msg)
+
+    # 새 login_session 쿠키가 발급되면 교체 + 만료 갱신
+    new_session = resend_resp.cookies.get("login_session")
+    if new_session:
+        entry["login_session"] = new_session
+    entry["expiry"] = now + PRE_AUTH_EXPIRY
+    entry["attempts"] = 0  # 새 OTP 발급되었으므로 시도 카운터 리셋
+
+    # SMS 발송 카운트 기록
+    rate_ts.append(now)
+    _sms_rate_store[empno] = rate_ts
+
+    # 인프라 응답(phone_masked/expires_in/resend_cooldown) 그대로 활용
+    try:
+        sso_body = resend_resp.json()
+    except Exception:
+        sso_body = {}
+
+    # 마스킹 전화번호 — 인프라가 주면 그 값, 아니면 우리 DB 폴백
+    masked = sso_body.get("phone_masked")
+    if not masked:
+        phone = await asyncio.to_thread(_get_user_phone_sync, empno)
+        masked = _mask_phone(phone or "") if phone else "(등록된 번호)"
+
+    logger.info(f"OTP 재발송 성공: empno={empno}")
+    return {
+        "result": "ok",
+        "masked_phone": masked,
+        "phone_masked": masked,
+        "expires_in": sso_body.get("expires_in", PRE_AUTH_EXPIRY),
+        "resend_cooldown": sso_body.get("resend_cooldown", 30),
+    }
 
 
 @router.post("/logout")
