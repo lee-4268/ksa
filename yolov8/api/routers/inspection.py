@@ -3921,14 +3921,19 @@ async def inspection_result_photo_upload(request: Request, year: int, 허가번�
     now = datetime.now(timezone.utc).isoformat()
     def _add_photo():
         c = sqlite3.connect(_INSP_DB, timeout=60); c.row_factory = sqlite3.Row
-        existing = c.execute('SELECT 사진S3키 FROM inspection_results WHERE pk=?', (pk,)).fetchone()
+        existing = c.execute('SELECT 사진S3키, 사진업로더 FROM inspection_results WHERE pk=?', (pk,)).fetchone()
         photos = _j.loads(existing['사진S3키']) if existing and existing['사진S3키'] else []
+        try:
+            uploaders = _j.loads(existing['사진업로더']) if existing and existing['사진업로더'] else {}
+        except Exception:
+            uploaders = {}
         photos.append(s3_key)
-        c.execute('''INSERT INTO inspection_results (pk, year, 허가번호, 사진S3키, 입력자, 입력일시)
-            VALUES (?,?,?,?,?,?)
+        uploaders[s3_key] = empno  # 사진별 업로더 기록 (삭제 권한 판정용)
+        c.execute('''INSERT INTO inspection_results (pk, year, 허가번호, 사진S3키, 사진업로더, 입력자, 입력일시)
+            VALUES (?,?,?,?,?,?,?)
             ON CONFLICT(pk) DO UPDATE SET 사진S3키=excluded.사진S3키,
-            입력자=excluded.입력자, 입력일시=excluded.입력일시''',
-            (pk, year, 허가번호, _j.dumps(photos), empno, now))
+            사진업로더=excluded.사진업로더, 입력자=excluded.입력자, 입력일시=excluded.입력일시''',
+            (pk, year, 허가번호, _j.dumps(photos), _j.dumps(uploaders), empno, now))
         c.commit(); c.close()
     await asyncio.to_thread(_add_photo)
     presigned = s3.generate_presigned_url('get_object', Params={'Bucket': S3_BUCKET_NAME, 'Key': s3_key}, ExpiresIn=3600)
@@ -3937,33 +3942,117 @@ async def inspection_result_photo_upload(request: Request, year: int, 허가번�
 @router.delete("/inspection/result/photo")
 async def inspection_result_photo_delete(request: Request, year: int, 허가번호: str, s3_key: str):
     import json as _j
-    await _verify_auth(request)
+    empno = await _verify_auth(request)
     if not s3_key.startswith("inspection/photos/"): raise HTTPException(400, "허용되지 않은 경로")
+    role = await asyncio.to_thread(_get_user_role_sync, empno)
+    pk = f"{year}#{허가번호}"
+
+    # 권한 판정: 업로드 본인 OR admin OR 해당 본부 manager 만 삭제 가능
+    def _photo_uploader() -> str:
+        c = sqlite3.connect(_INSP_DB, timeout=10); c.row_factory = sqlite3.Row
+        try:
+            row = c.execute('SELECT 사진업로더 FROM inspection_results WHERE pk=?', (pk,)).fetchone()
+            if not row or not row['사진업로더']:
+                return ''
+            try:
+                return (_j.loads(row['사진업로더']) or {}).get(s3_key, '') or ''
+            except Exception:
+                return ''
+        finally:
+            c.close()
+
+    uploader = await asyncio.to_thread(_photo_uploader)
+    is_owner = bool(uploader) and uploader == empno
+    if not is_owner and role != 'admin':
+        # 본인이 아니면 해당 본부 manager 만 허용 (member 는 불가)
+        if role != 'manager':
+            raise HTTPException(403, "본인이 올린 사진 또는 본부 담당자(매니저)만 삭제할 수 있습니다")
+        def _resolve_target_access() -> str:
+            c = sqlite3.connect(_INSP_DB, timeout=10); c.row_factory = sqlite3.Row
+            try:
+                row = c.execute('SELECT access담당 FROM inspection_schedules WHERE pk=?', (pk,)).fetchone()
+                if row and row['access담당']:
+                    return row['access담당']
+                row = c.execute(
+                    'SELECT access담당 FROM inspection_targets WHERE year=? AND 허가번호=?',
+                    (year, 허가번호)).fetchone()
+                return (row['access담당'] if row else '') or ''
+            finally:
+                c.close()
+        target_access = await asyncio.to_thread(_resolve_target_access)
+        if target_access:
+            allowed = await asyncio.to_thread(_caller_allowed_access_list, empno)
+            if target_access not in allowed:
+                raise HTTPException(403, "본인 본부 사진만 삭제할 수 있습니다")
+
     s3 = get_s3_client()
     s3.delete_object(Bucket=S3_BUCKET_NAME, Key=s3_key)
-    pk = f"{year}#{허가번호}"
     def _del_photo():
         c = sqlite3.connect(_INSP_DB, timeout=60); c.row_factory = sqlite3.Row
-        existing = c.execute('SELECT 사진S3키 FROM inspection_results WHERE pk=?', (pk,)).fetchone()
+        existing = c.execute('SELECT 사진S3키, 사진업로더 FROM inspection_results WHERE pk=?', (pk,)).fetchone()
         photos = _j.loads(existing['사진S3키']) if existing and existing['사진S3키'] else []
         photos = [p for p in photos if p != s3_key]
-        c.execute('UPDATE inspection_results SET 사진S3키=? WHERE pk=?', (_j.dumps(photos), pk))
+        try:
+            uploaders = _j.loads(existing['사진업로더']) if existing and existing['사진업로더'] else {}
+        except Exception:
+            uploaders = {}
+        uploaders.pop(s3_key, None)
+        c.execute('UPDATE inspection_results SET 사진S3키=?, 사진업로더=? WHERE pk=?',
+                  (_j.dumps(photos), _j.dumps(uploaders), pk))
         c.commit(); c.close()
     await asyncio.to_thread(_del_photo)
     return {"success": True}
 
+async def _verify_photo_division_access(request: Request, s3_key: str):
+    """검사사진 s3_key 접근 시 본부 격리 검사.
+    키 형식: inspection/photos/{year}/{허가번호}/{uuid}{ext}
+    admin 은 무제약, 그 외는 대상 검사의 access담당이 caller 허용 본부에 포함돼야 함."""
+    empno = await _verify_auth(request)
+    if not s3_key.startswith("inspection/photos/"):
+        raise HTTPException(400, "허용되지 않은 경로")
+    role = await asyncio.to_thread(_get_user_role_sync, empno)
+    if role == 'admin':
+        return empno
+    parts = s3_key.split("/")  # ['inspection','photos',year,허가번호,...]
+    if len(parts) < 5:
+        raise HTTPException(400, "허용되지 않은 경로")
+    try:
+        _year = int(parts[2])
+    except ValueError:
+        raise HTTPException(400, "허용되지 않은 경로")
+    _hn = parts[3]
+    _pk = f"{_year}#{_hn}"
+
+    def _resolve_target_access() -> str:
+        c = sqlite3.connect(_INSP_DB, timeout=10); c.row_factory = sqlite3.Row
+        try:
+            row = c.execute('SELECT access담당 FROM inspection_schedules WHERE pk=?', (_pk,)).fetchone()
+            if row and row['access담당']:
+                return row['access담당']
+            row = c.execute(
+                'SELECT access담당 FROM inspection_targets WHERE year=? AND 허가번호=?',
+                (_year, _hn)).fetchone()
+            return (row['access담당'] if row else '') or ''
+        finally:
+            c.close()
+
+    target_access = await asyncio.to_thread(_resolve_target_access)
+    if target_access:
+        allowed = await asyncio.to_thread(_caller_allowed_access_list, empno)
+        if target_access not in allowed:
+            raise HTTPException(403, "본인 본부 사진만 조회할 수 있습니다")
+    return empno
+
 @router.get("/inspection/result/photo-url")
 async def inspection_result_photo_url(request: Request, s3_key: str):
-    await _verify_auth(request)
-    if not s3_key.startswith("inspection/photos/"): raise HTTPException(400, "허용되지 않은 경로")
+    await _verify_photo_division_access(request, s3_key)
     s3 = get_s3_client()
     url = s3.generate_presigned_url('get_object', Params={'Bucket': S3_BUCKET_NAME, 'Key': s3_key}, ExpiresIn=3600)
     return {"url": url}
 
 @router.get("/inspection/result/photo-data")
 async def inspection_result_photo_data(request: Request, s3_key: str):
-    await _verify_auth(request)
-    if not s3_key.startswith("inspection/photos/"): raise HTTPException(400, "허용되지 않은 경로")
+    await _verify_photo_division_access(request, s3_key)
     s3 = get_s3_client()
     try:
         obj = await asyncio.to_thread(

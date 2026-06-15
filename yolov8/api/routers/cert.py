@@ -34,7 +34,7 @@ from fastapi.responses import StreamingResponse
 
 from core.auth import _verify_auth
 from core.config import (
-    S3_BUCKET_NAME, _INSP_DB, _DS_DETAIL_DB,
+    S3_BUCKET_NAME, _INSP_DB, _DS_DETAIL_DB, MAX_DS_ZIP_SIZE,
 )
 from core.cert_cache import (
     _cert_cache_load, _cert_cache_force_rebuild,
@@ -824,12 +824,17 @@ async def cert_batch_upload_photos(request: Request, file: UploadFile = File(...
 
     tmp_path = None
     try:
+        total_size = 0
         with _tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as tmp:
             tmp_path = tmp.name
             while True:
                 chunk = await file.read(8 * 1024 * 1024)
                 if not chunk:
                     break
+                total_size += len(chunk)
+                if total_size > MAX_DS_ZIP_SIZE:
+                    raise HTTPException(status_code=413,
+                        detail=f"파일 크기 초과 ({MAX_DS_ZIP_SIZE // (1024*1024)}MB)")
                 tmp.write(chunk)
 
         job_id = str(uuid.uuid4())
@@ -855,6 +860,8 @@ async def cert_batch_upload_photos(request: Request, file: UploadFile = File(...
         }
     except zipfile.BadZipFile:
         raise HTTPException(status_code=400, detail="올바른 ZIP 파일이 아닙니다.")
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"사진 ZIP 처리 실패: {e}")
         raise HTTPException(status_code=500, detail="서버 내부 오류")

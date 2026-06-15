@@ -193,6 +193,7 @@ def _init_inspection_db():
         ('주차별', "''"),
         ('schedule_pk', "''"),
         ('needs_recheck', "'0'"),
+        ('사진업로더', "'{}'"),
     ]:
         try:
             conn.execute(f"ALTER TABLE inspection_results ADD COLUMN {col} TEXT DEFAULT {dflt}")

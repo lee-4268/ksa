@@ -41,7 +41,8 @@ S3_REGION = os.getenv("AWS_REGION", "ap-northeast-2")
 # ── 파일 크기 제한 ────────────────────────────────────────────
 MAX_PHOTO_SIZE = 10 * 1024 * 1024    # 10MB
 MAX_EXCEL_SIZE = 50 * 1024 * 1024    # 50MB
-MAX_DS_UPLOAD_SIZE = 200 * 1024 * 1024  # 200MB
+MAX_DS_UPLOAD_SIZE = 200 * 1024 * 1024  # 200MB (callname 단일 엑셀 업로드)
+MAX_DS_ZIP_SIZE = 500 * 1024 * 1024  # 500MB (DS/cert ZIP 묶음 — 수도권 합계 약 330MB라 여유)
 
 # ── S3 허용 prefix ────────────────────────────────────────────
 ALLOWED_S3_READ_PREFIXES = ("photos/", "excel/", "feedback/", "ds-exports/", "ds-raw/")

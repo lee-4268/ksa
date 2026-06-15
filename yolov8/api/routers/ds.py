@@ -59,7 +59,6 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from core.auth import (
     _verify_auth,
-    _verify_token,
     _get_user_role_sync,
     _require_role,
     _check_division_access,
@@ -77,6 +76,7 @@ from core.config import (
     DS_CACHE_DIR,
     DS_CACHE_TTL,
     MAX_DS_UPLOAD_SIZE,
+    MAX_DS_ZIP_SIZE,
     ALLOWED_S3_READ_PREFIXES,
     _INSP_DB,
     _DS_DETAIL_DB,
@@ -3572,7 +3572,8 @@ async def ds_export_presign(
         forwarded_proto = request.headers.get("x-forwarded-proto", "https")
         forwarded_host = request.headers.get("x-forwarded-host") or request.headers.get("host", "")
         origin = f"{forwarded_proto}://{forwarded_host}"
-        raw_token = request.headers.get("Authorization", "")[7:]
+        # 토큰을 URL 쿼리스트링에 싣지 않는다 (로그/히스토리/Referer 유출 방지).
+        # 프론트(web/ds_export.js)는 이 URL을 fetch 하면서 Authorization 헤더로 인증한다.
         for _suffix, _ver in [("_v2.xlsx", "v2"), (".xlsx", "xlsx")]:
             _key = f"ds-exports/{divisionId}/{divisionCode}_{importDate}{_suffix}"
             _validate_s3_key(_key, ALLOWED_S3_READ_PREFIXES)
@@ -3581,8 +3582,6 @@ async def ds_export_presign(
                 qs = f"divisionId={divisionId}&importDate={importDate}&divisionCode={divisionCode}"
                 if _ver == "v2":
                     qs += "&v2=1"
-                if raw_token:
-                    qs += f"&token={raw_token}"
                 proxy_url = f"{origin}/ds/proxy-xlsx?{qs}"
                 # v2면 변경이력 최신 날짜 조회 (파일명 suffix 용)
                 last_change_date = ""
@@ -3775,20 +3774,14 @@ async def ds_proxy_xlsx(
     divisionId: str = Query(...),
     importDate: str = Query(...),
     divisionCode: str = Query(""),
-    token: str = Query(""),
     v2: str = Query(""),
 ):
     """S3 캐시 xlsx → EC2 프록시 스트리밍 (브라우저 CORS 우회)
-    Authorization 헤더 또는 token 쿼리파라미터로 인증.
+    인증은 Authorization 헤더만 허용 (쿼리스트링 토큰 fallback 제거 — URL 유출 방지).
+    프론트(web/ds_export.js)는 fetch + Authorization 헤더로 다운로드한다.
     v2=1 이면 _v2.xlsx 키 사용.
     """
-    # 헤더에 없으면 쿼리파라미터 token으로 fallback
-    if token and not request.headers.get("Authorization"):
-        empno = _verify_token(token)
-        if not empno:
-            raise HTTPException(status_code=401, detail="토큰이 만료되었거나 유효하지 않습니다")
-    else:
-        await _verify_auth(request)
+    await _verify_auth(request)
     suffix = "_v2.xlsx" if v2 == "1" else ".xlsx"
     s3_key = f"ds-exports/{divisionId}/{divisionCode}_{importDate}{suffix}"
     _validate_s3_key(s3_key, ALLOWED_S3_READ_PREFIXES)
@@ -4544,12 +4537,17 @@ async def ds_upload_raw(request: Request, file: UploadFile = File(...)):
         buf = b""
         parts: list = []
         part_number = 1
+        total_size = 0
 
         # 8MB씩 수신 → 버퍼가 PART_SIZE 이상이면 즉시 S3 파트 업로드
         while True:
             chunk = await file.read(PART_SIZE)
             if not chunk:
                 break
+            total_size += len(chunk)
+            if total_size > MAX_DS_ZIP_SIZE:
+                raise HTTPException(status_code=413,
+                    detail=f"파일 크기 초과 ({MAX_DS_ZIP_SIZE // (1024*1024)}MB)")
             buf += chunk
             while len(buf) >= PART_SIZE:
                 part_data, buf = buf[:PART_SIZE], buf[PART_SIZE:]
@@ -4598,6 +4596,8 @@ async def ds_upload_raw(request: Request, file: UploadFile = File(...)):
                 )
             except Exception:
                 pass
+        if isinstance(e, HTTPException):
+            raise
         logger.error(f"DS upload-raw error: {e}")
         raise HTTPException(status_code=500, detail="서버 내부 오류")
 
@@ -4619,8 +4619,13 @@ async def ds_upload_temp(request: Request, file: UploadFile = File(...)):
                 chunk = await file.read(CHUNK_SIZE)
                 if not chunk:
                     break
-                f.write(chunk)
                 total_size += len(chunk)
+                if total_size > MAX_DS_ZIP_SIZE:
+                    f.close()
+                    os.remove(temp_path)
+                    raise HTTPException(status_code=413,
+                        detail=f"파일 크기 초과 ({MAX_DS_ZIP_SIZE // (1024*1024)}MB)")
+                f.write(chunk)
 
         if total_size == 0:
             os.remove(temp_path)
@@ -4629,6 +4634,10 @@ async def ds_upload_temp(request: Request, file: UploadFile = File(...)):
         logger.info(f"DS upload-temp: {temp_id} ({total_size // 1024}KB) → {temp_path}")
         return {"success": True, "tempId": temp_id}
 
+    except HTTPException:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        raise
     except Exception as e:
         if os.path.exists(temp_path):
             os.remove(temp_path)
