@@ -243,10 +243,29 @@ aws s3 ls s3://sko-kca-s3/backups/sqlite/ --recursive | tail -20
 - **3-6 (Medium)** 워크플로우 자동전환에 `'admin'` 하드코딩 (main.py:16569) — member 도 INSPECTED 전환 가능
 - **3-7 (Low)** Category/Station Create owner 클라이언트 지정 (mass assignment) — `_require_owner_or_admin` 이 차단하지만 모델 설계상 owner 는 caller 강제가 안전
 - **3-8 (Low)** requirements.txt `>=` 핀고정 부재 → pip-tools lock + pip-audit 권장
-- **N-4** inspection multipart upload 누적 사이즈 한도 없음 (main.py:12891)
-- **N-5** community upload 전체 메모리 적재 (main.py:19718, 19777) — OOM 가능
+- **N-5** community upload 전체 메모리 적재 (community.py upload) — OOM 가능
 - **N-6** `_verify_password` 헬퍼·`secret_password` 컬럼 죽은 코드
 - **운영**: 백업 실패 알림 부재, 감사 로그 90일 TTL, 의존성 스캐닝 부재
+
+### 2026-06-15 4차 심층 재점검 (모듈 리팩토링 후 OWASP 멀티에이전트 감사)
+
+main.py → `core/`·`routers/` 모듈 분리 이후 전 라우터(약 23,000줄) + Flutter 프론트를 대상으로 9개 OWASP 차원 병렬 감사 + 적대적 검증 수행. 발견 51건 중 43건은 오탐(이미 가드 존재/도달불가/의도된 설계)으로 기각, 8건 확정(중복 1건 제외 7개소). 회귀 없음(1~3차 조치 모두 모듈 분리 후에도 유지 확인).
+
+조치 완료:
+
+| 등급 | 이슈 | 위치 | 조치 | 커밋 |
+|---|---|---|---|---|
+| **High** | `DELETE /inspection/result/photo` 본부 격리·소유자 검증 부재 (cross-HQ IDOR write) — 형제 업로드엔 격리 있으나 삭제만 누락. `/inspection/detail`(격리 없음)로 타 본부 사진S3키 수집 후 삭제 가능 | routers/inspection.py:3937 | 업로드 본인 OR admin OR 해당 본부 manager 만 삭제. 사진별 업로더 추적 위해 `inspection_results.사진업로더`(JSON `{s3_key:empno}`) 컬럼 신설(자동 마이그레이션) | 1f91713 |
+| Medium | `/inspection/result/photo-url`·`photo-data` 본부 격리 부재 — 타 본부 검사 사진 presigned URL 발급·열람 | routers/inspection.py:3955, 3963 | 공통 헬퍼 `_verify_photo_division_access` — s3_key의 year/허가번호 추출 → 대상 access담당 vs caller 본부 비교, 불일치 403 | 1f91713 |
+| Medium | `/ds/proxy-xlsx` 쿼리스트링 토큰 fallback (로그/히스토리/Referer 토큰 유출면) — 기존 3차 #2 항목 | routers/ds.py:3772 | 쿼리 토큰 fallback **완전 제거**, Authorization 헤더만 허용. export-presign도 URL에 token 미부착. 프론트(web/ds_export.js)는 이미 fetch+Bearer 라 회귀 없음 | 1f91713 |
+| Medium | `/ds/upload-temp`·`cert/batch/upload-photos` 업로드 누적 크기 제한 부재 (디스크 고갈 DoS) — 기존 N-4 항목 | routers/ds.py:4603, routers/cert.py:817 | DS/cert ZIP 전용 `MAX_DS_ZIP_SIZE`(500MB, 수도권 합계 약 330MB 대응) 신설, 누적 검사 + 413. `except Exception`이 413을 500으로 덮던 버그도 수정 | 1f91713 |
+| Low | `/ds/upload-raw` 멀티파트 누적 크기·파트 수 제한 부재 (admin/manager 한정, 실패 시 abort 정리됨) | routers/ds.py:4514 | 동일 `MAX_DS_ZIP_SIZE` 누적 검사 + 413, 초과 시 멀티파트 abort | 1f91713 |
+
+> 위 조치로 기존 남은 항목 **#2(ds proxy-xlsx 쿼리 토큰)** 와 **N-4(multipart 크기 한도)** 종결.
+
+4차 식별 후 추후 처리(우선순위 낮음):
+- 사진별 업로더 미기록인 **기존(마이그레이션 이전) 사진**은 업로더 본인 판정 불가 → admin/해당 본부 manager 만 삭제 가능(의도된 동작). 신규 업로드분부터 본인 삭제 가능.
+- 키 노출 진입점 `/inspection/detail`(routers/inspection.py) 자체는 여전히 본부 격리 없음 — photo 엔드포인트 격리로 사진 접근은 차단되나, detail 응답의 메타(사진S3키 목록 등) 노출은 별도 검토 가치.
 
 ## 보안 작업 체크리스트 (새 라우터 추가 시)
 
