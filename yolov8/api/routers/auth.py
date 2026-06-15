@@ -262,16 +262,21 @@ async def auth_resend_otp(req: OtpResendRequest, request: Request):
             msg = "재발송에 실패했습니다. 잠시 후 다시 시도해주세요."
         raise HTTPException(status_code=sso_resp.status_code, detail=msg)
 
-    sso_data = sso_resp.json()
+    # 재호출 시 인프라는 200 + login_session 은 주지만 status 가 sms_sent 가
+    # 아닌 값으로 응답하는 경우가 있음(SMS 는 실제로 발송됨). 1차 로그인과 달리
+    # 재발송은 login_session 쿠키 존재만으로 성공 판정한다 (AWS-IT-RESOURCE 와 동일).
+    try:
+        sso_data = sso_resp.json()
+    except Exception:
+        sso_data = {}
     if sso_data.get("status") != "sms_sent":
-        logger.warning(f"SSO resend(login) status={sso_data.get('status')} empno={empno}")
-        raise HTTPException(502, "SMS 재발송 실패. 잠시 후 다시 시도하세요.")
+        logger.info(f"SSO resend(login) status={sso_data.get('status')} empno={empno} (쿠키로 판정)")
 
     # 새 login_session 으로 교체 + 만료/시도 카운터 리셋
     new_session = sso_resp.cookies.get("login_session")
     if not new_session:
         logger.error(f"SSO resend(login): login_session 쿠키 없음 empno={empno}")
-        raise HTTPException(502, "SSO 세션 발급 실패. 잠시 후 다시 시도하세요.")
+        raise HTTPException(502, "SMS 재발송 실패. 잠시 후 다시 시도하세요.")
     entry["login_session"] = new_session
     entry["expiry"] = now + PRE_AUTH_EXPIRY
     entry["attempts"] = 0
