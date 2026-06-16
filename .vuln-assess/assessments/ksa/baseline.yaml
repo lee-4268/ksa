@@ -1,0 +1,16 @@
+suppressions:
+  - id: sqli-b608-false-positive-2026-06
+    kind: false-positive
+    reason: >-
+      Bandit B608 SQL injection 151건 전수 검증(5개 에이전트 병렬 + 적대적 핵심 케이스
+      확인) 결과 진성 0건. 모든 finding 이 (a) IN 절 동적 플레이스홀더('?'*N), (b) WHERE/SET
+      절을 상수 조건 문자열로 조립하고 값은 ? 파라미터 바인딩으로 분리, (c) 테이블/컬럼명은
+      상수 튜플 또는 화이트리스트(_ALLOWED_SORT, ALLOWED_COLS 등) 검증된 식별자만 f-string
+      보간하는 패턴. 사용자 입력이 SQL 문자열에 직접 삽입되는 경로 없음. B608 은 f-string +
+      SQL 키워드 휴리스틱이라 올바른 파라미터화 코드에도 발화하는 advisory 오탐.
+      검증 회차: 2026-06-18 스냅샷 기준. 상세 docs/rules/security.md 5차 점검.
+    match:
+      slug: sql-injection
+    added: 2026-06-16
+    expires: 2026-12-16
+    by: tomega0701 (SAST 5차, false-positive 판정)
