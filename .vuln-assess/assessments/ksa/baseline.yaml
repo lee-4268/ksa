@@ -45,3 +45,62 @@ suppressions:
     added: 2026-06-16
     expires: 2026-12-16
     by: tomega0701 (SAST 5차, false-positive 판정)
+  # ── unmatched(카탈로그 밖 CWE) 판결 — slug 없이 rule_id 로 매칭 ──
+  - id: unmatched-b110-try-except-pass-2026-06
+    kind: accepted-risk
+    reason: >-
+      Bandit B110(Try/Except/Pass) 73건. 예외를 의도적으로 삼키는 관용 패턴(best-effort
+      정리·옵셔널 컬럼 조회·캐시 무효화 등)으로 보안 결정에 영향 없음(CWE-703 일반 견고성
+      advisory). 민감 흐름의 예외 은폐 아님. 수용 위험. 만료 시 재검토.
+    match:
+      rule_id: B110
+    added: 2026-06-16
+    expires: 2026-12-16
+    by: tomega0701 (SAST 5차, accepted-risk)
+  - id: unmatched-b112-try-except-continue-2026-06
+    kind: accepted-risk
+    reason: >-
+      Bandit B112(Try/Except/Continue) 2건(main.py:406,486). 루프 내 한 항목 실패 시
+      다음으로 진행하는 관용 패턴(CWE-703). 보안 영향 없음. 수용 위험.
+    match:
+      rule_id: B112
+    added: 2026-06-16
+    expires: 2026-12-16
+    by: tomega0701 (SAST 5차, accepted-risk)
+  - id: unmatched-b113-requests-timeout-legacy-2026-06
+    kind: accepted-risk
+    reason: >-
+      Bandit B113(requests timeout 누락) 4건 — auth/skons_auth_api.py, auth/accounts/
+      backends/skons_auth_api.py. 해당 파일은 Django 레거시(auth/)로 FastAPI 운영
+      인증경로(core/auth.py SSO+OTP)에서 import 0건(미사용). 운영 영향 없음. 레거시
+      정리 시 함께 제거 권장. 만료 시 재검토.
+    match:
+      rule_id: B113
+    added: 2026-06-16
+    expires: 2026-12-16
+    by: tomega0701 (SAST 5차, accepted-risk · 레거시)
+  - id: unmatched-b108-temp-dir-const-2026-06
+    kind: false-positive
+    reason: >-
+      Bandit B108(insecure temp file/dir) 6건 — core/config.py:207(DS_CACHE_DIR
+      "/tmp/ds_cache"), core/utils.py:92/103/166/182(디스크 모니터링·stale temp 정리
+      경로 "/tmp"), backfill_ds_detail.py:200. 모두 고정 캐시/정리용 디렉터리 경로
+      상수로, 예측가능 파일명으로 민감 파일을 생성하는 패턴 아님(temp 정리·캐시 로직).
+      심볼릭링크 공격 표면 없음. 과탐.
+    match:
+      rule_id: B108
+    added: 2026-06-16
+    expires: 2026-12-16
+    by: tomega0701 (SAST 5차, false-positive)
+  - id: unmatched-b104-bind-all-devscript-2026-06
+    kind: false-positive
+    reason: >-
+      Bandit B104(0.0.0.0 바인딩) 1건 — yolov8/run_server.py:23. 이 파일은 로컬 개발용
+      실행 스크립트(reload=True, print "http://localhost:8000"). 운영 배포는 systemd
+      kca-api.service(uvicorn)로 이 스크립트 미사용. 개발 편의용 바인딩으로 운영 노출
+      경로 아님. 과탐.
+    match:
+      rule_id: B104
+    added: 2026-06-16
+    expires: 2026-12-16
+    by: tomega0701 (SAST 5차, false-positive · dev script)
