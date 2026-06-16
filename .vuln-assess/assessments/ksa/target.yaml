@@ -1,0 +1,3 @@
+project: ksa
+catalogs: [secure-coding]
+repo: .
