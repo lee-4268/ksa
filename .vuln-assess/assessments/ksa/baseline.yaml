@@ -14,3 +14,18 @@ suppressions:
     added: 2026-06-16
     expires: 2026-12-16
     by: tomega0701 (SAST 5차, false-positive 판정)
+  - id: oscommand-b603-false-positive-2026-06
+    kind: false-positive
+    reason: >-
+      Bandit B404/B603 os-command-injection 2건(inspection.py:1361 import subprocess,
+      :1366 subprocess.Popen) 검증 결과 진성 0건. Popen 은 shell=False(기본) + 리스트
+      인자 형태라 셸 메타문자 주입 불가. 실행 파일은 고정 inspection_worker.py(sys.executable),
+      사용자 입력(s3Key/year/uploadedBy)은 worker 의 argv 로만 전달되고 worker 는 셸
+      재실행(subprocess/os.system) 전무, year 는 int() 캐스팅. 엔드포인트에 admin/manager
+      role 게이트(inspection.py:1354) 존재. CLAUDE.md 권장(shell=False/리스트 인자) 준수.
+      검증 회차: 2026-06-18 스냅샷. 상세 docs/rules/security.md 5차 점검.
+    match:
+      slug: os-command-injection
+    added: 2026-06-16
+    expires: 2026-12-16
+    by: tomega0701 (SAST 5차, false-positive 판정)
