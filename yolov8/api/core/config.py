@@ -154,9 +154,6 @@ _DS_DETAIL_DB = os.path.join(_BASE_DIR, "ds_detail.db")
 _COMMUNITY_DB = os.path.join(_BASE_DIR, "community.db")
 _SISL_PHOTO_DB = os.path.join(_BASE_DIR, "sisl_photo.db")
 
-# ── 사용자 데이터 파일 경로 ────────────────────────────────────
-USERS_DATA_PATH = os.getenv("USERS_DATA_PATH", "data/users.json")
-
 # ── 호출명칭 설정 ─────────────────────────────────────────────
 CALLNAME_CSV_PREFIX = "callname-db/"
 CALLNAME_CACHE_TTL = 86400   # 24시간

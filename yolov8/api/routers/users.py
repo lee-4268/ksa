@@ -16,8 +16,6 @@ import asyncio
 import json
 import logging
 from datetime import datetime, timezone
-from pathlib import Path
-from typing import Optional
 
 import hmac as _hmac_mod
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -30,7 +28,7 @@ from core.auth import (
     _list_all_users_sync, _invalidate_admin_users_cache, _dev_users,
 )
 from core.config import (
-    DYNAMODB_TABLES, VALID_ROLES, ADMIN_BOOTSTRAP_KEY, USERS_DATA_PATH,
+    DYNAMODB_TABLES, VALID_ROLES, ADMIN_BOOTSTRAP_KEY,
 )
 from core.db import get_dynamodb_resource
 from core.utils import decimal_to_native
@@ -39,36 +37,13 @@ from schemas.models import SetRoleRequest
 router = APIRouter(tags=["users"])
 logger = logging.getLogger(__name__)
 
-# ── 로컬 유틸 ─────────────────────────────────────────────────
-
-_users_cache: Optional[dict] = None
-
-
-def _load_users() -> dict:
-    """JSON 파일에서 사용자 데이터 로드 (캐시)."""
-    global _users_cache
-    if _users_cache is not None:
-        return _users_cache
-    data_path = Path(USERS_DATA_PATH)
-    if not data_path.exists():
-        logger.warning(f"Users data file not found: {data_path}")
-        _users_cache = {}
-        return _users_cache
-    import json as _json
-    with open(data_path, "r", encoding="utf-8") as f:
-        users_list = _json.load(f)
-    _users_cache = {u["empno"]: u for u in users_list if "empno" in u}
-    logger.info(f"Loaded {len(_users_cache)} users from {data_path}")
-    return _users_cache
-
-
 # ── 엔드포인트 ────────────────────────────────────────────────
 
 @router.get("/users")
 async def list_users_count(request: Request = None):
-    """사용자 데이터 통계."""
+    """사용자 데이터 통계 (DynamoDB user_roles 기준)."""
     await _verify_auth(request)
-    users = _load_users()
+    users = await asyncio.to_thread(_list_all_users_sync)
     return {
         "success": True,
         "total_users": len(users),
@@ -130,17 +105,6 @@ async def get_user_by_empno(empno: str, request: Request = None):
 
     except ClientError as e:
         logger.error(f"DynamoDB error: {e}")
-        users = _load_users()
-        user = users.get(empno)
-        if user:
-            return {
-                "success": True,
-                "empno": empno,
-                "name": user.get("name"),
-                "region": user.get("region"),
-                "team": user.get("DeptName"),
-                "role": "member",
-            }
         return {"success": False, "empno": empno}
 
 
