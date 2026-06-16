@@ -30,7 +30,16 @@ class Command(BaseCommand):
         # 디렉토리가 없으면 생성
         os.makedirs(save_dir, exist_ok=True)
 
-        conn = pymssql.connect(server='172.19.152.78', user='onsuser1', password='ons12345!', database='Common')
+        db_server = os.environ.get('INET_DB_SERVER')
+        db_user = os.environ.get('INET_DB_USER')
+        db_password = os.environ.get('INET_DB_PASSWORD')
+        db_name = os.environ.get('INET_DB_NAME', 'Common')
+        if not all([db_server, db_user, db_password]):
+            raise RuntimeError(
+                'INET_DB_SERVER / INET_DB_USER / INET_DB_PASSWORD 환경변수를 설정하세요.'
+            )
+
+        conn = pymssql.connect(server=db_server, user=db_user, password=db_password, database=db_name)
 
         query_string = '''
         with step1 as (

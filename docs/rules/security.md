@@ -267,6 +267,24 @@ main.py → `core/`·`routers/` 모듈 분리 이후 전 라우터(약 23,000줄
 - 사진별 업로더 미기록인 **기존(마이그레이션 이전) 사진**은 업로더 본인 판정 불가 → admin/해당 본부 manager 만 삭제 가능(의도된 동작). 신규 업로드분부터 본인 삭제 가능.
 - 키 노출 진입점 `/inspection/detail`(routers/inspection.py) 자체는 여전히 본부 격리 없음 — photo 엔드포인트 격리로 사진 접근은 차단되나, detail 응답의 메타(사진S3키 목록 등) 노출은 별도 검토 가치.
 
+### 2026-06-16 5차 SAST 점검 (vuln-assess 플러그인, secure-coding 카탈로그)
+
+Semgrep 로컬 룰팩 + Bandit 으로 전 백엔드(`yolov8/api/`, `auth/`) SAST 스캔 → 카탈로그 49항목 매핑. effective 취약 3 + unmatched 87. 1회차 스냅샷 `.vuln-assess/assessments/ksa/2026-06-16.yaml`. 거버넌스: 조치는 `security/*` 브랜치 → PR.
+
+조치 완료:
+
+| 등급 | 이슈 | 위치 | 조치 | 커밋 |
+|---|---|---|---|---|
+| **Critical** | 인사DB 자격증명 평문 하드코딩 (server/user/password) — Bandit B106 | auth/accounts/management/commands/download_inet_users.py:33 | `INET_DB_SERVER/USER/PASSWORD/NAME` 환경변수화 + 미설정 시 RuntimeError(fail-closed). 재스캔(2026-06-17)으로 B106 0건 검증 | (security/hardcoded-db-creds 브랜치) |
+
+5차 식별 후 추후 처리(다음 회차):
+- **sql-injection (B608) ~106건** — `cert_cache.py`/`inspection.py`/`cert.py`/`community.py`/`inspection_results.py` 등. Bandit B608은 동적 identifier(테이블·컬럼명) 보간만으로도 잡으므로 과탐 다수 추정. 값 바인딩 `?` 준수 여부 vs identifier 화이트리스트 보간 구분해 진성만 추려야 함(거버넌스 light). ⚠️ 자격증명 노출 시 본 비밀번호로 직접 인사DB 접속 위험 동반되니 키 재발급 권고.
+- **os-command-injection (B603) 2건** — routers/inspection.py:1361, 1366 subprocess 호출. `shell=False`/리스트 인자 확인 필요(light).
+- **improper-input-validation (B405/B314/B406) 22건** — `xml.etree`/escape 로 비신뢰 XML 파싱(XXE) in callname.py/inspection.py/hwp_generator.py. `defusedxml` 전환(owner-signoff — 입력 거부로 동작 변경 가능).
+- **unmatched 86건** — B110/B112(try/except/pass·continue) 대다수 관용 패턴, B113(requests timeout 누락) auth/ 4건, B108(insecure temp) 6건, B104(0.0.0.0 바인딩) run_server.py. 0화 전 baseline 억제 or web-api 라우팅으로 판결 필요.
+
+> 운영 메모: 본 비밀번호(`ons12345!`)가 git 이력에 남아 있으므로 **인사DB 계정 비밀번호 재발급** 필요(코드 제거만으로는 이력 노출 미해소).
+
 ## 보안 작업 체크리스트 (새 라우터 추가 시)
 
 ```

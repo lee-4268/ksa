@@ -1,0 +1,1264 @@
+project: ksa
+date: '2026-06-17'
+catalog: secure-coding
+results:
+- slug: sql-injection
+  status: 취약
+  findings:
+  - file: yolov8\api\core\cert_cache.py
+    line: 203
+    rule_id: C.Users.user.Desktop.vuln-assess-plugin-main.vuln-assess-plugin-main.semgrep-rules.local-python-sql-injection-fstring
+    message: f-string 으로 외부값을 SQL 쿼리에 직접 연결하고 있습니다(SQL 삽입). 쿼리는 파라미터화하여 execute("...
+      %s ...", (값,)) 형태로 작성하십시오.
+  - file: yolov8\api\core\cert_cache.py
+    line: 284
+    rule_id: C.Users.user.Desktop.vuln-assess-plugin-main.vuln-assess-plugin-main.semgrep-rules.local-python-sql-injection-fstring
+    message: f-string 으로 외부값을 SQL 쿼리에 직접 연결하고 있습니다(SQL 삽입). 쿼리는 파라미터화하여 execute("...
+      %s ...", (값,)) 형태로 작성하십시오.
+  - file: yolov8\api\core\cert_cache.py
+    line: 298
+    rule_id: C.Users.user.Desktop.vuln-assess-plugin-main.vuln-assess-plugin-main.semgrep-rules.local-python-sql-injection-fstring
+    message: f-string 으로 외부값을 SQL 쿼리에 직접 연결하고 있습니다(SQL 삽입). 쿼리는 파라미터화하여 execute("...
+      %s ...", (값,)) 형태로 작성하십시오.
+  - file: yolov8\api\core\inspection_db.py
+    line: 31
+    rule_id: C.Users.user.Desktop.vuln-assess-plugin-main.vuln-assess-plugin-main.semgrep-rules.local-python-sql-injection-fstring
+    message: f-string 으로 외부값을 SQL 쿼리에 직접 연결하고 있습니다(SQL 삽입). 쿼리는 파라미터화하여 execute("...
+      %s ...", (값,)) 형태로 작성하십시오.
+  - file: yolov8\api\core\inspection_db.py
+    line: 89
+    rule_id: C.Users.user.Desktop.vuln-assess-plugin-main.vuln-assess-plugin-main.semgrep-rules.local-python-sql-injection-fstring
+    message: f-string 으로 외부값을 SQL 쿼리에 직접 연결하고 있습니다(SQL 삽입). 쿼리는 파라미터화하여 execute("...
+      %s ...", (값,)) 형태로 작성하십시오.
+  - file: yolov8\api\core\inspection_db.py
+    line: 103
+    rule_id: C.Users.user.Desktop.vuln-assess-plugin-main.vuln-assess-plugin-main.semgrep-rules.local-python-sql-injection-fstring
+    message: f-string 으로 외부값을 SQL 쿼리에 직접 연결하고 있습니다(SQL 삽입). 쿼리는 파라미터화하여 execute("...
+      %s ...", (값,)) 형태로 작성하십시오.
+  - file: yolov8\api\core\inspection_db.py
+    line: 141
+    rule_id: C.Users.user.Desktop.vuln-assess-plugin-main.vuln-assess-plugin-main.semgrep-rules.local-python-sql-injection-fstring
+    message: f-string 으로 외부값을 SQL 쿼리에 직접 연결하고 있습니다(SQL 삽입). 쿼리는 파라미터화하여 execute("...
+      %s ...", (값,)) 형태로 작성하십시오.
+  - file: yolov8\api\core\inspection_db.py
+    line: 199
+    rule_id: C.Users.user.Desktop.vuln-assess-plugin-main.vuln-assess-plugin-main.semgrep-rules.local-python-sql-injection-fstring
+    message: f-string 으로 외부값을 SQL 쿼리에 직접 연결하고 있습니다(SQL 삽입). 쿼리는 파라미터화하여 execute("...
+      %s ...", (값,)) 형태로 작성하십시오.
+  - file: yolov8\api\core\inspection_db.py
+    line: 328
+    rule_id: C.Users.user.Desktop.vuln-assess-plugin-main.vuln-assess-plugin-main.semgrep-rules.local-python-sql-injection-fstring
+    message: f-string 으로 외부값을 SQL 쿼리에 직접 연결하고 있습니다(SQL 삽입). 쿼리는 파라미터화하여 execute("...
+      %s ...", (값,)) 형태로 작성하십시오.
+  - file: yolov8\api\core\inspection_db.py
+    line: 336
+    rule_id: C.Users.user.Desktop.vuln-assess-plugin-main.vuln-assess-plugin-main.semgrep-rules.local-python-sql-injection-fstring
+    message: f-string 으로 외부값을 SQL 쿼리에 직접 연결하고 있습니다(SQL 삽입). 쿼리는 파라미터화하여 execute("...
+      %s ...", (값,)) 형태로 작성하십시오.
+  - file: yolov8\api\routers\change_request.py
+    line: 446
+    rule_id: C.Users.user.Desktop.vuln-assess-plugin-main.vuln-assess-plugin-main.semgrep-rules.local-python-sql-injection-fstring
+    message: f-string 으로 외부값을 SQL 쿼리에 직접 연결하고 있습니다(SQL 삽입). 쿼리는 파라미터화하여 execute("...
+      %s ...", (값,)) 형태로 작성하십시오.
+  - file: yolov8\api\routers\community.py
+    line: 214
+    rule_id: C.Users.user.Desktop.vuln-assess-plugin-main.vuln-assess-plugin-main.semgrep-rules.local-python-sql-injection-fstring
+    message: f-string 으로 외부값을 SQL 쿼리에 직접 연결하고 있습니다(SQL 삽입). 쿼리는 파라미터화하여 execute("...
+      %s ...", (값,)) 형태로 작성하십시오.
+  - file: yolov8\api\routers\community.py
+    line: 216
+    rule_id: C.Users.user.Desktop.vuln-assess-plugin-main.vuln-assess-plugin-main.semgrep-rules.local-python-sql-injection-fstring
+    message: f-string 으로 외부값을 SQL 쿼리에 직접 연결하고 있습니다(SQL 삽입). 쿼리는 파라미터화하여 execute("...
+      %s ...", (값,)) 형태로 작성하십시오.
+  - file: yolov8\api\routers\community.py
+    line: 438
+    rule_id: C.Users.user.Desktop.vuln-assess-plugin-main.vuln-assess-plugin-main.semgrep-rules.local-python-sql-injection-fstring
+    message: f-string 으로 외부값을 SQL 쿼리에 직접 연결하고 있습니다(SQL 삽입). 쿼리는 파라미터화하여 execute("...
+      %s ...", (값,)) 형태로 작성하십시오.
+  - file: yolov8\api\routers\community.py
+    line: 440
+    rule_id: C.Users.user.Desktop.vuln-assess-plugin-main.vuln-assess-plugin-main.semgrep-rules.local-python-sql-injection-fstring
+    message: f-string 으로 외부값을 SQL 쿼리에 직접 연결하고 있습니다(SQL 삽입). 쿼리는 파라미터화하여 execute("...
+      %s ...", (값,)) 형태로 작성하십시오.
+  - file: yolov8\api\routers\document.py
+    line: 207
+    rule_id: C.Users.user.Desktop.vuln-assess-plugin-main.vuln-assess-plugin-main.semgrep-rules.local-python-sql-injection-fstring
+    message: f-string 으로 외부값을 SQL 쿼리에 직접 연결하고 있습니다(SQL 삽입). 쿼리는 파라미터화하여 execute("...
+      %s ...", (값,)) 형태로 작성하십시오.
+  - file: yolov8\api\routers\inadequate.py
+    line: 141
+    rule_id: C.Users.user.Desktop.vuln-assess-plugin-main.vuln-assess-plugin-main.semgrep-rules.local-python-sql-injection-fstring
+    message: f-string 으로 외부값을 SQL 쿼리에 직접 연결하고 있습니다(SQL 삽입). 쿼리는 파라미터화하여 execute("...
+      %s ...", (값,)) 형태로 작성하십시오.
+  - file: yolov8\api\routers\inadequate.py
+    line: 187
+    rule_id: C.Users.user.Desktop.vuln-assess-plugin-main.vuln-assess-plugin-main.semgrep-rules.local-python-sql-injection-fstring
+    message: f-string 으로 외부값을 SQL 쿼리에 직접 연결하고 있습니다(SQL 삽입). 쿼리는 파라미터화하여 execute("...
+      %s ...", (값,)) 형태로 작성하십시오.
+  - file: yolov8\api\routers\inadequate.py
+    line: 215
+    rule_id: C.Users.user.Desktop.vuln-assess-plugin-main.vuln-assess-plugin-main.semgrep-rules.local-python-sql-injection-fstring
+    message: f-string 으로 외부값을 SQL 쿼리에 직접 연결하고 있습니다(SQL 삽입). 쿼리는 파라미터화하여 execute("...
+      %s ...", (값,)) 형태로 작성하십시오.
+  - file: yolov8\api\routers\inadequate.py
+    line: 216
+    rule_id: C.Users.user.Desktop.vuln-assess-plugin-main.vuln-assess-plugin-main.semgrep-rules.local-python-sql-injection-fstring
+    message: f-string 으로 외부값을 SQL 쿼리에 직접 연결하고 있습니다(SQL 삽입). 쿼리는 파라미터화하여 execute("...
+      %s ...", (값,)) 형태로 작성하십시오.
+  - file: yolov8\api\routers\inadequate.py
+    line: 217
+    rule_id: C.Users.user.Desktop.vuln-assess-plugin-main.vuln-assess-plugin-main.semgrep-rules.local-python-sql-injection-fstring
+    message: f-string 으로 외부값을 SQL 쿼리에 직접 연결하고 있습니다(SQL 삽입). 쿼리는 파라미터화하여 execute("...
+      %s ...", (값,)) 형태로 작성하십시오.
+  - file: yolov8\api\routers\inadequate.py
+    line: 218
+    rule_id: C.Users.user.Desktop.vuln-assess-plugin-main.vuln-assess-plugin-main.semgrep-rules.local-python-sql-injection-fstring
+    message: f-string 으로 외부값을 SQL 쿼리에 직접 연결하고 있습니다(SQL 삽입). 쿼리는 파라미터화하여 execute("...
+      %s ...", (값,)) 형태로 작성하십시오.
+  - file: yolov8\api\routers\inadequate.py
+    line: 261
+    rule_id: C.Users.user.Desktop.vuln-assess-plugin-main.vuln-assess-plugin-main.semgrep-rules.local-python-sql-injection-fstring
+    message: f-string 으로 외부값을 SQL 쿼리에 직접 연결하고 있습니다(SQL 삽입). 쿼리는 파라미터화하여 execute("...
+      %s ...", (값,)) 형태로 작성하십시오.
+  - file: yolov8\api\routers\inspection_results.py
+    line: 726
+    rule_id: C.Users.user.Desktop.vuln-assess-plugin-main.vuln-assess-plugin-main.semgrep-rules.local-python-sql-injection-fstring
+    message: f-string 으로 외부값을 SQL 쿼리에 직접 연결하고 있습니다(SQL 삽입). 쿼리는 파라미터화하여 execute("...
+      %s ...", (값,)) 형태로 작성하십시오.
+  - file: yolov8\api\routers\inspection_results.py
+    line: 752
+    rule_id: C.Users.user.Desktop.vuln-assess-plugin-main.vuln-assess-plugin-main.semgrep-rules.local-python-sql-injection-fstring
+    message: f-string 으로 외부값을 SQL 쿼리에 직접 연결하고 있습니다(SQL 삽입). 쿼리는 파라미터화하여 execute("...
+      %s ...", (값,)) 형태로 작성하십시오.
+  - file: yolov8\api\routers\inspection_results.py
+    line: 756
+    rule_id: C.Users.user.Desktop.vuln-assess-plugin-main.vuln-assess-plugin-main.semgrep-rules.local-python-sql-injection-fstring
+    message: f-string 으로 외부값을 SQL 쿼리에 직접 연결하고 있습니다(SQL 삽입). 쿼리는 파라미터화하여 execute("...
+      %s ...", (값,)) 형태로 작성하십시오.
+  - file: yolov8\api\routers\inspection_results.py
+    line: 761
+    rule_id: C.Users.user.Desktop.vuln-assess-plugin-main.vuln-assess-plugin-main.semgrep-rules.local-python-sql-injection-fstring
+    message: f-string 으로 외부값을 SQL 쿼리에 직접 연결하고 있습니다(SQL 삽입). 쿼리는 파라미터화하여 execute("...
+      %s ...", (값,)) 형태로 작성하십시오.
+  - file: yolov8\api\routers\inspection_results.py
+    line: 766
+    rule_id: C.Users.user.Desktop.vuln-assess-plugin-main.vuln-assess-plugin-main.semgrep-rules.local-python-sql-injection-fstring
+    message: f-string 으로 외부값을 SQL 쿼리에 직접 연결하고 있습니다(SQL 삽입). 쿼리는 파라미터화하여 execute("...
+      %s ...", (값,)) 형태로 작성하십시오.
+  - file: yolov8\api\routers\inspection_results.py
+    line: 771
+    rule_id: C.Users.user.Desktop.vuln-assess-plugin-main.vuln-assess-plugin-main.semgrep-rules.local-python-sql-injection-fstring
+    message: f-string 으로 외부값을 SQL 쿼리에 직접 연결하고 있습니다(SQL 삽입). 쿼리는 파라미터화하여 execute("...
+      %s ...", (값,)) 형태로 작성하십시오.
+  - file: yolov8\api\routers\inspection_results.py
+    line: 1036
+    rule_id: C.Users.user.Desktop.vuln-assess-plugin-main.vuln-assess-plugin-main.semgrep-rules.local-python-sql-injection-fstring
+    message: f-string 으로 외부값을 SQL 쿼리에 직접 연결하고 있습니다(SQL 삽입). 쿼리는 파라미터화하여 execute("...
+      %s ...", (값,)) 형태로 작성하십시오.
+  - file: yolov8\api\routers\inspection_results.py
+    line: 1041
+    rule_id: C.Users.user.Desktop.vuln-assess-plugin-main.vuln-assess-plugin-main.semgrep-rules.local-python-sql-injection-fstring
+    message: f-string 으로 외부값을 SQL 쿼리에 직접 연결하고 있습니다(SQL 삽입). 쿼리는 파라미터화하여 execute("...
+      %s ...", (값,)) 형태로 작성하십시오.
+  - file: yolov8\api\routers\inspection_results.py
+    line: 1282
+    rule_id: C.Users.user.Desktop.vuln-assess-plugin-main.vuln-assess-plugin-main.semgrep-rules.local-python-sql-injection-fstring
+    message: f-string 으로 외부값을 SQL 쿼리에 직접 연결하고 있습니다(SQL 삽입). 쿼리는 파라미터화하여 execute("...
+      %s ...", (값,)) 형태로 작성하십시오.
+  - file: yolov8\api\routers\inspection_results.py
+    line: 1286
+    rule_id: C.Users.user.Desktop.vuln-assess-plugin-main.vuln-assess-plugin-main.semgrep-rules.local-python-sql-injection-fstring
+    message: f-string 으로 외부값을 SQL 쿼리에 직접 연결하고 있습니다(SQL 삽입). 쿼리는 파라미터화하여 execute("...
+      %s ...", (값,)) 형태로 작성하십시오.
+  - file: yolov8\api\routers\inspection_results.py
+    line: 1287
+    rule_id: C.Users.user.Desktop.vuln-assess-plugin-main.vuln-assess-plugin-main.semgrep-rules.local-python-sql-injection-fstring
+    message: f-string 으로 외부값을 SQL 쿼리에 직접 연결하고 있습니다(SQL 삽입). 쿼리는 파라미터화하여 execute("...
+      %s ...", (값,)) 형태로 작성하십시오.
+  - file: yolov8\api\routers\inspection_results.py
+    line: 1443
+    rule_id: C.Users.user.Desktop.vuln-assess-plugin-main.vuln-assess-plugin-main.semgrep-rules.local-python-sql-injection-fstring
+    message: f-string 으로 외부값을 SQL 쿼리에 직접 연결하고 있습니다(SQL 삽입). 쿼리는 파라미터화하여 execute("...
+      %s ...", (값,)) 형태로 작성하십시오.
+  - file: yolov8/api/core/cert_cache.py
+    line: 203
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/core/cert_cache.py
+    line: 285
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/core/cert_cache.py
+    line: 299
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/core/cert_cache.py
+    line: 336
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/core/cert_cache.py
+    line: 353
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/core/cert_cache.py
+    line: 370
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/core/inspection_db.py
+    line: 328
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/cert.py
+    line: 408
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/cert.py
+    line: 426
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/cert.py
+    line: 492
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/cert.py
+    line: 525
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/cert.py
+    line: 541
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/cert.py
+    line: 584
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/cert.py
+    line: 1089
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/change_request.py
+    line: 177
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/change_request.py
+    line: 222
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/change_request.py
+    line: 447
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/change_request.py
+    line: 458
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/community.py
+    line: 214
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/community.py
+    line: 217
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/community.py
+    line: 438
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/community.py
+    line: 441
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/document.py
+    line: 208
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inadequate.py
+    line: 142
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inadequate.py
+    line: 153
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inadequate.py
+    line: 187
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inadequate.py
+    line: 215
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inadequate.py
+    line: 216
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inadequate.py
+    line: 217
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inadequate.py
+    line: 218
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inadequate.py
+    line: 262
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inspection.py
+    line: 823
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inspection.py
+    line: 855
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inspection.py
+    line: 1487
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inspection.py
+    line: 1501
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inspection.py
+    line: 1552
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inspection.py
+    line: 1603
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inspection.py
+    line: 1605
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inspection.py
+    line: 1621
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inspection.py
+    line: 1692
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inspection.py
+    line: 1696
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inspection.py
+    line: 1707
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inspection.py
+    line: 1713
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inspection.py
+    line: 1717
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inspection.py
+    line: 1755
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inspection.py
+    line: 2392
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inspection.py
+    line: 2415
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inspection.py
+    line: 2452
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inspection.py
+    line: 2455
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inspection.py
+    line: 2490
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inspection.py
+    line: 2526
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inspection.py
+    line: 2535
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inspection.py
+    line: 2592
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inspection.py
+    line: 2605
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inspection.py
+    line: 2619
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inspection.py
+    line: 2724
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inspection.py
+    line: 2735
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inspection.py
+    line: 2801
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inspection.py
+    line: 3336
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inspection.py
+    line: 3396
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inspection.py
+    line: 3447
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inspection.py
+    line: 3460
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inspection.py
+    line: 3755
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inspection.py
+    line: 4336
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inspection.py
+    line: 4401
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inspection.py
+    line: 4407
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inspection.py
+    line: 4434
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inspection.py
+    line: 4440
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inspection.py
+    line: 4446
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inspection.py
+    line: 4452
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inspection.py
+    line: 4458
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inspection.py
+    line: 4512
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inspection.py
+    line: 4819
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inspection.py
+    line: 5039
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inspection.py
+    line: 5110
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inspection.py
+    line: 5124
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inspection.py
+    line: 5201
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inspection_results.py
+    line: 720
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inspection_results.py
+    line: 727
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inspection_results.py
+    line: 753
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inspection_results.py
+    line: 757
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inspection_results.py
+    line: 762
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inspection_results.py
+    line: 767
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inspection_results.py
+    line: 772
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inspection_results.py
+    line: 917
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inspection_results.py
+    line: 1037
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inspection_results.py
+    line: 1042
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inspection_results.py
+    line: 1084
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inspection_results.py
+    line: 1094
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inspection_results.py
+    line: 1104
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inspection_results.py
+    line: 1120
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inspection_results.py
+    line: 1137
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inspection_results.py
+    line: 1176
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inspection_results.py
+    line: 1282
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inspection_results.py
+    line: 1286
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inspection_results.py
+    line: 1287
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/inspection_results.py
+    line: 1444
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/sisl_photos.py
+    line: 218
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/sisl_photos.py
+    line: 365
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+  - file: yolov8/api/routers/sisl_photos.py
+    line: 411
+    rule_id: B608
+    message: Possible SQL injection vector through string-based query construction.
+- slug: code-injection
+  status: 양호
+- slug: os-command-injection
+  status: 취약
+  findings:
+  - file: yolov8/api/routers/inspection.py
+    line: 1361
+    rule_id: B404
+    message: Consider possible security implications associated with the subprocess
+      module.
+  - file: yolov8/api/routers/inspection.py
+    line: 1366
+    rule_id: B603
+    message: subprocess call - check for execution of untrusted input.
+- slug: path-traversal
+  status: 양호
+- slug: xss
+  status: 양호
+- slug: dangerous-file-upload
+  status: 양호
+- slug: open-redirect
+  status: 양호
+- slug: ldap-injection
+  status: 양호
+- slug: csrf
+  status: 양호
+- slug: http-response-splitting
+  status: 양호
+- slug: integer-overflow
+  status: 양호
+- slug: xml-injection
+  status: 양호
+- slug: xxe
+  status: 양호
+- slug: server-side-request-forgery
+  status: 양호
+- slug: memory-buffer-overflow
+  status: 양호
+- slug: format-string
+  status: 양호
+- slug: improper-input-validation
+  status: 취약
+  findings:
+  - file: yolov8/api/hwp_generator.py
+    line: 11
+    rule_id: B406
+    message: Using escape to parse untrusted XML data is known to be vulnerable to
+      XML attacks. Replace escape with the equivalent defusedxml package, or make
+      sure defusedxml.defuse_stdlib() is called.
+  - file: yolov8/api/routers/callname.py
+    line: 119
+    rule_id: B405
+    message: Using xml.etree.ElementTree to parse untrusted XML data is known to be
+      vulnerable to XML attacks. Replace xml.etree.ElementTree with the equivalent
+      defusedxml package, or make sure defusedxml.defuse_stdlib() is called.
+  - file: yolov8/api/routers/callname.py
+    line: 122
+    rule_id: B314
+    message: Using xml.etree.ElementTree.fromstring to parse untrusted XML data is
+      known to be vulnerable to XML attacks. Replace xml.etree.ElementTree.fromstring
+      with its defusedxml equivalent function or make sure defusedxml.defuse_stdlib()
+      is called
+  - file: yolov8/api/routers/callname.py
+    line: 136
+    rule_id: B314
+    message: Using xml.etree.ElementTree.fromstring to parse untrusted XML data is
+      known to be vulnerable to XML attacks. Replace xml.etree.ElementTree.fromstring
+      with its defusedxml equivalent function or make sure defusedxml.defuse_stdlib()
+      is called
+  - file: yolov8/api/routers/callname.py
+    line: 153
+    rule_id: B405
+    message: Using xml.etree.ElementTree to parse untrusted XML data is known to be
+      vulnerable to XML attacks. Replace xml.etree.ElementTree with the equivalent
+      defusedxml package, or make sure defusedxml.defuse_stdlib() is called.
+  - file: yolov8/api/routers/callname.py
+    line: 175
+    rule_id: B314
+    message: Using xml.etree.ElementTree.iterparse to parse untrusted XML data is
+      known to be vulnerable to XML attacks. Replace xml.etree.ElementTree.iterparse
+      with its defusedxml equivalent function or make sure defusedxml.defuse_stdlib()
+      is called
+  - file: yolov8/api/routers/callname.py
+    line: 217
+    rule_id: B314
+    message: Using xml.etree.ElementTree.iterparse to parse untrusted XML data is
+      known to be vulnerable to XML attacks. Replace xml.etree.ElementTree.iterparse
+      with its defusedxml equivalent function or make sure defusedxml.defuse_stdlib()
+      is called
+  - file: yolov8/api/routers/callname.py
+    line: 268
+    rule_id: B405
+    message: Using xml.etree.ElementTree to parse untrusted XML data is known to be
+      vulnerable to XML attacks. Replace xml.etree.ElementTree with the equivalent
+      defusedxml package, or make sure defusedxml.defuse_stdlib() is called.
+  - file: yolov8/api/routers/callname.py
+    line: 279
+    rule_id: B314
+    message: Using xml.etree.ElementTree.iterparse to parse untrusted XML data is
+      known to be vulnerable to XML attacks. Replace xml.etree.ElementTree.iterparse
+      with its defusedxml equivalent function or make sure defusedxml.defuse_stdlib()
+      is called
+  - file: yolov8/api/routers/callname.py
+    line: 332
+    rule_id: B314
+    message: Using xml.etree.ElementTree.iterparse to parse untrusted XML data is
+      known to be vulnerable to XML attacks. Replace xml.etree.ElementTree.iterparse
+      with its defusedxml equivalent function or make sure defusedxml.defuse_stdlib()
+      is called
+  - file: yolov8/api/routers/callname.py
+    line: 432
+    rule_id: B405
+    message: Using xml.etree.ElementTree to parse untrusted XML data is known to be
+      vulnerable to XML attacks. Replace xml.etree.ElementTree with the equivalent
+      defusedxml package, or make sure defusedxml.defuse_stdlib() is called.
+  - file: yolov8/api/routers/callname.py
+    line: 473
+    rule_id: B314
+    message: Using xml.etree.ElementTree.iterparse to parse untrusted XML data is
+      known to be vulnerable to XML attacks. Replace xml.etree.ElementTree.iterparse
+      with its defusedxml equivalent function or make sure defusedxml.defuse_stdlib()
+      is called
+  - file: yolov8/api/routers/callname.py
+    line: 513
+    rule_id: B314
+    message: Using xml.etree.ElementTree.iterparse to parse untrusted XML data is
+      known to be vulnerable to XML attacks. Replace xml.etree.ElementTree.iterparse
+      with its defusedxml equivalent function or make sure defusedxml.defuse_stdlib()
+      is called
+  - file: yolov8/api/routers/inspection.py
+    line: 115
+    rule_id: B405
+    message: Using xml.etree.ElementTree to parse untrusted XML data is known to be
+      vulnerable to XML attacks. Replace xml.etree.ElementTree with the equivalent
+      defusedxml package, or make sure defusedxml.defuse_stdlib() is called.
+  - file: yolov8/api/routers/inspection.py
+    line: 118
+    rule_id: B314
+    message: Using xml.etree.ElementTree.fromstring to parse untrusted XML data is
+      known to be vulnerable to XML attacks. Replace xml.etree.ElementTree.fromstring
+      with its defusedxml equivalent function or make sure defusedxml.defuse_stdlib()
+      is called
+  - file: yolov8/api/routers/inspection.py
+    line: 132
+    rule_id: B314
+    message: Using xml.etree.ElementTree.fromstring to parse untrusted XML data is
+      known to be vulnerable to XML attacks. Replace xml.etree.ElementTree.fromstring
+      with its defusedxml equivalent function or make sure defusedxml.defuse_stdlib()
+      is called
+  - file: yolov8/api/routers/inspection.py
+    line: 148
+    rule_id: B405
+    message: Using xml.etree.ElementTree to parse untrusted XML data is known to be
+      vulnerable to XML attacks. Replace xml.etree.ElementTree with the equivalent
+      defusedxml package, or make sure defusedxml.defuse_stdlib() is called.
+  - file: yolov8/api/routers/inspection.py
+    line: 153
+    rule_id: B314
+    message: Using xml.etree.ElementTree.fromstring to parse untrusted XML data is
+      known to be vulnerable to XML attacks. Replace xml.etree.ElementTree.fromstring
+      with its defusedxml equivalent function or make sure defusedxml.defuse_stdlib()
+      is called
+  - file: yolov8/api/routers/inspection.py
+    line: 169
+    rule_id: B405
+    message: Using xml.etree.ElementTree to parse untrusted XML data is known to be
+      vulnerable to XML attacks. Replace xml.etree.ElementTree with the equivalent
+      defusedxml package, or make sure defusedxml.defuse_stdlib() is called.
+  - file: yolov8/api/routers/inspection.py
+    line: 190
+    rule_id: B314
+    message: Using xml.etree.ElementTree.iterparse to parse untrusted XML data is
+      known to be vulnerable to XML attacks. Replace xml.etree.ElementTree.iterparse
+      with its defusedxml equivalent function or make sure defusedxml.defuse_stdlib()
+      is called
+  - file: yolov8/api/routers/inspection.py
+    line: 231
+    rule_id: B314
+    message: Using xml.etree.ElementTree.iterparse to parse untrusted XML data is
+      known to be vulnerable to XML attacks. Replace xml.etree.ElementTree.iterparse
+      with its defusedxml equivalent function or make sure defusedxml.defuse_stdlib()
+      is called
+- slug: improper-authentication
+  status: 양호
+- slug: improper-authorization
+  status: 양호
+- slug: weak-permission-critical-resource
+  status: 양호
+- slug: weak-encryption-algorithm
+  status: 양호
+- slug: cleartext-sensitive-info
+  status: 양호
+- slug: hardcoded-credentials
+  status: 양호
+- slug: insufficient-key-length
+  status: 양호
+- slug: improper-random-value
+  status: 양호
+- slug: weak-password-allowed
+  status: 양호
+- slug: improper-digital-signature
+  status: 양호
+- slug: improper-cert-validation
+  status: 양호
+- slug: persistent-cookie-info-exposure
+  status: 양호
+- slug: sensitive-info-in-comments
+  status: 양호
+- slug: salt-fixed-onewayhash
+  status: 양호
+- slug: code-download-no-integrity-check
+  status: 양호
+- slug: no-auth-attempt-limit
+  status: 양호
+- slug: race-condition-tocttou
+  status: 양호
+- slug: uncontrolled-recursion
+  status: 양호
+- slug: error-message-info-exposure
+  status: 양호
+- slug: improper-error-handling
+  status: 양호
+- slug: improper-check-exceptional
+  status: 양호
+- slug: null-pointer-dereference
+  status: 양호
+- slug: improper-resource-shutdown
+  status: 양호
+- slug: use-after-free
+  status: 양호
+- slug: initialization-error
+  status: 양호
+- slug: insecure-deserialization
+  status: 양호
+- slug: data-leak-wrong-session
+  status: 양호
+- slug: debug-code-exposure
+  status: 양호
+- slug: private-array-returned-public
+  status: 양호
+- slug: private-array-to-public
+  status: 양호
+- slug: dns-lookup-trust
+  status: 양호
+- slug: vulnerable-api-misuse
+  status: 양호
+unmatched_findings:
+- rule_id: B113
+  cwes: &id001
+  - CWE-400
+  file: auth/accounts/backends/skons_auth_api.py
+  line: 55
+  message: Call to requests without timeout
+- rule_id: B113
+  cwes: *id001
+  file: auth/accounts/backends/skons_auth_api.py
+  line: 81
+  message: Call to requests without timeout
+- rule_id: B113
+  cwes: *id001
+  file: auth/skons_auth_api.py
+  line: 55
+  message: Call to requests without timeout
+- rule_id: B113
+  cwes: *id001
+  file: auth/skons_auth_api.py
+  line: 81
+  message: Call to requests without timeout
+- rule_id: B110
+  cwes: &id002
+  - CWE-703
+  file: scripts/make_manual_pptx.py
+  line: 111
+  message: Try, Except, Pass detected.
+- rule_id: B108
+  cwes: &id003
+  - CWE-377
+  file: yolov8/api/backfill_ds_detail.py
+  line: 200
+  message: Probable insecure usage of temp file/directory.
+- rule_id: B110
+  cwes: *id002
+  file: yolov8/api/core/auth.py
+  line: 145
+  message: Try, Except, Pass detected.
+- rule_id: B110
+  cwes: *id002
+  file: yolov8/api/core/auth.py
+  line: 199
+  message: Try, Except, Pass detected.
+- rule_id: B110
+  cwes: *id002
+  file: yolov8/api/core/auth.py
+  line: 440
+  message: Try, Except, Pass detected.
+- rule_id: B110
+  cwes: *id002
+  file: yolov8/api/core/auth.py
+  line: 573
+  message: Try, Except, Pass detected.
+- rule_id: B110
+  cwes: *id002
+  file: yolov8/api/core/cert_cache.py
+  line: 146
+  message: Try, Except, Pass detected.
+- rule_id: B110
+  cwes: *id002
+  file: yolov8/api/core/cert_cache.py
+  line: 164
+  message: Try, Except, Pass detected.
+- rule_id: B108
+  cwes: *id003
+  file: yolov8/api/core/config.py
+  line: 210
+  message: Probable insecure usage of temp file/directory.
+- rule_id: B110
+  cwes: *id002
+  file: yolov8/api/core/inspection_db.py
+  line: 32
+  message: Try, Except, Pass detected.
+- rule_id: B110
+  cwes: *id002
+  file: yolov8/api/core/inspection_db.py
+  line: 54
+  message: Try, Except, Pass detected.
+- rule_id: B110
+  cwes: *id002
+  file: yolov8/api/core/inspection_db.py
+  line: 90
+  message: Try, Except, Pass detected.
+- rule_id: B110
+  cwes: *id002
+  file: yolov8/api/core/inspection_db.py
+  line: 104
+  message: Try, Except, Pass detected.
+- rule_id: B110
+  cwes: *id002
+  file: yolov8/api/core/inspection_db.py
+  line: 142
+  message: Try, Except, Pass detected.
+- rule_id: B110
+  cwes: *id002
+  file: yolov8/api/core/inspection_db.py
+  line: 166
+  message: Try, Except, Pass detected.
+- rule_id: B110
+  cwes: *id002
+  file: yolov8/api/core/inspection_db.py
+  line: 200
+  message: Try, Except, Pass detected.
+- rule_id: B110
+  cwes: *id002
+  file: yolov8/api/core/inspection_db.py
+  line: 209
+  message: Try, Except, Pass detected.
+- rule_id: B110
+  cwes: *id002
+  file: yolov8/api/core/inspection_db.py
+  line: 258
+  message: Try, Except, Pass detected.
+- rule_id: B110
+  cwes: *id002
+  file: yolov8/api/core/utils.py
+  line: 70
+  message: Try, Except, Pass detected.
+- rule_id: B108
+  cwes: *id003
+  file: yolov8/api/core/utils.py
+  line: 92
+  message: Probable insecure usage of temp file/directory.
+- rule_id: B108
+  cwes: *id003
+  file: yolov8/api/core/utils.py
+  line: 103
+  message: Probable insecure usage of temp file/directory.
+- rule_id: B108
+  cwes: *id003
+  file: yolov8/api/core/utils.py
+  line: 166
+  message: Probable insecure usage of temp file/directory.
+- rule_id: B108
+  cwes: *id003
+  file: yolov8/api/core/utils.py
+  line: 182
+  message: Probable insecure usage of temp file/directory.
+- rule_id: B110
+  cwes: *id002
+  file: yolov8/api/core/utils.py
+  line: 199
+  message: Try, Except, Pass detected.
+- rule_id: B110
+  cwes: *id002
+  file: yolov8/api/core/utils.py
+  line: 255
+  message: Try, Except, Pass detected.
+- rule_id: B110
+  cwes: *id002
+  file: yolov8/api/hwp_generator.py
+  line: 77
+  message: Try, Except, Pass detected.
+- rule_id: B110
+  cwes: *id002
+  file: yolov8/api/inspection_worker.py
+  line: 48
+  message: Try, Except, Pass detected.
+- rule_id: B110
+  cwes: *id002
+  file: yolov8/api/main.py
+  line: 215
+  message: Try, Except, Pass detected.
+- rule_id: B112
+  cwes: &id004
+  - CWE-703
+  file: yolov8/api/main.py
+  line: 406
+  message: Try, Except, Continue detected.
+- rule_id: B112
+  cwes: *id004
+  file: yolov8/api/main.py
+  line: 486
+  message: Try, Except, Continue detected.
+- rule_id: B110
+  cwes: *id002
+  file: yolov8/api/routers/callname.py
+  line: 145
+  message: Try, Except, Pass detected.
+- rule_id: B110
+  cwes: *id002
+  file: yolov8/api/routers/callname.py
+  line: 262
+  message: Try, Except, Pass detected.
+- rule_id: B110
+  cwes: *id002
+  file: yolov8/api/routers/callname.py
+  line: 404
+  message: Try, Except, Pass detected.
+- rule_id: B110
+  cwes: *id002
+  file: yolov8/api/routers/callname.py
+  line: 411
+  message: Try, Except, Pass detected.
+- rule_id: B110
+  cwes: *id002
+  file: yolov8/api/routers/callname.py
+  line: 774
+  message: Try, Except, Pass detected.
+- rule_id: B110
+  cwes: *id002
+  file: yolov8/api/routers/callname.py
+  line: 908
+  message: Try, Except, Pass detected.
+- rule_id: B110
+  cwes: *id002
+  file: yolov8/api/routers/callname.py
+  line: 1060
+  message: Try, Except, Pass detected.
+- rule_id: B110
+  cwes: *id002
+  file: yolov8/api/routers/callname.py
+  line: 1156
+  message: Try, Except, Pass detected.
+- rule_id: B110
+  cwes: *id002
+  file: yolov8/api/routers/callname.py
+  line: 1285
+  message: Try, Except, Pass detected.
+- rule_id: B110
+  cwes: *id002
+  file: yolov8/api/routers/callname.py
+  line: 1711
+  message: Try, Except, Pass detected.
+- rule_id: B110
+  cwes: *id002
+  file: yolov8/api/routers/callname.py
+  line: 1744
+  message: Try, Except, Pass detected.
+- rule_id: B110
+  cwes: *id002
+  file: yolov8/api/routers/callname.py
+  line: 1753
+  message: Try, Except, Pass detected.
+- rule_id: B110
+  cwes: *id002
+  file: yolov8/api/routers/callname.py
+  line: 1883
+  message: Try, Except, Pass detected.
+- rule_id: B110
+  cwes: *id002
+  file: yolov8/api/routers/callname.py
+  line: 1953
+  message: Try, Except, Pass detected.
+- rule_id: B110
+  cwes: *id002
+  file: yolov8/api/routers/cert.py
+  line: 87
+  message: Try, Except, Pass detected.
+- rule_id: B110
+  cwes: *id002
+  file: yolov8/api/routers/cert.py
+  line: 953
+  message: Try, Except, Pass detected.
+- rule_id: B110
+  cwes: *id002
+  file: yolov8/api/routers/cert.py
+  line: 961
+  message: Try, Except, Pass detected.
+- rule_id: B110
+  cwes: *id002
+  file: yolov8/api/routers/cert.py
+  line: 1012
+  message: Try, Except, Pass detected.
+- rule_id: B110
+  cwes: *id002
+  file: yolov8/api/routers/document.py
+  line: 212
+  message: Try, Except, Pass detected.
+- rule_id: B110
+  cwes: *id002
+  file: yolov8/api/routers/document.py
+  line: 400
+  message: Try, Except, Pass detected.
+- rule_id: B110
+  cwes: *id002
+  file: yolov8/api/routers/inadequate.py
+  line: 69
+  message: Try, Except, Pass detected.
+- rule_id: B110
+  cwes: *id002
+  file: yolov8/api/routers/inadequate.py
+  line: 76
+  message: Try, Except, Pass detected.
+- rule_id: B110
+  cwes: *id002
+  file: yolov8/api/routers/inspection.py
+  line: 99
+  message: Try, Except, Pass detected.
+- rule_id: B110
+  cwes: *id002
+  file: yolov8/api/routers/inspection.py
+  line: 141
+  message: Try, Except, Pass detected.
+- rule_id: B110
+  cwes: *id002
+  file: yolov8/api/routers/inspection.py
+  line: 161
+  message: Try, Except, Pass detected.
+- rule_id: B110
+  cwes: *id002
+  file: yolov8/api/routers/inspection.py
+  line: 276
+  message: Try, Except, Pass detected.
+- rule_id: B110
+  cwes: *id002
+  file: yolov8/api/routers/inspection.py
+  line: 604
+  message: Try, Except, Pass detected.
+- rule_id: B110
+  cwes: *id002
+  file: yolov8/api/routers/inspection.py
+  line: 609
+  message: Try, Except, Pass detected.
+- rule_id: B110
+  cwes: *id002
+  file: yolov8/api/routers/inspection.py
+  line: 614
+  message: Try, Except, Pass detected.
+- rule_id: B110
+  cwes: *id002
+  file: yolov8/api/routers/inspection.py
+  line: 629
+  message: Try, Except, Pass detected.
+- rule_id: B110
+  cwes: *id002
+  file: yolov8/api/routers/inspection.py
+  line: 631
+  message: Try, Except, Pass detected.
+- rule_id: B110
+  cwes: *id002
+  file: yolov8/api/routers/inspection.py
+  line: 640
+  message: Try, Except, Pass detected.
+- rule_id: B110
+  cwes: *id002
+  file: yolov8/api/routers/inspection.py
+  line: 672
+  message: Try, Except, Pass detected.
+- rule_id: B110
+  cwes: *id002
+  file: yolov8/api/routers/inspection.py
+  line: 930
+  message: Try, Except, Pass detected.
+- rule_id: B110
+  cwes: *id002
+  file: yolov8/api/routers/inspection.py
+  line: 1237
+  message: Try, Except, Pass detected.
+- rule_id: B110
+  cwes: *id002
+  file: yolov8/api/routers/inspection.py
+  line: 1242
+  message: Try, Except, Pass detected.
+- rule_id: B110
+  cwes: *id002
+  file: yolov8/api/routers/inspection.py
+  line: 1247
+  message: Try, Except, Pass detected.
+- rule_id: B110
+  cwes: *id002
+  file: yolov8/api/routers/inspection.py
+  line: 1844
+  message: Try, Except, Pass detected.
+- rule_id: B110
+  cwes: *id002
+  file: yolov8/api/routers/inspection.py
+  line: 1857
+  message: Try, Except, Pass detected.
+- rule_id: B110
+  cwes: *id002
+  file: yolov8/api/routers/inspection.py
+  line: 1873
+  message: Try, Except, Pass detected.
+- rule_id: B110
+  cwes: *id002
+  file: yolov8/api/routers/inspection.py
+  line: 1890
+  message: Try, Except, Pass detected.
+- rule_id: B110
+  cwes: *id002
+  file: yolov8/api/routers/inspection.py
+  line: 1956
+  message: Try, Except, Pass detected.
+- rule_id: B110
+  cwes: *id002
+  file: yolov8/api/routers/inspection.py
+  line: 2195
+  message: Try, Except, Pass detected.
+- rule_id: B110
+  cwes: *id002
+  file: yolov8/api/routers/inspection.py
+  line: 2208
+  message: Try, Except, Pass detected.
+- rule_id: B110
+  cwes: *id002
+  file: yolov8/api/routers/inspection.py
+  line: 2224
+  message: Try, Except, Pass detected.
+- rule_id: B110
+  cwes: *id002
+  file: yolov8/api/routers/inspection.py
+  line: 2239
+  message: Try, Except, Pass detected.
+- rule_id: B110
+  cwes: *id002
+  file: yolov8/api/routers/inspection.py
+  line: 3434
+  message: Try, Except, Pass detected.
+- rule_id: B110
+  cwes: *id002
+  file: yolov8/api/routers/inspection_results.py
+  line: 543
+  message: Try, Except, Pass detected.
+- rule_id: B110
+  cwes: *id002
+  file: yolov8/api/routers/inspection_results.py
+  line: 607
+  message: Try, Except, Pass detected.
+- rule_id: B110
+  cwes: *id002
+  file: yolov8/api/routers/inspection_results.py
+  line: 616
+  message: Try, Except, Pass detected.
+- rule_id: B110
+  cwes: *id002
+  file: yolov8/api/routers/inspection_results.py
+  line: 847
+  message: Try, Except, Pass detected.
+- rule_id: B104
+  cwes:
+  - CWE-605
+  file: yolov8/run_server.py
+  line: 23
+  message: Possible binding to all interfaces.
