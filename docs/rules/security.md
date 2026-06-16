@@ -279,8 +279,16 @@ Semgrep 로컬 룰팩 + Bandit 으로 전 백엔드(`yolov8/api/`, `auth/`) SAST
 
 > CSV 동기화 체인 제거 상세: FastAPI 백엔드는 Django `accounts`/`UserProfile`을 import하지 않아 `update_users` 산출물(Django User)은 운영 경로 밖. `users.json`은 `GET /users` 통계와 `/users/{empno}` DynamoDB 장애 fallback에만 쓰였고, 둘 다 DynamoDB(`_list_all_users_sync`)로 대체 가능했음. 통계는 오히려 실제 사용자(DynamoDB)와 일치하게 정확해짐.
 
+5차 SQL injection 전수 검증 (B608, 151건 → 진성 0):
+
+`cert_cache.py`/`inspection.py`/`cert.py`/`community.py`/`inspection_results.py`/`ds.py`/`change_request.py`/`inadequate.py`/`document.py`/`sisl_photos.py`/`inspection_db.py` 19개소 151건(Semgrep+Bandit 중복 포함)을 5개 병렬 에이전트 + 적대적 핵심 케이스(`inadequate.py:153` sort_col 등) 검증 → **전부 과탐, 진성 0건**. 모든 finding 이 다음 3패턴 중 하나:
+- **IN 절 동적 플레이스홀더**: `ph = ','.join('?'*len(x))` 후 `execute(f'... IN ({ph})', x)` — 값은 바인딩 분리.
+- **WHERE/SET 절 상수 조립**: `wheres=['col=?', ...]` → `' AND '.join(wheres)` 보간, 값은 `params` 튜플 분리.
+- **식별자 화이트리스트 보간**: 테이블/컬럼명만 상수 튜플 또는 `_ALLOWED_SORT`/`ALLOWED_COLS` 검증 후 f-string.
+
+→ 판결: `baseline.yaml` 에 `slug: sql-injection` `false-positive` 억제(2026-12-16 만료, 재검토 강제). effective 취약에서 제외, 0화 집계 반영. B608은 f-string+SQL 키워드 휴리스틱이라 올바른 파라미터화 코드에도 발화하는 advisory 오탐.
+
 5차 식별 후 추후 처리(다음 회차):
-- **sql-injection (B608) ~106건** — `cert_cache.py`/`inspection.py`/`cert.py`/`community.py`/`inspection_results.py` 등. Bandit B608은 동적 identifier(테이블·컬럼명) 보간만으로도 잡으므로 과탐 다수 추정. 값 바인딩 `?` 준수 여부 vs identifier 화이트리스트 보간 구분해 진성만 추려야 함(거버넌스 light). ⚠️ 자격증명 노출 시 본 비밀번호로 직접 인사DB 접속 위험 동반되니 키 재발급 권고.
 - **os-command-injection (B603) 2건** — routers/inspection.py:1361, 1366 subprocess 호출. `shell=False`/리스트 인자 확인 필요(light).
 - **improper-input-validation (B405/B314/B406) 22건** — `xml.etree`/escape 로 비신뢰 XML 파싱(XXE) in callname.py/inspection.py/hwp_generator.py. `defusedxml` 전환(owner-signoff — 입력 거부로 동작 변경 가능).
 - **unmatched 86건** — B110/B112(try/except/pass·continue) 대다수 관용 패턴, B113(requests timeout 누락) `auth/skons_auth_api.py` 등 4건, B108(insecure temp) 6건, B104(0.0.0.0 바인딩) run_server.py. 0화 전 baseline 억제 or web-api 라우팅으로 판결 필요.
