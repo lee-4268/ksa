@@ -289,7 +289,7 @@ Semgrep 로컬 룰팩 + Bandit 으로 전 백엔드(`yolov8/api/`, `auth/`) SAST
 → 판결: `baseline.yaml` 에 `slug: sql-injection` `false-positive` 억제(2026-12-16 만료, 재검토 강제). effective 취약에서 제외, 0화 집계 반영. B608은 f-string+SQL 키워드 휴리스틱이라 올바른 파라미터화 코드에도 발화하는 advisory 오탐.
 
 5차 식별 후 추후 처리(다음 회차):
-- **os-command-injection (B603) 2건** — routers/inspection.py:1361, 1366 subprocess 호출. `shell=False`/리스트 인자 확인 필요(light).
+- ~~**os-command-injection (B603) 2건**~~ — routers/inspection.py:1361, 1366. **검증 완료: 과탐.** `subprocess.Popen` 이 `shell=False`(기본)+리스트 인자라 셸 주입 불가, 실행파일 고정(`inspection_worker.py`), 사용자 입력은 worker argv 로만 전달되고 worker 는 셸 재실행 없음, admin/manager 게이트 존재. → `baseline.yaml` `false-positive` 억제(2026-12-16 만료).
 - **improper-input-validation (B405/B314/B406) 22건** — `xml.etree`/escape 로 비신뢰 XML 파싱(XXE) in callname.py/inspection.py/hwp_generator.py. `defusedxml` 전환(owner-signoff — 입력 거부로 동작 변경 가능).
 - **unmatched 86건** — B110/B112(try/except/pass·continue) 대다수 관용 패턴, B113(requests timeout 누락) `auth/skons_auth_api.py` 등 4건, B108(insecure temp) 6건, B104(0.0.0.0 바인딩) run_server.py. 0화 전 baseline 억제 or web-api 라우팅으로 판결 필요.
 
