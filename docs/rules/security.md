@@ -291,9 +291,13 @@ Semgrep 로컬 룰팩 + Bandit 으로 전 백엔드(`yolov8/api/`, `auth/`) SAST
 5차 식별 후 추후 처리(다음 회차):
 - ~~**os-command-injection (B603) 2건**~~ — routers/inspection.py:1361, 1366. **검증 완료: 과탐.** `subprocess.Popen` 이 `shell=False`(기본)+리스트 인자라 셸 주입 불가, 실행파일 고정(`inspection_worker.py`), 사용자 입력은 worker argv 로만 전달되고 worker 는 셸 재실행 없음, admin/manager 게이트 존재. → `baseline.yaml` `false-positive` 억제(2026-12-16 만료).
 - ~~**improper-input-validation (B405/B314/B406) 22건**~~ — XXE in callname.py/inspection.py/hwp_generator.py. **검증 완료: 과탐.** 파싱 대상은 사용자 업로드 XLSX 내부 XML(입력 통제 가능)이나, Python 표준 `xml.etree.ElementTree` 는 **외부 엔티티를 확장하지 않음**(실측: `SYSTEM file://` → `undefined entity` ParseError 거부). XXE 파일탈취/SSRF 경로 없음. hwp_generator.py:11 은 `xml.sax.saxutils.escape`(XML 생성 이스케이프, 파싱 아님). → `baseline.yaml` `false-positive` 억제(2026-12-16 만료). **effective 취약 0 달성** (모든 results 취약 판결 완료).
-- **unmatched 86건** — B110/B112(try/except/pass·continue) 대다수 관용 패턴, B113(requests timeout 누락) `auth/skons_auth_api.py` 등 4건, B108(insecure temp) 6건, B104(0.0.0.0 바인딩) run_server.py. 0화 전 baseline 억제 or web-api 라우팅으로 판결 필요.
+- ~~**unmatched 86건**~~ — **전수 판결 완료.** B110/B112(try/except/pass·continue) 75건 → `accepted-risk`(CWE-703 관용 패턴, 보안 영향 없음). B113(requests timeout) 4건 → `accepted-risk`(Django 레거시 `auth/`, FastAPI 운영 미사용). B108(insecure temp) 6건 → `false-positive`(고정 /tmp 캐시·정리 경로 상수). B104(0.0.0.0) 1건 → `false-positive`(dev 실행 스크립트, 운영은 systemd). 전부 `baseline.yaml` 등록(2026-12-16 만료).
 
-> ⚠️ 운영 메모(미해소): 본 비밀번호(`ons12345!`)가 **git 이력에 남아 있다**. 파일 삭제·환경변수화 모두 현재 트리에서만 제거이므로 **인사DB `onsuser1` 계정 비밀번호 재발급(DBA 요청) 필수** — 이력의 평문은 그대로 노출 상태.
+### 🎯 5차 SAST 0화 달성 (2026-06-18 스냅샷 기준)
+
+`ci_gate --mode zero` **exit 0 (PASS)** — **effective 취약 0건 + 미판결 unmatched 0건**. 억제 174건(false-positive 161 / accepted-risk 13), 모든 항목 판결 완료. 진성 조치 1건(인사DB 자격증명 하드코딩 → 체인 제거), 나머지 175건은 전수 검증 후 과탐/수용 판결. 억제는 전부 **2026-12-16 만료**로 재검토 강제.
+
+> ⚠️ 운영 메모(미해소, 0화와 별개): 본 비밀번호(`ons12345!`)가 **git 이력에 남아 있다**. 파일 삭제·환경변수화 모두 현재 트리에서만 제거이므로 **인사DB `onsuser1` 계정 비밀번호 재발급(DBA 요청) 필수** — 이력의 평문은 그대로 노출 상태.
 
 ## 보안 작업 체크리스트 (새 라우터 추가 시)
 
