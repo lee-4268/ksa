@@ -29,3 +29,19 @@ suppressions:
     added: 2026-06-16
     expires: 2026-12-16
     by: tomega0701 (SAST 5차, false-positive 판정)
+  - id: xxe-b314-b405-b406-false-positive-2026-06
+    kind: false-positive
+    reason: >-
+      Bandit B314/B405/B406 XXE 22건(callname.py 12, inspection.py 8, hwp_generator.py 1)
+      검증 결과 진성 0건. (1) 대부분 사용자 업로드 XLSX 의 내부 XML(workbook.xml/sharedStrings/
+      worksheet)을 xml.etree.ElementTree 로 파싱 — 입력은 공격자 통제 가능하나, Python 표준
+      xml.etree 는 **외부 엔티티(SYSTEM file://, http://)를 확장하지 않음**(실측: undefined
+      entity ParseError 로 거부). 따라서 XXE 파일탈취/SSRF 경로 없음. 내부 엔티티만 확장하나
+      iterparse 스트리밍이라 billion-laughs 영향도 제한적. (2) hwp_generator.py:11 은
+      xml.sax.saxutils.escape — XML *생성* 시 출력 이스케이프 함수로 파싱 아님, XXE 무관.
+      Bandit 룰은 보수적 advisory. 검증 회차 2026-06-18. 상세 docs/rules/security.md.
+    match:
+      slug: improper-input-validation
+    added: 2026-06-16
+    expires: 2026-12-16
+    by: tomega0701 (SAST 5차, false-positive 판정)

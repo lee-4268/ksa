@@ -290,7 +290,7 @@ Semgrep 로컬 룰팩 + Bandit 으로 전 백엔드(`yolov8/api/`, `auth/`) SAST
 
 5차 식별 후 추후 처리(다음 회차):
 - ~~**os-command-injection (B603) 2건**~~ — routers/inspection.py:1361, 1366. **검증 완료: 과탐.** `subprocess.Popen` 이 `shell=False`(기본)+리스트 인자라 셸 주입 불가, 실행파일 고정(`inspection_worker.py`), 사용자 입력은 worker argv 로만 전달되고 worker 는 셸 재실행 없음, admin/manager 게이트 존재. → `baseline.yaml` `false-positive` 억제(2026-12-16 만료).
-- **improper-input-validation (B405/B314/B406) 22건** — `xml.etree`/escape 로 비신뢰 XML 파싱(XXE) in callname.py/inspection.py/hwp_generator.py. `defusedxml` 전환(owner-signoff — 입력 거부로 동작 변경 가능).
+- ~~**improper-input-validation (B405/B314/B406) 22건**~~ — XXE in callname.py/inspection.py/hwp_generator.py. **검증 완료: 과탐.** 파싱 대상은 사용자 업로드 XLSX 내부 XML(입력 통제 가능)이나, Python 표준 `xml.etree.ElementTree` 는 **외부 엔티티를 확장하지 않음**(실측: `SYSTEM file://` → `undefined entity` ParseError 거부). XXE 파일탈취/SSRF 경로 없음. hwp_generator.py:11 은 `xml.sax.saxutils.escape`(XML 생성 이스케이프, 파싱 아님). → `baseline.yaml` `false-positive` 억제(2026-12-16 만료). **effective 취약 0 달성** (모든 results 취약 판결 완료).
 - **unmatched 86건** — B110/B112(try/except/pass·continue) 대다수 관용 패턴, B113(requests timeout 누락) `auth/skons_auth_api.py` 등 4건, B108(insecure temp) 6건, B104(0.0.0.0 바인딩) run_server.py. 0화 전 baseline 억제 or web-api 라우팅으로 판결 필요.
 
 > ⚠️ 운영 메모(미해소): 본 비밀번호(`ons12345!`)가 **git 이력에 남아 있다**. 파일 삭제·환경변수화 모두 현재 트리에서만 제거이므로 **인사DB `onsuser1` 계정 비밀번호 재발급(DBA 요청) 필수** — 이력의 평문은 그대로 노출 상태.
