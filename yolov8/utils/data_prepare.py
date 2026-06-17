@@ -123,7 +123,9 @@ def prepare_classification_dataset(
         ├── dispersed_pole/
         └── ...
     """
-    random.seed(seed)
+    # 학습 데이터 분할 셔플용 — 보안 목적이 아닌 재현 가능한 데이터셋 구성용.
+    # 전역 random 대신 시드 고정 인스턴스를 써서 다른 호출과 격리하고 재현성을 보장한다.
+    rng = random.Random(seed)
 
     # 메타데이터 로드
     df = load_metadata(metadata_path)
@@ -209,7 +211,7 @@ def prepare_classification_dataset(
             print(f"  {cls}: 0개 (이미지 없음)")
             continue
 
-        random.shuffle(images)
+        rng.shuffle(images)
         split_idx = int(len(images) * train_ratio)
         train_images = images[:split_idx]
         val_images = images[split_idx:]
