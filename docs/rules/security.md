@@ -306,7 +306,7 @@ Semgrep 로컬 룰팩 + Bandit 으로 전 백엔드(`yolov8/api/`, `auth/`) SAST
 | 위험도 | 이슈 | 위치 | 조사 결과 | 조치 |
 |---|---|---|---|---|
 | 위험 | 적절하지 않은 난수 값 사용 (CWE-330) | yolov8/utils/data_prepare.py:8,126,212 | 학습 데이터셋 train/val 분할 셔플용 `random` — 보안 결정 무관(OTP/세션/키 아님). 실제 보안 난수는 `core/auth.py` 가 `os.urandom`·HMAC-SHA256·PBKDF2 사용(안전 확인). | 전역 `random.seed`/`random.shuffle` → `random.Random(seed)` 인스턴스로 전환. 동작·재현성 동일(실측 검증), 보안 스캐너 룰 회피. `secrets.randbelow` 는 seed/shuffle 미지원이라 부적합. |
-| 매우위험 | 하드코드된 중요정보 (CWE-259/321) | yolov8/api/routers/community.py:61 | `_COMMUNITY_FILE_CONTENT_TYPES` 딕셔너리의 `'.zip':'application/zip'` — 파일 확장자→MIME 타입 매핑 상수. DB연결·비밀번호·암호화키 아님. Sparrow 가 문자열 상수를 시크릿으로 오탐. | (별도 처리 예정 — 복호화 대상 비밀정보가 없어 코드 변경 불가, baseline/docs 판결) |
+| 매우위험 | 하드코드된 중요정보 (CWE-259/321) | yolov8/api/routers/community.py:61 | `_COMMUNITY_FILE_CONTENT_TYPES` 딕셔너리의 `'.zip':'application/zip'` — 파일 확장자→MIME 타입 매핑 상수. DB연결·비밀번호·암호화키 아님. Sparrow 가 문자열 상수를 시크릿으로 오탐. | 복호화 대상 비밀정보가 없어 코드 변경 불가(설정파일 분리 시 기능 손상). `baseline.yaml` finding-level `false-positive` 억제(path=community.py, 2026-12-16 만료). 보고서 권장(설정파일 복호화)은 실제 DB 자격증명 하드코딩에 적용되는 것으로, 본 건은 해당 대상 없음. |
 
 ```
 □ await _verify_auth(request) 호출
