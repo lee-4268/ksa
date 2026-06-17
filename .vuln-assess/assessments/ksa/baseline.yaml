@@ -104,3 +104,18 @@ suppressions:
     added: 2026-06-16
     expires: 2026-12-16
     by: tomega0701 (SAST 5차, false-positive · dev script)
+  # ── Sparrow SAST 공식 진단(분석ID 111637) 대응 ──
+  - id: sparrow-community-mime-falsepos-2026-06
+    kind: false-positive
+    reason: >-
+      Sparrow SAST 검출 '하드코드된 중요정보'(CWE-259/321, 매우위험) — community.py 의
+      _COMMUNITY_FILE_CONTENT_TYPES 딕셔너리(예 '.zip':'application/zip'). 파일
+      확장자→MIME Content-Type 매핑 상수로 DB연결·비밀번호·암호화키가 아님. Sparrow 가
+      표준 MIME 문자열 상수를 시크릿으로 오탐. 복호화 대상 비밀정보 자체가 없어 코드
+      변경 불가(설정파일 분리 시 기능 손상). 과탐 판결. 검증 docs/rules/security.md.
+    match:
+      path: '*routers/community.py'
+      rule_id: hardcoded-credentials
+    added: 2026-06-16
+    expires: 2026-12-16
+    by: tomega0701 (Sparrow 진단 대응, false-positive)
