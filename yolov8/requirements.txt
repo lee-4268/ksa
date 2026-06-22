@@ -29,3 +29,7 @@ pydantic>=2.0.0
 
 # AWS S3 (Feedback Storage)
 boto3>=1.28.0
+
+# DS xlsx/xls 파싱·빌드 (안테나/장치 시트, 호출명칭, 검사내역서)
+xlrd==1.2.0          # 구형 .xls(BIFF) 파싱 — 2.0+ 는 .xls 미지원이라 핀 고정 필수
+openpyxl>=3.1.0      # .xlsx 읽기/쓰기
