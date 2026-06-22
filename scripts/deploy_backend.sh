@@ -16,9 +16,11 @@
 #     BRANCH=main          (기본 main)        받아올 브랜치
 #     APP_DIR=/home/ubuntu/kca-api            운영 코드 위치
 #     PIP_INSTALL=1        (기본 0)           requirements 재설치 수행
+#     KEEP_BAK=3           (기본 3)           유지할 main.py.bak 개수 (나머지 자동 삭제)
 #
 # ── 안전장치 ──────────────────────────────────────────────────
 #   - 받기 전 기존 main.py 를 main.py.bak.<날짜시각> 으로 백업 (롤백용)
+#   - 백업은 최신 KEEP_BAK(기본 3)개만 유지하고 오래된 백업은 자동 삭제 (누적 방지)
 #   - 코드는 /tmp 에서 풀고, 운영 위치에는 main.py/requirements.txt/core/routers/schemas 만 복사
 #   - 토큰은 인자/코드에 하드코딩하지 않고 GITHUB_TOKEN 환경변수로만 받음
 #
@@ -84,6 +86,9 @@ done
 echo "==> [3/5] 기존 main.py 백업: $APP_DIR/main.py.bak.$TS"
 if [[ -f "$APP_DIR/main.py" ]]; then
   cp -p "$APP_DIR/main.py" "$APP_DIR/main.py.bak.$TS"
+  # 백업 누적 방지: 최신 KEEP_BAK 개만 남기고 정리 (git 에 전체 이력이 있어 안전망)
+  KEEP_BAK="${KEEP_BAK:-3}"
+  ls -1t "$APP_DIR"/main.py.bak.* 2>/dev/null | tail -n +$((KEEP_BAK + 1)) | xargs -r rm -f
 fi
 
 echo "==> [4/5] 코드 복사 (DB/로그/venv 는 건드리지 않음)"
