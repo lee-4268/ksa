@@ -29,12 +29,13 @@ https://api-sko-kca.skons.net
 - 인증: HMAC-SHA256 Bearer 토큰 (2시간 만료)
 - CORS: 환경변수 `CORS_ALLOWED_ORIGINS` 또는 기본 허용 목록
 
-### 1.3 AI 분류 서버 (FastAPI on EC2 + API Gateway)
+### 1.3 AI 분류 서버 (메인 백엔드 EC2 통합)
 ```
-https://c3jictzagh.execute-api.ap-northeast-2.amazonaws.com
+https://api-sko-kca.skons.net      # 메인 백엔드와 동일 (routers/predict.py)
 ```
-- Framework: FastAPI + YOLOv8n-cls
-- Instance: c7i-flex.large
+- Framework: FastAPI + YOLOv8n-cls (`best.pt`, lazy load)
+- 2026-06 통합: 옛 별도 API Gateway(`c3jictzagh…`)는 폐기(현재 404) → 메인 백엔드 predict 라우터로 일원화. 인증(`_verify_auth`) 필수
+- 프론트(`tower_classification_service.dart`)도 메인 백엔드 + Bearer 토큰으로 호출
 
 ---
 
@@ -674,7 +675,7 @@ i-NET SSO 인증 + HMAC 토큰 발급. Rate Limit: 5회/60초.
 
 ## 5. AI 분류 API (FastAPI REST)
 
-Base URL: `https://c3jictzagh.execute-api.ap-northeast-2.amazonaws.com`
+Base URL: `https://api-sko-kca.skons.net` (메인 백엔드 통합, 인증 필수. 옛 `c3jictzagh…` API Gateway 폐기)
 
 ### 4.1 분류 클래스 (9개)
 

@@ -8,7 +8,7 @@
 | 백엔드 | FastAPI (Python), Uvicorn, systemd |
 | DB | SQLite (inspection.db, cert_cache.db), DynamoDB (사용자/역할/DS) |
 | 스토리지 | AWS S3 (sko-kca-s3) |
-| AI | YOLOv8n-cls (철탑 분류), AWS Lambda |
+| AI | YOLOv8n-cls (철탑형태 분류) — 메인 백엔드 EC2 통합 (`routers/predict.py` + `best.pt`, lazy load). 학습 코드는 별도 레포 `ksa-tower-trainer` |
 | 배포 | Amplify (프론트), EC2 (백엔드) |
 
 ## 디렉토리 구조
