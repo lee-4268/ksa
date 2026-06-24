@@ -352,7 +352,7 @@ Semgrep 로컬 룰팩 + Bandit 으로 전 백엔드(`yolov8/api/`, `auth/`) SAST
 **6차 이후 추후 처리(우선순위 낮음):**
 - 3-4(토큰 무효화 메커니즘 부재), 3-5(403 거부 로깅 부재) 미해소 유지.
 
-> py_compile 검증은 로컬 Python 부재로 EC2 배포(`deploy_backend.sh --restart`) 시 모듈 로드 + `journalctl` 로 확인 필요.
+> 검증: 수정 5개 파일 + 전체 `yolov8/api/` `python -m compileall` 통과(문법 오류 0, Python 3.14.6). 신규/추가 import 이름 소스 모듈 실재 확인. 단 fastapi/boto3 미설치 + `core.config` 운영 fail-closed 로 전체 import 스모크는 불가 → 모듈 로드(NameError 등) 최종 확인은 EC2 배포(`deploy_backend.sh --restart`) 후 `journalctl` 로.
 
 ```
 □ await _verify_auth(request) 호출
