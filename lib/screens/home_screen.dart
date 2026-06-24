@@ -21,6 +21,7 @@ import 'inspection_my_list_screen.dart';
 import 'inspection_results_screen.dart';
 import 'sisl_photo_search_screen.dart';
 import 'community_screen.dart';
+import 'system_guide_screen.dart';
 import '../services/community_service.dart';
 import '../services/notification_service.dart';
 import '../services/inspection_service.dart';
@@ -313,6 +314,7 @@ final result = await showDialog<bool>(
       if (auth.isAdmin)
         _MenuItem('변경개설신고', Icons.swap_horiz_outlined, const Color(0xFFE53935), description: '변경개설신고 파일 비교 및 적용'),
       _MenuItem('커뮤니티', Icons.forum_outlined, const Color(0xFFE53935), description: '공지사항 및 요청사항'),
+      _MenuItem('시스템 안내', Icons.menu_book_outlined, const Color(0xFF6366F1), description: '시스템 소개 및 사용 안내'),
       if (auth.isSuperAdmin)
         _MenuItem('관리자', Icons.settings_outlined, const Color(0xFF6366F1), description: '시스템 설정 및 사용자 관리'),
     ];
@@ -389,6 +391,7 @@ final result = await showDialog<bool>(
       case '부적합 관리': return const InadequateManagementScreen();
       case '변경개설신고': return const ChangeNotificationScreen();
       case '커뮤니티': return CommunityScreen();
+      case '시스템 안내': return const SystemGuideScreen();
       case '관리자': return const AdminPanelScreen();
       default: return _HomeContent(
         onNavigate: (i) { setState(() => _selectedIndex = i); _logMenuAccess(items[i].title); },
