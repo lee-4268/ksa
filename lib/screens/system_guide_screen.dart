@@ -6,8 +6,75 @@ import 'package:flutter/material.dart';
 /// 프로세스 흐름 + STEP 카드 + 단계 설명 + 상태칩 + 팁.
 /// 내용 갱신은 이 파일을 직접 수정 후 배포한다(정적 내장).
 /// (스크린샷은 추후 assets 로 추가 가능 — 현재는 텍스트·구조 중심)
-class SystemGuideScreen extends StatelessWidget {
+class SystemGuideScreen extends StatefulWidget {
   const SystemGuideScreen({super.key});
+
+  @override
+  State<SystemGuideScreen> createState() => _SystemGuideScreenState();
+}
+
+class _SystemGuideScreenState extends State<SystemGuideScreen> {
+  final ScrollController _scrollCtrl = ScrollController();
+
+  // 섹션 앵커 (목차 점프용)
+  final _kInspection = GlobalKey();
+  final _kAnalysis = GlobalKey();
+  final _kAiTower = GlobalKey();
+  final _kDs = GlobalKey();
+  final _kDocs = GlobalKey();
+  final _kAutoDoc = GlobalKey();
+  final _kCommunity = GlobalKey();
+
+  String _activeId = 'insp';
+
+  late final List<({String id, String label, GlobalKey key, bool sub})> _toc = [
+    (id: 'insp', label: '수검 관리', key: _kInspection, sub: false),
+    (id: 'analysis', label: '분석 · 사전점검', key: _kAnalysis, sub: true),
+    (id: 'ai', label: 'AI 철탑형태 분류', key: _kAiTower, sub: true),
+    (id: 'ds', label: '허가현황 관리', key: _kDs, sub: false),
+    (id: 'docs', label: '서류 관리', key: _kDocs, sub: false),
+    (id: 'autodoc', label: '서류 자동 생성', key: _kAutoDoc, sub: true),
+    (id: 'community', label: '커뮤니티', key: _kCommunity, sub: false),
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    _scrollCtrl.addListener(_onScroll);
+  }
+
+  @override
+  void dispose() {
+    _scrollCtrl.removeListener(_onScroll);
+    _scrollCtrl.dispose();
+    super.dispose();
+  }
+
+  void _scrollTo(String id, GlobalKey key) {
+    setState(() => _activeId = id);
+    final ctx = key.currentContext;
+    if (ctx != null) {
+      Scrollable.ensureVisible(ctx,
+          duration: const Duration(milliseconds: 400),
+          curve: Curves.easeInOut,
+          alignment: 0.0);
+    }
+  }
+
+  // 스크롤 위치 기준으로 현재 보이는 섹션을 목차에서 강조
+  void _onScroll() {
+    String active = _toc.first.id;
+    for (final e in _toc) {
+      final ctx = e.key.currentContext;
+      if (ctx == null) continue;
+      try {
+        final box = ctx.findRenderObject() as RenderBox;
+        final dy = box.localToGlobal(Offset.zero).dy;
+        if (dy <= 160) active = e.id; // 화면 상단 근처를 지난 마지막 섹션
+      } catch (_) {}
+    }
+    if (active != _activeId) setState(() => _activeId = active);
+  }
 
   // 참고 안내 페이지와 동일한 색 체계
   static const _primary = Color(0xFF1A56DB);
@@ -24,6 +91,7 @@ class SystemGuideScreen extends StatelessWidget {
   static const _skyLight = Color(0xFFF0F9FF);
   static const _text = Color(0xFF1E293B);
   static const _muted = Color(0xFF64748B);
+  static const _light = Color(0xFF94A3B8);
   static const _border = Color(0xFFE2E8F0);
   static const _surface2 = Color(0xFFF0F4F8);
   static const _bg = Color(0xFFF5F7FA);
@@ -32,30 +100,131 @@ class SystemGuideScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: _bg,
-      body: SingleChildScrollView(
-        child: Column(
-          children: [
-            _hero(),
-            Center(
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 1000),
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 28, 16, 40),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      _sectionInspection(),
-                      _sectionDivider(),
-                      _sectionDs(),
-                      _sectionDivider(),
-                      _sectionDocs(),
-                      _sectionDivider(),
-                      _sectionCommunity(),
-                    ],
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          final wide = constraints.maxWidth >= 880;
+          final content = SingleChildScrollView(
+            controller: _scrollCtrl,
+            child: Column(
+              children: [
+                _hero(),
+                if (!wide) _jumpChips(),
+                Center(
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 1000),
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 28, 16, 40),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          KeyedSubtree(key: _kInspection, child: _sectionInspection()),
+                          _sectionDivider(),
+                          KeyedSubtree(key: _kDs, child: _sectionDs()),
+                          _sectionDivider(),
+                          KeyedSubtree(key: _kDocs, child: _sectionDocs()),
+                          _sectionDivider(),
+                          KeyedSubtree(key: _kCommunity, child: _sectionCommunity()),
+                        ],
+                      ),
+                    ),
                   ),
                 ),
-              ),
+              ],
             ),
+          );
+          if (!wide) return content;
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _tocSidebar(),
+              Expanded(child: content),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  // ════ 좌측 목차 (와이드) ════
+  Widget _tocSidebar() {
+    return Container(
+      width: 220,
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        border: Border(right: BorderSide(color: _border)),
+      ),
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Padding(
+              padding: EdgeInsets.fromLTRB(10, 4, 10, 10),
+              child: Text('목차',
+                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: _light, letterSpacing: 1.2)),
+            ),
+            for (final e in _toc) _tocRow(e),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _tocRow(({String id, String label, GlobalKey key, bool sub}) e) {
+    final active = _activeId == e.id;
+    return InkWell(
+      onTap: () => _scrollTo(e.id, e.key),
+      borderRadius: BorderRadius.circular(7),
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 2),
+        padding: EdgeInsets.fromLTRB(e.sub ? 22 : 10, 8, 10, 8),
+        decoration: BoxDecoration(
+          color: active ? _primaryLight : Colors.transparent,
+          borderRadius: BorderRadius.circular(7),
+        ),
+        child: Row(
+          children: [
+            if (!e.sub)
+              Container(
+                width: 6, height: 6, margin: const EdgeInsets.only(right: 8),
+                decoration: BoxDecoration(
+                    color: active ? _primary : _light, shape: BoxShape.circle),
+              ),
+            Expanded(
+              child: Text(e.label,
+                  style: TextStyle(
+                    fontSize: e.sub ? 12.5 : 13.5,
+                    fontWeight: e.sub ? FontWeight.w500 : FontWeight.w700,
+                    color: active ? _primary : (e.sub ? _muted : _text),
+                  )),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ════ 상단 점프 칩 (좁은 화면) ════
+  Widget _jumpChips() {
+    final tops = _toc.where((e) => !e.sub).toList();
+    return Container(
+      color: Colors.white,
+      padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: [
+            for (final e in tops)
+              Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: ActionChip(
+                  label: Text(e.label, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+                  backgroundColor: _activeId == e.id ? _primaryLight : _surface2,
+                  labelStyle: TextStyle(color: _activeId == e.id ? _primary : _muted),
+                  side: BorderSide(color: _activeId == e.id ? _primary : _border),
+                  onPressed: () => _scrollTo(e.id, e.key),
+                ),
+              ),
           ],
         ),
       ),
@@ -159,7 +328,7 @@ class SystemGuideScreen extends StatelessWidget {
             '등록 완료 → 상태 자동 변경 [사전점검중]',
           ],
         ),
-        _card(
+        KeyedSubtree(key: _kAnalysis, child: _card(
           location: '수검 관리 ▸ 실적관리 ▸ 수검 분석',
           stepBadge: ('STEP 3 · 사전점검', _sky),
           spotlight: _primary,
@@ -174,7 +343,7 @@ class SystemGuideScreen extends StatelessWidget {
             '결과 확인 → 수정 불필요면 STEP 4-1 점검완료, 변경 필요면 STEP 4-2 변경개설 요청으로 분기',
           ],
           chips: const [('✅ 일치', _green), ('❌ 불일치', _red), ('🟡 확인필요', _orange)],
-        ),
+        )),
         _branchHeader('STEP 4 · 분석 결과에 따라 분기'),
         Row(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -228,7 +397,7 @@ class SystemGuideScreen extends StatelessWidget {
           chips: const [('✅ 합격', _green), ('❌ 불합격', _red), ('⏰ 시기조정', _orange)],
           tip: '불합격 결과 입력 시 [서류관리] ▸ [부적합 관리]에 자동 등록되고 담당자 알림이 발송됩니다.',
         ),
-        _card(
+        KeyedSubtree(key: _kAiTower, child: _card(
           location: '수검 관리 ▸ 실적관리 ▸ 수검 결과 입력',
           extraBadge: ('보조 기능', _purple),
           spotlight: _purple,
@@ -243,7 +412,7 @@ class SystemGuideScreen extends StatelessWidget {
             'AI 분석 결과(Top 5 + 신뢰도) 확인 후 「확인」 → 결과 자동 입력',
           ],
           tip: '결과는 담당자가 최종 확인·수정할 수 있습니다. 신뢰도가 낮으면 직접 선택을 권장합니다.',
-        ),
+        )),
         _card(
           location: '수검 관리 ▸ 수검 Map',
           emoji: '🗺️', iconBg: _primaryLight,
@@ -327,7 +496,7 @@ class SystemGuideScreen extends StatelessWidget {
             '데이터 매칭·비교부터 확인서 발급, 부적합·변경신고 추적, 시설물 사진 조회까지 — 문서·데이터 정합성 기능을 모았습니다.',
             ['호출명칭', '전산비교', '설치확인서', '부적합 관리', '변경개설신고', '시설물 사진']),
         const SizedBox(height: 16),
-        _card(
+        KeyedSubtree(key: _kAutoDoc, child: _card(
           spotlight: _green,
           emoji: '📑', iconBg: _greenLight,
           title: '서류 자동 생성',
@@ -340,7 +509,7 @@ class SystemGuideScreen extends StatelessWidget {
             ('📊 검사 결과 보고서', ['수검 일정·실적 기반 PDF 보고서', '상태별·지역별 집계 자동 반영']),
           ],
           tip: '각 문서의 상세 발급 절차는 아래 설치확인서·변경개설신고 항목에서 이어집니다.',
-        ),
+        )),
         _card(
           location: '서류 관리 ▸ 호출명칭',
           emoji: '📡', iconBg: _skyLight,
