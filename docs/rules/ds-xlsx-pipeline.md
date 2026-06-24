@@ -38,7 +38,7 @@ DS 업로드 후 xlsx 캐시 빌드 → 다운로드까지 전체 흐름 정리.
 | 비수도권 xlsx | `ds-exports/{divisionId}/{divisionCode}_{importDate}.xlsx` |
 | 수도권 본부별 xlsx | `ds-exports/sudogwon/10_{importDate}_{hdqt_key}.xlsx` |
 
-**`_HDQT_S3_KEY` 매핑 (main.py:218):**
+**`_HDQT_S3_KEY` 매핑 (core/config.py:187):**
 ```python
 {'강남': 'gangnam', '강북': 'gangbuk', '경기': 'gyeonggi', '인천': 'incheon'}
 ```
@@ -47,23 +47,24 @@ DS 업로드 후 xlsx 캐시 빌드 → 다운로드까지 전체 흐름 정리.
 
 ## 수도권 특수 처리 상세
 
-### 빌드 단계
+### 빌드 단계 (routers/ds.py)
 ```python
-# main.py:5094
-is_sudo = (division_code == '10')
+# _build_xlsx_cache_background (routers/ds.py:3329) — ZIP 다운로드 후 진입
+await _build_one_xlsx_cache(division_id, division_code, import_date, zip_temp, cancel_ev)
 
-# 수도권: city_hdqt_map 먼저 조회 (도로명주소 → 본부 매핑)
-# main.py:5147
-for hdqt in ['강남', '강북', '경기', '인천']:
-    await _build_one_xlsx_cache(
-        ..., hdqt_filter=hdqt, city_hdqt_map=city_hdqt_map
-    )
+# _build_one_xlsx_cache (routers/ds.py:3140) 내부에서 수도권(division_code == '10') 분기:
+#   도로명주소 → 본부(city_hdqt_map) 매핑으로 강남/강북/경기/인천 본부별 xlsx 분리 생성
+#   → S3 ds-exports/sudogwon/10_{importDate}_{hdqt_key}.xlsx 저장
+
+# 4개 본부 캐시 완료 후 전체 통합본 필요 시:
+# _merge_hdqt_xlsx_from_s3 (routers/ds.py:3242) 가 4개를 스트리밍 병합 → 단일 xlsx
+hdqt_order = ['강남', '강북', '경기', '인천']  # ds.py:3249
 ```
-- 각 본부 서브프로세스 종료 후 다음 진행 (메모리 순차 해제)
+- 본부별 분리 생성 + 병합 시 openpyxl read_only/write_only 스트리밍으로 한 번에 한 본부만 메모리 적재
 - 한 본부 빌드 실패해도 나머지 계속 진행 (non-fatal)
 
 ### city_hdqt_map
-- API: `GET /ds/city-hdqt-map` (main.py:5457)
+- API: `GET /ds/city-hdqt-map` (routers/ds.py:3715, `ds_city_hdqt_map`)
 - `inspection_targets` 테이블에서 시/군별 최다 access담당 집계
 - 6시간 캐시 (`_city_hdqt_cache`)
 - xlsx 빌드 시 각 행의 도로명주소에서 시/군 추출 → 본부 필터링에 사용
@@ -83,7 +84,7 @@ for hdqt in ['강남', '강북', '경기', '인천']:
 
 ## 다운로드 흐름 상세
 
-### export-presign (main.py:5338)
+### export-presign (routers/ds.py:3559)
 ```
 1. xlsx 캐시 확인 (S3 head_object)
    → 있으면: X-Forwarded-Host 기준 EC2 프록시 URL 생성
@@ -99,7 +100,7 @@ for hdqt in ['강남', '강북', '경기', '인천']:
    → {"success": false, "message": "S3에 파일 없음. DB Export로 대체합니다."}
 ```
 
-### proxy-xlsx (main.py:5514)
+### proxy-xlsx (routers/ds.py:3771)
 - S3 GetObject → 65536byte 청크 스트리밍
 - `_verify_auth` 호출 → Bearer 토큰 검증 필수
 - `Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`

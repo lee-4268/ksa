@@ -88,32 +88,35 @@ Authorization: Bearer {base64url(empno:expiry:hmac_sha256)}
 | GET | `/inspection-results/summary-report` | 현황 리포트 자동 생성 |
 
 ### DS 데이터
-| Method | Path | 라인 | 설명 |
+
+> 라인 = `yolov8/api/routers/ds.py` 기준 (2026.05 모듈 리팩토링 이후. 이전 단일 main.py 라인 아님)
+
+| Method | Path | ds.py 라인 | 설명 |
 |--------|------|------|------|
-| GET | `/ds/region-codes` | 2721 | DS 지역코드 매핑 조회 |
-| GET | `/ds/upload-presign` | 5288 | S3 ZIP 업로드용 presigned PUT URL |
-| GET | `/ds/xlsx-upload-presign` | 5311 | S3 xlsx 업로드용 presigned PUT URL |
-| GET | `/ds/export-presign` | 5338 | xlsx 캐시 → EC2 프록시 URL 반환 (없으면 ZIP URL) |
-| GET | `/ds/xlsx-build-status` | 5398 | 수도권 본부별 캐시 상태 + 빌드 진행 현황 |
-| GET | `/ds/city-hdqt-map` | 5457 | 시/군별 최다 access담당 집계 (6시간 캐시) |
-| GET | `/ds/proxy-xlsx` | 5514 | S3 xlsx → EC2 프록시 스트리밍 (CORS 우회) |
-| GET | `/ds/proxy-raw-zip` | 5557 | S3 ZIP → EC2 프록시 스트리밍 (CORS 우회) |
-| POST | `/ds/upload-init` | 5596 | 업로드 세션 시작 (기존 데이터 삭제 + 새 레코드 생성) |
-| POST | `/ds/upload-chunk` | 5718 | 청크 데이터 수신 → DynamoDB BatchWriteItem |
-| POST | `/ds/upload-finalize` | 5731 | 업로드 완료 처리 |
-| GET | `/ds/stats` | 5758 | DS 통계 조회 |
-| GET | `/ds/export` | 5821 | DB 조회 → CSV 스트리밍 |
-| GET | `/ds/data` | 5957 | S3 xlsx/ZIP에서 페이지네이션 읽기 |
-| DELETE | `/ds/data` | 6143 | DynamoDB 데이터 삭제 |
-| GET | `/ds/presign-raw` | 6228 | ZIP S3 직접 업로드용 presigned PUT URL |
-| POST | `/ds/upload-raw` | 6253 | ZIP → EC2 로컬 디스크 저장 (병합용) |
-| POST | `/ds/upload-temp` | 6338 | ZIP → EC2 로컬 임시 저장 |
-| POST | `/ds/enqueue` | 6372 | DS 처리 잡 등록 → 즉시 jobId 반환 |
-| POST | `/ds/enqueue-multi` | 6426 | 복수 ZIP 병합 잡 생성 |
-| POST | `/ds/trigger-xlsx-build` | 6581 | xlsx 캐시 없는 업로드 → 빌드 큐 등록 |
-| GET | `/ds/export-xlsx` | 6596 | DB → xlsx 서버사이드 생성 (폴백) |
-| GET | `/ds/job/{job_id}` | 6802 | DS 잡 상태 조회 (3초 폴링용) |
-| DELETE | `/ds/job/{job_id}` | 6841 | DS 잡 취소 |
+| GET | `/ds/region-codes` | 139 | DS 지역코드 매핑 조회 |
+| GET | `/ds/upload-presign` | 3509 | S3 ZIP 업로드용 presigned PUT URL |
+| GET | `/ds/xlsx-upload-presign` | 3532 | S3 xlsx 업로드용 presigned PUT URL |
+| GET | `/ds/export-presign` | 3559 | xlsx 캐시 → EC2 프록시 URL 반환 (없으면 ZIP URL) |
+| GET | `/ds/xlsx-build-status` | 3631 | 수도권 본부별 캐시 상태 + 빌드 진행 현황 |
+| GET | `/ds/city-hdqt-map` | 3714 | 시/군별 최다 access담당 집계 (6시간 캐시) |
+| GET | `/ds/proxy-xlsx` | 3771 | S3 xlsx → EC2 프록시 스트리밍 (CORS 우회) |
+| GET | `/ds/proxy-raw-zip` | 3817 | S3 ZIP → EC2 프록시 스트리밍 (CORS 우회) |
+| POST | `/ds/upload-init` | 3856 | 업로드 세션 시작 (기존 데이터 삭제 + 새 레코드 생성) |
+| POST | `/ds/upload-chunk` | 3978 | 청크 데이터 수신 → DynamoDB BatchWriteItem |
+| POST | `/ds/upload-finalize` | 3991 | 업로드 완료 처리 |
+| GET | `/ds/stats` | 4018 | DS 통계 조회 |
+| GET | `/ds/export` | 4081 | DB 조회 → CSV 스트리밍 |
+| GET | `/ds/data` | 4217 | S3 xlsx/ZIP에서 페이지네이션 읽기 |
+| DELETE | `/ds/data` | 4403 | DynamoDB 데이터 삭제 |
+| GET | `/ds/presign-raw` | 4488 | ZIP S3 직접 업로드용 presigned PUT URL |
+| POST | `/ds/upload-raw` | 4513 | ZIP → EC2 로컬 디스크 저장 (병합용) |
+| POST | `/ds/upload-temp` | 4605 | ZIP → EC2 로컬 임시 저장 |
+| POST | `/ds/enqueue` | 4648 | DS 처리 잡 등록 → 즉시 jobId 반환 |
+| POST | `/ds/enqueue-multi` | 4702 | 복수 ZIP 병합 잡 생성 |
+| POST | `/ds/trigger-xlsx-build` | 4837 | xlsx 캐시 없는 업로드 → 빌드 큐 등록 |
+| GET | `/ds/export-xlsx` | 4852 | DB → xlsx 서버사이드 생성 (폴백) |
+| GET | `/ds/job/{job_id}` | 5075 | DS 잡 상태 조회 (3초 폴링용) |
+| DELETE | `/ds/job/{job_id}` | 5114 | DS 잡 취소 |
 
 ### 호출명칭
 | Method | Path | 설명 |
