@@ -343,9 +343,11 @@ Semgrep 로컬 룰팩 + Bandit 으로 전 백엔드(`yolov8/api/`, `auth/`) SAST
 
 **안전 확인(조치 불요):** HMAC 토큰 위조 불가(상수시간·시크릿·운영 fail-closed); role 강등은 매 요청 DynamoDB 재조회로 즉시 반영(3-4 의 "강등 후 토큰 잔존" 시나리오는 실제 미해당); `set-role` 자기강등/상위변경 차단; role 클라이언트 입력 mass-assignment 없음; categories/stations/route_basket/community(공지·요청·댓글·알림) owner 격리 정상; `/inspection/result`·photo R/W/D·schedules·my-list 본부 격리 정상.
 
-**6차 이후 추후 처리(우선순위 낮음 — 모두 admin/manager 한정이거나 read-only 집계):**
-- DS 조회류(`/ds/data`·`/ds/stats`·`/ds/export(-xlsx)`·`/ds/proxy-*`·`/ds/change-history`)와 `inspection_results.py` 대시보드/추이/export 는 본부 격리 미적용(read-only 집계, divisionId/region 클라이언트 필터). manager-vs-manager 횡적 열람 차단은 다음 회차에 read 필터 강제.
-- `/ds/change-history/{id}/cancel`·`bulk-cancel` 은 admin/manager 게이트만 있고 divisionId 횡적 격리 미적용(허가번호↔본부 2-DB 조인 필요 → 별도 회차).
+**accepted by design — 전국 조회는 의도된 설계 (조치 안 함, 진단 지적 시 "accepted"로 답변):**
+- **실적 데이터**(`inspection_results.py` 대시보드/분석/추이/export)와 **DS 데이터**(`/ds/data`·`/ds/stats`·`/ds/export(-xlsx)`·`/ds/proxy-*`·`/ds/change-history` 조회) 는 **전 직원이 전국 본부를 비교·조회하는 것이 업무상 의도된 기능**이다 (OVERVIEW 5.8 "전국 9개 본부 진도율/합격율", 메뉴 권한 실적·DS = member/manager/admin 모두 O). 운영 정책 확인 완료(2026-06-24): member/manager 가 타 본부 실적·DS 를 보는 것은 정상. → **read 본부 격리 적용 안 함.** (단 개별 무선국 운영 레코드 — `/inspection/detail`·`/inspection/data`·`/inspection/schedules` — 는 OVERVIEW 의 "본인 본부/팀만" 정책대로 6차에서 격리함. 실적/DS 집계와 성격이 다름.)
+
+**6차 이후 추후 처리(우선순위 낮음):**
+- `/ds/change-history/{id}/cancel`·`bulk-cancel` (되돌리기=write) 은 admin/manager 게이트만 있고 divisionId 횡적 격리 미적용(허가번호↔본부 2-DB 조인 필요 → 별도 회차). ※ 조회가 아니라 write 라 "전국 조회 허용" 정책과 무관.
 - 3-4(토큰 무효화 메커니즘 부재), 3-5(403 거부 로깅 부재) 미해소 유지.
 
 > py_compile 검증은 로컬 Python 부재로 EC2 배포(`deploy_backend.sh --restart`) 시 모듈 로드 + `journalctl` 로 확인 필요.
