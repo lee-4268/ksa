@@ -638,6 +638,7 @@ ERP vs DS 데이터 비교를 담당합니다. Bearer 토큰 인증 사용.
 | 화면 | 파일 | Drawer 메뉴 |
 |------|------|------------|
 | 홈 | `home_screen.dart` | — |
+| 시스템 안내 | `system_guide_screen.dart` | 시스템 안내 (정적, OVERVIEW.md 기반) |
 | 대시보드 (일정/통계) | `dashboard_screen.dart` | 일정 및 통계 |
 | 무선국 지도 | `station_list_screen.dart` | — |
 | AI 철탑분류 | `tower_classification_screen.dart` | AI 철탑형태 분류 |
