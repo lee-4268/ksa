@@ -334,6 +334,7 @@ Semgrep 로컬 룰팩 + Bandit 으로 전 백엔드(`yolov8/api/`, `auth/`) SAST
 | High | `DELETE /ds/data` 본부 격리 부재 (manager 가 타 본부 DS 삭제) | routers/ds.py:4435 | `_require_division_for_ds` | (6차) |
 | Medium | `/ds/apply-partial-update` 본부 격리 부재 | routers/ds.py:5713 | `_require_division_for_ds`(division_id 지정 시) | (6차) |
 | High | change_request `direct`·`cancel-bulk`·`DELETE {id}`·`file` 본부 격리 부재 (타 본부 변경개설 등록·취소·신고완료) | routers/change_request.py | `_resolve_cr_access_sync` + `_caller_allowed_access_list` 비교(단건 403, bulk skip) | (6차) |
+| Medium | `/ds/change-history/{id}/cancel`·`bulk-cancel` 본부 격리 부재 (타 본부 변경이력 되돌리기=write) | routers/ds.py:5615 | `ds_변경이력.division_id` ↔ caller 허용 divisionId 집합 비교(403, bulk 는 skip 처리). manager 격리, admin 무제약 | (6차) |
 
 **IDOR(소유자 격리):**
 
@@ -346,8 +347,9 @@ Semgrep 로컬 룰팩 + Bandit 으로 전 백엔드(`yolov8/api/`, `auth/`) SAST
 **accepted by design — 전국 조회는 의도된 설계 (조치 안 함, 진단 지적 시 "accepted"로 답변):**
 - **실적 데이터**(`inspection_results.py` 대시보드/분석/추이/export)와 **DS 데이터**(`/ds/data`·`/ds/stats`·`/ds/export(-xlsx)`·`/ds/proxy-*`·`/ds/change-history` 조회) 는 **전 직원이 전국 본부를 비교·조회하는 것이 업무상 의도된 기능**이다 (OVERVIEW 5.8 "전국 9개 본부 진도율/합격율", 메뉴 권한 실적·DS = member/manager/admin 모두 O). 운영 정책 확인 완료(2026-06-24): member/manager 가 타 본부 실적·DS 를 보는 것은 정상. → **read 본부 격리 적용 안 함.** (단 개별 무선국 운영 레코드 — `/inspection/detail`·`/inspection/data`·`/inspection/schedules` — 는 OVERVIEW 의 "본인 본부/팀만" 정책대로 6차에서 격리함. 실적/DS 집계와 성격이 다름.)
 
+> **본부 격리 일관 원칙 (6차 확정):** 모든 격리 게이트는 `role == 'admin'` 을 **가장 먼저** 통과시킨다. admin 은 지역본부 소속이 아닐 수 있어(`access담당`/region 값 없음) 어떤 API 에서도 본부 격리 대상이 아니다(전사 무제약). manager/member 만 본부 격리 적용. 신규 라우터 작성 시 동일 패턴 준수.
+
 **6차 이후 추후 처리(우선순위 낮음):**
-- `/ds/change-history/{id}/cancel`·`bulk-cancel` (되돌리기=write) 은 admin/manager 게이트만 있고 divisionId 횡적 격리 미적용(허가번호↔본부 2-DB 조인 필요 → 별도 회차). ※ 조회가 아니라 write 라 "전국 조회 허용" 정책과 무관.
 - 3-4(토큰 무효화 메커니즘 부재), 3-5(403 거부 로깅 부재) 미해소 유지.
 
 > py_compile 검증은 로컬 Python 부재로 EC2 배포(`deploy_backend.sh --restart`) 시 모듈 로드 + `journalctl` 로 확인 필요.

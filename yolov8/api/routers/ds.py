@@ -5575,7 +5575,9 @@ async def ds_change_history_bulk_cancel(request: Request, req: BulkCancelReq):
             if div_id:
                 affected_divisions.add(div_id)
         except HTTPException as he:
-            if he.status_code == 400 and '이미 취소된' in (he.detail or ''):
+            # 이미 취소됨(400) 또는 타 본부(403) → skipped 처리
+            if (he.status_code == 400 and '이미 취소된' in (he.detail or '')) \
+                    or he.status_code == 403:
                 results["skipped"] += 1
             else:
                 results["failed"] += 1
@@ -5602,6 +5604,12 @@ async def ds_change_history_cancel(history_id: int, request: Request, _skip_v2: 
     role = await asyncio.to_thread(_get_user_role_sync, empno)
     if role not in {"admin", "manager"}:
         raise HTTPException(403, "관리자/매니저만 가능")
+    # 본부 격리: 비-admin 은 본인 본부(divisionId) 변경이력만 되돌리기 가능 (admin 무제약)
+    allowed_divs = None
+    if role != 'admin':
+        _acc = await asyncio.to_thread(_caller_allowed_access_list, empno)
+        allowed_divs = {_ACCESS_TO_DIVISION.get(a) for a in _acc}
+        allowed_divs.discard(None)
 
     def _do():
         dc = sqlite3.connect(_DS_DETAIL_DB, timeout=60); dc.row_factory = sqlite3.Row
@@ -5613,6 +5621,10 @@ async def ds_change_history_cancel(history_id: int, request: Request, _skip_v2: 
             d = dict(row)
             if (d.get('cancelled') or '0') == '1':
                 raise HTTPException(400, "이미 취소된 변경입니다")
+            if allowed_divs is not None:
+                _div = d.get('division_id') or ''
+                if _div and _div not in allowed_divs:
+                    raise HTTPException(403, "본인 본부의 변경이력만 되돌릴 수 있습니다")
             hn = (d.get('허가번호') or '').replace('-', '')
             jn = (d.get('장치번호') or '').strip()
             field = (d.get('필드명') or '').strip()
