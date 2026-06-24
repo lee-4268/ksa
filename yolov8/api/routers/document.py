@@ -23,7 +23,7 @@ from botocore.exceptions import ClientError
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse
 
-from core.auth import _verify_auth, _get_user_role_sync
+from core.auth import _verify_auth, _get_user_role_sync, _require_role
 from core.config import _DS_DETAIL_DB, _INSP_DB, S3_BUCKET_NAME
 from core.db import get_s3_client
 
@@ -458,7 +458,7 @@ async def document_change_notification(
 @router.post("/document/apply-change-notification")
 async def document_apply_change_notification(request: Request):
     """변경개설신고 diff 결과를 ds_detail.db에 반영하고 이력 저장."""
-    await _verify_auth(request)
+    await _require_role(request, {"admin", "manager"})
     body = await request.json()
     selected = set(body.get('selected', []))
     diff = body.get('diff', [])

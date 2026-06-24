@@ -122,6 +122,23 @@ except ImportError:
 router = APIRouter(tags=["ds"])
 logger = logging.getLogger(__name__)
 
+
+async def _require_division_for_ds(request: Request, division_id: str, action: str = "DS 데이터"):
+    """DS divisionId 본부 격리 게이트. (caller_empno, role) 반환.
+    - admin: 무제약
+    - manager/member: caller 본부의 access담당 → divisionId 집합에 division_id 포함돼야 함
+      (수도권 4개 본부는 sudogwon 을 공유)."""
+    empno = await _verify_auth(request)
+    role = await asyncio.to_thread(_get_user_role_sync, empno)
+    if role == 'admin':
+        return empno, role
+    allowed_acc = await asyncio.to_thread(_caller_allowed_access_list, empno)
+    allowed_divs = {_ACCESS_TO_DIVISION.get(a) for a in allowed_acc}
+    allowed_divs.discard(None)
+    if division_id and division_id not in allowed_divs:
+        raise HTTPException(403, f"본인 본부의 {action}만 접근할 수 있습니다")
+    return empno, role
+
 # ── DS xlsx 빌드 상태 ────────────────────────────────────────
 _xlsx_build_queue: list = []
 _xlsx_build_task = None
@@ -3856,7 +3873,7 @@ async def ds_proxy_raw_zip(
 @router.post("/ds/upload-init")
 async def ds_upload_init(req: DsUploadInit, request: Request = None):
     """DS 업로드 세션 시작 - 기존 데이터 삭제 후 새 레코드 생성"""
-    await _verify_auth(request)
+    await _require_role(request, {"admin", "manager"})
     try:
         dynamodb = get_dynamodb_resource()
         uploads_table = dynamodb.Table(DYNAMODB_TABLES["ds_uploads"])
@@ -3978,7 +3995,7 @@ def _write_chunk_sync(req: "DsUploadChunk") -> int:
 @router.post("/ds/upload-chunk")
 async def ds_upload_chunk(req: DsUploadChunk, request: Request = None):
     """DS 청크 데이터 수신 → DynamoDB BatchWriteItem (스레드 풀에서 실행)"""
-    await _verify_auth(request)
+    await _require_role(request, {"admin", "manager"})
     try:
         written = await asyncio.to_thread(_write_chunk_sync, req)
         logger.info(f"DS chunk: {req.divisionId}/{req.sheetName} chunk {req.chunkIndex}/{req.totalChunks} - {written} rows")
@@ -3991,7 +4008,7 @@ async def ds_upload_chunk(req: DsUploadChunk, request: Request = None):
 @router.post("/ds/upload-finalize")
 async def ds_upload_finalize(req: DsUploadFinalize, request: Request = None):
     """DS 업로드 완료 - status 업데이트"""
-    await _verify_auth(request)
+    await _require_role(request, {"admin", "manager"})
     try:
         dynamodb = get_dynamodb_resource()
         table = dynamodb.Table(DYNAMODB_TABLES["ds_uploads"])
@@ -4414,8 +4431,9 @@ async def ds_delete_data(
     - S3 xlsx/zip: 즉시 삭제 → 이전 Export 파일 무효화
     - DynamoDB records: storageType="s3"면 건너뜀 (records 없음)
     """
-    # 권한 체크: admin, manager만 삭제 가능
+    # 권한 체크: admin/manager + 본부(divisionId) 격리 (타 본부 DS 삭제 차단)
     await _require_role(request, {"admin", "manager"})
+    await _require_division_for_ds(request, divisionId, "DS 데이터")
 
     try:
         dynamodb = get_dynamodb_resource()
@@ -5114,7 +5132,7 @@ async def ds_job_status(job_id: str, request: Request = None):
 @router.delete("/ds/job/{job_id}")
 async def ds_job_cancel(job_id: str, request: Request = None):
     """DS 잡 취소 — queued/processing 상태 모두 가능"""
-    await _verify_auth(request)
+    await _require_role(request, {"admin", "manager"})
     try:
         jobs_table = get_dynamodb_resource().Table(DYNAMODB_TABLES["ds_jobs"])
         item = jobs_table.get_item(Key={"jobId": job_id}).get("Item")
@@ -5692,6 +5710,9 @@ async def ds_apply_partial_update(request: Request, file: UploadFile = File(...)
     role = await asyncio.to_thread(_get_user_role_sync, empno)
     if role not in {"admin", "manager"}:
         raise HTTPException(403, "관리자/매니저만 가능")
+    # 본부 격리: 비-admin 은 본인 본부 divisionId 만 (division_id 미지정이면 통과)
+    if role != 'admin' and division_id:
+        await _require_division_for_ds(request, division_id, "DS 부분 적용")
 
     file_bytes = await file.read()
     if not file_bytes:

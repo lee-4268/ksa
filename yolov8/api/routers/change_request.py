@@ -20,12 +20,32 @@ from urllib.parse import quote
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
-from core.auth import _verify_auth, _get_user_role_sync
+from core.auth import _verify_auth, _get_user_role_sync, _caller_allowed_access_list
 from core.config import _INSP_DB, _COMMUNITY_DB
 from schemas.models import ChangeRequestDirectReq, ChangeRequestFileReq
 
 router = APIRouter(tags=["change_request"])
 logger = logging.getLogger(__name__)
+
+
+def _resolve_cr_access_sync(c, schedule_pk: str = "", 허가번호: str = "") -> str:
+    """변경개설 대상의 access담당 조회 (schedule_pk 우선, 없으면 허가번호로 target 조회)."""
+    try:
+        if schedule_pk:
+            r = c.execute(
+                'SELECT access담당 FROM inspection_schedules WHERE pk=?', (schedule_pk,)).fetchone()
+            if r and r[0]:
+                return r[0]
+        if 허가번호:
+            r = c.execute(
+                "SELECT access담당 FROM inspection_targets "
+                "WHERE 허가번호=? AND access담당 IS NOT NULL AND access담당!='' LIMIT 1",
+                (허가번호,)).fetchone()
+            if r and r[0]:
+                return r[0]
+    except Exception:
+        pass
+    return ''
 
 # ── 워크플로우 상수 ────────────────────────────────────────────
 WF_REGISTERED = "REGISTERED"
@@ -123,6 +143,19 @@ async def change_request_direct(request: Request, req: ChangeRequestDirectReq):
         if not it.after_value.strip():
             raise HTTPException(400, f"{it.field} 변경 후 값이 비어있습니다.")
 
+    # 본부 격리: 비-admin 은 본인 본부 허가번호만
+    if role != 'admin':
+        allowed = await asyncio.to_thread(_caller_allowed_access_list, empno)
+        def _chk():
+            c = sqlite3.connect(_INSP_DB, timeout=10)
+            try:
+                return _resolve_cr_access_sync(c, 허가번호=req.허가번호)
+            finally:
+                c.close()
+        tgt_access = await asyncio.to_thread(_chk)
+        if tgt_access and tgt_access not in allowed:
+            raise HTTPException(403, "본인 본부의 변경개설만 등록할 수 있습니다")
+
     now = datetime.now(timezone.utc).isoformat()
 
     def _save():
@@ -209,6 +242,9 @@ async def change_request_cancel_bulk(request: Request):
     ids = [int(x) for x in (body.get("ids") or []) if x]
     if not schedule_pks and not ids:
         raise HTTPException(400, "schedule_pks 또는 ids 중 최소 하나는 필수")
+    # 본부 격리: admin 외에는 본인 본부 건만 취소 (타 본부 row 는 skip)
+    allowed_access = None if role == 'admin' else await asyncio.to_thread(
+        _caller_allowed_access_list, empno)
 
     def _do():
         c = sqlite3.connect(_INSP_DB, timeout=60)
@@ -247,6 +283,12 @@ async def change_request_cancel_bulk(request: Request):
                 if role not in {"admin", "manager"} and (d.get('requested_by') or '') != empno:
                     skipped += 1
                     continue
+                if allowed_access is not None:
+                    _acc = _resolve_cr_access_sync(c, schedule_pk=d.get('schedule_pk') or '',
+                                                   허가번호=d.get('허가번호') or '')
+                    if _acc and _acc not in allowed_access:
+                        skipped += 1
+                        continue
                 c.execute(
                     "UPDATE change_request SET cancelled='1', cancelled_at=?, cancelled_by=? "
                     "WHERE id=?",
@@ -296,13 +338,15 @@ async def change_request_cancel(cr_id: int, request: Request):
     empno = await _verify_auth(request)
     role = await asyncio.to_thread(_get_user_role_sync, empno)
     now = datetime.now(timezone.utc).isoformat()
+    allowed_access = None if role == 'admin' else await asyncio.to_thread(
+        _caller_allowed_access_list, empno)
 
     def _do():
         c = sqlite3.connect(_INSP_DB, timeout=60)
         c.row_factory = sqlite3.Row
         try:
             row = c.execute(
-                'SELECT id, schedule_pk, status, requested_by, cancelled '
+                'SELECT id, schedule_pk, 허가번호, status, requested_by, cancelled '
                 'FROM change_request WHERE id=?', (cr_id,)
             ).fetchone()
             if not row:
@@ -315,6 +359,12 @@ async def change_request_cancel(cr_id: int, request: Request):
             # 권한: 본인 OR admin/manager
             if role not in {"admin", "manager"} and (d.get('requested_by') or '') != empno:
                 return False, "본인이 등록한 요청만 취소할 수 있습니다", None
+            # 본부 격리: 비-admin 은 본인 본부 건만
+            if allowed_access is not None:
+                _acc = _resolve_cr_access_sync(c, schedule_pk=d.get('schedule_pk') or '',
+                                               허가번호=d.get('허가번호') or '')
+                if _acc and _acc not in allowed_access:
+                    return False, "본인 본부의 변경개설만 취소할 수 있습니다", None
 
             c.execute(
                 "UPDATE change_request SET cancelled='1', cancelled_at=?, cancelled_by=? WHERE id=?",
@@ -369,8 +419,15 @@ async def change_request_file(request: Request, req: ChangeRequestFileReq):
     pks = list(dict.fromkeys(p for p in pks if p))
     if not pks:
         raise HTTPException(400, "schedule_pk(s) 비어있음")
+    # 본부 격리: admin 외에는 본인 본부 일정만 신고완료 처리
+    allowed_access = None if role == 'admin' else await asyncio.to_thread(
+        _caller_allowed_access_list, empno)
 
     def _save_one(c, pk: str) -> tuple:
+        if allowed_access is not None:
+            _acc = _resolve_cr_access_sync(c, schedule_pk=pk)
+            if _acc and _acc not in allowed_access:
+                return False, "본인 본부 일정이 아님"
         row = c.execute(
             'SELECT workflow_status FROM inspection_schedules WHERE pk=?', (pk,)
         ).fetchone()

@@ -2062,6 +2062,9 @@ async def update_pre_check_status(request: Request, req: PreCheckStatusReq):
         raise HTTPException(403, "admin/manager만 가능")
     if not req.license_nos:
         raise HTTPException(400, "license_nos 비어있음")
+    # 본부 격리: 비-admin 은 본인 본부 건만 처리 (타 본부 license 는 건너뜀)
+    allowed_access = None if role == 'admin' else await asyncio.to_thread(
+        _caller_allowed_access_list, empno)
 
     def _update():
         c = sqlite3.connect(_INSP_DB, timeout=60)
@@ -2073,16 +2076,18 @@ async def update_pre_check_status(request: Request, req: PreCheckStatusReq):
             for no in req.license_nos:
                 if req.year:
                     row = c.execute(
-                        "SELECT pk, workflow_status FROM inspection_schedules "
+                        "SELECT pk, workflow_status, access담당 FROM inspection_schedules "
                         "WHERE REPLACE(허가번호,'-','')=REPLACE(?,'-','') AND year=?",
                         (no, req.year)).fetchone()
                 else:
                     row = c.execute(
-                        "SELECT pk, workflow_status FROM inspection_schedules "
+                        "SELECT pk, workflow_status, access담당 FROM inspection_schedules "
                         "WHERE REPLACE(허가번호,'-','')=REPLACE(?,'-','')",
                         (no,)).fetchone()
                 if row:
                     pk, cur_st = row[0], (row[1] or WF_REGISTERED)
+                    if allowed_access is not None and row[2] and row[2] not in allowed_access:
+                        continue
                     if cur_st not in ok_from:
                         continue
                     c.execute(
@@ -2093,14 +2098,24 @@ async def update_pre_check_status(request: Request, req: PreCheckStatusReq):
                                         "ERP-DS 전산비교 완료 후 사전점검완료 처리")
                     updated_schedules += 1
                 else:
+                    # 일정 없는 대상: 본부 격리 — 비-admin 은 access담당 일치 행만 갱신
+                    acc_clause, acc_params = '', []
+                    if allowed_access is not None:
+                        if not allowed_access:
+                            continue
+                        _ph = ','.join('?' * len(allowed_access))
+                        acc_clause = f' AND access담당 IN ({_ph})'
+                        acc_params = list(allowed_access)
                     if req.year:
                         cur = c.execute(
-                            "UPDATE inspection_targets SET pre_check_status=? WHERE 허가번호=? AND year=?",
-                            (req.status, no, req.year))
+                            "UPDATE inspection_targets SET pre_check_status=? "
+                            "WHERE 허가번호=? AND year=?" + acc_clause,
+                            (req.status, no, req.year, *acc_params))
                     else:
                         cur = c.execute(
-                            "UPDATE inspection_targets SET pre_check_status=? WHERE 허가번호=?",
-                            (req.status, no))
+                            "UPDATE inspection_targets SET pre_check_status=? "
+                            "WHERE 허가번호=?" + acc_clause,
+                            (req.status, no, *acc_params))
                     updated_targets += cur.rowcount
             c.commit()
             return updated_targets, updated_schedules
@@ -2422,7 +2437,8 @@ def _build_insp_where(year, sheet, filters, search, addr, schedule_yn="", schedu
 @router.post("/inspection/data")
 async def inspection_data(request: Request, req: InspectionDataReq):
     """필터 적용 데이터 조회 (페이지네이션)."""
-    await _verify_auth(request)
+    caller = await _verify_auth(request)
+    _caller_role = await asyncio.to_thread(_get_user_role_sync, caller)
     if not os.path.exists(_INSP_DB): return {"items": [], "total": 0}
     if req.workflow_status or req.needs_recheck or req.overdue_only:
         logger.info(
@@ -2434,6 +2450,16 @@ async def inspection_data(request: Request, req: InspectionDataReq):
         req.year, req.sheet, req.filters, req.search, req.addr,
         req.schedule_yn, req.schedule_week,
         req.workflow_status, req.needs_recheck, req.overdue_only)
+    # 본부 격리: 비-admin 은 본인 본부(access담당)만. (access담당 은 inspection_targets 고유 컬럼 →
+    # COUNT/서브쿼리 모두 bare table 이라 무자격 참조 안전)
+    if _caller_role != 'admin':
+        _allowed_acc = await asyncio.to_thread(_caller_allowed_access_list, caller)
+        if _allowed_acc:
+            _ph = ','.join('?' * len(_allowed_acc))
+            where_sql = f'({where_sql}) AND access담당 IN ({_ph})'
+            params = list(params) + list(_allowed_acc)
+        else:
+            where_sql = f'({where_sql}) AND 1=0'
     _ALLOWED_INSP_SORT = {
         '허가번호', '호출명칭', '국종군', '부서', '연도주기',
         '설치장소', '도로명주소', '장치수', '통시', '공대',
@@ -2818,7 +2844,8 @@ async def inspection_summary(request: Request, req: InspectionSummaryReq):
 @router.get("/inspection/detail")
 async def inspection_detail(request: Request, year: int, 허가번호: str):
     """행 클릭 상세 정보 (KCA + DS + 일정 + 결과)."""
-    await _verify_auth(request)
+    # 본부 격리: 비-admin 은 본인 본부 건만 상세 조회 가능 (사진S3키 등 메타 노출 차단)
+    await _require_schedule_division(request, f"{year}#{허가번호}", "상세 정보")
     import sqlite3
 
     target = None
@@ -2899,8 +2926,7 @@ async def inspection_detail(request: Request, year: int, 허가번호: str):
 @router.patch("/inspection/target-review")
 async def inspection_target_review(request: Request, year: int, 허가번호: str, 시기조정: str = ""):
     """수검 검토 결과(시기조정) 업데이트 — admin/manager 만 허용."""
-    empno = await _verify_auth(request)
-    role = await asyncio.to_thread(_get_user_role_sync, empno)
+    empno, role = await _require_schedule_division(request, f"{year}#{허가번호}", "수검 대상")
     if role not in {"admin", "manager"}:
         raise HTTPException(403, "관리자/매니저만 가능")
     if not os.path.exists(_INSP_DB):
@@ -2995,6 +3021,42 @@ _WF_RANK = {
     WF_SUBMITTED: 5,
     WF_INSPECTED: 6,
 }
+
+
+def _resolve_schedule_access_sync(pk: str) -> str:
+    """일정 pk(year#허가번호)의 access담당 조회 (schedule 우선, 없으면 target)."""
+    c = sqlite3.connect(_INSP_DB, timeout=10); c.row_factory = sqlite3.Row
+    try:
+        row = c.execute(
+            'SELECT access담당 FROM inspection_schedules WHERE pk=?', (pk,)).fetchone()
+        if row and row['access담당']:
+            return row['access담당']
+        if '#' in pk:
+            y, lic = pk.split('#', 1)
+            row = c.execute(
+                'SELECT access담당 FROM inspection_targets WHERE year=? AND 허가번호=?',
+                (y, lic)).fetchone()
+            if row and row['access담당']:
+                return row['access담당']
+        return ''
+    finally:
+        c.close()
+
+
+async def _require_schedule_division(request: Request, pk: str, action: str = "데이터"):
+    """일정 pk 본부 격리 게이트. (caller_empno, role) 반환.
+    - admin: 무제약
+    - manager/member: 대상 일정의 access담당이 caller 본부 목록에 있어야 함 (없으면 403)
+    대상 access담당을 못 구하면(미배정) 통과시킨다(데이터 품질 문제로 막지 않음)."""
+    empno = await _verify_auth(request)
+    role = await asyncio.to_thread(_get_user_role_sync, empno)
+    if role != 'admin':
+        target_access = await asyncio.to_thread(_resolve_schedule_access_sync, pk)
+        if target_access:
+            allowed = await asyncio.to_thread(_caller_allowed_access_list, empno)
+            if target_access not in allowed:
+                raise HTTPException(403, f"본인 본부의 {action}만 접근할 수 있습니다")
+    return empno, role
 
 
 def _wf_can_transition(from_status, to_status: str, role: str) -> bool:
@@ -3185,8 +3247,7 @@ class WfBulkTransitionReq(BaseModel):
 
 @router.patch("/inspection/schedule/{pk:path}/status")
 async def inspection_schedule_transition(pk: str, request: Request, req: WfTransitionReq):
-    empno = await _verify_auth(request)
-    role = await asyncio.to_thread(_get_user_role_sync, empno)
+    empno, role = await _require_schedule_division(request, pk, "일정")
     ok, msg = await asyncio.to_thread(
         _wf_transition_sync, pk, req.to_status, empno, role, req.memo)
     if not ok:
@@ -3204,8 +3265,7 @@ async def inspection_schedule_force_transition(pk: str, request: Request, req: W
     일어났을 때 수동으로 되돌리거나 임의 상태 강제 변경하는 용도.
     상태 뱃지 클릭 → admin/manager에게만 노출되는 다이얼로그에서 호출.
     """
-    empno = await _verify_auth(request)
-    role = await asyncio.to_thread(_get_user_role_sync, empno)
+    empno, role = await _require_schedule_division(request, pk, "일정")
     if role not in ("admin", "manager"):
         raise HTTPException(403, "admin/manager 권한 필요")
     if req.to_status not in WF_VALID:
@@ -3248,10 +3308,18 @@ async def inspection_schedule_transition_bulk(request: Request, req: WfBulkTrans
     role = await asyncio.to_thread(_get_user_role_sync, empno)
     if not req.schedule_pks:
         raise HTTPException(400, "schedule_pks 비어있음")
+    # 본부 격리: admin 외에는 본인 본부 일정만 전환 (타 본부 pk는 403 처리)
+    allowed_access = None if role == 'admin' else await asyncio.to_thread(
+        _caller_allowed_access_list, empno)
 
     def _bulk():
         results = []
         for spk in req.schedule_pks:
+            if allowed_access is not None:
+                tgt = _resolve_schedule_access_sync(spk)
+                if tgt and tgt not in allowed_access:
+                    results.append({"pk": spk, "ok": False, "msg": "본인 본부 일정이 아님"})
+                    continue
             ok, msg = _wf_transition_sync(spk, req.to_status, empno, role, req.memo)
             results.append({"pk": spk, "ok": ok, "msg": msg})
         return results
@@ -3266,7 +3334,7 @@ async def inspection_schedule_transition_bulk(request: Request, req: WfBulkTrans
 
 @router.get("/inspection/schedule/{pk:path}/log")
 async def inspection_schedule_log(pk: str, request: Request):
-    await _verify_auth(request)
+    await _require_schedule_division(request, pk, "일정 이력")
     def _read():
         c = sqlite3.connect(_INSP_DB, timeout=60); c.row_factory = sqlite3.Row
         rows = c.execute(
@@ -3499,8 +3567,7 @@ class PreCheckResultReq(BaseModel):
 
 @router.post("/inspection/schedule/{pk:path}/pre-check-result")
 async def inspection_schedule_pre_check_result(pk: str, request: Request, req: PreCheckResultReq):
-    empno = await _verify_auth(request)
-    role = await asyncio.to_thread(_get_user_role_sync, empno)
+    empno, role = await _require_schedule_division(request, pk, "일정")
 
     s = req.summary or {}
     mismatch = (s.get("tower_mismatch", 0) + s.get("serial_mismatch", 0))
@@ -3560,8 +3627,7 @@ class ChangeRequestCreateReq(BaseModel):
 
 @router.post("/inspection/schedule/{pk:path}/change-request")
 async def inspection_change_request_create(pk: str, request: Request, req: ChangeRequestCreateReq):
-    empno = await _verify_auth(request)
-    role = await asyncio.to_thread(_get_user_role_sync, empno)
+    empno, role = await _require_schedule_division(request, pk, "일정")
 
     if not req.items:
         raise HTTPException(400, "변경 항목이 비어있습니다.")
@@ -3693,6 +3759,14 @@ async def inspection_schedule_upsert(request: Request, req: InspectionScheduleRe
     role = await asyncio.to_thread(_get_user_role_sync, empno)
     if role not in {"admin", "manager"}: raise HTTPException(403, "권한 없음")
     pk = f"{req.year}#{req.허가번호}"
+    # 본부 격리: 비-admin 은 본인 본부의 일정만 생성/수정 가능.
+    # 신규 생성은 req.access담당 기준, 기존 일정 덮어쓰기는 기존 access담당 기준으로 검사.
+    if role != 'admin':
+        allowed = await asyncio.to_thread(_caller_allowed_access_list, empno)
+        existing_access = await asyncio.to_thread(_resolve_schedule_access_sync, pk)
+        target_access = existing_access or (req.access담당 or '')
+        if target_access and target_access not in allowed:
+            raise HTTPException(403, "본인 본부의 일정만 등록/수정할 수 있습니다")
     now = datetime.now(timezone.utc).isoformat()
     def _write():
         c = sqlite3.connect(_INSP_DB, timeout=60)
@@ -3721,10 +3795,9 @@ async def inspection_schedule_upsert(request: Request, req: InspectionScheduleRe
 
 @router.delete("/inspection/schedule/{year}/{license_no}")
 async def inspection_schedule_delete(year: int, license_no: str, request: Request):
-    empno = await _verify_auth(request)
-    role = await asyncio.to_thread(_get_user_role_sync, empno)
-    if role not in {"admin", "manager"}: raise HTTPException(403, "권한 없음")
     pk = f"{year}#{license_no}"
+    empno, role = await _require_schedule_division(request, pk, "일정")
+    if role not in {"admin", "manager"}: raise HTTPException(403, "권한 없음")
     def _del():
         c = sqlite3.connect(_INSP_DB, timeout=60)
         c.execute('DELETE FROM inspection_schedules WHERE pk=?', (pk,))
@@ -3815,7 +3888,7 @@ async def inspection_result_upsert(request: Request, req: InspectionResultReq):
                 'SELECT workflow_status FROM inspection_schedules WHERE pk=?', (pk,)).fetchone()
             if sched:
                 cur = sched['workflow_status'] or WF_REGISTERED
-                if _wf_can_transition(cur, WF_INSPECTED, 'admin') and cur != WF_INSPECTED:
+                if _wf_can_transition(cur, WF_INSPECTED, role) and cur != WF_INSPECTED:
                     c.execute(
                         'UPDATE inspection_schedules SET workflow_status=?, '
                         'status_updated_at=?, status_updated_by=? WHERE pk=?',
@@ -4885,8 +4958,7 @@ class InspectionSubmissionReq(BaseModel):
 
 @router.patch("/inspection/schedule/{pk:path}/submission")
 async def inspection_schedule_submission(pk: str, request: Request, req: InspectionSubmissionReq):
-    empno = await _verify_auth(request)
-    role = await asyncio.to_thread(_get_user_role_sync, empno)
+    empno, role = await _require_schedule_division(request, pk, "일정")
     if not req.submission_no.strip():
         raise HTTPException(400, "접수번호 필요")
 
@@ -4938,12 +5010,20 @@ async def inspection_schedule_submission_bulk(request: Request, req: InspectionS
     if not sub_no:
         raise HTTPException(400, "접수번호 필요")
     submitted_at = req.submitted_at.strip() or datetime.now(timezone.utc).isoformat()
+    # 본부 격리: admin 외에는 본인 본부 일정만 (타 본부 pk는 403 처리)
+    allowed_access = None if role == 'admin' else await asyncio.to_thread(
+        _caller_allowed_access_list, empno)
 
     def _save():
         c = sqlite3.connect(_INSP_DB, timeout=60)
         now = datetime.now(timezone.utc).isoformat()
         results = []
         for pk in req.schedule_pks:
+            if allowed_access is not None:
+                tgt = _resolve_schedule_access_sync(pk)
+                if tgt and tgt not in allowed_access:
+                    results.append({"pk": pk, "ok": False, "msg": "본인 본부 일정이 아님"})
+                    continue
             row = c.execute(
                 'SELECT workflow_status FROM inspection_schedules WHERE pk=?', (pk,)).fetchone()
             if not row:
