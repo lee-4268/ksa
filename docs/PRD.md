@@ -654,12 +654,11 @@ DS 데이터 관리 → 업로드 카드 → Excel Export 버튼
 - **Storage:** AWS S3 (ksa-photos-bucket)
 - **Region:** ap-northeast-2 (서울)
 
-### 8.3 Backend - AI 서버 (EC2 #1)
-- **Framework:** FastAPI + Uvicorn
-- **Model:** YOLOv8n-cls (철탑형태 분류)
-- **Proxy:** AWS API Gateway (HTTPS)
-- **Instance:** c7i-flex.large (Ubuntu 22.04)
-- **Endpoint:** https://c3jictzagh.execute-api.ap-northeast-2.amazonaws.com
+### 8.3 Backend - AI 분류 (메인 백엔드 EC2 통합)
+- **Framework:** FastAPI + Uvicorn (`routers/predict.py`)
+- **Model:** YOLOv8n-cls (철탑형태 분류, `best.pt` lazy load)
+- **Endpoint:** https://api-sko-kca.skons.net (메인 백엔드와 동일, 인증 필수)
+- **변경(2026-06):** 옛 별도 API Gateway(`c3jictzagh…`)는 폐기 → 메인 백엔드 predict 라우터로 일원화
 
 ### 8.4 Backend - 통합 API 서버 (EC2 #2)
 - **Framework:** FastAPI + Uvicorn

@@ -4,8 +4,17 @@ import 'package:http/http.dart' as http;
 
 /// 철탑형태 분류 서비스 - FastAPI 기반 YOLOv8 모델 연동
 class TowerClassificationService {
-  // FastAPI 서버 URL
-  static const String _baseUrl = 'https://c3jictzagh.execute-api.ap-northeast-2.amazonaws.com';
+  // FastAPI 서버 URL (다른 서비스와 동일하게 빌드타임 주입, 기본 EC2)
+  static const String _baseUrl = String.fromEnvironment(
+    'API_BASE_URL',
+    defaultValue: 'https://api-sko-kca.skons.net',
+  );
+
+  // 서버 발급 HMAC 토큰 (EC2 predict 라우터는 _verify_auth 필수)
+  String? _authToken;
+  void setAuthToken(String? token) => _authToken = token;
+  Map<String, String> get _authHeader =>
+      {'Authorization': 'Bearer ${_authToken ?? ''}'};
 
   // 분류 클래스 정보 (9개 클래스)
   static const Map<int, Map<String, String>> classNames = {
@@ -46,6 +55,7 @@ class TowerClassificationService {
     try {
       final response = await http.get(
         Uri.parse('$_baseUrl/health'),
+        headers: _authHeader,
       ).timeout(const Duration(seconds: 5));
 
       if (response.statusCode == 200) {
@@ -76,6 +86,7 @@ class TowerClassificationService {
       final uri = Uri.parse('$_baseUrl/predict?conf_threshold=$confThreshold');
 
       final request = http.MultipartRequest('POST', uri)
+        ..headers.addAll(_authHeader)
         ..files.add(http.MultipartFile.fromBytes(
           'file',
           imageBytes,
@@ -130,7 +141,8 @@ class TowerClassificationService {
         '$_baseUrl/predict/ensemble?method=$method&conf_threshold=$confThreshold',
       );
 
-      final request = http.MultipartRequest('POST', uri);
+      final request = http.MultipartRequest('POST', uri)
+        ..headers.addAll(_authHeader);
 
       for (int i = 0; i < imageBytesList.length; i++) {
         request.files.add(http.MultipartFile.fromBytes(
@@ -195,9 +207,10 @@ class TowerClassificationService {
   /// 지원 클래스 목록 조회
   Future<List<ClassInfo>> getClassList() async {
     try {
-      final response = await http.get(Uri.parse('$_baseUrl/classes')).timeout(
-        const Duration(seconds: 10),
-      );
+      final response = await http.get(
+        Uri.parse('$_baseUrl/classes'),
+        headers: _authHeader,
+      ).timeout(const Duration(seconds: 10));
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
@@ -228,6 +241,7 @@ class TowerClassificationService {
       final uri = Uri.parse('$_baseUrl/feedback');
 
       final request = http.MultipartRequest('POST', uri)
+        ..headers.addAll(_authHeader)
         ..fields['original_class'] = originalClass
         ..fields['corrected_class'] = correctedClass
         ..files.add(http.MultipartFile.fromBytes(

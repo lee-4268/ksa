@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:provider/provider.dart';
 import 'dart:typed_data';
 import '../services/tower_classification_service.dart';
+import '../services/auth_service.dart';
 import '../widgets/progress_dialog.dart';
 
 /// 철탑형태 분류 결과 (상세정보에서 사용)
@@ -71,6 +73,8 @@ class _TowerClassificationScreenState extends State<TowerClassificationScreen>
   void initState() {
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
+    // EC2 predict 라우터는 인증 필수 → 로그인 토큰 주입
+    _classificationService.setAuthToken(context.read<AuthService>().authToken);
     _checkServerConnection();
   }
 
