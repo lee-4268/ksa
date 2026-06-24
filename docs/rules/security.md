@@ -317,6 +317,52 @@ Semgrep 로컬 룰팩 + Bandit 으로 전 백엔드(`yolov8/api/`, `auth/`) SAST
 - **CWE-259/321 (community.py)**: 운영 코드라 분리 대상 아님. 기존 판정(과탐, MIME 매핑 상수) 유지 — baseline 억제 그대로.
 - **잔여**: trainer 레포 분리 후 `best.pt` 출처(데이터/시드/하이퍼파라미터) 단일 기준이 trainer README "재현 기록 표"로 이동. 클래스 정의는 `api/core/config.py(CLASS_NAMES_KR)` ↔ trainer `configs/dataset.yaml` 동기화 유지 필요.
 
+### 2026-06-24 6차 점검 — 모의해킹 사전 대비 (접근통제: 수직/수평 권한 상승)
+
+테스트 계정 모의해킹(본인 권한 밖 CRUD) 대비. 18개 라우터 mutating 엔드포인트를 인증/role/본부격리/IDOR 4차원으로 병렬 감사(4 에이전트) + 헤드라인 진성 코드 직접 검증. **인증 커버리지는 100%**(누락 0)였으나, role 게이트·본부 격리·소유자 격리가 일부 엔드포인트에만 적용돼(비일관) 진성 취약 다수 확인. `security/access-control-hardening` 브랜치에서 일괄 조치.
+
+**수직 권한(role 게이트 누락) — member 가 호출 가능했던 mutating:**
+
+| 등급 | 이슈 | 위치 | 조치 | 커밋 |
+|---|---|---|---|---|
+| High | `/document/apply-change-notification` role 게이트 전무 → member 가 임의 허가번호 DS/대상 UPDATE (형제 `change-notification-sample` 엔 게이트 있음) | routers/document.py:461 | `_require_role({admin,manager})` 로 교체 | (6차) |
+| High | `/ds/upload-init`·`upload-chunk`·`upload-finalize` role 게이트 누락 → member 가 타 본부 DS 삭제·초기화·임의 레코드 주입 | routers/ds.py:3876,3998,4011 | 3종 모두 `_require_role({admin,manager})` (형제 enqueue/upload-raw 와 동일) | (6차) |
+| Medium | `DELETE /ds/job/{job_id}` role 게이트 누락 → member 가 DS 처리 잡 취소·사보타주 | routers/ds.py:5135 | `_require_role({admin,manager})` | (6차) |
+| Medium | `/inspection/result` 자동 INSPECTED 전환에 `'admin'` 하드코딩(3-6 항목 실코드) — role 가드 우회 구조 | routers/inspection.py:3891 | `_wf_can_transition(cur, WF_INSPECTED, role)` 로 실제 role 전달 (정상 SUBMITTED→INSPECTED 는 전이표에 있어 member 현장수검 흐름 유지) | (6차) |
+
+**수평 권한(본부 격리 부재) — 강남 계정이 경기 본부 데이터 R/W/D:**
+
+`_check_division_access` 헬퍼가 `/inspection/schedules` 1곳에만 적용돼 있던 것을 전 write/delete/고노출 read 로 확장. inspection.py 에 재사용 헬퍼 `_resolve_schedule_access_sync`/`_require_schedule_division`(pk→access담당 resolve 후 `_caller_allowed_access_list` 비교), ds.py 에 `_require_division_for_ds`(divisionId 격리, 수도권 4본부는 sudogwon 공유), change_request.py 에 `_resolve_cr_access_sync` 신설.
+
+| 등급 | 이슈 | 위치 | 조치 | 커밋 |
+|---|---|---|---|---|
+| High | 워크플로 전환 전 계열 본부 격리 부재 (status·status-force·transition-bulk·pre-check-result·change-request·submission·submission-bulk·target-review·pre-check-status) | routers/inspection.py | 각 핸들러에 `_require_schedule_division` 적용, bulk/리스트 계열은 per-pk 격리 필터 | (6차) |
+| High | 일정 생성/삭제 본부 격리 부재 (manager 가 타 본부 일정 생성·삭제) | routers/inspection.py:3759,3795 | upsert 는 req.access담당/기존 access담당 검사, delete 는 `_require_schedule_division` | (6차) |
+| High | `/inspection/detail` 본부 격리 부재 → 사진S3키 등 메타 노출(키 enumerate 발판) | routers/inspection.py:2847 | `_require_schedule_division` | (6차) |
+| High | `/inspection/data` 본부 격리 부재 (access담당을 클라이언트 선택 필터로만 취급) | routers/inspection.py:2453 | 비-admin 은 `access담당 IN (allowed)` 강제 주입(미배정 본부는 `1=0`) | (6차) |
+| High | `DELETE /ds/data` 본부 격리 부재 (manager 가 타 본부 DS 삭제) | routers/ds.py:4435 | `_require_division_for_ds` | (6차) |
+| Medium | `/ds/apply-partial-update` 본부 격리 부재 | routers/ds.py:5713 | `_require_division_for_ds`(division_id 지정 시) | (6차) |
+| High | change_request `direct`·`cancel-bulk`·`DELETE {id}`·`file` 본부 격리 부재 (타 본부 변경개설 등록·취소·신고완료) | routers/change_request.py | `_resolve_cr_access_sync` + `_caller_allowed_access_list` 비교(단건 403, bulk skip) | (6차) |
+| Medium | `/ds/change-history/{id}/cancel`·`bulk-cancel` 본부 격리 부재 (타 본부 변경이력 되돌리기=write) | routers/ds.py:5615 | `ds_변경이력.division_id` ↔ caller 허용 divisionId 집합 비교(403, bulk 는 skip 처리). manager 격리, admin 무제약 | (6차) |
+
+**IDOR(소유자 격리):**
+
+| 등급 | 이슈 | 위치 | 조치 | 커밋 |
+|---|---|---|---|---|
+| High | storage read/download/delete 가 `photos/{owner}`·`excel/{owner}` 키의 owner 미검증 → 키만 알면 타인 사진/엑셀 R/D | routers/storage.py:137,158,189 | `_key_owner` 추출 + `_enforce_key_owner`(소유자 또는 admin). feedback/·ds-*/ 는 사번 기반 아니라 인증만 | (6차) |
+
+**안전 확인(조치 불요):** HMAC 토큰 위조 불가(상수시간·시크릿·운영 fail-closed); role 강등은 매 요청 DynamoDB 재조회로 즉시 반영(3-4 의 "강등 후 토큰 잔존" 시나리오는 실제 미해당); `set-role` 자기강등/상위변경 차단; role 클라이언트 입력 mass-assignment 없음; categories/stations/route_basket/community(공지·요청·댓글·알림) owner 격리 정상; `/inspection/result`·photo R/W/D·schedules·my-list 본부 격리 정상.
+
+**accepted by design — 전국 조회는 의도된 설계 (조치 안 함, 진단 지적 시 "accepted"로 답변):**
+- **실적 데이터**(`inspection_results.py` 대시보드/분석/추이/export)와 **DS 데이터**(`/ds/data`·`/ds/stats`·`/ds/export(-xlsx)`·`/ds/proxy-*`·`/ds/change-history` 조회) 는 **전 직원이 전국 본부를 비교·조회하는 것이 업무상 의도된 기능**이다 (OVERVIEW 5.8 "전국 9개 본부 진도율/합격율", 메뉴 권한 실적·DS = member/manager/admin 모두 O). 운영 정책 확인 완료(2026-06-24): member/manager 가 타 본부 실적·DS 를 보는 것은 정상. → **read 본부 격리 적용 안 함.** (단 개별 무선국 운영 레코드 — `/inspection/detail`·`/inspection/data`·`/inspection/schedules` — 는 OVERVIEW 의 "본인 본부/팀만" 정책대로 6차에서 격리함. 실적/DS 집계와 성격이 다름.)
+
+> **본부 격리 일관 원칙 (6차 확정):** 모든 격리 게이트는 `role == 'admin'` 을 **가장 먼저** 통과시킨다. admin 은 지역본부 소속이 아닐 수 있어(`access담당`/region 값 없음) 어떤 API 에서도 본부 격리 대상이 아니다(전사 무제약). manager/member 만 본부 격리 적용. 신규 라우터 작성 시 동일 패턴 준수.
+
+**6차 이후 추후 처리(우선순위 낮음):**
+- 3-4(토큰 무효화 메커니즘 부재), 3-5(403 거부 로깅 부재) 미해소 유지.
+
+> 검증: 수정 5개 파일 + 전체 `yolov8/api/` `python -m compileall` 통과(문법 오류 0, Python 3.14.6). 신규/추가 import 이름 소스 모듈 실재 확인. 단 fastapi/boto3 미설치 + `core.config` 운영 fail-closed 로 전체 import 스모크는 불가 → 모듈 로드(NameError 등) 최종 확인은 EC2 배포(`deploy_backend.sh --restart`) 후 `journalctl` 로.
+
 ```
 □ await _verify_auth(request) 호출
 □ admin/manager 필요한 작업이면 role 게이트

@@ -34,7 +34,7 @@ ZIP 업로드 → S3(ds-raw/) 저장 → enqueue → 백그라운드 잡 처리
 전체 xlsx:        ds-exports/{divisionId}/{divisionCode}_{importDate}.xlsx
 수도권 본부별 xlsx: ds-exports/{divisionId}/{divisionCode}_{importDate}_{hdqt_key}.xlsx
 ```
-- `hdqt_key` 매핑 (`_HDQT_S3_KEY`, main.py:218): `강남→gangnam`, `강북→gangbuk`, `경기→gyeonggi`, `인천→incheon`
+- `hdqt_key` 매핑 (`_HDQT_S3_KEY`, core/config.py:187): `강남→gangnam`, `강북→gangbuk`, `경기→gyeonggi`, `인천→incheon`
 
 ### 권한
 - 업로드/삭제: admin 또는 manager만 가능
@@ -53,15 +53,16 @@ ZIP 업로드 → S3(ds-raw/) 저장 → enqueue → 백그라운드 잡 처리
 → S3 ds-exports/sudogwon/10_{importDate}_{hdqt_key}.xlsx 저장
 ```
 
-### 핵심 함수 위치 (main.py)
-| 함수 | 라인 | 역할 |
+### 핵심 함수 위치 (리팩토링 후: core/config.py + routers/ds.py)
+| 함수 | 위치 | 역할 |
 |------|------|------|
-| `_HDQT_S3_KEY` | 218 | 한글 본부명 → S3 영문 키 딕셔너리 |
-| `_build_one_xlsx_cache` | 5000 | 단일 xlsx 빌드 → S3 저장 |
-| `_build_xlsx_cache_background` | 5085 | 서브프로세스 진입점 (수도권 4개 순차 실행) |
-| `_xlsx_build_worker` | 5190 | 큐 처리 태스크 |
-| `_job_worker_loop` | 5209 | 메인 잡 워커 (싱글턴, OOM 방지) |
-| `ds_xlsx_build_status` | 5398 | 본부별 캐시 상태 + 빌드 진행 현황 API |
+| `_HDQT_S3_KEY` | core/config.py:187 | 한글 본부명 → S3 영문 키 딕셔너리 |
+| `_build_one_xlsx_cache` | routers/ds.py:3140 | xlsx 빌드 → S3 저장 (수도권은 본부별 분리 생성) |
+| `_merge_hdqt_xlsx_from_s3` | routers/ds.py:3242 | 수도권 4개 본부 xlsx 다운로드 → 단일 전체 xlsx 병합 (스트리밍) |
+| `_build_xlsx_cache_background` | routers/ds.py:3329 | 빌드 진입점 (ZIP 다운로드 → _build_one_xlsx_cache → v2 재빌드 트리거) |
+| `_xlsx_build_worker` | routers/ds.py:3411 | 큐 처리 태스크 |
+| `_job_worker_loop` | routers/ds.py:3430 | 메인 잡 워커 (싱글턴, OOM 방지) |
+| `ds_xlsx_build_status` | routers/ds.py:3632 | 본부별 캐시 상태 + 빌드 진행 현황 API |
 
 ### 메모리 관리 원칙
 - 한 번에 1개 잡만 처리 (OOM 방지)
@@ -80,9 +81,9 @@ export-presign API 호출
 
 ## 수검대상 업로드 보정 로직
 
-DS 업로드 시 `access담당` 컬럼 품질 보정 (main.py:11750~).
+DS 업로드 시 `access담당` 컬럼 품질 보정 (`_correct_hdqt`, routers/inspection.py:962~).
 
-### 유효한 본부명 (`_ACCESS_TO_SKT_HDQT` 키, main.py:10729)
+### 유효한 본부명 (`_ACCESS_TO_SKT_HDQT` 키, routers/inspection.py:296)
 ```
 강남, 강북, 경기, 인천, 강원, 충청, 서부, 동부
 ```
@@ -168,7 +169,7 @@ CSV 업로드 → 분석(컬럼/건수) → 필터 설정 → 매칭 처리 → 
 
 ### 딕셔너리 (`_EQP_TYPE_SIMPLIFY`)
 - 280+ 장비타입 → 30+ 간소화 카테고리
-- 위치: `core/config.py` (리팩토링 전 main.py 상단)
+- 위치: `routers/inspection_results.py:50` (리팩토링 전 main.py 상단)
 
 ### 주요 카테고리
 ```

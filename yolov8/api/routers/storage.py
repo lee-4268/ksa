@@ -40,6 +40,27 @@ def _validate_s3_key(key: str, allowed_prefixes: tuple) -> None:
         raise HTTPException(status_code=403, detail="허용되지 않은 S3 경로")
 
 
+def _key_owner(key: str) -> str | None:
+    """photos/{owner}/... · excel/{owner}/... 키에서 owner(사번) 세그먼트 추출.
+    사번 기반이 아닌 prefix(feedback/·ds-*/)는 None."""
+    normalized = key.replace("\\", "/")
+    for prefix in ("photos/", "excel/"):
+        if normalized.startswith(prefix):
+            seg = normalized[len(prefix):].split("/", 1)[0]
+            return seg or None
+    return None
+
+
+async def _enforce_key_owner(request: Request, key: str) -> str:
+    """사번 기반 S3 키(photos/{owner}, excel/{owner})는 소유자 또는 admin만 접근 허용.
+    그 외 prefix(feedback/ 등)는 인증만 요구. caller empno 반환.
+    → 키만 알면 타인 사진/엑셀을 열람·삭제하던 IDOR 차단."""
+    owner = _key_owner(key)
+    if owner:
+        return await _require_owner_or_admin(request, owner)
+    return await _verify_auth(request)
+
+
 @router.post("/upload/photo")
 async def upload_photo(
     file: UploadFile = File(...),
@@ -119,8 +140,8 @@ async def get_presigned_url(
     request: Request = None,
 ):
     """S3 Presigned URL 생성 (다운로드용)."""
-    await _verify_auth(request)
     _validate_s3_key(key, ALLOWED_S3_READ_PREFIXES)
+    await _enforce_key_owner(request, key)
     try:
         s3_client = get_s3_client()
         url = s3_client.generate_presigned_url(
@@ -140,8 +161,8 @@ async def download_photo(
     request: Request = None,
 ):
     """S3 이미지를 EC2 경유로 스트리밍 (CORS 우회)."""
-    await _verify_auth(request)
     _validate_s3_key(key, ALLOWED_S3_READ_PREFIXES)
+    await _enforce_key_owner(request, key)
     try:
         s3_client = get_s3_client()
         response = s3_client.get_object(Bucket=S3_BUCKET_NAME, Key=key)
@@ -165,9 +186,9 @@ async def download_photo(
 @router.delete("/storage/{key:path}")
 async def delete_s3_object(key: str, request: Request = None):
     """S3 객체 삭제."""
-    await _verify_auth(request)
     _check_rate_limit(request, "storage_delete", 10, 60)
     _validate_s3_key(key, ALLOWED_S3_DELETE_PREFIXES)
+    await _enforce_key_owner(request, key)
     try:
         s3_client = get_s3_client()
         s3_client.delete_object(Bucket=S3_BUCKET_NAME, Key=key)
