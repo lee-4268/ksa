@@ -191,6 +191,25 @@ bash /home/ubuntu/deploy_backend.sh --restart   # 코드 받기 + 재시작 + �
 - 받기 전 기존 `main.py` 를 `main.py.bak.<날짜시각>` 으로 자동 백업 (롤백용 명령도 종료 시 출력)
 - 운영 디렉터리 `/home/ubuntu/kca-api/` 는 git 저장소가 아님 (DB·로그·venv·코드가 한 폴더에 평면 배치)
 
+> **시스템 패키지 (최초 1회, AI 분류 필수)**: 철탑형태 분류(ultralytics→opencv)는 OpenGL/GLib
+> 시스템 라이브러리를 요구한다. 헤드리스 EC2 기본 이미지엔 없어 **첫 추론에서 `libGL.so.1:
+> cannot open shared object file` → 500** 이 난다(모델 로드는 됨). requirements.txt 로는 안
+> 잡히므로(시스템 .so) 인스턴스 최초 셋업/재생성 시 apt 로 설치:
+> ```bash
+> sudo apt-get update && sudo apt-get install -y libgl1 libglib2.0-0
+> # Ubuntu 22.04 기준 libgl1 (구버전은 libgl1-mesa-glx). libglib2.0-0 = libgthread-2.0.so.0
+> ```
+> ultralytics 가 `opencv-python`(비헤드리스)을 의존성으로 강제하므로 `opencv-python-headless`
+> 로 바꿔도 비헤드리스가 다시 설치됨 → **시스템 라이브러리 설치가 정답**.
+
+> **메모리 운영 (분류 메인 백엔드 통합, 2026-06 결정)**: 분류가 별도 AI 서버 → 메인 백엔드로
+> 통합됨. torch+모델은 **lazy 로드**(첫 predict 전 비용 0)이나, 한 번 쓰면 단일 uvicorn
+> 워커(`--workers 1`)에 **상주**해 baseline 메모리가 영구히 올라간다(재시작 전까지). 안전장치:
+> ① 모든 predict·DS 작업은 `_check_memory`(사용률 ≥80% 시 503, OOM 크래시 대신 graceful)
+> ② DS 대형 빌드는 서브프로세스+단일 잡 직렬화로 메인 프로세스와 메모리 분리.
+> → **메모리 압박 시 우선 인스턴스 RAM 한 단계 업**(예 2GB→4GB)으로 대응. 전용 AI 서버
+> 재분리는 분류가 **상시 고부하**로 확인될 때만 검토(2번째 EC2+API GW+프로비저닝 비용).
+
 ```bash
 # 로그 확인 (모듈 로드 NameError 등은 재시작 직후 여기 찍힘)
 systemctl status kca-api --no-pager | head -8
