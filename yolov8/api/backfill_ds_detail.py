@@ -46,10 +46,11 @@ def init_db(conn):
     conn.commit()
 
 # ── 헬퍼 ─────────────────────────────────────────────────────────────────────
-def _col_idx(ws, name):
-    for c in range(ws.ncols):
-        if str(ws.cell_value(0, c)).strip() == name:
-            return c
+def _col_idx(ws, *names):
+    for name in names:
+        for c in range(ws.ncols):
+            if str(ws.cell_value(0, c)).strip() == name:
+                return c
     return -1
 
 def _fix_zip_filename(name: str) -> str:
@@ -125,7 +126,7 @@ def process_zip(zip_path: str, conn: sqlite3.Connection, label: str):
                     ji = _col_idx(ws, '장치번호')
                     ki = _col_idx(ws, '기')
                     ei = _col_idx(ws, '이득')
-                    pi = _col_idx(ws, '공중선주 설치형태명')
+                    pi = _col_idx(ws, '공중선주 설치형태명', '공중선주설치형태명', '안테나설치대 설치형태명', '안테나설치대설치형태명')
                     batch = []
                     for r in range(1, ws.nrows):
                         h = str(ws.cell_value(r, hi) or '').strip() if hi >= 0 else ''

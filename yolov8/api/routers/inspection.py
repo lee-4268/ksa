@@ -745,7 +745,7 @@ def _build_ds_detail_from_zip_sync(zip_path: str):
                         ws = wb.sheet_by_name('안테나')
                         hi = _col_idx(ws, '허가번호'); ji = _col_idx(ws, '장치번호')
                         ki = _col_idx(ws, '기'); ei = _col_idx(ws, '이득')
-                        pi = _col_idx(ws, '공중선주 설치형태명', '공중선주설치형태명')
+                        pi = _col_idx(ws, '공중선주 설치형태명', '공중선주설치형태명', '안테나설치대 설치형태명', '안테나설치대설치형태명')
                         ai = _col_idx(ws, '공중선일련번호')
                         ni = _col_idx(ws, '공중선형식명')
                         # _col_idx는 정확 매칭이므로 '지상고'와 '안테나지상고도' 구분됨

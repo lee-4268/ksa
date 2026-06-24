@@ -37,17 +37,10 @@ class _LoginScreenState extends State<LoginScreen> {
   static const Color _border    = Color(0xFFE5E7EB);
   static const Color _bgPage    = Color(0xFFF5F5F5);
 
-  // ── 테스트 계정 ────────────────────────────────────────────
+  // ── 테스트 계정 (보안진단용: 관리자/일반사용자 2종) ──────────────
   static const _testAccounts = [
-    {'empno': 'TEST_GN', 'name': '테스트_강남', 'region': '강남Access담당', 'role': 'member', 'team': '강남품질개선팀'},
-    {'empno': 'TEST_GB', 'name': '테스트_강북', 'region': '강북Access담당', 'role': 'member', 'team': '용산품질개선팀'},
-    {'empno': 'TEST_IC', 'name': '테스트_인천', 'region': '인천Access담당', 'role': 'member', 'team': '북인천품질개선팀'},
-    {'empno': 'TEST_GG', 'name': '테스트_경기', 'region': '경기Access담당', 'role': 'member', 'team': '하남품질개선팀'},
-    {'empno': 'TEST_GW', 'name': '테스트_강원', 'region': '강원Access담당', 'role': 'member', 'team': '원주품질개선팀'},
-    {'empno': 'TEST_CC', 'name': '테스트_충청', 'region': '충청Access담당', 'role': 'member', 'team': '대전품질개선팀'},
-    {'empno': 'TEST_KB', 'name': '테스트_경북', 'region': '경북Access담당', 'role': 'member', 'team': '포항품질개선팀'},
-    {'empno': 'TEST_KN', 'name': '테스트_경남', 'region': '경남Access담당', 'role': 'member', 'team': '동부산품질개선팀'},
-    {'empno': 'TEST_SB', 'name': '테스트_서부', 'region': '서부Access담당', 'role': 'member', 'team': '서광주품질개선팀'},
+    {'empno': 'TEST_ADMIN', 'name': '관리자', 'region': '강남Access담당', 'role': 'admin', 'team': '강남품질개선팀'},
+    {'empno': 'TEST_MEMBER', 'name': '일반사용자', 'region': '강남Access담당', 'role': 'member', 'team': '강남품질개선팀'},
   ];
 
   @override
@@ -596,9 +589,7 @@ class _LoginScreenState extends State<LoginScreen> {
                         borderRadius: BorderRadius.circular(6)),
                   ),
                   child: Text(
-                    acc['region']!
-                        .replaceAll('본부', '')
-                        .replaceAll('담당', ''),
+                    acc['name']!,
                     style: TextStyle(
                       fontSize: 11,
                       color: isAdmin

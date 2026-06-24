@@ -308,6 +308,15 @@ Semgrep 로컬 룰팩 + Bandit 으로 전 백엔드(`yolov8/api/`, `auth/`) SAST
 | 위험 | 적절하지 않은 난수 값 사용 (CWE-330) | yolov8/utils/data_prepare.py:8,126,212 | 학습 데이터셋 train/val 분할 셔플용 `random` — 보안 결정 무관(OTP/세션/키 아님). 실제 보안 난수는 `core/auth.py` 가 `os.urandom`·HMAC-SHA256·PBKDF2 사용(안전 확인). | 전역 `random.seed`/`random.shuffle` → `random.Random(seed)` 인스턴스로 전환. 동작·재현성 동일(실측 검증), 보안 스캐너 룰 회피. `secrets.randbelow` 는 seed/shuffle 미지원이라 부적합. |
 | 매우위험 | 하드코드된 중요정보 (CWE-259/321) | yolov8/api/routers/community.py:61 | `_COMMUNITY_FILE_CONTENT_TYPES` 딕셔너리의 `'.zip':'application/zip'` — 파일 확장자→MIME 타입 매핑 상수. DB연결·비밀번호·암호화키 아님. Sparrow 가 문자열 상수를 시크릿으로 오탐. | 복호화 대상 비밀정보가 없어 코드 변경 불가(설정파일 분리 시 기능 손상). `baseline.yaml` finding-level `false-positive` 억제(path=community.py, 2026-12-16 만료). 보고서 권장(설정파일 복호화)은 실제 DB 자격증명 하드코딩에 적용되는 것으로, 본 건은 해당 대상 없음. |
 
+### 2026-06-17 Sparrow 재검출(분석ID 111748) 대응 — 학습 코드 분리로 CWE-330 근본 소멸
+
+분석ID 111748(2026-06-17 코드 기준)에서 위 2건이 동일하게 재검출됨(코드 대응은 했으나 스캐너 룰이 계속 매칭). 근본 대응으로 **학습 전용 코드를 본 레포에서 분리**.
+
+- **조사**: `yolov8/train.py`·`evaluate.py`·`predict.py`·`utils/data_prepare.py`·`configs/` 는 `best.pt` 산출용 오프라인 도구로, 운영 API(`api/`)가 **import하지 않음**(추론은 `api/core/model.py` 가 `best.pt` 만 로드). grep으로 런타임 참조 0건 확인.
+- **조치 (CWE-330 종결)**: 위 학습 파일 7개를 `git rm` 으로 본 레포에서 제거 → 별도 학습 레포 `ksa-tower-trainer` 로 이관. 검출 파일 `data_prepare.py` 가 진단 대상에서 사라져 **CWE-330 근본 소멸**(오탐 회신·baseline 억제 불필요). `yolov8/README.md` 는 운영(추론+EC2 배포) 중심으로 정리, 학습 절차는 trainer 레포로 안내.
+- **CWE-259/321 (community.py)**: 운영 코드라 분리 대상 아님. 기존 판정(과탐, MIME 매핑 상수) 유지 — baseline 억제 그대로.
+- **잔여**: trainer 레포 분리 후 `best.pt` 출처(데이터/시드/하이퍼파라미터) 단일 기준이 trainer README "재현 기록 표"로 이동. 클래스 정의는 `api/core/config.py(CLASS_NAMES_KR)` ↔ trainer `configs/dataset.yaml` 동기화 유지 필요.
+
 ### 2026-06-24 6차 점검 — 모의해킹 사전 대비 (접근통제: 수직/수평 권한 상승)
 
 테스트 계정 모의해킹(본인 권한 밖 CRUD) 대비. 18개 라우터 mutating 엔드포인트를 인증/role/본부격리/IDOR 4차원으로 병렬 감사(4 에이전트) + 헤드라인 진성 코드 직접 검증. **인증 커버리지는 100%**(누락 0)였으나, role 게이트·본부 격리·소유자 격리가 일부 엔드포인트에만 적용돼(비일관) 진성 취약 다수 확인. `security/access-control-hardening` 브랜치에서 일괄 조치.
