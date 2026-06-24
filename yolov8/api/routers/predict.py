@@ -26,7 +26,8 @@ from fastapi.responses import JSONResponse
 from core.auth import _verify_auth
 from core.config import CLASS_NAMES_KR, SHORT_NAMES, MODEL_PATH, UPLOAD_DIR, S3_BUCKET_NAME, ALLOWED_EXTENSIONS
 from core.db import get_s3_client
-from core.model import model, load_model, predict_single_image, ensemble_predictions
+import core.model as _model_mod
+from core.model import load_model, predict_single_image, ensemble_predictions
 from core.utils import (
     _check_memory, _check_rate_limit, validate_image, validate_image_bytes,
     save_upload_file, cleanup_file
@@ -38,6 +39,17 @@ from schemas.models import (
 
 router = APIRouter(tags=["predict"])
 logger = logging.getLogger(__name__)
+
+
+def _model_ready() -> bool:
+    """분류 준비 여부.
+    - 이미 메모리에 로드됨(_model_mod.model) → True
+    - 아직 lazy 로드 전이라도 best.pt 파일이 있으면 로드 가능 → True
+    UI 가 이 값으로 분류 버튼을 활성화하고, 실제 가중치 로드는 첫 predict 에서 수행.
+    (predict.py 가 `from core.model import model` 로 None 을 값 복사해 갖고 있어
+     로드 후에도 갱신 안 되던 버그 → 모듈 상태를 직접 참조하도록 수정)
+    """
+    return _model_mod.model is not None or Path(MODEL_PATH).exists()
 
 
 # ── 로컬 유틸 ─────────────────────────────────────────────────
@@ -67,7 +79,7 @@ async def root():
     """서버 상태 확인 (루트)."""
     return {
         "status": "healthy",
-        "model_loaded": model is not None,
+        "model_loaded": _model_ready(),
         "model_path": MODEL_PATH,
         "timestamp": datetime.now(timezone.utc).isoformat()
     }
@@ -78,7 +90,7 @@ async def health_check():
     """서버 상태 확인."""
     return {
         "status": "healthy",
-        "model_loaded": model is not None,
+        "model_loaded": _model_ready(),
         "model_path": MODEL_PATH,
         "timestamp": datetime.now(timezone.utc).isoformat()
     }
