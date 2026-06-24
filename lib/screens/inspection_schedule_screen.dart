@@ -2699,12 +2699,22 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     if (week.isEmpty && status == null) {
       final preCheck = _targetPreCheckMap[licenseNo] ?? '';
       if (preCheck.isNotEmpty) {
-        // preCheck는 일정 등록 전 단계라 schedulePk 없음 — admin 클릭 비활성
+        // preCheck는 일정 등록 전 단계라 schedule 행이 없음 → 워크플로 전환 불가.
+        // admin/manager 는 칩 클릭으로 '사전점검완료 표시 해제'(초기화) 가능.
+        final badge = _buildStatusBadge(preCheck);
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           mainAxisAlignment: MainAxisAlignment.center,
-          children: [_buildStatusBadge(preCheck)],
+          children: [
+            _isAdmin
+                ? InkWell(
+                    borderRadius: BorderRadius.circular(10),
+                    onTap: () => _clearPreCheck(licenseNo),
+                    child: badge,
+                  )
+                : badge,
+          ],
         );
       }
       return const SizedBox.shrink();
@@ -2754,6 +2764,46 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
         ],
       ],
     );
+  }
+
+  // 일정 미등록 국소의 '사전점검완료' 표시 해제 (admin/manager).
+  // 이런 건은 schedule 행이 없어 워크플로 전환이 불가하므로, 표시를 클리어해
+  // '상태 없음'으로 되돌린 뒤 정상적으로 일정을 등록할 수 있게 한다.
+  Future<void> _clearPreCheck(String licenseNo) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        title: const Text('사전점검완료 해제',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+        content: const Text(
+          '일정이 등록되지 않은 상태에서 사전점검완료로 표시된 건입니다.\n'
+          '해제하면 상태칩이 사라지고, 이후 정상적으로 일정을 등록할 수 있습니다.',
+          style: TextStyle(fontSize: 13, height: 1.5),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('취소')),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: ElevatedButton.styleFrom(backgroundColor: _primary, foregroundColor: Colors.white),
+            child: const Text('해제'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    final dialog = ProgressDialog(context);
+    dialog.show(message: '해제 중...');
+    try {
+      await _svc.markPreChecked([licenseNo], year: _year, status: '');
+      if (!mounted) return;
+      await dialog.complete(message: '사전점검완료 표시를 해제했습니다');
+      _loadAll();
+    } catch (e) {
+      if (!mounted) return;
+      await dialog.error(message: '해제 실패: $e');
+    }
   }
 
   Widget _buildRowCheckbox(Map<String, dynamic> item, String licenseNo, bool isChecked) {
