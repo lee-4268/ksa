@@ -355,6 +355,7 @@ class _SystemGuideScreenState extends State<SystemGuideScreen> {
                 location: '수검 관리 ▸ 수검 분석',
                 stepBadge: ('STEP 4-1 · 수정 불필요', _green),
                 topBorder: _green,
+                image: 'assets/guide/점검완료.png',
                 emoji: '✅', iconBg: _greenLight,
                 title: '점검완료 처리',
                 sub: '현황 수정이 필요 없을 때',
@@ -388,6 +389,7 @@ class _SystemGuideScreenState extends State<SystemGuideScreen> {
           location: '수검 관리 ▸ 실적관리',
           stepBadge: ('STEP 5 · 최종', _primary),
           extraBadge: ('→ 수검완료', _green),
+          image: 'assets/guide/수검결과.png',
           emoji: '🏁', iconBg: _greenLight,
           title: '수검완료 — 수검 결과 입력',
           sub: '점검완료된 국소를 현장 수검 후 결과를 입력합니다',
@@ -404,6 +406,7 @@ class _SystemGuideScreenState extends State<SystemGuideScreen> {
           location: '수검 관리 ▸ 실적관리 ▸ 수검 결과 입력',
           extraBadge: ('보조 기능', _purple),
           spotlight: _purple,
+          image: 'assets/guide/철탑형태분류.png',
           emoji: '🤖', iconBg: _purpleLight,
           title: 'AI 철탑형태 분류',
           spotBadge: ('⭐ AI 핵심 기능', _purple, _purpleLight),
@@ -456,6 +459,7 @@ class _SystemGuideScreenState extends State<SystemGuideScreen> {
               child: _card(
                 location: '허가현황 관리 ▸ DS 데이터',
                 roleFlag: '업로드: Manager+',
+                image: 'assets/guide/허가현황관리.png',
                 emoji: '📂', iconBg: _primaryLight,
                 title: 'DS 올리기 & 보기',
                 sub: '원장 파일을 등록하고 조회합니다',
@@ -542,6 +546,7 @@ class _SystemGuideScreenState extends State<SystemGuideScreen> {
         ),
         _card(
           location: '서류 관리 ▸ 설치확인서',
+          image: 'assets/guide/설치확인서.png',
           emoji: '📄', iconBg: _greenLight,
           title: '설치확인서 발급',
           spotBadge: ('📑 자동 생성', _green, _greenLight),
@@ -841,8 +846,6 @@ class _SystemGuideScreenState extends State<SystemGuideScreen> {
                 ],
               ),
             ),
-          // 스크린샷 (있을 때)
-          if (image != null) _screenshot(image),
           // header
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -948,6 +951,11 @@ class _SystemGuideScreenState extends State<SystemGuideScreen> {
               child: Text('💡 $tip', style: const TextStyle(fontSize: 12, color: Color(0xFF1240A8), height: 1.6)),
             ),
           ],
+          // 스크린샷 — 설명 아래(카드 하단)에 표시
+          if (image != null) ...[
+            const SizedBox(height: 14),
+            _screenshot(image),
+          ],
         ],
       ),
     );
@@ -995,7 +1003,6 @@ class _SystemGuideScreenState extends State<SystemGuideScreen> {
   // 스크린샷 — 브라우저 프레임 스타일 (assets/guide/*.png)
   Widget _screenshot(String asset) {
     return Container(
-      margin: const EdgeInsets.only(bottom: 14),
       clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
         color: _surface2,
