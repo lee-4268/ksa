@@ -953,6 +953,45 @@ class _SystemGuideScreenState extends State<SystemGuideScreen> {
     );
   }
 
+  // 스크린샷 확대 보기 (라이트박스): 핀치/드래그 줌, 바깥/X 클릭 시 닫힘
+  void _openImageViewer(String asset) {
+    showGeneralDialog(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: '닫기',
+      barrierColor: Colors.black.withValues(alpha: 0.85),
+      transitionDuration: const Duration(milliseconds: 200),
+      pageBuilder: (ctx, _, _) => Stack(
+        children: [
+          Center(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: InteractiveViewer(
+                minScale: 0.8,
+                maxScale: 5,
+                child: Image.asset(asset, fit: BoxFit.contain),
+              ),
+            ),
+          ),
+          Positioned(
+            top: 20, right: 20,
+            child: Material(
+              color: Colors.white24,
+              shape: const CircleBorder(),
+              child: IconButton(
+                icon: const Icon(Icons.close, color: Colors.white),
+                tooltip: '닫기',
+                onPressed: () => Navigator.of(ctx).pop(),
+              ),
+            ),
+          ),
+        ],
+      ),
+      transitionBuilder: (ctx, anim, _, child) =>
+          FadeTransition(opacity: anim, child: child),
+    );
+  }
+
   // 스크린샷 — 브라우저 프레임 스타일 (assets/guide/*.png)
   Widget _screenshot(String asset) {
     return Container(
@@ -979,15 +1018,37 @@ class _SystemGuideScreenState extends State<SystemGuideScreen> {
               ],
             ),
           ),
-          Image.asset(
-            asset,
-            fit: BoxFit.fitWidth,
-            width: double.infinity,
-            errorBuilder: (_, _, _) => const Padding(
-              padding: EdgeInsets.all(24),
-              child: Text('이미지를 불러올 수 없습니다',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(fontSize: 12, color: _muted)),
+          GestureDetector(
+            onTap: () => _openImageViewer(asset),
+            child: Stack(
+              children: [
+                Image.asset(
+                  asset,
+                  fit: BoxFit.fitWidth,
+                  width: double.infinity,
+                  errorBuilder: (_, _, _) => const Padding(
+                    padding: EdgeInsets.all(24),
+                    child: Text('이미지를 불러올 수 없습니다',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(fontSize: 12, color: _muted)),
+                  ),
+                ),
+                Positioned(
+                  right: 8, bottom: 8,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.55),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                      Icon(Icons.zoom_in, size: 14, color: Colors.white),
+                      SizedBox(width: 3),
+                      Text('확대', style: TextStyle(fontSize: 11, color: Colors.white)),
+                    ]),
+                  ),
+                ),
+              ],
             ),
           ),
         ],
