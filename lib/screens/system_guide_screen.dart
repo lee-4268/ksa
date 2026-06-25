@@ -318,6 +318,7 @@ class _SystemGuideScreenState extends State<SystemGuideScreen> {
           location: '수검 관리 ▸ 일정 및 대상 관리',
           stepBadge: ('STEP 2', _primary),
           extraBadge: ('→ 사전점검중', _sky),
+          image: 'assets/guide/일정등록.png',
           emoji: '📅', iconBg: _skyLight,
           title: '일정 등록',
           sub: '수검 예정 일정을 배정하면 상태가 [사전점검중]으로 전환됩니다',
@@ -332,6 +333,7 @@ class _SystemGuideScreenState extends State<SystemGuideScreen> {
           location: '수검 관리 ▸ 실적관리 ▸ 수검 분석',
           stepBadge: ('STEP 3 · 사전점검', _sky),
           spotlight: _primary,
+          image: 'assets/guide/사전점검.png',
           emoji: '📈', iconBg: _primaryLight,
           title: '분석 — 사전점검',
           spotBadge: ('⭐ 핵심 기능', _primary, _primaryLight),
@@ -366,6 +368,7 @@ class _SystemGuideScreenState extends State<SystemGuideScreen> {
                 location: '수검 관리 ▸ 수검 분석',
                 stepBadge: ('STEP 4-2 · 변경개설 필요', _orange),
                 topBorder: _orange,
+                image: 'assets/guide/변경개설요청.png',
                 emoji: '📝', iconBg: _orangeLight,
                 title: '변경개설신고 요청',
                 sub: '현황 수정이 필요할 때',
@@ -802,6 +805,7 @@ class _SystemGuideScreenState extends State<SystemGuideScreen> {
     List<(String, List<String>)> miniCards = const [],
     String? tip,
     (String, String)? warning,
+    String? image,
   }) {
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
@@ -837,6 +841,8 @@ class _SystemGuideScreenState extends State<SystemGuideScreen> {
                 ],
               ),
             ),
+          // 스크린샷 (있을 때)
+          if (image != null) _screenshot(image),
           // header
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -946,6 +952,51 @@ class _SystemGuideScreenState extends State<SystemGuideScreen> {
       ),
     );
   }
+
+  // 스크린샷 — 브라우저 프레임 스타일 (assets/guide/*.png)
+  Widget _screenshot(String asset) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 14),
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        color: _surface2,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: _border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Container(
+            color: Colors.white,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            child: Row(
+              children: [
+                _dot(const Color(0xFFFF5F57)),
+                const SizedBox(width: 6),
+                _dot(const Color(0xFFFEBC2E)),
+                const SizedBox(width: 6),
+                _dot(const Color(0xFF28C840)),
+              ],
+            ),
+          ),
+          Image.asset(
+            asset,
+            fit: BoxFit.fitWidth,
+            width: double.infinity,
+            errorBuilder: (_, _, _) => const Padding(
+              padding: EdgeInsets.all(24),
+              child: Text('이미지를 불러올 수 없습니다',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 12, color: _muted)),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _dot(Color c) =>
+      Container(width: 10, height: 10, decoration: BoxDecoration(color: c, shape: BoxShape.circle));
 
   Widget _solidBadge(String text, Color color) => Container(
         padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 2),
