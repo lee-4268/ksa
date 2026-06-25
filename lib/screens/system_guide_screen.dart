@@ -1029,15 +1029,20 @@ class _SystemGuideScreenState extends State<SystemGuideScreen> {
             onTap: () => _openImageViewer(asset),
             child: Stack(
               children: [
-                Image.asset(
-                  asset,
-                  fit: BoxFit.fitWidth,
-                  width: double.infinity,
-                  errorBuilder: (_, _, _) => const Padding(
-                    padding: EdgeInsets.all(24),
-                    child: Text('이미지를 불러올 수 없습니다',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(fontSize: 12, color: _muted)),
+                ConstrainedBox(
+                  // 인라인은 최대 높이만 제한(세로로 긴 사진 축소). 원본은 클릭 확대로 확인.
+                  constraints: const BoxConstraints(maxHeight: 260),
+                  child: Image.asset(
+                    asset,
+                    fit: BoxFit.contain,
+                    width: double.infinity,
+                    alignment: Alignment.topCenter,
+                    errorBuilder: (_, _, _) => const Padding(
+                      padding: EdgeInsets.all(24),
+                      child: Text('이미지를 불러올 수 없습니다',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(fontSize: 12, color: _muted)),
+                    ),
                   ),
                 ),
                 Positioned(
