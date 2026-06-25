@@ -1374,49 +1374,48 @@ Future<void> _downloadExcel() async {
 
     final allRows = [...sortedRegions, if (totals.isNotEmpty) totals];
 
-    DataColumn col(String label, {bool numeric = false}) =>
-        DataColumn(
-          label: Center(child: Text(label)),
-          numeric: numeric,
-          headingRowAlignment: MainAxisAlignment.center,
-        );
-
     final byTeam = (_dashboard['groupBy'] as String?) == 'team' || _selectedTeam.isNotEmpty;
     return _chartSection(
       title: byTeam ? '팀별 현황' : '본부별 현황',
       icon: Icons.table_chart,
       iconColor: _blue,
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: DataTable(
-          headingRowColor: WidgetStateProperty.all(const Color(0xFFF3F4F6)),
-          headingRowHeight: 38,
-          dataRowMinHeight: 36,
-          dataRowMaxHeight: 36,
-          columnSpacing: 20,
-          horizontalMargin: 12,
-          border: TableBorder.all(
-            color: const Color(0xFFE5E7EB),
-            width: 0.5,
-            borderRadius: BorderRadius.circular(8),
+      // 가로 스크롤 DataTable → 폭에 맞춰 채우는 Table(FlexColumnWidth).
+      // 11개 열을 사용 가능한 폭에 비례 배분 → 좁은 레이아웃(목표 차트와 나란히)에서도
+      // 잘리지 않고 동적으로 열너비 조정. (헤더는 좁으면 2줄로 줄바꿈, 숫자는 1줄)
+      child: Table(
+        border: TableBorder.all(
+          color: const Color(0xFFE5E7EB),
+          width: 0.5,
+          borderRadius: BorderRadius.circular(8),
+        ),
+        defaultVerticalAlignment: TableCellVerticalAlignment.middle,
+        defaultColumnWidth: const FlexColumnWidth(1),
+        columnWidths: const {
+          0: FlexColumnWidth(1.5),   // 팀/본부명 (조금 넓게)
+          9: FlexColumnWidth(1.3),   // 성능합격율
+          10: FlexColumnWidth(1.3),  // 서류합격율
+        },
+        children: [
+          TableRow(
+            decoration: const BoxDecoration(color: Color(0xFFF3F4F6)),
+            children: [
+              for (final h in [
+                byTeam ? '팀' : '본부', '수검국소', '완료', '시기조정', '폐국',
+                '성능합격', '성능불합', '서류합격', '서류불합', '성능합격율', '서류합격율',
+              ])
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 9, horizontal: 3),
+                  child: Text(h,
+                      textAlign: TextAlign.center,
+                      maxLines: 2,
+                      style: const TextStyle(
+                          fontSize: 10.5,
+                          fontWeight: FontWeight.w700,
+                          color: Color(0xFF374151))),
+                ),
+            ],
           ),
-          headingTextStyle: const TextStyle(
-              fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF374151)),
-          dataTextStyle: const TextStyle(fontSize: 11, color: Color(0xFF111827)),
-          columns: [
-            col(byTeam ? '팀' : '본부'),
-            col('수검국소', numeric: true),
-            col('완료', numeric: true),
-            col('시기조정', numeric: true),
-            col('폐국', numeric: true),
-            col('성능합격', numeric: true),
-            col('성능불합', numeric: true),
-            col('서류합격', numeric: true),
-            col('서류불합', numeric: true),
-            col('성능합격율', numeric: true),
-            col('서류합격율', numeric: true),
-          ],
-          rows: allRows.asMap().entries.map((entry) {
+          ...allRows.asMap().entries.map((entry) {
             final i = entry.key;
             final r = entry.value;
             final isTotalRow = i == allRows.length - 1 && totals.isNotEmpty;
@@ -1428,35 +1427,45 @@ Future<void> _downloadExcel() async {
               fontWeight: isTotalRow ? FontWeight.w700 : FontWeight.w400,
               color: const Color(0xFF111827),
             );
-
-            return DataRow(
-              color: WidgetStateProperty.all(
-                isTotalRow
+            Widget txt(String v) => Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 2),
+                  child: Text(v,
+                      textAlign: TextAlign.center,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: style),
+                );
+            Widget rate(double v, bool isPerf) => Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 2),
+                  child: Center(
+                      child: _buildRateCell(v, isPerfRate: isPerf, isBold: isTotalRow)),
+                );
+            return TableRow(
+              decoration: BoxDecoration(
+                color: isTotalRow
                     ? const Color(0xFFEEF2FF)
                     : isEven
                         ? Colors.white
                         : const Color(0xFFFAFAFB),
               ),
-              cells: [
-                DataCell(Center(child: Text(
-                  byTeam && !isTotalRow
-                      ? _shortTeamName(_regionName(r, fallback: '-'))
-                      : _regionName(r, fallback: isTotalRow ? '합계' : '-'),
-                  style: style))),
-                DataCell(Center(child: Text(_fmt(r['수검국소'] ?? r['total']), style: style))),
-                DataCell(Center(child: Text(_fmt(r['완료'] ?? r['completed']), style: style))),
-                DataCell(Center(child: Text(_fmt(r['시기조정'] ?? r['adjusted']), style: style))),
-                DataCell(Center(child: Text(_fmt(r['폐국'] ?? r['폐'] ?? r['closed']), style: style))),
-                DataCell(Center(child: Text(_fmt(r['성능합격'] ?? r['perf_pass']), style: style))),
-                DataCell(Center(child: Text(_fmt(r['성능불합격'] ?? r['perf_fail']), style: style))),
-                DataCell(Center(child: Text(_fmt(r['서류합격'] ?? r['doc_pass']), style: style))),
-                DataCell(Center(child: Text(_fmt(r['서류불합격'] ?? r['doc_fail']), style: style))),
-                DataCell(Center(child: _buildRateCell(perfRate, isPerfRate: true, isBold: isTotalRow))),
-                DataCell(Center(child: _buildRateCell(docRate, isPerfRate: false, isBold: isTotalRow))),
+              children: [
+                txt(byTeam && !isTotalRow
+                    ? _shortTeamName(_regionName(r, fallback: '-'))
+                    : _regionName(r, fallback: isTotalRow ? '합계' : '-')),
+                txt(_fmt(r['수검국소'] ?? r['total'])),
+                txt(_fmt(r['완료'] ?? r['completed'])),
+                txt(_fmt(r['시기조정'] ?? r['adjusted'])),
+                txt(_fmt(r['폐국'] ?? r['폐'] ?? r['closed'])),
+                txt(_fmt(r['성능합격'] ?? r['perf_pass'])),
+                txt(_fmt(r['성능불합격'] ?? r['perf_fail'])),
+                txt(_fmt(r['서류합격'] ?? r['doc_pass'])),
+                txt(_fmt(r['서류불합격'] ?? r['doc_fail'])),
+                rate(perfRate, true),
+                rate(docRate, false),
               ],
             );
-          }).toList(),
-        ),
+          }),
+        ],
       ),
     );
   }
