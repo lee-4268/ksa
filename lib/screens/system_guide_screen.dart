@@ -26,6 +26,9 @@ class _SystemGuideScreenState extends State<SystemGuideScreen> {
   final _kCommunity = GlobalKey();
 
   String _activeId = 'insp';
+  // 목차 클릭으로 프로그래밍 점프 중에는 스크롤 리스너의 자동 강조를 멈춘다
+  // (애니메이션 중 중간 섹션들로 강조가 튀는 버벅임 방지)
+  bool _suppressScrollSpy = false;
 
   late final List<({String id, String label, GlobalKey key, bool sub})> _toc = [
     (id: 'insp', label: '수검 관리', key: _kInspection, sub: false),
@@ -51,18 +54,27 @@ class _SystemGuideScreenState extends State<SystemGuideScreen> {
   }
 
   void _scrollTo(String id, GlobalKey key) {
-    setState(() => _activeId = id);
+    setState(() {
+      _activeId = id;
+      _suppressScrollSpy = true; // 점프 애니메이션 동안 자동 강조 정지
+    });
     final ctx = key.currentContext;
     if (ctx != null) {
       Scrollable.ensureVisible(ctx,
-          duration: const Duration(milliseconds: 400),
-          curve: Curves.easeInOut,
-          alignment: 0.0);
+              duration: const Duration(milliseconds: 400),
+              curve: Curves.easeInOut,
+              alignment: 0.0)
+          .whenComplete(() {
+        if (mounted) setState(() => _suppressScrollSpy = false);
+      });
+    } else {
+      _suppressScrollSpy = false;
     }
   }
 
   // 스크롤 위치 기준으로 현재 보이는 섹션을 목차에서 강조
   void _onScroll() {
+    if (_suppressScrollSpy) return; // 클릭 점프 중에는 강조를 고정
     String active = _toc.first.id;
     for (final e in _toc) {
       final ctx = e.key.currentContext;
