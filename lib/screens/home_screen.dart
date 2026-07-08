@@ -50,9 +50,9 @@ class _HomeScreenState extends State<HomeScreen> {
   int _selectedIndex = 0;
   bool _sidebarCollapsed = false;
 
-  // 일정화면 → 전산비교 이동 시 전달할 데이터
+  // 일정화면 → 전산 비교 이동 시 전달할 데이터
   ({List<String> nos, String? div, bool multi, List<String>? schedulePks, Map<String, Map<String, String>>? schedMap})? _pendingCompare;
-  // 전산비교 → 일정화면 이동 시 전달할 허가번호
+  // 전산 비교 → 일정화면 이동 시 전달할 허가번호
   List<String>? _pendingSchedule;
   // 홈 대시보드 → 일정화면 이동 시 전달할 초기 워크플로우 상태 필터
   String? _pendingStatusFilter;
@@ -66,38 +66,38 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _navigateToScheduleWithStatus(List<_MenuItem> items, String status) {
-    final idx = items.indexWhere((m) => m.title == '일정 및 통계');
+    final idx = items.indexWhere((m) => m.title == '무선국 일정');
     if (idx < 0) return;
     setState(() {
       _pendingStatusFilter = status;
       _selectedIndex = idx;
     });
-    _logMenuAccess('일정 및 통계');
+    _logMenuAccess('무선국 일정');
   }
 
   void _navigateToScheduleRecheck(List<_MenuItem> items) {
-    final idx = items.indexWhere((m) => m.title == '일정 및 통계');
+    final idx = items.indexWhere((m) => m.title == '무선국 일정');
     if (idx < 0) return;
     setState(() {
       _pendingStatusFilter = 'RECHECK';   // 일정 화면에서 특수 토큰으로 처리
       _selectedIndex = idx;
     });
-    _logMenuAccess('일정 및 통계');
+    _logMenuAccess('무선국 일정');
   }
 
   void _navigateToScheduleOverdue(List<_MenuItem> items) {
-    final idx = items.indexWhere((m) => m.title == '일정 및 통계');
+    final idx = items.indexWhere((m) => m.title == '무선국 일정');
     if (idx < 0) return;
     setState(() {
       _pendingStatusFilter = 'OVERDUE';   // SLA 임계 초과 건 토글
       _pendingSchedule = null;
       _selectedIndex = idx;
     });
-    _logMenuAccess('일정 및 통계');
+    _logMenuAccess('무선국 일정');
   }
 
   void _navigateToScheduleSingle(List<_MenuItem> items, String licenseNo) {
-    final idx = items.indexWhere((m) => m.title == '일정 및 통계');
+    final idx = items.indexWhere((m) => m.title == '무선국 일정');
     if (idx < 0 || licenseNo.isEmpty) return;
     setState(() {
       // 검색바에 허가번호 단건을 넣어 해당 건만 표시
@@ -105,7 +105,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _pendingStatusFilter = null;
       _selectedIndex = idx;
     });
-    _logMenuAccess('일정 및 통계');
+    _logMenuAccess('무선국 일정');
   }
 
   @override
@@ -301,18 +301,18 @@ final result = await showDialog<bool>(
   List<_MenuItem> _buildMenuItems(AuthService auth) {
     return [
       _MenuItem('홈', Icons.home_outlined, const Color(0xFF374151), description: '메인 화면'),
-      _MenuItem('현장 수검 Map', Icons.map_outlined, const Color(0xFF3B82F6), description: '수검 대상 지도 및 관리'),
-      _MenuItem('일정 및 통계', Icons.event_note_outlined, const Color(0xFF10B981), description: '수검 일정 조회 및 통계'),
-      _MenuItem('실적 관리', Icons.bar_chart_outlined, const Color(0xFFE53935), description: '본부별 수검 실적 현황'),
-      _MenuItem('DS 데이터', Icons.storage_outlined, const Color(0xFF8B5CF6), description: 'DS 데이터 조회 및 분석'),
-      _MenuItem('DS 병합', Icons.merge_outlined, const Color(0xFFF59E0B), description: 'DS 데이터 병합 처리'),
-      _MenuItem('호출명칭', Icons.sync_alt_outlined, const Color(0xFFEF4444), description: '호출명칭 검색 및 비교'),
-      _MenuItem('설치확인서', Icons.description_outlined, const Color(0xFF06B6D4), description: '설치확인서 조회 및 관리'),
-      _MenuItem('시설물 사진', Icons.image_search_outlined, const Color(0xFF06B6D4), description: '시설물 점검 사진 검색'),
-      _MenuItem('전산비교', Icons.compare_outlined, const Color(0xFF2563EB), description: 'ERP·DS 전산 데이터 비교'),
+      _MenuItem('무선국 Map', Icons.map_outlined, const Color(0xFF3B82F6), description: '수검 대상 지도 및 관리'),
+      _MenuItem('무선국 일정', Icons.event_note_outlined, const Color(0xFF10B981), description: '수검 일정 조회 및 통계'),
+      _MenuItem('무선국 실적', Icons.bar_chart_outlined, const Color(0xFFE53935), description: '본부별 수검 실적 현황'),
+      _MenuItem('DS 전산파일', Icons.storage_outlined, const Color(0xFF8B5CF6), description: 'DS 전산파일 조회 및 분석'),
+      _MenuItem('DS 병합', Icons.merge_outlined, const Color(0xFFF59E0B), description: 'DS 전산파일 병합 처리'),
+      _MenuItem('통시코드 매칭', Icons.sync_alt_outlined, const Color(0xFFEF4444), description: '호출명칭 검색 및 비교'),
+      _MenuItem('설치 확인서', Icons.description_outlined, const Color(0xFF06B6D4), description: '설치 확인서 조회 및 관리'),
+      _MenuItem('Opark DB 사진', Icons.image_search_outlined, const Color(0xFF06B6D4), description: '시설물 점검 사진 검색'),
+      _MenuItem('전산 비교', Icons.compare_outlined, const Color(0xFF2563EB), description: 'ERP·DS 전산 데이터 비교'),
       _MenuItem('부적합 관리', Icons.warning_amber_outlined, const Color(0xFFE53935), description: '부적합 현황 관리'),
       if (auth.isAdmin)
-        _MenuItem('변경개설신고', Icons.swap_horiz_outlined, const Color(0xFFE53935), description: '변경개설신고 파일 비교 및 적용'),
+        _MenuItem('변경 신고', Icons.swap_horiz_outlined, const Color(0xFFE53935), description: '변경 신고 파일 비교 및 적용'),
       _MenuItem('커뮤니티', Icons.forum_outlined, const Color(0xFFE53935), description: '공지사항 및 요청사항'),
       _MenuItem('시스템 안내', Icons.menu_book_outlined, const Color(0xFF6366F1), description: '시스템 소개 및 사용 안내'),
       if (auth.isSuperAdmin)
@@ -322,9 +322,9 @@ final result = await showDialog<bool>(
 
   // 아코디언 그룹 정의
   static const _menuGroups = [
-    _MenuGroup('수검 관리', Icons.map_outlined, Color(0xFF3B82F6), ['실적 관리', '일정 및 통계', '현장 수검 Map']),
-    _MenuGroup('허가현황 관리', Icons.storage_outlined, Color(0xFF8B5CF6), ['DS 데이터', 'DS 병합']),
-    _MenuGroup('서류 관리', Icons.folder_outlined, Color(0xFFEF4444), ['호출명칭', '설치확인서', '시설물 사진', '전산비교', '부적합 관리', '변경개설신고']),
+    _MenuGroup('수검 관리', Icons.map_outlined, Color(0xFF3B82F6), ['무선국 실적', '무선국 일정', '무선국 Map']),
+    _MenuGroup('전산파일', Icons.storage_outlined, Color(0xFF8B5CF6), ['DS 전산파일', 'DS 병합']),
+    _MenuGroup('서류 관리', Icons.folder_outlined, Color(0xFFEF4444), ['통시코드 매칭', '설치 확인서', 'Opark DB 사진', '전산 비교', '부적합 관리', '변경 신고']),
   ];
 
   Widget _buildPage(int index, AuthService auth) {
@@ -342,8 +342,8 @@ final result = await showDialog<bool>(
         onNavigateToScheduleOverdue: () => _navigateToScheduleOverdue(items),
         onNavigateToScheduleSingle: (licenseNo) => _navigateToScheduleSingle(items, licenseNo),
       );
-      case '실적 관리': return const InspectionResultsScreen();
-      case '일정 및 통계': {
+      case '무선국 실적': return const InspectionResultsScreen();
+      case '무선국 일정': {
         final schedNos = _pendingSchedule;
         _pendingSchedule = null;
         final statusFilter = _pendingStatusFilter;
@@ -352,7 +352,7 @@ final result = await showDialog<bool>(
           initialLicenseNos: schedNos,
           initialStatusFilter: statusFilter,
           onCompareNavigate: (nos, div, multi, {schedulePks, schedMap}) {
-            final compareIdx = items.indexWhere((m) => m.title == '전산비교');
+            final compareIdx = items.indexWhere((m) => m.title == '전산 비교');
             if (compareIdx >= 0) {
               setState(() {
                 _pendingCompare = (nos: nos, div: div, multi: multi, schedulePks: schedulePks, schedMap: schedMap);
@@ -362,13 +362,13 @@ final result = await showDialog<bool>(
           },
         );
       }
-      case '현장 수검 Map': return const InspectionMyListScreen();
-      case 'DS 데이터': return const DsDashboardScreen();
+      case '무선국 Map': return const InspectionMyListScreen();
+      case 'DS 전산파일': return const DsDashboardScreen();
       case 'DS 병합': return const DsMergeScreen();
-      case '호출명칭': return const CallnameScreen();
-      case '설치확인서': return const CertificateScreen();
-      case '시설물 사진': return const SislPhotoSearchScreen();
-      case '전산비교': {
+      case '통시코드 매칭': return const CallnameScreen();
+      case '설치 확인서': return const CertificateScreen();
+      case 'Opark DB 사진': return const SislPhotoSearchScreen();
+      case '전산 비교': {
         final data = _pendingCompare;
         _pendingCompare = null;
         return ErpDsCompareScreen(
@@ -378,7 +378,7 @@ final result = await showDialog<bool>(
           initialSchedulePks: data?.schedulePks,
           initialSchedMap: data?.schedMap,
           onScheduleNavigate: (nos) {
-            final schedIdx = items.indexWhere((m) => m.title == '일정 및 통계');
+            final schedIdx = items.indexWhere((m) => m.title == '무선국 일정');
             if (schedIdx >= 0) {
               setState(() {
                 _pendingSchedule = nos;
@@ -389,7 +389,7 @@ final result = await showDialog<bool>(
         );
       }
       case '부적합 관리': return const InadequateManagementScreen();
-      case '변경개설신고': return const ChangeNotificationScreen();
+      case '변경 신고': return const ChangeNotificationScreen();
       case '커뮤니티': return CommunityScreen();
       case '시스템 안내': return const SystemGuideScreen();
       case '관리자': return const AdminPanelScreen();
@@ -1080,7 +1080,7 @@ class _MenuGroup {
 class _HomeContent extends StatefulWidget {
   final void Function(int index) onNavigate;
   final List<_MenuItem> menuItems;
-  /// 일정 및 통계로 점프하면서 상태 필터를 같이 적용 (Phase 5 대시보드)
+  /// 무선국 일정로 점프하면서 상태 필터를 같이 적용 (Phase 5 대시보드)
   final void Function(String workflowStatus)? onNavigateToScheduleWithStatus;
   final void Function()? onNavigateToScheduleRecheck;
   final void Function()? onNavigateToScheduleOverdue;
@@ -1111,7 +1111,7 @@ class _HomeContentState extends State<_HomeContent> {
   }
 
   void _jumpToScheduleScreen() {
-    final idx = widget.menuItems.indexWhere((m) => m.title == '일정 및 통계');
+    final idx = widget.menuItems.indexWhere((m) => m.title == '무선국 일정');
     if (idx >= 0) widget.onNavigate(idx);
   }
 
