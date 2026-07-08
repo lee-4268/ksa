@@ -3475,7 +3475,6 @@ async def inspection_dashboard(request: Request, year: int):
             'REPORT_ISSUED': 0, 'SUBMITTED': 0, 'INSPECTED': 0,
         }
         recheck = 0
-        overdue: list = []
         now = datetime.now(timezone.utc)
         for r in rows:
             st = (r['workflow_status'] or 'REGISTERED')
@@ -3483,24 +3482,6 @@ async def inspection_dashboard(request: Request, year: int):
                 counts[st] += 1
             if (r['needs_recheck'] or '0') == '1':
                 recheck += 1
-            threshold = _SLA_DAYS.get(st)
-            if threshold and r['status_updated_at']:
-                try:
-                    updated = datetime.fromisoformat(r['status_updated_at'])
-                    if updated.tzinfo is None:
-                        updated = updated.replace(tzinfo=timezone.utc)
-                    days = (now - updated).days
-                    if days > threshold:
-                        overdue.append({
-                            'pk': r['pk'],
-                            '호출명칭': r['호출명칭'] or '',
-                            '허가번호': r['허가번호'] or '',
-                            'status': st,
-                            'days_overdue': days - threshold,
-                            'threshold': threshold,
-                        })
-                except Exception:
-                    pass
 
         t_wheres = ["t.pre_check_status='PRE_CHECKED'",
                     "REPLACE(t.허가번호,'-','') NOT IN "
@@ -3543,15 +3524,24 @@ async def inspection_dashboard(request: Request, year: int):
                 'region': dr['region'] or dr['skt본부'] or '',
             })
 
+        # 행정처분 대상: 부적합(inadequate) 시정기한이 이미 지난 미완료 건수
+        pen_wheres = ["status != '완료'", "시정기한 IS NOT NULL", "시정기한 != ''", "시정기한 < ?"]
+        pen_params: list = [today_str]
+        if role != "admin" and access_team:
+            pen_wheres.append("(region LIKE ? OR skt본부 LIKE ?)")
+            pen_params.extend([f'%{access_team}%', f'%{access_team}%'])
+        penalty_total = c.execute(
+            'SELECT COUNT(*) AS cnt FROM inadequate_management WHERE '
+            + ' AND '.join(pen_wheres), pen_params).fetchone()['cnt']
+
         c.close()
-        overdue.sort(key=lambda x: x['days_overdue'], reverse=True)
         return {
             'role': role,
             'scope': scope,
             'counts': counts,
             'recheck': recheck,
-            'overdue': overdue[:20],
-            'overdue_total': len(overdue),
+            'overdue': [],
+            'overdue_total': penalty_total,
             'deadline_items': deadline_items,
         }
 
