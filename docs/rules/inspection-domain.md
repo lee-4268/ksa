@@ -38,7 +38,9 @@ REGISTERED → PRE_CHECK → PRE_CHECK_DONE → REPORT_ISSUED → SUBMITTED → 
 - admin = 전사 / manager = 자기 본부 / member = 자기 본부+팀
 - 상태 카드 클릭 → 일정 화면으로 점프하면서 해당 상태 필터 자동 적용
 - 재점검 카드 → 일정 화면 `_recheckOnly` 토글 ON으로 점프
-- SLA 임계점 하드코딩 (`_SLA_DAYS`): PRE_CHECK 5일, CHANGE_FILING 3일, RE_CHECK 7일, REPORT_ISSUED 3일, SUBMITTED 14일
+- **행정처분 대상 카드** (구 "SLA 지연"): `inadequate_management`에서 **시정기한이 지난(미완료) 건수**
+  (`status != '완료' AND 시정기한 < today`, 본부 격리 scope 적용). 카드 클릭 → **부적합 관리**로 이동.
+  (기존 워크플로 단계 기반 `_SLA_DAYS` 계산은 대시보드에서 미사용 — 상수만 잔존)
 
 ### 알림 (Phase 5)
 - 시스템 내 알림 전용 (이메일/Slack/푸시 미사용)

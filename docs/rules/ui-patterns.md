@@ -195,7 +195,7 @@ Row(mainAxisSize: MainAxisSize.min, children: [
 - 위치: 홈 화면 커뮤니티 ↔ 바로가기 사이
 - 역할 자동 분기 (admin/manager/member) — 백엔드 `GET /inspection/dashboard?year=`에 위임
 - 상태별 8개 카드 (반응형 그리드: 720+ = 4열 / 480+ = 3열 / 그 외 2열)
-- 재점검 필요 + SLA 지연 알림 카드 (개수 0이면 자동 숨김)
+- 재점검 필요 + 행정처분 대상(부적합 시정기한 지남) 알림 카드 (개수 0이면 자동 숨김)
 - 지연 건 상위 5개 미니 리스트
 - 카드 클릭 → 일정 화면으로 점프 + 해당 필터 자동 적용 (`InspectionScheduleScreen.initialStatusFilter`)
 - 재점검 카드 클릭 → 일정 화면 `_recheckOnly` 토글 ON (특수 토큰 `'RECHECK'` 사용)

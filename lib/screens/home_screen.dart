@@ -85,15 +85,15 @@ class _HomeScreenState extends State<HomeScreen> {
     _logMenuAccess('무선국 일정');
   }
 
+  // '행정처분 대상' 카드 탭 → 부적합 관리로 이동 (시정기한 지난 미완료 건)
   void _navigateToScheduleOverdue(List<_MenuItem> items) {
-    final idx = items.indexWhere((m) => m.title == '무선국 일정');
+    final idx = items.indexWhere((m) => m.title == '부적합 관리');
     if (idx < 0) return;
     setState(() {
-      _pendingStatusFilter = 'OVERDUE';   // SLA 임계 초과 건 토글
       _pendingSchedule = null;
       _selectedIndex = idx;
     });
-    _logMenuAccess('무선국 일정');
+    _logMenuAccess('부적합 관리');
   }
 
   void _navigateToScheduleSingle(List<_MenuItem> items, String licenseNo) {

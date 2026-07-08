@@ -66,7 +66,7 @@ Authorization: Bearer {base64url(empno:expiry:hmac_sha256)}
 | POST | `/inspection/report/generate` | 검사내역서 xls 발급 (Phase 3, 상태 무관 허용) |
 | PATCH | `/inspection/schedule/{pk}/submission` | 단건 접수번호 입력 → SUBMITTED |
 | POST | `/inspection/schedule/submission-bulk` | 다중 일정 접수번호 일괄 입력 (Phase 3) |
-| GET | `/inspection/dashboard?year=` | 역할별 대시보드 집계 + SLA 지연 (Phase 5) |
+| GET | `/inspection/dashboard?year=` | 역할별 대시보드 집계 + 행정처분 대상(부적합 시정기한 지남) + 시정기한 도래 (Phase 5) |
 
 ### 알림 (Phase 5)
 | Method | Path | 설명 |

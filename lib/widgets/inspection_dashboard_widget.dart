@@ -168,9 +168,9 @@ class _InspectionDashboardWidgetState extends State<InspectionDashboardWidget> {
             SizedBox(
               width: w,
               child: _GridAlertCard(
-                icon: Icons.schedule_outlined,
+                icon: Icons.gavel_rounded,
                 color: const Color(0xFFE53935),
-                label: 'SLA 지연',
+                label: '행정처분 대상',
                 count: overdueTotal,
                 onTap: widget.onOverdueTap,
               ),
