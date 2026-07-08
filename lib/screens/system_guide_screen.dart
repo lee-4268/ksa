@@ -306,12 +306,12 @@ class _SystemGuideScreenState extends State<SystemGuideScreen> {
       children: [
         _groupHeader('메뉴 ① · 수검 관리', '📋', '수검 관리',
             '연간 수검 대상 등록부터 현장 수검 완료까지, 수검 업무의 전 과정을 하나의 흐름으로 관리합니다.',
-            ['일정 및 대상 관리', '실적관리', '수검 Map']),
+            ['무선국 실적', '무선국 일정', '무선국 Map']),
         const SizedBox(height: 20),
         _processFlow(),
         const SizedBox(height: 20),
         _card(
-          location: '수검 관리 ▸ 일정 및 대상 관리',
+          location: '수검 관리 ▸ 무선국 일정',
           roleFlag: 'Admin 권한',
           stepBadge: ('STEP 1', _primary),
           emoji: '📋', iconBg: _primaryLight,
@@ -327,7 +327,7 @@ class _SystemGuideScreenState extends State<SystemGuideScreen> {
               '자동 매칭이 안 된 국소는 [수검검토]에서 개별 처리합니다. 장비 검색(시설명·망구분·주파수)으로 최적의 통합시설코드를 추천받아 수동 매칭합니다.'),
         ),
         _card(
-          location: '수검 관리 ▸ 일정 및 대상 관리',
+          location: '수검 관리 ▸ 무선국 일정',
           stepBadge: ('STEP 2', _primary),
           extraBadge: ('→ 사전점검중', _sky),
           image: 'assets/guide/일정등록.png',
@@ -342,7 +342,7 @@ class _SystemGuideScreenState extends State<SystemGuideScreen> {
           ],
         ),
         KeyedSubtree(key: _kAnalysis, child: _card(
-          location: '수검 관리 ▸ 실적관리 ▸ 수검 분석',
+          location: '수검 관리 ▸ 무선국 실적 ▸ 수검 분석',
           stepBadge: ('STEP 3 · 사전점검', _sky),
           spotlight: _primary,
           image: 'assets/guide/사전점검.png',
@@ -398,7 +398,7 @@ class _SystemGuideScreenState extends State<SystemGuideScreen> {
         ),
         const SizedBox(height: 12),
         _card(
-          location: '수검 관리 ▸ 실적관리',
+          location: '수검 관리 ▸ 무선국 실적',
           stepBadge: ('STEP 5 · 최종', _primary),
           extraBadge: ('→ 수검완료', _green),
           image: 'assets/guide/수검결과.png',
@@ -415,7 +415,7 @@ class _SystemGuideScreenState extends State<SystemGuideScreen> {
           tip: '불합격 결과 입력 시 [서류관리] ▸ [부적합 관리]에 자동 등록되고 담당자 알림이 발송됩니다.',
         ),
         KeyedSubtree(key: _kAiTower, child: _card(
-          location: '수검 관리 ▸ 실적관리 ▸ 수검 결과 입력',
+          location: '수검 관리 ▸ 무선국 실적 ▸ 수검 결과 입력',
           extraBadge: ('보조 기능', _purple),
           spotlight: _purple,
           image: 'assets/guide/철탑형태분류.png',
@@ -432,7 +432,7 @@ class _SystemGuideScreenState extends State<SystemGuideScreen> {
           tip: '결과는 담당자가 최종 확인·수정할 수 있습니다. 신뢰도가 낮으면 직접 선택을 권장합니다.',
         )),
         _card(
-          location: '수검 관리 ▸ 수검 Map',
+          location: '수검 관리 ▸ 무선국 Map',
           emoji: '🗺️', iconBg: _primaryLight,
           title: '전국 수검 진행 현황 지도',
           sub: '수검 프로세스 상태를 지도에서 한눈에 확인합니다',
@@ -457,9 +457,9 @@ class _SystemGuideScreenState extends State<SystemGuideScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _groupHeader('메뉴 ② · 허가현황 관리', '🗄️', '허가현황 관리',
+        _groupHeader('메뉴 ② · 전산파일', '🗄️', '전산파일',
             'KCA 무선국 인허가 원장 데이터(DS)를 올리고, 조회하고, 합칩니다.',
-            ['DS 데이터', 'DS 병합']),
+            ['DS 전산파일', 'DS 병합']),
         const SizedBox(height: 16),
         _notice('DS란?',
             '한국방송통신전파진흥원(KCA)이 관리하는 무선국 인허가 원장 데이터입니다. 여러 시트가 묶인 큰 엑셀로 제공되며, 시스템에 올리면 DB에 저장되어 언제든 조회·비교·내보내기가 가능합니다.'),
@@ -469,7 +469,7 @@ class _SystemGuideScreenState extends State<SystemGuideScreen> {
           children: [
             Expanded(
               child: _card(
-                location: '허가현황 관리 ▸ DS 데이터',
+                location: '전산파일 ▸ DS 전산파일',
                 roleFlag: '업로드: Manager+',
                 image: 'assets/guide/허가현황관리.png',
                 emoji: '📂', iconBg: _primaryLight,
@@ -487,7 +487,7 @@ class _SystemGuideScreenState extends State<SystemGuideScreen> {
             const SizedBox(width: 12),
             Expanded(
               child: _card(
-                location: '허가현황 관리 ▸ DS 병합',
+                location: '전산파일 ▸ DS 병합',
                 roleFlag: 'Manager+',
                 emoji: '🔗', iconBg: _purpleLight,
                 title: '여러 DS 파일 합치기',
@@ -513,7 +513,7 @@ class _SystemGuideScreenState extends State<SystemGuideScreen> {
       children: [
         _groupHeader('메뉴 ③ · 서류 관리', '📁', '서류 관리',
             '데이터 매칭·비교부터 확인서 발급, 부적합·변경신고 추적, 시설물 사진 조회까지 — 문서·데이터 정합성 기능을 모았습니다.',
-            ['호출명칭', '전산비교', '설치확인서', '부적합 관리', '변경개설신고', '시설물 사진']),
+            ['통시코드 매칭', '전산 비교', '설치 확인서', '부적합 관리', '변경 신고', 'Opark DB 사진']),
         const SizedBox(height: 16),
         KeyedSubtree(key: _kAutoDoc, child: _card(
           spotlight: _green,
@@ -530,7 +530,7 @@ class _SystemGuideScreenState extends State<SystemGuideScreen> {
           tip: '각 문서의 상세 발급 절차는 아래 설치확인서·변경개설신고 항목에서 이어집니다.',
         )),
         _card(
-          location: '서류 관리 ▸ 호출명칭',
+          location: '서류 관리 ▸ 통시코드 매칭',
           emoji: '📡', iconBg: _skyLight,
           title: '호출명칭 자동 매칭',
           sub: '이름만 있는 엑셀에 허가번호·주소를 자동으로 채웁니다',
@@ -543,7 +543,7 @@ class _SystemGuideScreenState extends State<SystemGuideScreen> {
           ],
         ),
         _card(
-          location: '서류 관리 ▸ 전산비교',
+          location: '서류 관리 ▸ 전산 비교',
           emoji: '🔄', iconBg: _orangeLight,
           title: '데이터 비교 (KCA 허가현황 ↔ SKT 시스템현황)',
           sub: '두 시스템의 무선국 정보가 일치하는지 대조합니다',
@@ -557,7 +557,7 @@ class _SystemGuideScreenState extends State<SystemGuideScreen> {
           tip: '확인된 불일치 건은 변경개설신고로 이어집니다.',
         ),
         _card(
-          location: '서류 관리 ▸ 설치확인서',
+          location: '서류 관리 ▸ 설치 확인서',
           image: 'assets/guide/설치확인서.png',
           emoji: '📄', iconBg: _greenLight,
           title: '설치확인서 발급',
@@ -585,7 +585,7 @@ class _SystemGuideScreenState extends State<SystemGuideScreen> {
           chips: const [('미완료', _red), ('완료', _green)],
         ),
         _card(
-          location: '서류 관리 ▸ 변경개설신고',
+          location: '서류 관리 ▸ 변경 신고',
           emoji: '📝', iconBg: _orangeLight,
           title: '변경개설신고 문서 관리',
           spotBadge: ('📑 자동 생성', _green, _greenLight),
@@ -600,7 +600,7 @@ class _SystemGuideScreenState extends State<SystemGuideScreen> {
           chips: const [('대기중', _orange), ('처리중', _primary), ('완료', _green)],
         ),
         _card(
-          location: '서류 관리 ▸ 시설물 사진 조회',
+          location: '서류 관리 ▸ Opark DB 사진',
           emoji: '🖼️', iconBg: _skyLight,
           title: '시설물 사진 검색·조회',
           sub: '현장 점검 사진을 빠르게 찾습니다',
