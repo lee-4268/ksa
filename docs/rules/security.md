@@ -374,6 +374,27 @@ Semgrep 로컬 룰팩 + Bandit 으로 전 백엔드(`yolov8/api/`, `auth/`) SAST
 □ 외부 API 호출 시 키는 전역 환경변수 참조 (하드코딩 금지)
 ```
 
+### 2026-06-25 7차 재점검 — 웹 보안진단(모의해킹) 사전 대비 (member 테스트 계정 위협모델)
+
+외부 웹 보안진단 예정. 위협모델 = **임의 본부/팀 배정의 member 권한 테스트 계정**이 모든 API 를 직접 호출하며 (a) 권한 밖 행위, (b) DB 접근(SQLi), (c) DoS 를 시도. 전 라우터(117개 mutating 포함)를 3개 병렬 에이전트로 (수직권한 전수 / 수평·IDOR / DoS·SQLi) 재점검.
+
+**판정 요약**: 수직 권한 상승 없음(전 mutating 인증+role 게이트, 6차 조치 회귀 없음) · SQLi 진성 0건(정렬 화이트리스트+`?` 바인딩) · 수평/IDOR write·delete member HIGH 없음. 단 아래 정보노출/DoS 항목은 진단 지적 가능 → **이번엔 진단만 수행, 조치는 진단 후로 보류(사용자 결정 2026-06-25)**.
+
+**미조치 남은 항목 (진단 후 처리):**
+
+| # | 등급 | 이슈 | 위치 | 조치안 |
+|---|---|---|---|---|
+| 7-1 | **High** | `/inspection/export-xlsx` 본부 격리 누락 → member 가 타 본부 전체 수검데이터 xlsx 다운로드(정보노출). +rate limit·`_check_memory`·`_ensure_disk_space` 전무 + 전량 인메모리 빌드(DoS). `/inspection/data` 는 격리했으나 export 경로만 누락 | routers/inspection.py:2589 | `data` 와 동일 `access담당 IN(...)` 격리 주입 + 메모리/디스크 가드 선행 + rate limit + 행수 상한 |
+| 7-2 | Med-High | `/inspection/data` `page_size` 상한 없음(대량 적재 DoS) | routers/inspection.py:2314 | `min(page_size, 200)` 클램프 |
+| 7-3 | Med | `/inadequate/list` `pageSize` 상한 없음 | routers/inadequate.py:106 | `Query(100, le=500)` |
+| 7-4 | Med | rate limit 커버리지 공백 — 무거운 조회/export(export·proxy·summary·stats 등) 무제한. `_check_rate_limit` 는 login/otp/predict/feedback/callname_process/storage_delete 8곳만 | core/utils.py + 호출부 | 무거운 read/export 공통 rate limit |
+| 7-5 | Med | `/cert/photos` ZIP 압축해제 크기·엔트리수 미검증(zip bomb 우려). 압축본은 500MB 방어 | routers/cert.py:820 | 해제 전 `file_size` 합계·엔트리수 상한 검사 |
+| 7-6 | Low(정책) | 미배정(`access담당=''`) 국소 격리 fail-open — 비-admin 이 무소속 국소에 member-tier 작업(전환/결과입력/사진) 가능. 구조적 admin/manager 작업은 role 선검사라 도달 불가 | routers/inspection.py:3046 등 | 비-admin 빈 access담당 시 거부(fail-closed) 전환 여부 결정 |
+| 7-7 | Low | `feedback/` S3 객체 owner 격리 없음(삭제) — ML 이미지, 소유 개념 없음 | routers/storage.py:43 | 필요 시 owner/역할 게이트 |
+| 7-8 | 범위밖 | manager 본부간 수평이동(`upsert_override`·`inadequate_update`·`inspection_station_add`·`set-role`). **member 계정은 트리거 불가** → 이번 진단 무관 | 여러 곳 | 추후 manager 대상 본부격리 검토 |
+
+> **이미 견고한 방어(재확인)**: 업로드 크기 상한(10~500MB) + 이미지 magic-byte 검증, DS/cert 메모리·디스크 가드, DS/sisl 페이지네이션 상한, cert 배치 직렬화 락, 본부 격리(write/delete 전반)·IDOR(categories/stations/route_basket/community/storage) — 6차 조치 전부 유효(회귀 없음).
+
 ## 향후 점검 시 참조
 
 코드 보안 감사가 필요할 때:
