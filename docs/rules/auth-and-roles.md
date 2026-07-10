@@ -11,6 +11,8 @@
 → kca-user-roles에 자동 등록 (없으면 member)
 ```
 
+**사번 정규화 규칙**: 실사번은 대문자로 변환하되, `test_` 프리픽스 계정(예: `test_user`, `test_admin`)은 SSO가 대소문자를 구분하므로 원문 그대로 전달. 규칙은 백엔드 `core/auth.py`의 `_normalize_empno()`와 프론트 `auth_service.dart`의 `_normalizeEmpno()`에 동일하게 구현 — 로그인, 관리자 사용자 목록 dedup에서 함께 사용하므로 한쪽만 바꾸면 안 됨 (역할 부여 키가 어긋남).
+
 ### 개발용 테스트 로그인
 ```
 POST /auth/dev-login (DEV_LOGIN_ENABLED=1 + APP_ENV=dev 둘 다 필요)

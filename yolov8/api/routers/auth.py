@@ -32,7 +32,7 @@ from fastapi.responses import JSONResponse
 from core.auth import (
     _verify_auth, _generate_token, _blacklist_token,
     _get_user_role_info, _ensure_user_in_roles_sync, _update_last_login,
-    _get_user_phone_sync, _mask_phone,
+    _get_user_phone_sync, _mask_phone, _normalize_empno,
     _pre_auth_store, _sms_rate_store, _dev_users,
 )
 from core.config import (
@@ -57,7 +57,7 @@ import secrets as _secrets_mod
 async def proxy_sso_login(req: LoginRequest, request: Request):
     """SKons SSO 통합 인증 1차 — 사번/비번 검증 + 인프라 측이 SMS OTP 직접 발송."""
     _check_rate_limit(request, "login", 5, 60)
-    username = req.username.upper()  # 사번 대문자 정규화
+    username = _normalize_empno(req.username)  # 사번 대문자 정규화 (test_ 계정은 원문 유지)
 
     # 우리 측 SMS 발송 횟수 제한 (인프라 측에도 있겠지만 1차 방어선)
     now = _time_mod.time()

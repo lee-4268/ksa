@@ -199,6 +199,10 @@ class AuthService extends ChangeNotifier {
   );
   String get _loginEndpoint => '$_loginUrl/auth/login';
 
+  /// 사번 정규화 — 실사번은 대문자, test_ 프리픽스 테스트 계정은 원문 유지 (백엔드와 동일 규칙)
+  static String _normalizeEmpno(String username) =>
+      username.toLowerCase().startsWith('test_') ? username : username.toUpperCase();
+
   /// 로그인 (SKons SSO 인증 + AppSync에서 사용자 정보 조회)
   Future<bool> signIn(String username, String password) async {
     _isLoading = true;
@@ -229,7 +233,7 @@ class AuthService extends ChangeNotifier {
           _preAuthToken = data['pre_auth_token'] as String?;
           _maskedPhone  = data['masked_phone']   as String?;
           _awaitingOtp  = true;
-          _userId       = username.toUpperCase(); // verifyOtp() 에서 사번 사용
+          _userId       = _normalizeEmpno(username); // verifyOtp() 에서 사번 사용
           _otpResendPassword = password; // 재발송용 RAM 보관
           _isLoading    = false;
           notifyListeners();
@@ -237,7 +241,7 @@ class AuthService extends ChangeNotifier {
 
         } else if (result == 'ok') {
           // SSO 인증 성공 → 토큰 저장 + 즉시 로그인 상태 반영
-          final normalizedId = username.toUpperCase();
+          final normalizedId = _normalizeEmpno(username);
           _authToken   = data['token'] as String?;
           _isSignedIn  = true;
           _userId      = normalizedId;

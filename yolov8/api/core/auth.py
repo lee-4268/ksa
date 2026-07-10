@@ -232,6 +232,12 @@ def _get_user_role_sync(empno: str) -> str:
     return "member"
 
 
+def _normalize_empno(empno: str) -> str:
+    """사번 정규화 — 실사번은 대문자, test_ 프리픽스 테스트 계정은 원문 유지 (SSO 대소문자 구분)."""
+    e = empno.strip()
+    return e if e.lower().startswith("test_") else e.upper()
+
+
 def _get_user_role_info(empno: str) -> dict:
     """kca-user-roles 테이블에서 role + last_login + is_dormant 한 번에 조회."""
     try:
@@ -522,7 +528,7 @@ def _list_all_users_sync() -> list:
     _ROLE_RANK = {"admin": 3, "manager": 2, "member": 1, "": 0}
     deduped: dict = {}
     for u in users:
-        key = u["empno"].upper()
+        key = _normalize_empno(u["empno"])
         if key not in deduped:
             u["empno"] = key
             deduped[key] = u
