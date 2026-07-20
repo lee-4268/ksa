@@ -125,6 +125,13 @@ DashboardScreen(
 - `didUpdateWidget`: 외부 값 변화 시 내부 `_selectedRegion` 갱신
 - shortName → map key 변환: `_shortNameToKey()` (강남→gangnam 등)
 
+## 모바일(좁은 화면) 대응 규칙
+
+- 게시글 상세 메타줄(작성자·날짜·조회수)은 고정 `Row` + `|` 구분자 금지 → `Wrap(spacing: 20, runSpacing: 8)` 사용 (좁으면 다음 줄로 흐름)
+- 상세 카드 내부 패딩: `MediaQuery.of(context).size.width < 600 ? 16 : 32`
+- 테이블의 허가번호(16자리) 셀은 `maxLines: 1` + 컬럼폭 145 이상 (줄바꿈 방지)
+- 일정 화면 필터 바는 좁은 화면(<600px)에서 기본 접힘 — 헤더 탭으로 토글, 접힘 시 '적용중' 배지 + 건수 표시 (`_filterCollapsedUser`, 데스크탑은 항상 펼침)
+
 ## 인라인 배경 (현황 리포트 달성/미달성)
 
 전체 너비를 채우지 않고 텍스트 너비만큼만 배경 적용:

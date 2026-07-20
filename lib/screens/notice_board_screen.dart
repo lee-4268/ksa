@@ -818,7 +818,7 @@ class _NoticeBoardScreenState extends State<NoticeBoardScreen> {
               border: Border.all(color: Colors.grey.shade300),
             ),
             child: SingleChildScrollView(
-              padding: const EdgeInsets.all(32), // 넉넉한 내부 패딩
+              padding: EdgeInsets.all(MediaQuery.of(context).size.width < 600 ? 16 : 32),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -843,12 +843,13 @@ class _NoticeBoardScreenState extends State<NoticeBoardScreen> {
                       borderRadius: BorderRadius.circular(6),
                       border: Border.all(color: Colors.grey.shade200),
                     ),
-                    child: Row(
+                    child: Wrap(
+                      spacing: 20,
+                      runSpacing: 8,
+                      crossAxisAlignment: WrapCrossAlignment.center,
                       children: [
                         _detailInfoItem(Icons.person_outline, author),
-                        _verticalDivider(),
                         _detailInfoItem(Icons.calendar_today_outlined, date),
-                        _verticalDivider(),
                         _detailInfoItem(Icons.visibility_outlined, '조회 $views'),
                       ],
                     ),
@@ -1001,13 +1002,6 @@ class _NoticeBoardScreenState extends State<NoticeBoardScreen> {
         const SizedBox(width: 6),
         Text(text, style: TextStyle(fontSize: 13, color: Colors.grey.shade600, fontWeight: FontWeight.w500)),
       ],
-    );
-  }
-
-  Widget _verticalDivider() {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      child: Text('|', style: TextStyle(color: Colors.grey.shade300, fontSize: 14)),
     );
   }
 

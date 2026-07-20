@@ -27,7 +27,7 @@ class _InspColSpec {
 const _kInspCols = <_InspColSpec>[
   _InspColSpec('__chk',     '',             48,  -1, hideable: false),
   _InspColSpec('__sched',   '수검일정',     110,   1, hideable: false),
-  _InspColSpec('허가번호',   '허가번호',     120,   2, hideable: false),
+  _InspColSpec('허가번호',   '허가번호',     145,   2, hideable: false),
   _InspColSpec('호출명칭',   '호출명칭',     180,   3, hideable: false),
   _InspColSpec('국종군',     '국종군',        80,   4),
   _InspColSpec('부서',       'KCA부서',      120,   5),
@@ -74,6 +74,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
   bool _hScrollSyncing = false;
   final Map<String, double> _colWidths = {for (final c in _kInspCols) c.key: c.w};
   Set<String> _hiddenCols = {'부서', '연도주기', '도로명주소', '시기조정', '기준연도'};
+  bool? _filterCollapsedUser; // 모바일 필터 접기 (null = 기본값: 좁은 화면에서 접힘)
 
   int _year = DateTime.now().year;
   String _sheet = 'all';
@@ -1880,6 +1881,8 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
   // ── 필터 바 ────────────────────────────────────────────
 
   Widget _buildFilterBar() {
+    final isNarrow = MediaQuery.of(context).size.width < 600;
+    final collapsed = isNarrow && (_filterCollapsedUser ?? true);
 
     return Container(
       margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
@@ -1895,26 +1898,54 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // 필터 헤더
-          Padding(
-            padding: const EdgeInsets.only(bottom: 12),
-            child: Row(
-              children: [
-                Container(
-                  width: 3,
-                  height: 16,
-                  decoration: BoxDecoration(
-                    color: _primary,
-                    borderRadius: BorderRadius.circular(2),
+          // 필터 헤더 (모바일에서 탭하여 접기/펼치기)
+          InkWell(
+            onTap: isNarrow
+                ? () => setState(() => _filterCollapsedUser = !collapsed)
+                : null,
+            borderRadius: BorderRadius.circular(8),
+            child: Padding(
+              padding: EdgeInsets.only(bottom: collapsed ? 0 : 12),
+              child: Row(
+                children: [
+                  Container(
+                    width: 3,
+                    height: 16,
+                    decoration: BoxDecoration(
+                      color: _primary,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
                   ),
-                ),
-                const SizedBox(width: 8),
-                const Icon(Icons.tune_rounded, size: 14, color: Color(0xFF6B7280)),
-                const SizedBox(width: 4),
-                const Text('필터 및 검색', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF374151))),
-              ],
+                  const SizedBox(width: 8),
+                  const Icon(Icons.tune_rounded, size: 14, color: Color(0xFF6B7280)),
+                  const SizedBox(width: 4),
+                  const Text('필터 및 검색', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF374151))),
+                  if (collapsed && _hasActiveFilters) ...[
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: _primary.withValues(alpha: 0.08),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Text('적용중', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: _primary)),
+                    ),
+                  ],
+                  if (collapsed && _total > 0) ...[
+                    const SizedBox(width: 8),
+                    Text('${_formatNumber(_total)}건',
+                        style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF0369A1))),
+                  ],
+                  if (isNarrow) ...[
+                    const Spacer(),
+                    Icon(collapsed ? Icons.expand_more : Icons.expand_less,
+                        size: 18, color: const Color(0xFF6B7280)),
+                  ],
+                ],
+              ),
             ),
           ),
+          if (!collapsed)
           // Row 1: 연도, 시트, 검색창, 총건수, 일괄등록 버튼
           Wrap(
             spacing: 10,
@@ -2020,6 +2051,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
               ],
             ],
           ),
+          if (!collapsed) ...[
           const SizedBox(height: 12),
           Divider(height: 1, color: Colors.grey.shade200),
           const SizedBox(height: 12),
@@ -2179,6 +2211,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
           if (_hasActiveFilters) ...[
             const SizedBox(height: 10),
             _buildActiveFilterChips(),
+          ],
           ],
         ],
       ),
@@ -3336,7 +3369,8 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
       case '__sched':
         return _buildScheduleCell(licenseNo);
       case '허가번호':
-        return Text(licenseNo, style: cs);
+        return Text(licenseNo, style: cs,
+            maxLines: 1, overflow: TextOverflow.ellipsis);
       case '호출명칭':
         return Text('${item['호출명칭'] ?? ''}',
             style: cs.copyWith(fontWeight: FontWeight.w600),
