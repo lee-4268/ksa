@@ -26,6 +26,7 @@ from core.auth import (
     _get_user_role_sync, _get_user_role_info,
     _ensure_user_in_roles_sync, _record_audit_log_sync,
     _list_all_users_sync, _invalidate_admin_users_cache, _dev_users,
+    _mask_email, _mask_phone,
 )
 from core.config import (
     DYNAMODB_TABLES, VALID_ROLES, ADMIN_BOOTSTRAP_KEY,
@@ -235,7 +236,14 @@ async def admin_list_users(
             filtered = [u for u in filtered if u.get("region", "") == region]
         if role:
             filtered = [u for u in filtered if u.get("role", "member") == role]
-        return {"success": True, "users": filtered, "total": len(filtered)}
+        # PII 마스킹 (2026-07-27 보안진단 4.2 조치) — 검색은 위에서 원본으로 수행
+        masked = [
+            {**u,
+             "email": _mask_email(u.get("email")),
+             "phone": _mask_phone(u["phone"]) if u.get("phone") else None}
+            for u in filtered
+        ]
+        return {"success": True, "users": masked, "total": len(masked)}
     except Exception as e:
         logger.error(f"admin users list failed: {e}")
         raise HTTPException(status_code=500, detail="서버 내부 오류")

@@ -640,6 +640,15 @@ def _mask_phone(phone: str) -> str:
     return "***-****-****"
 
 
+def _mask_email(email: str | None) -> str | None:
+    """이메일 마스킹: 로컬파트 앞 2자만 노출 (ab******@sk.com)."""
+    if not email or "@" not in email:
+        return email or None
+    local, _, domain = email.partition("@")
+    visible = local[:2] if len(local) > 2 else local[:1]
+    return f"{visible}{'*' * 6}@{domain}"
+
+
 def _get_user_phone_sync(empno: str) -> str | None:
     """DynamoDB Users 테이블에서 phone_number 조회."""
     try:
