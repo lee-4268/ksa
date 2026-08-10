@@ -168,6 +168,10 @@ learned_map (읍면동 단위 매핑의 실체)
   갱신은 mois.go.kr 의 jscode*.zip 내 KIKmix xlsx 를 `--admin-dong` 으로 넘기거나 파일 교체.
   실측 3,627건 중 3,560건이 구성 법정동 전부 동일, 15건 다수결, 52건은 출장소/신설동이라
   시군구 대표팀 폴백
+- **SKT 운용팀 컬럼**: 품질개선팀(SKO) → SKT Access운용팀 매핑은 `scripts/data/skt_ops_team_map.tsv`
+  (사내 SKTSKO조직맵핑.csv 기준, 12개 운용팀). 행정동_팀매핑·학습_키워드_팀 시트에
+  `access운용팀(SKT)` 으로 붙는다. 원본에 남양주품질개선팀이 경기/인천 두 줄로 있어
+  **인천Access운용팀으로 확정**했다. `--skt-ops` 로 교체 가능
 - 로컬 실행 시 learned_map이 없어 서울(467건)만 확정됨. **전국분은 EC2에서 실행**해야 함
 - 스크립트는 `deploy_backend.sh` 배포에 포함되어 `$APP_DIR/scripts/` 로 들어간다 (별도 전송 불필요)
   ```bash

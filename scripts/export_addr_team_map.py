@@ -30,6 +30,11 @@ LEGAL_DONG_TSV = ''
 ADMIN_DONG_TSV_GZ = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                  'data', 'admin_dong_map.tsv.gz')
 
+# 품질개선팀(SKO) → SKT Access운용팀. 출처: 사내 SKTSKO조직맵핑.csv
+# 원본에 남양주품질개선팀이 경기/인천 두 줄로 있어 인천Access운용팀으로 확정했다.
+SKT_OPS_TSV = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           'data', 'skt_ops_team_map.tsv')
+
 # 로컬 리포지토리 / EC2 배포본(APP_DIR) 양쪽에서 동작
 API_DIR_CANDIDATES = [
     os.path.join(ROOT, 'yolov8', 'api'),
@@ -197,6 +202,21 @@ def load_legal_dong(with_ri):
     return rows
 
 
+def load_skt_ops(path):
+    """품질개선팀 → SKT Access운용팀."""
+    src = path or SKT_OPS_TSV
+    out = {}
+    if not os.path.exists(src):
+        return out
+    with open(src, encoding='utf-8') as f:
+        next(f)
+        for line in f:
+            p = line.rstrip('\n').split('\t')
+            if len(p) >= 3:
+                out[p[0]] = p[2]
+    return out
+
+
 def load_admin_dong(path):
     """행정동↔법정동 매핑 로드 → [(행정동코드, 시도, 시군구, 행정동명, 법정동코드), …].
 
@@ -237,6 +257,10 @@ def build(args):
     ORG = logic['INSP_ORG_MAP']
     TEAM_TO_HDQT = logic['INSP_TEAM_TO_HDQT']
     ACCESS_TO_SKT = logic['_ACCESS_TO_SKT_HDQT']
+    SKT_OPS = load_skt_ops(args.skt_ops)
+    missing_ops = sorted(t for t in TEAM_TO_HDQT if t not in SKT_OPS)
+    if SKT_OPS and missing_ops:
+        print(f'경고: SKT 운용팀 매핑 없는 품질개선팀 {len(missing_ops)}개 — {missing_ops}')
 
     from openpyxl import Workbook
     from openpyxl.styles import Alignment, Font, PatternFill
@@ -369,22 +393,25 @@ def build(args):
                 if team:
                     adm_review += 1
             ons = TEAM_TO_HDQT.get(team, '')
-            admin_rows.append([hcode, sido, sgg, hdong, tot,
-                               team, ons, ACCESS_TO_SKT.get(ons, ''), 근거, 검토])
+            admin_rows.append([hcode, sido, sgg, hdong, tot, team, ons,
+                               ACCESS_TO_SKT.get(ons, ''), SKT_OPS.get(team, ''),
+                               근거, 검토])
         sheet('행정동_팀매핑',
               ['행정동코드', '시도', '시군구', '행정동명', '구성법정동수',
-               '품질개선팀', 'access담당(ONS)', 'access담당(SKT)', '판정근거', '검토필요'],
-              admin_rows, [13, 14, 18, 20, 12, 20, 16, 16, 24, 10])
+               '품질개선팀', 'access담당(ONS)', 'access담당(SKT)', 'access운용팀(SKT)',
+               '판정근거', '검토필요'],
+              admin_rows, [13, 14, 18, 20, 12, 20, 16, 16, 18, 24, 10])
 
     # 5) 학습된 키워드 → 팀
     lrn_rows = sorted(
-        ([kw, t, ons, ACCESS_TO_SKT.get(ons, '')]
+        ([kw, t, ons, ACCESS_TO_SKT.get(ons, ''), SKT_OPS.get(t, '')]
          for kw, t, ons in ((k, v, TEAM_TO_HDQT.get(v, ''))
                             for k, v in learned_raw.items())),
         key=lambda r: (r[3], r[2], r[1], r[0]))
     sheet('학습_키워드_팀',
-          ['주소 키워드', '품질개선팀', 'access담당(ONS)', 'access담당(SKT)'],
-          lrn_rows, [26, 20, 16, 16])
+          ['주소 키워드', '품질개선팀', 'access담당(ONS)', 'access담당(SKT)',
+           'access운용팀(SKT)'],
+          lrn_rows, [26, 20, 16, 16, 18])
 
     # 6) 폐지팀 치환 / 주소 약어 정규화
     sheet('폐지팀_치환', ['구(폐지) 팀명', '현행 팀명'],
@@ -467,6 +494,9 @@ if __name__ == '__main__':
     ap.add_argument('-l', '--learned',
                     help='학습맵 (.json 캐시 또는 cert_cache.db). 생략 시 임시디렉터리 자동 탐색')
     ap.add_argument('--api-dir', help='inspection.py / legal_dong_code.tsv 가 있는 디렉터리')
+    ap.add_argument('--skt-ops',
+                    help='품질개선팀→SKT Access운용팀 tsv. '
+                         '생략 시 scripts/data/skt_ops_team_map.tsv 사용')
     ap.add_argument('--admin-dong',
                     help='행정동↔법정동 매핑. 행안부 KIKmix xlsx 또는 tsv(.gz). '
                          '생략 시 scripts/data/admin_dong_map.tsv.gz 사용')
