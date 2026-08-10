@@ -100,7 +100,11 @@ def load_logic():
 
     missing = [n for n in WANT_CONSTS + WANT_FUNCS if n not in ns]
     if missing:
-        sys.exit(f'inspection.py에서 추출 실패: {missing}')
+        sys.exit(f'inspection.py에서 다음을 찾지 못했습니다: {", ".join(missing)}\n'
+                 f'  대상 파일: {INSPECTION_PY}\n'
+                 '  이 스크립트보다 배포된 백엔드 코드가 오래되면 발생합니다.\n'
+                 '  EC2 라면 코드부터 갱신하세요 (재시작 불필요):\n'
+                 '      bash /home/ubuntu/deploy_backend.sh')
     return ns
 
 
