@@ -12,6 +12,7 @@
 """
 import argparse
 import ast
+import gzip
 import json
 import os
 import sqlite3
@@ -22,6 +23,12 @@ import types
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 INSPECTION_PY = ''
 LEGAL_DONG_TSV = ''
+
+# 행정동↔법정동 매핑 (행정안전부 '행정기관(행정동) 및 관할구역(법정동)' KIKmix, 2026.3.25 시행)
+# 출처: https://www.mois.go.kr → 업무안내 → 주민등록,인감 → 변경내역 알림 첨부 jscode*.zip
+# 이용허락범위 제한 없음. 갱신하려면 KIKmix xlsx 를 받아 --admin-dong 으로 넘기거나 이 파일을 교체.
+ADMIN_DONG_TSV_GZ = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                 'data', 'admin_dong_map.tsv.gz')
 
 # 로컬 리포지토리 / EC2 배포본(APP_DIR) 양쪽에서 동작
 API_DIR_CANDIDATES = [
@@ -190,6 +197,36 @@ def load_legal_dong(with_ri):
     return rows
 
 
+def load_admin_dong(path):
+    """행정동↔법정동 매핑 로드 → [(행정동코드, 시도, 시군구, 행정동명, 법정동코드), …].
+
+    path 가 .xlsx 면 행안부 KIKmix 원본으로 보고 말소분을 걸러 읽는다.
+    """
+    if path and path.lower().endswith('.xlsx'):
+        import openpyxl
+        wb = openpyxl.load_workbook(path, read_only=True)
+        out = []
+        for h, sido, sgg, hdong, bcode, _dongri, _c, malso in wb.active.iter_rows(
+                min_row=2, values_only=True):
+            if not hdong or malso:
+                continue
+            out.append((str(h), sido or '', sgg or '', hdong, str(bcode)))
+        return out
+
+    src = path or ADMIN_DONG_TSV_GZ
+    if not os.path.exists(src):
+        return []
+    opener = gzip.open if src.endswith('.gz') else open
+    out = []
+    with opener(src, 'rt', encoding='utf-8') as f:
+        next(f)
+        for line in f:
+            p = line.rstrip('\n').split('\t')
+            if len(p) >= 5:
+                out.append(tuple(p[:5]))
+    return out
+
+
 def build(args):
     api_dir = resolve_paths(args.api_dir)
     logic = load_logic()
@@ -297,6 +334,48 @@ def build(args):
     sheet('시군구_요약', ['시도', '시군구', '팀종류수', '팀별 읍면동수', '대표팀'],
           sgg_rows, [14, 20, 10, 60, 20])
 
+    # 4-2) 행정동 단위 매핑 — 기존 데이터가 행정동 기준일 때 조인용.
+    # 행정동 하나가 여러 법정동을 관할하므로 구성 법정동의 판정을 다수결로 집계한다.
+    admin_rows = []
+    adm_review = 0
+    adm_src = load_admin_dong(args.admin_dong)
+    if adm_src:
+        bjd_team = {r[0]: r[8] for r in dong_rows if r[8]}
+        sgg_top = {k: c.most_common(1)[0][0] for k, c in sgg_teams.items() if c}
+        adm_agg = defaultdict(Counter)
+        adm_info = {}
+        for hcode, sido, sgg, hdong, bcode in adm_src:
+            adm_info[hcode] = (sido, sgg, hdong)
+            team = bjd_team.get(bcode) or bjd_team.get(bcode[:8] + '00')
+            if team:
+                adm_agg[hcode][team] += 1
+        for hcode, (sido, sgg, hdong) in sorted(adm_info.items()):
+            counter = adm_agg.get(hcode)
+            if counter:
+                team, n = counter.most_common(1)[0]
+                tot = sum(counter.values())
+                if len(counter) == 1:
+                    근거, 검토 = f'구성 법정동 {tot}개 전부 동일', ''
+                else:
+                    근거 = f'다수결 {n}/{tot}'
+                    검토 = '검토'
+                    adm_review += 1
+            else:
+                # 출장소(관할이 시군구 코드) 또는 신설 법정동 — 시군구 대표팀으로 폴백
+                team = sgg_top.get((sido, sgg), '')
+                tot = 0
+                근거 = '시군구 대표팀 폴백' if team else '미매핑'
+                검토 = '검토' if team else ''
+                if team:
+                    adm_review += 1
+            ons = TEAM_TO_HDQT.get(team, '')
+            admin_rows.append([hcode, sido, sgg, hdong, tot,
+                               team, ons, ACCESS_TO_SKT.get(ons, ''), 근거, 검토])
+        sheet('행정동_팀매핑',
+              ['행정동코드', '시도', '시군구', '행정동명', '구성법정동수',
+               '품질개선팀', 'access담당(ONS)', 'access담당(SKT)', '판정근거', '검토필요'],
+              admin_rows, [13, 14, 18, 20, 12, 20, 16, 16, 24, 10])
+
     # 5) 학습된 키워드 → 팀
     lrn_rows = sorted(
         ([kw, t, ons, ACCESS_TO_SKT.get(ons, '')]
@@ -345,12 +424,22 @@ def build(args):
         ['',  '"소수 1/N" 처럼 극단적으로 적은 건은 소수 표본이 지역 합의를 뒤집은 오매핑일 수 있다.'],
         ['',  '학습 임계가 3건이라 특정 동에 지하철 역사 등이 몰리면 발생한다. 눈으로 확인할 것.'],
         [''],
+        ['■ 행정동_팀매핑 시트'],
+        ['',  '기존 데이터가 행정동 기준일 때 조인용. 행정동↔법정동은 1:1이 아니라 다대다다.'],
+        ['',  '(청운효자동 ⊃ 청운동·신교동·궁정동…  /  신림동 → 여러 행정동으로 분할)'],
+        ['',  '그래서 행정동이 관할하는 법정동들의 판정을 모아 다수결로 팀을 정한다.'],
+        ['',  '매핑 원본: 행정안전부 행정기관(행정동) 및 관할구역(법정동) KIKmix, 2026.3.25 시행'],
+        ['',  '출장소나 신설 법정동처럼 구성 법정동이 안 잡히는 건은 시군구 대표팀으로 폴백하고'],
+        ['',  '판정근거에 표시한다. 검토필요 표시된 행만 확인하면 된다.'],
+        [''],
         ['■ 커버리지'],
         ['대상 읍면동 수', total],
         ['팀 확정', stat_matched],
         ['미매핑', total - stat_matched],
         ['검토필요(소수 판정)', review],
         ['학습 키워드 수', len(learned_raw)],
+        ['행정동 수', len(admin_rows)],
+        ['행정동 검토필요', adm_review],
     ]
     for row in guide:
         ws.append(row)
@@ -368,6 +457,8 @@ def build(args):
     print(f'  읍면동 {total}건 중 팀 확정 {stat_matched}건 / 미매핑 {total - stat_matched}건')
     print(f'  학습 키워드 {len(learned_raw)}개')
     print(f'  검토필요(시군구 대표팀과 다른 소수 판정) {review}건')
+    if admin_rows:
+        print(f'  행정동 {len(admin_rows)}건 / 검토필요 {adm_review}건')
 
 
 if __name__ == '__main__':
@@ -376,5 +467,8 @@ if __name__ == '__main__':
     ap.add_argument('-l', '--learned',
                     help='학습맵 (.json 캐시 또는 cert_cache.db). 생략 시 임시디렉터리 자동 탐색')
     ap.add_argument('--api-dir', help='inspection.py / legal_dong_code.tsv 가 있는 디렉터리')
+    ap.add_argument('--admin-dong',
+                    help='행정동↔법정동 매핑. 행안부 KIKmix xlsx 또는 tsv(.gz). '
+                         '생략 시 scripts/data/admin_dong_map.tsv.gz 사용')
     ap.add_argument('--with-ri', action='store_true', help='리(里) 단위까지 포함')
     build(ap.parse_args())
