@@ -67,7 +67,7 @@ WANT_CONSTS = [
     '_DEPRECATED_TEAM_MAP', '_SEOUL_GU_TO_TEAM', '_SEOUL_GU_SORTED', '_ADDR_ABBR_MAP',
 ]
 WANT_FUNCS = ['_normalize_addr', '_hdqt_from_addr', '_normalize_skt_hdqt',
-              '_learn_addr_map_from_cert_db']
+              '_normalize_learned_map', '_learn_addr_map_from_cert_db']
 
 
 def load_logic():
@@ -130,7 +130,16 @@ def load_learned(path, logic):
         sys.exit(f'학습 맵 파일 없음: {path}')
     if path.lower().endswith('.json'):
         with open(path, encoding='utf-8') as f:
-            return json.load(f), path
+            raw = json.load(f)
+        learned = logic['_normalize_learned_map'](raw)
+        dropped = len(raw) - len(learned)
+        if dropped:
+            print(f'경고: 학습맵 {len(raw)}개 중 {dropped}개 항목이 유효한 팀이 아니라 제외됨')
+        if not learned:
+            sys.exit(f'학습맵에 쓸 수 있는 항목이 없습니다: {path}\n'
+                     '  구 형식({"access":…,"team":…}) 캐시일 수 있습니다. '
+                     '파일을 지우고 cert DB(-l …/cert_cache.db)로 직접 학습시키세요.')
+        return learned, path
     learned = logic['_learn_addr_map_from_cert_db'](db_path=path)
     if not learned:
         sys.exit(f'cert DB에서 학습 실패(테이블/컬럼 확인): {path}')

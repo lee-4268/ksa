@@ -485,6 +485,22 @@ def _hdqt_from_addr(addr: str, known_hdqt: str = '',
     return known_hdqt, ''
 
 
+def _normalize_learned_map(raw: dict) -> dict:
+    """디스크에서 읽은 학습맵의 값을 팀 문자열로 정규화.
+
+    과거 core.cert_cache 워밍업이 같은 캐시 파일(learned_addr_map.json)에
+    {'access':…, 'team':…} 형태로 쓰던 시기가 있어, 그대로 _hdqt_from_addr 에
+    넘기면 `team not in INSP_TEAM_TO_HDQT` 에서 TypeError(unhashable dict) 가 난다.
+    두 형태를 모두 수용하고 유효한 팀만 남긴다.
+    """
+    out: dict = {}
+    for kw, v in (raw or {}).items():
+        team = v.get('team') if isinstance(v, dict) else v
+        if isinstance(team, str) and team in INSP_TEAM_TO_HDQT:
+            out[kw] = team
+    return out
+
+
 def _learn_addr_map_from_cert_db(db_path: str = "") -> dict:
     import re
     from collections import Counter, defaultdict
@@ -923,7 +939,7 @@ def _process_inspection_sync(job_id: str, s3_key: str, year: int, uploaded_by: s
                 cache_age = _time_mod.time() - os.path.getmtime(_learned_cache)
                 if cache_age < 86400:
                     with open(_learned_cache, 'r', encoding='utf-8') as f:
-                        learned_addr_map = _j2.load(f)
+                        learned_addr_map = _normalize_learned_map(_j2.load(f))
                     if learned_addr_map:
                         logger.info(f"학습 맵 캐시 재사용: {len(learned_addr_map)}개 키워드 ({cache_age:.0f}초 전)")
                         _cache_valid = True
@@ -1939,7 +1955,7 @@ async def _load_learned_addr_map_async() -> dict:
     if os.path.exists(_cache_path):
         try:
             with open(_cache_path, 'r', encoding='utf-8') as _f:
-                learned_map = _jr.load(_f)
+                learned_map = _normalize_learned_map(_jr.load(_f))
         except Exception:
             learned_map = {}
 

@@ -53,32 +53,6 @@ def _stream_s3_csvs():
             body.close()
 
 
-def _learn_addr_map_from_cert_db(db_path: str = "") -> dict:
-    """cert SQLite DB에서 주소→팀 학습 맵 빌드."""
-    addr_map = {}
-    _db = db_path or _cert_cache_db_path
-    if not _db or not os.path.exists(_db):
-        return addr_map
-    try:
-        conn = sqlite3.connect(_db, timeout=30)
-        conn.row_factory = sqlite3.Row
-        for row in conn.execute("SELECT zpwiadr, area_hdofc_nm, ons_team_nm FROM cert WHERE zpwiadr != ''"):
-            addr = row["zpwiadr"] or ""
-            access = row["area_hdofc_nm"] or ""
-            team = row["ons_team_nm"] or ""
-            if not addr or not (access or team):
-                continue
-            parts = addr.split()
-            for i in range(len(parts)):
-                key = " ".join(parts[i:i+2]) if i + 1 < len(parts) else parts[i]
-                if len(key) >= 3 and key not in addr_map:
-                    addr_map[key] = {"access": access, "team": team}
-        conn.close()
-    except Exception as e:
-        logger.warning(f"주소→팀 학습 맵 빌드 실패: {e}")
-    return addr_map
-
-
 def _cert_cache_load():
     """S3 CSV → SQLite DB 파일로 캐싱. 메모리 사용 최소화."""
     global _cert_cache_ts, _cert_cache_db_path
@@ -150,24 +124,11 @@ def _cert_cache_load():
         _cert_cache_ts = _time_mod.time()
         logger.info(f"설치확인서 SQLite 캐시 빌드 완료: {total}행, {_cert_cache_ts - t0:.1f}초")
 
-        import json as _jw
-        _addr_cache = os.path.join(_tempfile.gettempdir(), "learned_addr_map.json")
-        _should_warm = True
-        if os.path.exists(_addr_cache):
-            try:
-                _age = _time_mod.time() - os.path.getmtime(_addr_cache)
-                if _age < 86400:
-                    with open(_addr_cache, 'r', encoding='utf-8') as _f:
-                        _existing = _jw.load(_f)
-                    if _existing:
-                        _should_warm = False
-            except Exception:
-                pass
-        if _should_warm:
-            _addr_map = _learn_addr_map_from_cert_db(db_path=db_path)
-            with open(_addr_cache, 'w', encoding='utf-8') as _f:
-                _jw.dump(_addr_map, _f, ensure_ascii=False)
-            logger.info(f"주소→팀 학습 맵 워밍업 완료: {len(_addr_map)}개 키워드")
+        # 주소→팀 학습맵 워밍업은 여기서 하지 않는다.
+        # 과거 이 자리에서 learned_addr_map.json 을 {'access':…,'team':…} 형태로 썼는데,
+        # 같은 파일을 읽는 routers.inspection 은 {키: '팀명'} 형태를 기대해
+        # _hdqt_from_addr 에서 TypeError(unhashable dict) 가 발생했다.
+        # 학습맵은 routers.inspection._learn_addr_map_from_cert_db 가 필요 시 직접 빌드한다.
 
 
 def _cert_cache_force_rebuild():

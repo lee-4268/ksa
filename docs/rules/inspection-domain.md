@@ -146,6 +146,10 @@ Row 4: [장비 Type별 불합격 현황 테이블] | [장비 Type별 불합격 �
 learned_map (읍면동 단위 매핑의 실체)
 - `_learn_addr_map_from_cert_db` — cert DB의 `zpwiadr`(주소) + `ons_team_nm`(실제 담당팀) 쌍을 키워드별 집계, **동일 키워드 3건 이상**일 때만 최빈 팀 채택
 - 즉 하드코딩이 아니라 운영 데이터 학습 결과 → 캐시 `{tempdir}/learned_addr_map.json`
+- **캐시 값 형식은 `{키: "팀명"}` 문자열 고정.** 과거 `core/cert_cache.py` 워밍업이 같은 파일에
+  `{키: {"access":…, "team":…}}` 로 써서 `_hdqt_from_addr` 가 `TypeError: unhashable type: 'dict'`
+  로 죽는 버그가 있었다(2026.08 수정). 워밍업은 제거했고, 읽는 쪽은 `_normalize_learned_map` 으로
+  두 형식을 모두 흡수해 기존 오염 캐시가 자동 치유된다
 - `_learn_pnu_map_from_cert_db`는 PNU 앞 10자리(법정동코드) → 팀, 1건부터 채택. 주소 매핑 실패 시 fallback
 - `_DEPRECATED_TEAM_MAP` — 폐지된 구 팀명 → 현행 팀명 치환
 
