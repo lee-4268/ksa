@@ -299,11 +299,13 @@ def build(args):
 
     # 5) 학습된 키워드 → 팀
     lrn_rows = sorted(
-        ([kw, t, TEAM_TO_HDQT.get(t, ''), ' ' in kw and '복합키' or '단일키']
-         for kw, t in learned_raw.items()),
-        key=lambda r: (r[2], r[1], r[0]))
-    sheet('학습_키워드_팀', ['주소 키워드', '품질개선팀', 'access담당(본부)', '키유형'],
-          lrn_rows, [26, 20, 16, 10])
+        ([kw, t, ons, ACCESS_TO_SKT.get(ons, '')]
+         for kw, t, ons in ((k, v, TEAM_TO_HDQT.get(v, ''))
+                            for k, v in learned_raw.items())),
+        key=lambda r: (r[3], r[2], r[1], r[0]))
+    sheet('학습_키워드_팀',
+          ['주소 키워드', '품질개선팀', 'access담당(ONS)', 'access담당(SKT)'],
+          lrn_rows, [26, 20, 16, 16])
 
     # 6) 폐지팀 치환 / 주소 약어 정규화
     sheet('폐지팀_치환', ['구(폐지) 팀명', '현행 팀명'],
