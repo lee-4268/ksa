@@ -250,16 +250,39 @@ def build(args):
         dong_rows.append([code, 시도, 시군구, 하위, level, name,
                           ACCESS_TO_SKT.get(hdqt, ''), hdqt or '', team or '', 근거])
     total = len(dong_rows)
+
+    # 시군구 합의에서 벗어난 소수 판정 표시.
+    # 복합키가 소수 표본(학습 임계 3건)으로 지역 합의를 뒤집는 경우가 있어
+    # (예: 지하철 역사가 몰린 동 → 지하철품질개선팀) 재생성 때마다 눈에 띄게 한다.
+    from collections import Counter, defaultdict
+    sgg_teams = defaultdict(Counter)
+    for r in dong_rows:
+        if r[8]:
+            sgg_teams[(r[1], r[2])][r[8]] += 1
+    review = 0
+    for r in dong_rows:
+        counter = sgg_teams.get((r[1], r[2]))
+        if not counter or not r[8]:
+            r += ['', '']
+            continue
+        top_team, top_n = counter.most_common(1)[0]
+        n, tot = counter[r[8]], sum(counter.values())
+        if r[8] != top_team:
+            review += 1
+            r += [top_team, f'소수 {n}/{tot}']
+        else:
+            r += [top_team, '']
+
     sheet('법정동_팀매핑',
           ['법정동코드', '시도', '시군구', '읍면동', '단위', '전체주소',
-           'SKT본부', 'access담당(본부)', '품질개선팀', '판정근거'],
-          dong_rows, [13, 14, 18, 14, 8, 42, 10, 14, 20, 26])
+           'SKT본부', 'access담당(본부)', '품질개선팀', '판정근거',
+           '시군구_대표팀', '검토필요'],
+          dong_rows, [13, 14, 18, 14, 8, 42, 10, 14, 20, 26, 20, 12])
 
     # 4) 시군구 단위 요약 (한 시군구가 여러 팀으로 갈리는지 확인용)
-    from collections import defaultdict
     agg = defaultdict(lambda: defaultdict(int))
-    for _, 시도, 시군구, _, _, _, _, _, team, _ in dong_rows:
-        agg[(시도, 시군구)][team or '(미매핑)'] += 1
+    for r in dong_rows:
+        agg[(r[1], r[2])][r[8] or '(미매핑)'] += 1
     sgg_rows = []
     for (시도, 시군구), counter in sorted(agg.items()):
         items = sorted(counter.items(), key=lambda x: -x[1])
@@ -309,10 +332,17 @@ def build(args):
         ['',  '키워드별 최빈 팀을 채택한 표. 동일 키워드 3건 미만은 노이즈로 버린다.'],
         ['',  '즉 읍면동 단위 매핑은 하드코딩이 아니라 운영 데이터에서 학습된 결과다.'],
         [''],
+        ['■ 검토필요 컬럼'],
+        ['',  '같은 시군구 안에서 대표팀과 다른 팀으로 판정된 행에 "소수 n/전체" 표시.'],
+        ['',  '실제로 팀 경계가 시군구를 가르는 정상 케이스도 있지만(예: 인천 중구 영종도),'],
+        ['',  '"소수 1/N" 처럼 극단적으로 적은 건은 소수 표본이 지역 합의를 뒤집은 오매핑일 수 있다.'],
+        ['',  '학습 임계가 3건이라 특정 동에 지하철 역사 등이 몰리면 발생한다. 눈으로 확인할 것.'],
+        [''],
         ['■ 커버리지'],
         ['대상 읍면동 수', total],
         ['팀 확정', stat_matched],
         ['미매핑', total - stat_matched],
+        ['검토필요(소수 판정)', review],
         ['학습 키워드 수', len(learned_raw)],
     ]
     for row in guide:
@@ -330,6 +360,7 @@ def build(args):
     print(f'생성 완료: {out}')
     print(f'  읍면동 {total}건 중 팀 확정 {stat_matched}건 / 미매핑 {total - stat_matched}건')
     print(f'  학습 키워드 {len(learned_raw)}개')
+    print(f'  검토필요(시군구 대표팀과 다른 소수 판정) {review}건')
 
 
 if __name__ == '__main__':
