@@ -154,7 +154,14 @@ learned_map (읍면동 단위 매핑의 실체)
 - 상수·함수를 inspection.py 소스에서 AST로 추출해 그대로 실행 (복사본 없음 = 드리프트 없음)
 - 시트: 안내 / 조직도 / 서울_자치구_규칙 / **법정동_팀매핑**(전국 읍면동 5,067행 + 판정근거) / 시군구_요약 / 학습_키워드_팀 / 폐지팀_치환 / 주소약어_정규화
 - 로컬 실행 시 learned_map이 없어 서울(467건)만 확정됨. **전국분은 EC2에서 실행**해야 함
+- 스크립트는 `deploy_backend.sh` 배포에 포함되어 `$APP_DIR/scripts/` 로 들어간다 (별도 전송 불필요)
+  ```bash
+  # EC2
+  bash /home/ubuntu/deploy_backend.sh          # scripts/ 까지 갱신 (재시작 불필요)
+  /home/ubuntu/kca-api/venv/bin/python \
+      /home/ubuntu/kca-api/scripts/export_addr_team_map.py -o /tmp/addr_team_map.xlsx
   ```
-  python export_addr_team_map.py --api-dir /home/ubuntu/kca-api -o /tmp/주소-팀_매핑.xlsx
-  ```
-  `-l` 생략 시 `{tempdir}/learned_addr_map.json` → `{tempdir}/cert_cache.db` 순으로 자동 탐색
+- `--api-dir` 생략 시 `APP_DIR` 환경변수 → `/home/ubuntu/kca-api` 순으로 자동 탐색
+- `-l` 생략 시 `{tempdir}/learned_addr_map.json` → `{tempdir}/cert_cache.db` 순으로 자동 탐색
+- learned_map 캐시가 없으면 `POST /inspection/remap-divisions?year=&dry_run=true` 를 먼저 호출
+  (dry_run 이라 DB 미변경, 캐시만 생성)

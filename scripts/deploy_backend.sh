@@ -3,8 +3,9 @@
 # deploy_backend.sh — KCA 백엔드(FastAPI) EC2 배포 스크립트
 #
 # 리팩토링 이후 백엔드는 단일 main.py 가 아니라 폴더 구조(core/ routers/ schemas/)입니다.
-# 이 스크립트는 GitHub 저장소를 tarball 로 한 번에 받아, 코드 파일/폴더만 운영 위치로
-# 복사합니다. DB(*.db) · 로그(*.log) · venv/ · data/ · runs/ 등 런타임 자산은 건드리지 않습니다.
+# 이 스크립트는 GitHub 저장소를 tarball 로 한 번에 받아, 코드 파일/폴더와 운영 도구 스크립트만
+# 운영 위치로 복사합니다. DB(*.db) · 로그(*.log) · venv/ · data/ · runs/ 등 런타임 자산은
+# 건드리지 않습니다.
 #
 # ── 사용법 ────────────────────────────────────────────────────
 #   EC2 에서:
@@ -21,7 +22,8 @@
 # ── 안전장치 ──────────────────────────────────────────────────
 #   - 받기 전 기존 main.py 를 main.py.bak.<날짜시각> 으로 백업 (롤백용)
 #   - 백업은 최신 KEEP_BAK(기본 3)개만 유지하고 오래된 백업은 자동 삭제 (누적 방지)
-#   - 코드는 /tmp 에서 풀고, 운영 위치에는 main.py/requirements.txt/core/routers/schemas 만 복사
+#   - 코드는 /tmp 에서 풀고, 운영 위치에는 main.py/requirements.txt/core/routers/schemas
+#     그리고 운영 도구용 scripts/ 만 복사
 #   - 토큰은 인자/코드에 하드코딩하지 않고 GITHUB_TOKEN 환경변수로만 받음
 #
 set -euo pipefail
@@ -99,6 +101,12 @@ for d in core routers schemas; do
   rm -rf "${APP_DIR:?}/$d"
   cp -r "$SRC_API/$d" "$APP_DIR/$d"
 done
+# 운영 도구 스크립트도 함께 배치 (주소→팀 매핑 export 등 EC2 에서 일회성 실행용).
+# 서비스 동작과 무관하므로 없어도 배포는 계속 진행.
+if [[ -d "$SRC_ROOT/scripts" ]]; then
+  rm -rf "${APP_DIR:?}/scripts"
+  cp -r "$SRC_ROOT/scripts" "$APP_DIR/scripts"
+fi
 # 옛 바이트코드 캐시 제거
 rm -rf "$APP_DIR/__pycache__" "$APP_DIR"/core/__pycache__ \
        "$APP_DIR"/routers/__pycache__ "$APP_DIR"/schemas/__pycache__ 2>/dev/null || true

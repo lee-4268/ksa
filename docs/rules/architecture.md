@@ -187,7 +187,10 @@ bash /home/ubuntu/deploy_backend.sh --restart   # 코드 받기 + 재시작 + �
 #   --pip  옵션: requirements 바뀐 경우 pip install 까지 수행
 ```
 
-- 스크립트가 받아오는 것: `main.py`, `requirements.txt`(저장소 `yolov8/requirements.txt`), `core/`, `routers/`, `schemas/`
+- 스크립트가 받아오는 것: `main.py`, `requirements.txt`(저장소 `yolov8/requirements.txt`), `core/`, `routers/`, `schemas/`, 그리고 저장소 루트의 `scripts/`
+- `scripts/` 는 서비스 코드가 아니라 **EC2 에서 일회성으로 돌리는 운영 도구** 배치용
+  (예: `scripts/export_addr_team_map.py` — 주소→팀 매핑 Excel 내보내기).
+  EC2 에 파일을 따로 전송할 필요 없이 배포만 하면 `$APP_DIR/scripts/` 에 들어온다
 - 받기 전 기존 `main.py` 를 `main.py.bak.<날짜시각>` 으로 자동 백업 (롤백용 명령도 종료 시 출력)
 - 운영 디렉터리 `/home/ubuntu/kca-api/` 는 git 저장소가 아님 (DB·로그·venv·코드가 한 폴더에 평면 배치)
 

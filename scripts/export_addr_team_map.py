@@ -31,14 +31,36 @@ API_DIR_CANDIDATES = [
 
 
 def resolve_paths(api_dir):
+    """inspection.py 와 legal_dong_code.tsv 를 각각 탐색.
+
+    배포본에는 deploy_backend.sh 가 코드만 복사하고 tsv 는 런타임 자산으로 남아 있어
+    두 파일이 다른 위치에 있을 수 있으므로 따로 찾는다.
+    """
     global INSPECTION_PY, LEGAL_DONG_TSV
-    for d in ([api_dir] if api_dir else API_DIR_CANDIDATES):
-        insp = os.path.join(d, 'routers', 'inspection.py')
-        tsv = os.path.join(d, 'legal_dong_code.tsv')
-        if os.path.exists(insp) and os.path.exists(tsv):
-            INSPECTION_PY, LEGAL_DONG_TSV = insp, tsv
-            return d
-    sys.exit('inspection.py / legal_dong_code.tsv 를 찾지 못했습니다. --api-dir 로 지정하세요.')
+    # --api-dir 를 명시했으면 폴백하지 않는다 (오타를 조용히 넘기지 않도록)
+    cands = [api_dir] if api_dir else API_DIR_CANDIDATES
+
+    for d in cands:
+        p = os.path.join(d, 'routers', 'inspection.py')
+        if os.path.exists(p):
+            INSPECTION_PY = p
+            break
+    else:
+        sys.exit('inspection.py 를 찾지 못했습니다. --api-dir 로 지정하세요.\n'
+                 f'  탐색: {", ".join(cands)}')
+
+    for d in cands:
+        p = os.path.join(d, 'legal_dong_code.tsv')
+        if os.path.exists(p):
+            LEGAL_DONG_TSV = p
+            break
+    else:
+        sys.exit('legal_dong_code.tsv 를 찾지 못했습니다.\n'
+                 f'  탐색: {", ".join(cands)}\n'
+                 '  저장소 yolov8/api/legal_dong_code.tsv 를 해당 위치에 두거나 '
+                 '--api-dir 로 지정하세요.')
+
+    return os.path.dirname(os.path.dirname(INSPECTION_PY))
 
 WANT_CONSTS = [
     'INSP_ORG_MAP', 'INSP_TEAM_TO_HDQT', '_VALID_SKT_HDQTS', '_ACCESS_TO_SKT_HDQT',
