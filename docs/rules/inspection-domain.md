@@ -129,3 +129,32 @@ Row 4: [장비 Type별 불합격 현황 테이블] | [장비 Type별 불합격 �
 - ERP 대상 확정(confirm) 시 **백그라운드 자동 실행**
 - Kakao API 10개 동시 요청, 500개 배치
 - 수동 좌표 갱신 버튼도 유지
+
+## 주소 → 품질개선팀 매핑
+로직 전부 `yolov8/api/routers/inspection.py`. 진입점 `_hdqt_from_addr(addr, known_hdqt, learned_map)` → `(access담당, 품질개선팀)`.
+
+판정 순서
+1. `_normalize_addr` — 선행 괄호 제거, `_ADDR_ABBR_MAP`으로 축약 시도명 확장(`서울 `→`서울특별시 `)
+2. 서울이면 `_SEOUL_GU_TO_TEAM` 확정 규칙표 (긴 키워드 우선, `_SEOUL_GU_SORTED`)
+3. 비서울은 주소에서 `[가-힣]+(?:시|군|구|읍|면|동)` 토큰 추출 → 후보키 생성
+   - 복합키: `시 구` / `시 군` / `시 동` / `군 읍` / `군 면` / `구 동`
+   - 단일키: 시·군·구·읍·면 (**단독 `동`은 전국 중복이라 제외**)
+4. 후보키를 길이 내림차순으로 `learned_map` 조회 → 첫 히트 팀 확정
+5. `INSP_TEAM_TO_HDQT`로 본부 역산, `_normalize_skt_hdqt`로 SKT본부 정규화
+6. 미히트 시 기존 본부 유지 + 팀 공란
+
+learned_map (읍면동 단위 매핑의 실체)
+- `_learn_addr_map_from_cert_db` — cert DB의 `zpwiadr`(주소) + `ons_team_nm`(실제 담당팀) 쌍을 키워드별 집계, **동일 키워드 3건 이상**일 때만 최빈 팀 채택
+- 즉 하드코딩이 아니라 운영 데이터 학습 결과 → 캐시 `{tempdir}/learned_addr_map.json`
+- `_learn_pnu_map_from_cert_db`는 PNU 앞 10자리(법정동코드) → 팀, 1건부터 채택. 주소 매핑 실패 시 fallback
+- `_DEPRECATED_TEAM_MAP` — 폐지된 구 팀명 → 현행 팀명 치환
+
+### Excel로 내보내기
+`scripts/export_addr_team_map.py` → `docs/주소-팀_매핑.xlsx`
+- 상수·함수를 inspection.py 소스에서 AST로 추출해 그대로 실행 (복사본 없음 = 드리프트 없음)
+- 시트: 안내 / 조직도 / 서울_자치구_규칙 / **법정동_팀매핑**(전국 읍면동 5,067행 + 판정근거) / 시군구_요약 / 학습_키워드_팀 / 폐지팀_치환 / 주소약어_정규화
+- 로컬 실행 시 learned_map이 없어 서울(467건)만 확정됨. **전국분은 EC2에서 실행**해야 함
+  ```
+  python export_addr_team_map.py --api-dir /home/ubuntu/kca-api -o /tmp/주소-팀_매핑.xlsx
+  ```
+  `-l` 생략 시 `{tempdir}/learned_addr_map.json` → `{tempdir}/cert_cache.db` 순으로 자동 탐색
