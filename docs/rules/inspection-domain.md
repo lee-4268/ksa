@@ -150,6 +150,10 @@ learned_map (읍면동 단위 매핑의 실체)
   `{키: {"access":…, "team":…}}` 로 써서 `_hdqt_from_addr` 가 `TypeError: unhashable type: 'dict'`
   로 죽는 버그가 있었다(2026.08 수정). 워밍업은 제거했고, 읽는 쪽은 `_normalize_learned_map` 으로
   두 형식을 모두 흡수해 기존 오염 캐시가 자동 치유된다
+- **`_NON_GEOGRAPHIC_TEAMS`(=지하철품질개선팀)는 주소 학습에서 제외.** 관할이 지리가 아니라
+  시설 유형으로 정해지는 팀이라, 역사가 몰린 동이 통째로 지하철팀으로 학습되면 그 동의 일반
+  무선국까지 오배정된다(실측: 김포시 북변동). 주소에 '지하철'이 명시된 건은
+  `_SEOUL_GU_TO_TEAM` 확정 규칙으로 계속 처리
 - `_learn_pnu_map_from_cert_db`는 PNU 앞 10자리(법정동코드) → 팀, 1건부터 채택. 주소 매핑 실패 시 fallback
 - `_DEPRECATED_TEAM_MAP` — 폐지된 구 팀명 → 현행 팀명 치환
 

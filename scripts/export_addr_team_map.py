@@ -65,6 +65,7 @@ def resolve_paths(api_dir):
 WANT_CONSTS = [
     'INSP_ORG_MAP', 'INSP_TEAM_TO_HDQT', '_VALID_SKT_HDQTS', '_ACCESS_TO_SKT_HDQT',
     '_DEPRECATED_TEAM_MAP', '_SEOUL_GU_TO_TEAM', '_SEOUL_GU_SORTED', '_ADDR_ABBR_MAP',
+    '_NON_GEOGRAPHIC_TEAMS',
 ]
 WANT_FUNCS = ['_normalize_addr', '_hdqt_from_addr', '_normalize_skt_hdqt',
               '_normalize_learned_map', '_learn_addr_map_from_cert_db']
@@ -91,8 +92,8 @@ def load_logic():
 
     ns = {
         'os': os, 'sqlite3': sqlite3,
-        'logger': types.SimpleNamespace(warning=lambda *a: None, info=lambda *a: None,
-                                        error=lambda *a: None),
+        # 학습 진행 상황을 그대로 보여준다 (제외 건수 등 확인용)
+        'logger': types.SimpleNamespace(warning=print, info=print, error=print),
         '_cert_cache_mod': types.SimpleNamespace(_cert_cache_db_path=''),
     }
     exec(''.join(chunks), ns)

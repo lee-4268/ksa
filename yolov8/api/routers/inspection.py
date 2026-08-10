@@ -501,6 +501,13 @@ def _normalize_learned_map(raw: dict) -> dict:
     return out
 
 
+# 지리가 아니라 시설 유형으로 관할이 정해지는 팀 — 주소 통계 학습에서 제외한다.
+# 역사가 몰린 동(예: 김포시 북변동)이 통째로 지하철팀으로 학습돼, 그 동의 일반 무선국까지
+# 지하철팀으로 배정되는 문제가 있었다. 주소에 '지하철'이 명시된 경우는
+# _SEOUL_GU_TO_TEAM 의 확정 규칙으로 계속 처리된다.
+_NON_GEOGRAPHIC_TEAMS: set = {'지하철품질개선팀'}
+
+
 def _learn_addr_map_from_cert_db(db_path: str = "") -> dict:
     import re
     from collections import Counter, defaultdict
@@ -519,7 +526,7 @@ def _learn_addr_map_from_cert_db(db_path: str = "") -> dict:
             'SELECT zpwiadr, ons_team_nm FROM cert WHERE zpwiadr IS NOT NULL AND zpwiadr != ""'
         ):
             team = str(ons_team or '').strip()
-            if team not in INSP_TEAM_TO_HDQT:
+            if team not in INSP_TEAM_TO_HDQT or team in _NON_GEOGRAPHIC_TEAMS:
                 continue
             normalized = _normalize_addr(str(zpwiadr))
             matches = geo_re.findall(normalized)
