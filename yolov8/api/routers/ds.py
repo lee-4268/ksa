@@ -2942,6 +2942,7 @@ async def _process_ds_job(job_id: str, job_item: dict):
         # 9.5. ds_detail.db 갱신 (검사내역서 export용 — non-fatal)
         #      (새 달 업로드 시 변경이력 초기화는 _init_upload_record_sync에서 이미 처리됨)
         try:
+            from routers.inspection import _build_ds_detail_from_zip_sync
             await asyncio.to_thread(_build_ds_detail_from_zip_sync, zip_temp_path)
             logger.info(f"DS job {job_id}: ds_detail.db 갱신 완료")
         except Exception as _de:
