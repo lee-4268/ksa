@@ -130,6 +130,17 @@ Row 4: [장비 Type별 불합격 현황 테이블] | [장비 Type별 불합격 �
 - Kakao API 10개 동시 요청, 500개 배치
 - 수동 좌표 갱신 버튼도 유지
 
+## 특이국소 관리 (서류 관리 메뉴)
+
+지하철·터널·야간출입 등 특이사항 국소를 별도 관리 — 일정 계획 시 참고 목적.
+
+- **테이블**: `special_sites` (inspection.db) — **허가번호 TEXT PRIMARY KEY** (연도 무관한 국소 속성), 유형/메모/등록자/등록일시.
+- **백엔드**: `routers/special_sites.py`. 유형 화이트리스트 `VALID_SPECIAL_TYPES = (지하철, 터널, 야간출입, 기타)`.
+- **권한**: 등록/수정/삭제/resolve = admin·manager 전용(403). 관리 화면 자체도 member 접근 시 '권한이 없습니다' ProgressDialog + 잠금 표시. 단 `GET /special-sites`(조회)는 전체 로그인 사용자 허용 — 일정 화면 행 배경색이 member에게도 보여야 하기 때문(일정 계획 차질 방지 목적).
+- **전체 대상 조회**: targets+staging 통합 테이블은 없음 — 확정 시 staging에서 삭제되어 서로소이므로 `inspection_targets ∪ inspection_targets_staging` UNION이 KCA Import 전체. 등록 검증(resolve)은 이 UNION 기준, 동일 허가번호 다연도 시 최신 연도 채택.
+- **화면**: `special_sites_screen.dart` — 유형 칩 필터 + 검색, 대상 추가(허가번호 복수 입력 → resolve 미리보기 → 일괄 등록), 삭제는 admin/manager.
+- **일정 화면 연동**: `inspection_schedule_screen.dart`가 `GET /special-sites`로 {허가번호→유형} 맵을 백그라운드 로드, 행 배경색 tint + 테이블 상단 범례 표시. 유형별 색은 `special_sites_screen.dart`의 `kSpecialSiteColors` 단일 소스 (백엔드 VALID_SPECIAL_TYPES와 함께 유지).
+
 ## 주소 → 품질개선팀 매핑
 로직 전부 `yolov8/api/routers/inspection.py`. 진입점 `_hdqt_from_addr(addr, known_hdqt, learned_map)` → `(access담당, 품질개선팀)`.
 

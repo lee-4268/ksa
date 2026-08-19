@@ -299,6 +299,14 @@ def _init_inspection_db():
     )''')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_ito_year ON inspection_target_overrides(year)')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_ito_hn ON inspection_target_overrides(year, 허가번호)')
+    conn.execute('''CREATE TABLE IF NOT EXISTS special_sites (
+        허가번호 TEXT PRIMARY KEY,
+        유형 TEXT NOT NULL,
+        메모 TEXT DEFAULT '',
+        등록자 TEXT DEFAULT '',
+        등록일시 TEXT DEFAULT ''
+    )''')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_ss_유형 ON special_sites(유형)')
     conn.execute('''CREATE TABLE IF NOT EXISTS menu_usage_log (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id TEXT,

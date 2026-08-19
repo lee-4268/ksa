@@ -68,6 +68,14 @@ Authorization: Bearer {base64url(empno:expiry:hmac_sha256)}
 | POST | `/inspection/schedule/submission-bulk` | 다중 일정 접수번호 일괄 입력 (Phase 3) |
 | GET | `/inspection/dashboard?year=` | 역할별 대시보드 집계 + 행정처분 대상(부적합 시정기한 지남) + 시정기한 도래 (Phase 5) |
 
+### 특이국소 관리
+| Method | Path | 설명 |
+|--------|------|------|
+| GET | `/special-sites` | 특이국소 목록 (+대상 정보 join, 전체 로그인 사용자) |
+| POST | `/special-sites/resolve` | 허가번호 목록 → 전체 대상(targets∪staging) 매칭 미리보기 (admin/manager) |
+| POST | `/special-sites/bulk` | 일괄 등록/upsert — 유형: 지하철/터널/야간출입/기타 (admin/manager) |
+| POST | `/special-sites/delete` | 일괄 삭제 (admin/manager) |
+
 ### 알림 (Phase 5)
 | Method | Path | 설명 |
 |--------|------|------|

@@ -9,6 +9,7 @@ import '../services/inspection_service.dart';
 import '../widgets/app_loader.dart';
 import '../widgets/progress_dialog.dart';
 import 'inspection_result_screen.dart';
+import 'special_sites_screen.dart' show kSpecialSiteColors;
 // ignore: avoid_web_libraries_in_flutter
 import 'dart:html' as html;
 import 'dart:ui_web' as ui_web;
@@ -75,6 +76,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
   final Map<String, double> _colWidths = {for (final c in _kInspCols) c.key: c.w};
   Set<String> _hiddenCols = {'부서', '연도주기', '도로명주소', '시기조정', '기준연도'};
   bool? _filterCollapsedUser; // 모바일 필터 접기 (null = 기본값: 좁은 화면에서 접힘)
+  Map<String, String> _specialSites = {}; // 허가번호 → 특이국소 유형 (행 배경색용)
 
   int _year = DateTime.now().year;
   String _sheet = 'all';
@@ -297,6 +299,14 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
 
   Future<void> _loadAll() async {
     setState(() { _loading = true; _error = null; });
+
+    // 특이국소 맵 (행 배경색용) — 백그라운드 로드, 실패해도 무시
+    _svc.getSpecialSites().then((items) {
+      if (!mounted) return;
+      setState(() => _specialSites = {
+        for (final it in items) '${it['허가번호'] ?? ''}': '${it['유형'] ?? ''}',
+      });
+    }).catchError((_) {});
 
     // Phase 5 성능: 메인 데이터 + 일정 매핑(state badge용)만 동기 대기.
     // 나머지(매트릭스/미배정/진도율)는 백그라운드로 채워 메인 화면 즉시 노출.
@@ -2621,8 +2631,32 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
       Padding(
         padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
         child: Row(
-          mainAxisAlignment: MainAxisAlignment.end,
           children: [
+            // 특이국소 범례 (등록된 유형만 표시)
+            if (_specialSites.isNotEmpty)
+              Expanded(
+                child: Wrap(
+                  spacing: 8,
+                  runSpacing: 4,
+                  children: _specialSites.values.toSet().map((t) {
+                    final c = kSpecialSiteColors[t] ?? const Color(0xFF6B7280);
+                    return Row(mainAxisSize: MainAxisSize.min, children: [
+                      Container(
+                        width: 10, height: 10,
+                        decoration: BoxDecoration(
+                          color: c.withValues(alpha: 0.25),
+                          border: Border.all(color: c),
+                          borderRadius: BorderRadius.circular(3),
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      Text(t, style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280))),
+                    ]);
+                  }).toList(),
+                ),
+              )
+            else
+              const Spacer(),
             if (_selectedLicenseNos.isNotEmpty && (_isAdmin || _isDivisionAdmin)) ...[
               _buildBulkMappingButton(),
               const SizedBox(width: 8),
@@ -3318,6 +3352,11 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     Color rowColor() {
       if (isSelected) return _primary.withValues(alpha: 0.06);
       if (hovered) return _primary.withValues(alpha: 0.04);
+      final specialType = _specialSites[licenseNo];
+      if (specialType != null) {
+        final c = kSpecialSiteColors[specialType] ?? const Color(0xFF6B7280);
+        return c.withValues(alpha: idx.isEven ? 0.12 : 0.08);
+      }
       return idx.isEven ? const Color(0xFFFAFAFA) : Colors.white;
     }
 

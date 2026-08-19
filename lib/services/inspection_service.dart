@@ -74,6 +74,52 @@ class InspectionService {
     return json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
   }
 
+  // ── 특이국소 관리 ─────────────────────────────────────────
+
+  Future<List<Map<String, dynamic>>> getSpecialSites() async {
+    final resp = await http.get(
+      Uri.parse('$_baseUrl/special-sites'),
+      headers: _headers,
+    ).timeout(_apiTimeout);
+    final body = json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+    if (resp.statusCode != 200) throw Exception(body['detail'] ?? '특이국소 조회 실패');
+    return List<Map<String, dynamic>>.from(body['items'] ?? []);
+  }
+
+  Future<Map<String, dynamic>> resolveSpecialSites(List<String> licenses) async {
+    final resp = await http.post(
+      Uri.parse('$_baseUrl/special-sites/resolve'),
+      headers: _headers,
+      body: json.encode({'licenses': licenses}),
+    ).timeout(_apiTimeout);
+    final body = json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+    if (resp.statusCode != 200) throw Exception(body['detail'] ?? '대상 조회 실패');
+    return body;
+  }
+
+  Future<Map<String, dynamic>> bulkRegisterSpecialSites(
+      List<String> licenses, String type, String memo) async {
+    final resp = await http.post(
+      Uri.parse('$_baseUrl/special-sites/bulk'),
+      headers: _headers,
+      body: json.encode({'licenses': licenses, '유형': type, '메모': memo}),
+    ).timeout(_apiTimeout);
+    final body = json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+    if (resp.statusCode != 200) throw Exception(body['detail'] ?? '특이국소 등록 실패');
+    return body;
+  }
+
+  Future<int> deleteSpecialSites(List<String> licenses) async {
+    final resp = await http.post(
+      Uri.parse('$_baseUrl/special-sites/delete'),
+      headers: _headers,
+      body: json.encode({'licenses': licenses}),
+    ).timeout(_apiTimeout);
+    final body = json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+    if (resp.statusCode != 200) throw Exception(body['detail'] ?? '특이국소 삭제 실패');
+    return (body['deleted'] as num?)?.toInt() ?? 0;
+  }
+
   // ── Staging (필터링 후 확정) ─────────────────────────────
 
   Future<List<Map<String, dynamic>>> getStagingColumnValues(int year, String col) async {

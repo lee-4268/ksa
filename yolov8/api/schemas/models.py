@@ -498,6 +498,16 @@ class InadequateUpdateReq(BaseModel):
     심의차수: str = ""
 
 
+class SpecialSiteLicensesReq(BaseModel):
+    licenses: list[str]
+
+
+class SpecialSiteBulkReq(BaseModel):
+    licenses: list[str]
+    유형: str  # 지하철/터널/야간출입/기타
+    메모: str = ""
+
+
 class MappingOverrideReq(BaseModel):
     year: int
     허가번호: str
