@@ -305,13 +305,17 @@ final result = await showDialog<bool>(
       _MenuItem('무선국 Map', Icons.map_outlined, const Color(0xFF3B82F6), description: '수검 대상 지도 및 관리'),
       _MenuItem('무선국 일정', Icons.event_note_outlined, const Color(0xFF10B981), description: '수검 일정 조회 및 통계'),
       _MenuItem('무선국 실적', Icons.bar_chart_outlined, const Color(0xFFE53935), description: '본부별 수검 실적 현황'),
-      _MenuItem('DS 전산파일', Icons.storage_outlined, const Color(0xFF8B5CF6), description: 'DS 전산파일 조회 및 분석'),
-      _MenuItem('DS 병합', Icons.merge_outlined, const Color(0xFFF59E0B), description: 'DS 전산파일 병합 처리'),
-      _MenuItem('통시코드 매칭', Icons.sync_alt_outlined, const Color(0xFFEF4444), description: '호출명칭 검색 및 비교'),
-      _MenuItem('설치 확인서', Icons.description_outlined, const Color(0xFF06B6D4), description: '설치 확인서 조회 및 관리'),
+      if (auth.isAdmin) ...[
+        // 전산파일·서류관리 상세 메뉴는 admin/manager 전용 (member 비노출)
+        _MenuItem('DS 전산파일', Icons.storage_outlined, const Color(0xFF8B5CF6), description: 'DS 전산파일 조회 및 분석'),
+        _MenuItem('DS 병합', Icons.merge_outlined, const Color(0xFFF59E0B), description: 'DS 전산파일 병합 처리'),
+        _MenuItem('통시코드 매칭', Icons.sync_alt_outlined, const Color(0xFFEF4444), description: '호출명칭 검색 및 비교'),
+        _MenuItem('설치 확인서', Icons.description_outlined, const Color(0xFF06B6D4), description: '설치 확인서 조회 및 관리'),
+      ],
       _MenuItem('Opark DB 사진', Icons.image_search_outlined, const Color(0xFF06B6D4), description: '시설물 점검 사진 검색'),
       _MenuItem('전산 비교', Icons.compare_outlined, const Color(0xFF2563EB), description: 'ERP·DS 전산 데이터 비교'),
-      _MenuItem('부적합 관리', Icons.warning_amber_outlined, const Color(0xFFE53935), description: '부적합 현황 관리'),
+      if (auth.isAdmin)
+        _MenuItem('부적합 관리', Icons.warning_amber_outlined, const Color(0xFFE53935), description: '부적합 현황 관리'),
       _MenuItem('특이국소 관리', Icons.fmd_bad_outlined, const Color(0xFF8E24AA), description: '지하철·터널·야간출입 국소 관리'),
       if (auth.isAdmin)
         _MenuItem('변경 신고', Icons.swap_horiz_outlined, const Color(0xFFE53935), description: '변경 신고 파일 비교 및 적용'),
@@ -662,9 +666,10 @@ final result = await showDialog<bool>(
                     // 홈 (단일)
                     _buildSidebarMenuItem(items, 0, inDrawer),
                     const SizedBox(height: 4),
-                    // 아코디언 그룹
+                    // 아코디언 그룹 (권한상 자식이 하나도 없으면 그룹 자체 숨김)
                     for (final group in _menuGroups)
-                      _buildSidebarAccordion(group, items, inDrawer),
+                      if (group.childTitles.any((t) => items.any((m) => m.title == t)))
+                        _buildSidebarAccordion(group, items, inDrawer),
                     // 대상 관리, 관리자 (조건부 단일 메뉴)
                     for (var i = 0; i < items.length; i++)
                       if (!_menuGroups.any((g) => g.childTitles.contains(items[i].title)) && items[i].title != '홈')
