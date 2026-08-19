@@ -8,6 +8,19 @@ import '../widgets/progress_dialog.dart';
 /// 특이국소 유형 목록 (백엔드 VALID_SPECIAL_TYPES와 동일하게 유지)
 const kSpecialSiteTypes = ['지하철', '터널', '야간출입', '기타'];
 
+/// 본부 → 팀 목록 매핑 (부적합 관리 화면과 동일)
+const _orgMap = <String, List<String>>{
+  '강남': ['강남품질개선팀', '관악품질개선팀', '강동품질개선팀', '양천품질개선팀'],
+  '강북': ['용산품질개선팀', '종로품질개선팀', '성수품질개선팀', '수유품질개선팀', '지하철품질개선팀'],
+  '인천': ['북인천품질개선팀', '남인천품질개선팀', '부천품질개선팀', '일산품질개선팀', '남양주품질개선팀', '의정부품질개선팀'],
+  '경기': ['하남품질개선팀', '평택품질개선팀', '수원품질개선팀', '분당품질개선팀', '용인품질개선팀'],
+  '경남': ['동부산품질개선팀', '서부산품질개선팀', '김해품질개선팀', '울산품질개선팀', '진주품질개선팀', '창원품질개선팀'],
+  '경북': ['동대구품질개선팀', '서대구품질개선팀', '경산품질개선팀', '포항품질개선팀', '안동품질개선팀', '구미품질개선팀'],
+  '서부': ['서광주품질개선팀', '동광주품질개선팀', '목포품질개선팀', '순천품질개선팀', '제주품질개선팀', '전주품질개선팀', '군산품질개선팀'],
+  '충청': ['대전품질개선팀', '천안품질개선팀', '세종품질개선팀', '서산품질개선팀', '서청주품질개선팀', '동청주품질개선팀', '충주품질개선팀'],
+  '강원': ['원주품질개선팀', '춘천품질개선팀', '강릉품질개선팀'],
+};
+
 /// 유형별 표시 색 — 일정 화면 행 배경색에서도 재사용
 const kSpecialSiteColors = <String, Color>{
   '지하철': Color(0xFF8E24AA),
@@ -34,6 +47,8 @@ class _SpecialSitesScreenState extends State<SpecialSitesScreen> {
   bool _loading = false;
   List<Map<String, dynamic>> _items = [];
   String _typeFilter = '';
+  String _regionFilter = '';
+  String _teamFilter = '';
   String _search = '';
   final _searchCtrl = TextEditingController();
   final Set<String> _checked = {};
@@ -44,6 +59,18 @@ class _SpecialSitesScreenState extends State<SpecialSitesScreen> {
     final auth = context.read<AuthService>();
     _svc = InspectionService()..setAuthToken(auth.authToken);
     _canManage = auth.isAdmin; // admin + manager
+    // 본인 본부/팀 자동 필터 (superAdmin 제외 — 부적합 관리와 동일 패턴)
+    if (!auth.isSuperAdmin) {
+      final myRegion = auth.currentDivisionShortName ?? '';
+      if (myRegion.isNotEmpty && _orgMap.containsKey(myRegion)) {
+        _regionFilter = myRegion;
+        final myTeam = (auth.userTeam ?? '').trim();
+        if (!auth.isDivisionAdmin &&
+            (_orgMap[myRegion]?.contains(myTeam) ?? false)) {
+          _teamFilter = myTeam;
+        }
+      }
+    }
     if (_canManage) {
       _load();
     } else {
@@ -84,6 +111,13 @@ class _SpecialSitesScreenState extends State<SpecialSitesScreen> {
   List<Map<String, dynamic>> get _filtered {
     return _items.where((it) {
       if (_typeFilter.isNotEmpty && it['유형'] != _typeFilter) return false;
+      if (_regionFilter.isNotEmpty) {
+        final region = '${it['access담당'] ?? it['skt본부'] ?? ''}'.trim();
+        if (!region.startsWith(_regionFilter)) return false;
+      }
+      if (_teamFilter.isNotEmpty && '${it['품질개선팀'] ?? ''}'.trim() != _teamFilter) {
+        return false;
+      }
       if (_search.isNotEmpty) {
         final terms = _search
             .split(RegExp(r'[,\s]+'))
@@ -387,6 +421,34 @@ class _SpecialSitesScreenState extends State<SpecialSitesScreen> {
     }
   }
 
+  Widget _filterDropdown(String label, String value, List<String> options,
+      ValueChanged<String> onChanged) {
+    return Container(
+      height: 38,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border.all(color: Colors.grey.shade300),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<String>(
+          isDense: true,
+          icon: const Icon(Icons.arrow_drop_down, color: _primary, size: 20),
+          dropdownColor: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          style: const TextStyle(color: Colors.black87, fontSize: 13),
+          value: value,
+          items: [
+            DropdownMenuItem(value: '', child: Text('$label 전체')),
+            ...options.map((o) => DropdownMenuItem(value: o, child: Text(o))),
+          ],
+          onChanged: (v) => onChanged(v ?? ''),
+        ),
+      ),
+    );
+  }
+
   Widget _typeChip(String type) {
     final color = kSpecialSiteColors[type] ?? const Color(0xFF6B7280);
     return Container(
@@ -483,6 +545,16 @@ class _SpecialSitesScreenState extends State<SpecialSitesScreen> {
                     showCheckmark: false,
                   );
                 }),
+                _filterDropdown('본부', _regionFilter, _orgMap.keys.toList(),
+                    (v) => setState(() {
+                      _regionFilter = v;
+                      _teamFilter = '';
+                    })),
+                _filterDropdown(
+                    '팀',
+                    _teamFilter,
+                    _regionFilter.isEmpty ? const [] : (_orgMap[_regionFilter] ?? []),
+                    (v) => setState(() => _teamFilter = v)),
                 SizedBox(
                   width: isNarrow ? double.infinity : 260,
                   height: 38,
