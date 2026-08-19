@@ -584,7 +584,29 @@ class _SpecialSitesScreenState extends State<SpecialSitesScreen> {
                                 columnSpacing: 20,
                                 horizontalMargin: 14,
                                 columns: [
-                                  if (_canManage) const DataColumn(label: Text('')),
+                                  if (_canManage)
+                                    DataColumn(label: Builder(builder: (_) {
+                                      final nos = rows
+                                          .map((it) => '${it['허가번호'] ?? ''}')
+                                          .toSet();
+                                      final allChecked = nos.isNotEmpty &&
+                                          nos.every(_checked.contains);
+                                      final someChecked =
+                                          nos.any(_checked.contains);
+                                      return Checkbox(
+                                        tristate: true,
+                                        value: allChecked
+                                            ? true
+                                            : (someChecked ? null : false),
+                                        onChanged: (_) => setState(() {
+                                          if (allChecked) {
+                                            _checked.removeAll(nos);
+                                          } else {
+                                            _checked.addAll(nos);
+                                          }
+                                        }),
+                                      );
+                                    })),
                                   const DataColumn(label: Text('유형')),
                                   const DataColumn(label: Text('허가번호')),
                                   const DataColumn(label: Text('호출명칭')),
