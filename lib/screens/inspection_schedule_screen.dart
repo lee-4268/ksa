@@ -695,6 +695,101 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
 
   // ── Schedule 등록 ───────────────────────────────────────
 
+  /// 동일국소(통시→공대→pnu) 미배정 대상 확인.
+  /// 반환: 함께 배정할 추가 item 목록 (빈 리스트 = 추가 없음, null = 사용자가 등록 취소)
+  Future<List<Map<String, dynamic>>?> _checkCoLocated(List<String> licenses) async {
+    Map<String, dynamic> res;
+    try {
+      res = await _svc.coLocatedCheck(_year, licenses);
+    } catch (_) {
+      return const []; // 체크 실패가 등록을 막지는 않음
+    }
+    final groups = List<Map<String, dynamic>>.from(res['groups'] ?? []);
+    final unscheduled = <Map<String, dynamic>>[];
+    for (final g in groups) {
+      for (final o in List<Map<String, dynamic>>.from(g['others'] ?? [])) {
+        if (o['scheduled'] != true) {
+          unscheduled.add({...o, '_gkind': g['kind'], '_gvalue': g['value']});
+        }
+      }
+    }
+    if (unscheduled.isEmpty || !mounted) return const [];
+
+    final choice = await showDialog<String>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Colors.white,
+        surfaceTintColor: Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Row(children: [
+          const Icon(Icons.warning_amber_rounded, size: 20, color: Color(0xFFB45309)),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text('같은 국소에 미배정 대상 ${unscheduled.length}건',
+                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+          ),
+        ]),
+        content: SizedBox(
+          width: 440,
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text('선택한 국소와 동일한 장소에 아직 배정되지 않은 대상이 있습니다.\n함께 배정하지 않으면 누락될 수 있습니다.',
+                style: TextStyle(fontSize: 13, height: 1.5, color: Color(0xFF374151))),
+            const SizedBox(height: 10),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 220),
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFFF7ED),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: const Color(0xFFFED7AA)),
+                ),
+                child: SingleChildScrollView(
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    ...unscheduled.take(15).map((o) => Padding(
+                          padding: const EdgeInsets.only(bottom: 4),
+                          child: Text(
+                            '• ${o['호출명칭'] ?? ''} (${o['허가번호'] ?? ''}) — ${o['_gkind']} ${o['_gvalue']}',
+                            style: const TextStyle(fontSize: 12.5),
+                          ),
+                        )),
+                    if (unscheduled.length > 15)
+                      Text('…외 ${unscheduled.length - 15}건',
+                          style: const TextStyle(fontSize: 12.5, color: Colors.black54)),
+                  ]),
+                ),
+              ),
+            ),
+          ]),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, 'cancel'),
+            child: const Text('취소', style: TextStyle(color: Color(0xFF9CA3AF))),
+          ),
+          OutlinedButton(
+            onPressed: () => Navigator.pop(ctx, 'only'),
+            child: const Text('선택한 것만 배정'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF1F2937),
+              foregroundColor: Colors.white,
+              elevation: 0,
+            ),
+            onPressed: () => Navigator.pop(ctx, 'together'),
+            child: Text('${unscheduled.length}건 함께 배정'),
+          ),
+        ],
+      ),
+    );
+    if (choice == null || choice == 'cancel') return null;
+    if (choice == 'together') return unscheduled;
+    return const [];
+  }
+
   Future<void> _showScheduleDialog(Map<String, dynamic> item) async {
     final existingWeek = _extractScheduleWeek(item);
     final (initMonth, initWeek) = _parseWeekParts(existingWeek);
@@ -789,23 +884,33 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     inspectorCtrl.dispose();
     if (result == null) return;
     final weekStr = '${result['month']}월 ${result['week']}주차';
+
+    // 동일국소 미배정 대상 확인 (함께 배정 제안)
+    final extra = await _checkCoLocated(['${item['허가번호'] ?? ''}']);
+    if (extra == null) return; // 사용자가 등록 자체를 취소
+    final saveItems = [item, ...extra];
+
     try {
-      await _withLoading('일정 저장 중...', () => _svc.upsertSchedule({
-        'year': _year,
-        '허가번호': item['허가번호'],
-        '호출명칭': item['호출명칭'] ?? '',
-        '분기': item['분기'] ?? '',
-        'skt본부': item['skt본부'] ?? '',
-        'access담당': item['access담당'] ?? '',
-        '품질개선팀': item['품질개선팀'] ?? '',
-        '수검예정주차': weekStr,
-        '수검시작일': '',
-        '수검종료일': '',
-        '지역': '',
-        '검사관': result['검사관'] ?? '',
-        '조': result['조'] ?? '',
-      }));
-      await _showSuccess('일정이 저장되었습니다.');
+      await _withLoading('일정 저장 중...', () => Future.wait(
+        saveItems.map((it) => _svc.upsertSchedule({
+          'year': _year,
+          '허가번호': it['허가번호'],
+          '호출명칭': it['호출명칭'] ?? '',
+          '분기': it['분기'] ?? '',
+          'skt본부': it['skt본부'] ?? '',
+          'access담당': it['access담당'] ?? '',
+          '품질개선팀': it['품질개선팀'] ?? '',
+          '수검예정주차': weekStr,
+          '수검시작일': '',
+          '수검종료일': '',
+          '지역': '',
+          '검사관': result['검사관'] ?? '',
+          '조': result['조'] ?? '',
+        })),
+      ));
+      await _showSuccess(extra.isEmpty
+          ? '일정이 저장되었습니다.'
+          : '일정이 저장되었습니다. (동일국소 ${extra.length}건 함께 배정)');
       await Future.wait([
         _loadData(),
         if (_detailLicenseNo != null) _loadDetail(_detailLicenseNo!),
@@ -1291,10 +1396,16 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     final inspector = result['검사관'] as String? ?? '';
     final jo = result['조'] as String? ?? '';
 
+    // 동일국소 미배정 대상 확인 (함께 배정 제안)
+    final extra = await _checkCoLocated(
+        targetItems.map((it) => '${it['허가번호'] ?? ''}').toList());
+    if (extra == null) return; // 사용자가 등록 자체를 취소
+    final allItems = [...targetItems, ...extra];
+
     int successCount = 0, failCount = 0;
-    await _withLoading('일정 등록 중... (${targetItems.length}건)', () async {
+    await _withLoading('일정 등록 중... (${allItems.length}건)', () async {
       final results = await Future.wait(
-        targetItems.map((item) => _svc.upsertSchedule({
+        allItems.map((item) => _svc.upsertSchedule({
           'year': _year,
           '허가번호': item['허가번호'],
           '호출명칭': item['호출명칭'] ?? '',

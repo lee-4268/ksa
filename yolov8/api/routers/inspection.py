@@ -47,7 +47,7 @@ import core.cert_cache as _cert_cache_mod
 from core.cert_cache import _cert_cache_load
 from core.s3 import get_s3_client
 from core.db import get_dynamodb_resource
-from schemas.models import MappingOverrideReq
+from schemas.models import MappingOverrideReq, CoLocatedCheckReq
 
 try:
     import psutil
@@ -3805,6 +3805,82 @@ async def inspection_schedule_upsert(request: Request, req: InspectionScheduleRe
     await asyncio.to_thread(_record_audit_log_sync, "inspection_schedule_upsert", "inspection_schedule", pk, empno)
     asyncio.create_task(asyncio.to_thread(_geocode_target_sync, req.year, req.허가번호))
     return {"success": True}
+
+@router.post("/inspection/schedule/co-located-check")
+async def inspection_schedule_co_located_check(request: Request, req: CoLocatedCheckReq):
+    """일정 등록 전 동일국소 대상 확인 — 같은 장소의 다른 허가번호 놓침 방지.
+
+    동일국소 판정 키(우선순위): 통시 → 공대 → pnu_code.
+    주소 문자열 비교는 지번/도로명 혼재로 부정확하여 사용하지 않음.
+    2026 데이터 기준 3단 키로 전체 대상 100% 커버 (전부없음 0건).
+    """
+    await _verify_auth(request)
+    licenses = [str(x).strip() for x in req.licenses if str(x).strip()]
+    if not licenses:
+        raise HTTPException(400, "허가번호를 입력하세요")
+    if len(licenses) > 500:
+        raise HTTPException(400, "한 번에 최대 500건까지 확인 가능합니다")
+
+    _GKEY = ("CASE WHEN TRIM(COALESCE(통시,''))!='' THEN '통시:'||TRIM(통시) "
+             "WHEN TRIM(COALESCE(공대,''))!='' THEN '공대:'||TRIM(공대) "
+             "WHEN TRIM(COALESCE(pnu_code,''))!='' THEN 'pnu:'||TRIM(pnu_code) "
+             "ELSE '' END")
+
+    def _check():
+        c = sqlite3.connect(_INSP_DB, timeout=60)
+        c.row_factory = sqlite3.Row
+        try:
+            ph = ','.join('?' * len(licenses))
+            sel = c.execute(
+                f'SELECT DISTINCT 허가번호, {_GKEY} AS gkey FROM inspection_targets '
+                f'WHERE year=? AND 허가번호 IN ({ph})',
+                [req.year] + licenses).fetchall()
+            sel_by_key: dict = {}
+            for r in sel:
+                if r['gkey']:
+                    sel_by_key.setdefault(r['gkey'], []).append(r['허가번호'])
+            keys = sorted(sel_by_key)
+            if not keys:
+                return {"groups": [], "unscheduled_others": 0}
+            kph = ','.join('?' * len(keys))
+            rows = c.execute(
+                f'''SELECT t.허가번호, t.호출명칭, t.분기, t.skt본부, t.access담당,
+                           t.품질개선팀, t.설치장소, {_GKEY} AS gkey,
+                           CASE WHEN s.pk IS NULL THEN 0 ELSE 1 END AS scheduled
+                    FROM inspection_targets t
+                    LEFT JOIN inspection_schedules s ON s.pk = ?||'#'||t.허가번호
+                    WHERE t.year=? AND {_GKEY} IN ({kph})
+                      AND t.허가번호 NOT IN ({ph})''',
+                [str(req.year), req.year] + keys + licenses).fetchall()
+        finally:
+            c.close()
+        groups: dict = {}
+        seen: set = set()
+        unscheduled = 0
+        for r in rows:
+            no = r['허가번호']
+            if no in seen:
+                continue
+            seen.add(no)
+            g = groups.setdefault(r['gkey'], {
+                "kind": r['gkey'].split(':', 1)[0],
+                "value": r['gkey'].split(':', 1)[1],
+                "selected": sel_by_key.get(r['gkey'], []),
+                "others": [],
+            })
+            g["others"].append({
+                "허가번호": no, "호출명칭": r['호출명칭'] or '',
+                "분기": r['분기'] or '', "skt본부": r['skt본부'] or '',
+                "access담당": r['access담당'] or '', "품질개선팀": r['품질개선팀'] or '',
+                "설치장소": r['설치장소'] or '', "scheduled": bool(r['scheduled']),
+            })
+            if not r['scheduled']:
+                unscheduled += 1
+        return {"groups": list(groups.values()), "unscheduled_others": unscheduled}
+
+    result = await asyncio.to_thread(_check)
+    return {"success": True, **result}
+
 
 @router.delete("/inspection/schedule/{year}/{license_no}")
 async def inspection_schedule_delete(year: int, license_no: str, request: Request):

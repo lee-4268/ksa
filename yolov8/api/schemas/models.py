@@ -498,6 +498,11 @@ class InadequateUpdateReq(BaseModel):
     심의차수: str = ""
 
 
+class CoLocatedCheckReq(BaseModel):
+    year: int
+    licenses: list[str]
+
+
 class SpecialSiteLicensesReq(BaseModel):
     licenses: list[str]
 

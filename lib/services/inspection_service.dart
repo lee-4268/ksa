@@ -284,6 +284,17 @@ class InspectionService {
 
   // ── Schedule ─────────────────────────────────────────────
 
+  Future<Map<String, dynamic>> coLocatedCheck(int year, List<String> licenses) async {
+    final resp = await http.post(
+      Uri.parse('$_baseUrl/inspection/schedule/co-located-check'),
+      headers: _headers,
+      body: json.encode({'year': year, 'licenses': licenses}),
+    ).timeout(_apiTimeout);
+    final body = json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+    if (resp.statusCode != 200) throw Exception(body['detail'] ?? '동일국소 확인 실패');
+    return body;
+  }
+
   Future<void> upsertSchedule(Map<String, dynamic> data) async {
     final resp = await http.post(
       Uri.parse('$_baseUrl/inspection/schedule'),
