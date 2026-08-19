@@ -144,6 +144,7 @@ Row 4: [장비 Type별 불합격 현황 테이블] | [장비 Type별 불합격 �
 - **테이블**: `special_sites` (inspection.db) — **허가번호 TEXT PRIMARY KEY** (연도 무관한 국소 속성), 유형/메모/등록자/등록일시.
 - **백엔드**: `routers/special_sites.py`. 유형 화이트리스트 `VALID_SPECIAL_TYPES = (지하철, 터널, 야간출입, 기타)`.
 - **권한**: 등록/수정/삭제/resolve = admin·manager 전용(403). 관리 화면 자체도 member 접근 시 '권한이 없습니다' ProgressDialog + 잠금 표시. 단 `GET /special-sites`(조회)는 전체 로그인 사용자 허용 — 일정 화면 행 배경색이 member에게도 보여야 하기 때문(일정 계획 차질 방지 목적).
+- **본부 격리**: admin = 전 본부 CRUD, manager = 본인 본부 대상만 (`_caller_allowed_access_list` — 일정 upsert와 동일 정책). resolve/bulk 는 타본부 건을 `denied`로 분리 반환, delete 는 타본부·미확인 건 거부. 화면에서도 manager 는 타본부 행 체크박스 비활성.
 - **전체 대상 조회**: targets+staging 통합 테이블은 없음 — 확정 시 staging에서 삭제되어 서로소이므로 `inspection_targets ∪ inspection_targets_staging` UNION이 KCA Import 전체. 등록 검증(resolve)은 이 UNION 기준, 동일 허가번호 다연도 시 최신 연도 채택.
 - **화면**: `special_sites_screen.dart` — 유형 칩 필터 + 검색, 대상 추가(허가번호 복수 입력 → resolve 미리보기 → 일괄 등록), 삭제는 admin/manager.
 - **일정 화면 연동**: `inspection_schedule_screen.dart`가 `GET /special-sites`로 {허가번호→유형} 맵을 백그라운드 로드, 행 배경색 tint + 테이블 상단 범례 표시. 유형별 색은 `special_sites_screen.dart`의 `kSpecialSiteColors` 단일 소스 (백엔드 VALID_SPECIAL_TYPES와 함께 유지).

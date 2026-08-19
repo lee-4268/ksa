@@ -18,7 +18,9 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Request
 
-from core.auth import _verify_auth, _require_role
+from core.auth import (
+    _verify_auth, _require_role, _get_user_role_sync, _caller_allowed_access_list,
+)
 from core.config import _INSP_DB
 from schemas.models import SpecialSiteBulkReq, SpecialSiteLicensesReq
 
@@ -30,6 +32,33 @@ VALID_SPECIAL_TYPES = ('지하철', '터널', '야간출입', '기타')
 
 def _norm_license(v: str) -> str:
     return re.sub(r'[\s\-]', '', str(v or ''))
+
+
+async def _require_manager_scope(request: Request):
+    """admin/manager 게이트 + 본부 격리 범위 반환.
+
+    반환: (empno, allowed) — allowed None = 무제약(admin),
+    리스트 = manager 본인 본부의 access담당 값 목록 (일정 upsert와 동일 정책).
+    """
+    empno = await _require_role(request, {"admin", "manager"})
+    role = await asyncio.to_thread(_get_user_role_sync, empno)
+    if role == 'admin':
+        return empno, None
+    allowed = await asyncio.to_thread(_caller_allowed_access_list, empno)
+    return empno, allowed
+
+
+def _split_by_access(matched: list[dict], allowed: list[str] | None):
+    """resolve 결과를 (허용, 타본부 거부) 로 분리. allowed None 이면 전부 허용."""
+    if allowed is None:
+        return matched, []
+    ok, denied = [], []
+    for m in matched:
+        if (m.get('access담당') or '') in allowed:
+            ok.append(m)
+        else:
+            denied.append(m)
+    return ok, denied
 
 
 def _resolve_targets_sync(licenses: list[str]) -> dict:
@@ -99,20 +128,28 @@ async def list_special_sites(request: Request):
 
 @router.post("/special-sites/resolve")
 async def resolve_special_sites(req: SpecialSiteLicensesReq, request: Request):
-    """등록 전 미리보기 — 허가번호가 전체 대상(targets∪staging)에 있는지 확인."""
-    await _require_role(request, {"admin", "manager"})
+    """등록 전 미리보기 — 허가번호가 전체 대상(targets∪staging)에 있는지 확인.
+
+    manager 는 본인 본부 대상만 허용 — 타본부 건은 denied 로 분리 반환.
+    """
+    _, allowed = await _require_manager_scope(request)
     if not req.licenses:
         raise HTTPException(400, "허가번호를 입력하세요")
     if len(req.licenses) > 1000:
         raise HTTPException(400, "한 번에 최대 1000건까지 조회 가능합니다")
     result = await asyncio.to_thread(_resolve_targets_sync, req.licenses)
-    return {"success": True, **result}
+    ok, denied = _split_by_access(result['matched'], allowed)
+    return {"success": True, "matched": ok, "denied": denied,
+            "not_found": result['not_found']}
 
 
 @router.post("/special-sites/bulk")
 async def bulk_register_special_sites(req: SpecialSiteBulkReq, request: Request):
-    """특이국소 일괄 등록 — 이미 등록된 허가번호는 유형/메모 갱신(upsert)."""
-    empno = await _require_role(request, {"admin", "manager"})
+    """특이국소 일괄 등록 — 이미 등록된 허가번호는 유형/메모 갱신(upsert).
+
+    manager 는 본인 본부 대상만 등록 가능 (타본부 건은 denied 로 제외).
+    """
+    empno, allowed = await _require_manager_scope(request)
     if req.유형 not in VALID_SPECIAL_TYPES:
         raise HTTPException(400, f"유효하지 않은 유형: {req.유형} (가능: {', '.join(VALID_SPECIAL_TYPES)})")
     if not req.licenses:
@@ -121,8 +158,11 @@ async def bulk_register_special_sites(req: SpecialSiteBulkReq, request: Request)
         raise HTTPException(400, "한 번에 최대 1000건까지 등록 가능합니다")
 
     resolved = await asyncio.to_thread(_resolve_targets_sync, req.licenses)
-    matched_nos = [m['허가번호'] for m in resolved['matched']]
+    ok, denied = _split_by_access(resolved['matched'], allowed)
+    matched_nos = [m['허가번호'] for m in ok]
     if not matched_nos:
+        if denied:
+            raise HTTPException(403, "본인 본부의 대상만 등록할 수 있습니다")
         raise HTTPException(400, "전체 수검 대상에서 일치하는 허가번호가 없습니다")
 
     now = datetime.now(timezone.utc).isoformat()
@@ -143,21 +183,35 @@ async def bulk_register_special_sites(req: SpecialSiteBulkReq, request: Request)
             conn.close()
 
     await asyncio.to_thread(_insert)
-    logger.info(f"특이국소 일괄 등록: {len(matched_nos)}건 ({req.유형}) by {empno}")
+    logger.info(f"특이국소 일괄 등록: {len(matched_nos)}건 ({req.유형}) by {empno}"
+                + (f", 타본부 제외 {len(denied)}건" if denied else ""))
     return {
         "success": True,
         "registered": len(matched_nos),
+        "denied": [m['허가번호'] for m in denied],
         "not_found": resolved['not_found'],
     }
 
 
 @router.post("/special-sites/delete")
 async def delete_special_sites(req: SpecialSiteLicensesReq, request: Request):
-    """특이국소 일괄 삭제."""
-    empno = await _require_role(request, {"admin", "manager"})
+    """특이국소 일괄 삭제 — manager 는 본인 본부 대상만."""
+    empno, allowed = await _require_manager_scope(request)
     clean = [c for c in ({_norm_license(x) for x in req.licenses}) if c]
     if not clean:
         raise HTTPException(400, "허가번호를 입력하세요")
+
+    denied_count = 0
+    if allowed is not None:
+        # manager: 대상의 access담당으로 본부 확인 — 본인 본부 건만 삭제 허용.
+        # 대상 테이블에서 확인 불가한 허가번호(과년도 제외 등)도 안전하게 거부.
+        resolved = await asyncio.to_thread(_resolve_targets_sync, clean)
+        ok, denied = _split_by_access(resolved['matched'], allowed)
+        ok_nos = {m['허가번호'] for m in ok}
+        denied_count = len(clean) - len(ok_nos)
+        clean = [c for c in clean if c in ok_nos]
+        if not clean:
+            raise HTTPException(403, "본인 본부의 대상만 삭제할 수 있습니다")
 
     def _delete():
         conn = sqlite3.connect(_INSP_DB, timeout=60)
@@ -170,5 +224,6 @@ async def delete_special_sites(req: SpecialSiteLicensesReq, request: Request):
             conn.close()
 
     deleted = await asyncio.to_thread(_delete)
-    logger.info(f"특이국소 삭제: {deleted}건 by {empno}")
-    return {"success": True, "deleted": deleted}
+    logger.info(f"특이국소 삭제: {deleted}건 by {empno}"
+                + (f", 타본부 거부 {denied_count}건" if denied_count else ""))
+    return {"success": True, "deleted": deleted, "denied": denied_count}

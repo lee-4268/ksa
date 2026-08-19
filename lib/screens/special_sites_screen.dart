@@ -49,6 +49,15 @@ class _SpecialSitesScreenState extends State<SpecialSitesScreen> {
 
   late final InspectionService _svc;
   late final bool _canManage;
+  late final bool _isSuperAdmin;
+  late final String _myRegion;
+
+  /// manager 는 본인 본부 행만 선택/삭제 가능 (백엔드에도 동일 격리 존재)
+  bool _canTouchRow(Map<String, dynamic> it) {
+    if (_isSuperAdmin) return true;
+    if (_myRegion.isEmpty) return false;
+    return '${it['access담당'] ?? it['skt본부'] ?? ''}'.trim().startsWith(_myRegion);
+  }
 
   bool _loading = false;
   List<Map<String, dynamic>> _items = [];
@@ -65,6 +74,8 @@ class _SpecialSitesScreenState extends State<SpecialSitesScreen> {
     final auth = context.read<AuthService>();
     _svc = InspectionService()..setAuthToken(auth.authToken);
     _canManage = auth.isAdmin; // admin + manager
+    _isSuperAdmin = auth.isSuperAdmin;
+    _myRegion = auth.currentDivisionShortName ?? '';
     // 본인 본부/팀 자동 필터 (superAdmin 제외 — 부적합 관리와 동일 패턴)
     if (!auth.isSuperAdmin) {
       final myRegion = auth.currentDivisionShortName ?? '';
@@ -148,6 +159,7 @@ class _SpecialSitesScreenState extends State<SpecialSitesScreen> {
     final memoCtrl = TextEditingController();
     final inputCtrl = TextEditingController();
     List<Map<String, dynamic>> matched = [];
+    List<Map<String, dynamic>> denied = [];
     List<String> notFound = [];
     bool resolving = false;
     bool resolved = false;
@@ -169,6 +181,7 @@ class _SpecialSitesScreenState extends State<SpecialSitesScreen> {
             final res = await _svc.resolveSpecialSites(licenses);
             setDlg(() {
               matched = List<Map<String, dynamic>>.from(res['matched'] ?? []);
+              denied = List<Map<String, dynamic>>.from(res['denied'] ?? []);
               notFound = List<String>.from(res['not_found'] ?? []);
               resolved = true;
             });
@@ -302,11 +315,12 @@ class _SpecialSitesScreenState extends State<SpecialSitesScreen> {
                       Expanded(
                         child: Text(
                           '매칭 ${matched.length}건'
+                          '${denied.isNotEmpty ? ' · 타본부 ${denied.length}건' : ''}'
                           '${notFound.isNotEmpty ? ' · 미발견 ${notFound.length}건' : ''}',
                           style: TextStyle(
                               fontSize: 13,
                               fontWeight: FontWeight.w600,
-                              color: notFound.isEmpty
+                              color: (notFound.isEmpty && denied.isEmpty)
                                   ? const Color(0xFF1A8754)
                                   : const Color(0xFFB45309)),
                         ),
@@ -336,6 +350,26 @@ class _SpecialSitesScreenState extends State<SpecialSitesScreen> {
                                         '${m['호출명칭'] ?? ''} · ${m['access담당'] ?? ''} ${m['품질개선팀'] ?? ''}',
                                         style: const TextStyle(
                                             fontSize: 12.5, color: Color(0xFF6B7280)),
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                  ]),
+                                )),
+                            ...denied.map((m) => Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 12, vertical: 6),
+                                  child: Row(children: [
+                                    SizedBox(
+                                        width: 130,
+                                        child: Text('${m['허가번호'] ?? ''}',
+                                            style: const TextStyle(
+                                                fontSize: 12.5,
+                                                color: Color(0xFFB45309)))),
+                                    Expanded(
+                                      child: Text(
+                                        '타본부(${m['access담당'] ?? ''}) — 권한 없음',
+                                        style: const TextStyle(
+                                            fontSize: 12.5, color: Color(0xFFB45309)),
                                         overflow: TextOverflow.ellipsis,
                                       ),
                                     ),
@@ -724,6 +758,7 @@ class _SpecialSitesScreenState extends State<SpecialSitesScreen> {
                                   if (_canManage)
                                     DataColumn(label: Builder(builder: (_) {
                                       final nos = rows
+                                          .where(_canTouchRow)
                                           .map((it) => '${it['허가번호'] ?? ''}')
                                           .toSet();
                                       final allChecked = nos.isNotEmpty &&
@@ -761,13 +796,15 @@ class _SpecialSitesScreenState extends State<SpecialSitesScreen> {
                                       if (_canManage)
                                         DataCell(Checkbox(
                                           value: _checked.contains(no),
-                                          onChanged: (v) => setState(() {
-                                            if (v == true) {
-                                              _checked.add(no);
-                                            } else {
-                                              _checked.remove(no);
-                                            }
-                                          }),
+                                          onChanged: _canTouchRow(it)
+                                              ? (v) => setState(() {
+                                                    if (v == true) {
+                                                      _checked.add(no);
+                                                    } else {
+                                                      _checked.remove(no);
+                                                    }
+                                                  })
+                                              : null, // 타본부 행 — 선택 불가
                                         )),
                                       DataCell(_typeChip('${it['유형'] ?? ''}')),
                                       DataCell(Text(no)),
