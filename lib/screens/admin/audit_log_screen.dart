@@ -146,8 +146,15 @@ class _AuditLogScreenState extends State<AuditLogScreen> {
                   style: const TextStyle(color: Colors.black87, fontSize: 13),
                   items: const [
                     DropdownMenuItem(value: null, child: Text('전체')),
-                    DropdownMenuItem(value: 'User', child: Text('사용자')),
+                    DropdownMenuItem(value: 'User', child: Text('사용자 (로그인·권한)')),
+                    DropdownMenuItem(value: 'inspection_schedule', child: Text('수검 일정')),
+                    DropdownMenuItem(value: 'inspection_result', child: Text('수검 결과')),
+                    DropdownMenuItem(value: 'inspection_targets', child: Text('수검 대상')),
                     DropdownMenuItem(value: 'DSData', child: Text('DS 데이터')),
+                    DropdownMenuItem(value: 'ds_detail', child: Text('DS 상세')),
+                    DropdownMenuItem(value: 'ds_변경이력', child: Text('DS 변경이력')),
+                    DropdownMenuItem(value: 'callname_sample', child: Text('호출명칭 샘플')),
+                    DropdownMenuItem(value: 'sisl_photo', child: Text('시설물 사진')),
                   ],
                   onChanged: (value) {
                     setState(() => _filterEntityType = value);

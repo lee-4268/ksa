@@ -249,6 +249,21 @@ async def admin_list_users(
         raise HTTPException(status_code=500, detail="서버 내부 오류")
 
 
+# 감사 로그 entityType 목록 — DynamoDB 파티션 키라서 API 로 열거할 수 없다.
+# _record_audit_log_sync 를 호출하는 곳이 늘어나면 여기에도 추가해야 '전체' 조회에 잡힌다.
+_AUDIT_ENTITY_TYPES = (
+    "User",                 # 로그인/로그아웃, 역할 변경
+    "DSData",
+    "callname_sample",
+    "ds_변경이력",
+    "ds_detail",
+    "inspection_schedule",
+    "inspection_result",
+    "inspection_targets",
+    "sisl_photo",
+)
+
+
 @router.get("/admin/audit-logs")
 async def admin_list_audit_logs(
     request: Request,
@@ -262,28 +277,38 @@ async def admin_list_audit_logs(
         dynamodb = get_dynamodb_resource()
         table = dynamodb.Table(DYNAMODB_TABLES["audit_logs"])
 
-        if entityType:
+        def _query_one(et: str) -> list:
+            """entityType 파티션 하나를 최신순으로 조회."""
             params: dict = {
                 "KeyConditionExpression": "entityType = :et",
-                "ExpressionAttributeValues": {":et": entityType},
-                "ScanIndexForward": False,
+                "ExpressionAttributeValues": {":et": et},
+                "ScanIndexForward": False,   # sk = timestamp#uuid → 최신 우선
                 "Limit": limit,
             }
             if action:
                 params["FilterExpression"] = "#a = :a"
                 params["ExpressionAttributeNames"] = {"#a": "action"}
                 params["ExpressionAttributeValues"][":a"] = action
-            resp = await asyncio.to_thread(lambda: table.query(**params))
+            return table.query(**params).get("Items", [])
+
+        if entityType:
+            items = await asyncio.to_thread(_query_one, entityType)
         else:
-            params = {"Limit": limit}
-            if action:
-                params["FilterExpression"] = "#a = :a"
-                params["ExpressionAttributeNames"] = {"#a": "action"}
-                params["ExpressionAttributeValues"] = {":a": action}
-            resp = await asyncio.to_thread(lambda: table.scan(**params))
+            # 예전에는 scan(Limit=n) 이었는데, scan 은 파티션 순서대로 앞에서 n건을
+            # 잘라오기 때문에 특정 entityType(예: inspection_result) 만 화면을 채우고
+            # 다른 유형은 아예 보이지 않았다. 파티션별로 최신 n건을 받아 병합한다.
+            def _query_all() -> list:
+                merged: list = []
+                for et in _AUDIT_ENTITY_TYPES:
+                    try:
+                        merged.extend(_query_one(et))
+                    except Exception as qe:
+                        logger.warning(f"audit query 실패 entityType={et}: {qe}")
+                return merged
+            items = await asyncio.to_thread(_query_all)
 
         logs = []
-        for item in resp.get("Items", []):
+        for item in items:
             sk = item.get("sk", "")
             log_id = sk.split("#")[-1] if "#" in sk else sk
             logs.append({
@@ -300,7 +325,7 @@ async def admin_list_audit_logs(
                 "canRollback": item.get("canRollback", False),
             })
         logs.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
-        return {"success": True, "logs": logs}
+        return {"success": True, "logs": logs[:limit]}
     except Exception as e:
         logger.error(f"audit logs list failed: {e}")
         raise HTTPException(status_code=500, detail="서버 내부 오류")

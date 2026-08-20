@@ -134,6 +134,40 @@ DS 조회/업로드 시 4개 본부가 같은 divisionId를 공유하며, xlsx�
 - 서버 재시작 시 초기화
 - **my-list 조회 시 is_dev=True이면 팀 무관 전체 조회** (실계정은 AND 조건)
 
+## 감사 로그 (kca-audit-logs)
+
+- PK: `entityType` / SK: `{timestamp}#{uuid}` / TTL 90일
+- 기록: `core/auth.py` `_record_audit_log_sync(action, entity_type, entity_id, user_id, details)`
+  — `details` 는 item 에 그대로 merge 되므로 상세는 `{"newData": json.dumps(...)}` 형태로 넣는다
+- 조회: GET `/admin/audit-logs` (admin/manager) → 화면 `lib/screens/admin/audit_log_screen.dart`
+
+### 로그인/로그아웃 기록
+| 이벤트 | action | entityType | entityId | newData |
+|--------|--------|-----------|----------|---------|
+| SSO OTP 인증 성공 (`/auth/verify-otp`) | `LOGIN` | `User` | 사번 | method=sso_otp, ip |
+| dev-login (`/auth/dev-login`) | `LOGIN` | `User` | 사번 | method=dev_login, role, ip |
+| 로그아웃 (`/auth/logout`) | `LOGOUT` | `User` | 사번 | ip |
+
+- 로그아웃은 `_blacklist_token()` **전에** `_verify_token()` 으로 사번을 뽑는다 (블랙리스트 등록
+  후에는 None 이 반환됨). 만료·손상 토큰도 로그아웃은 성공시켜야 하므로 `_verify_auth` 를 쓰지 않는다.
+- 로그인 실패(비번 오류·OTP 오류)는 기록하지 않는다. 필요해지면 별도 논의.
+
+### ⚠️ action 문자열은 대문자 enum 이름과 일치시켜야 한다
+프론트가 `AuditAction.values.firstWhere((a) => a.name.toUpperCase() == json['action'], orElse: update)`
+로 파싱한다. 일치하지 않으면 **전부 '수정'으로 표시된다** — `inspection_result_upsert` 가
+화면에 `inspection_result - 수정` 으로 보이던 원인. 유효값은
+`CREATE/UPDATE/DELETE/APPROVE/REJECT/SUSPEND/RESTORE/ROLLBACK/LOGIN/LOGOUT`.
+기존 소문자 snake_case action 들은 표시만 부정확하고 데이터는 남아 있다.
+
+### entityType 목록은 코드에 하드코딩되어 있다
+`entityType` 이 파티션 키라서 DynamoDB API 로 열거할 수 없다. `/admin/audit-logs` 의 '전체'
+조회는 `routers/users.py` `_AUDIT_ENTITY_TYPES` 를 순회하며 파티션별 최신 N건을 query 해서
+병합·정렬한다(과거에는 `scan(Limit=n)` 이라 특정 유형만 화면을 채웠다).
+**새 entityType 으로 감사 로그를 남기면 `_AUDIT_ENTITY_TYPES` 와 화면 드롭다운에도 추가할 것.**
+
+현재 등록된 entityType: `User`, `inspection_schedule`, `inspection_result`,
+`inspection_targets`, `DSData`, `ds_detail`, `ds_변경이력`, `callname_sample`, `sisl_photo`
+
 ## 휴면계정 관리
 
 ### 배치 스케줄러

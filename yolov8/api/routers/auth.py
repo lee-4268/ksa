@@ -22,6 +22,7 @@ auth - 인증/로그인/OTP/토큰 갱신 엔드포인트
 """
 
 import asyncio
+import json
 import logging
 import time as _time_mod
 
@@ -30,17 +31,17 @@ from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import JSONResponse
 
 from core.auth import (
-    _verify_auth, _generate_token, _blacklist_token,
+    _verify_auth, _verify_token, _generate_token, _blacklist_token,
     _get_user_role_info, _ensure_user_in_roles_sync, _update_last_login,
     _get_user_phone_sync, _mask_phone, _normalize_empno,
-    _pre_auth_store, _sms_rate_store, _dev_users,
+    _pre_auth_store, _sms_rate_store, _dev_users, _record_audit_log_sync,
 )
 from core.config import (
     SSO_LOGIN_URL, SSO_VERIFY_URL, DEV_LOGIN_ENABLED, IS_PROD, VALID_ROLES,
     AUTH_TOKEN_EXPIRY,
 )
 from core.sso_verify import verify_access_token
-from core.utils import _check_rate_limit
+from core.utils import _check_rate_limit, _get_client_ip
 from schemas.models import LoginRequest, OtpVerifyRequest, OtpResendRequest, DevLoginRequest
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -201,6 +202,12 @@ async def auth_verify_otp(req: OtpVerifyRequest, request: Request):
     _pre_auth_store.pop(req.pre_auth_token, None)
     token = _generate_token(empno)
     await asyncio.to_thread(_update_last_login, empno)
+    # 감사 로그 — 프론트가 action 문자열을 AuditAction enum 이름과 대조하므로
+    # 반드시 "LOGIN"/"LOGOUT" 대문자로 남긴다(불일치 시 화면에 '수정'으로 표시됨).
+    await asyncio.to_thread(
+        _record_audit_log_sync, "LOGIN", "User", empno, empno,
+        {"newData": json.dumps({"method": "sso_otp", "ip": _get_client_ip(request)},
+                               ensure_ascii=False)})
     logger.info(f"OTP 인증 성공: empno={empno}")
     return JSONResponse(
         status_code=200,
@@ -302,8 +309,15 @@ async def auth_resend_otp(req: OtpResendRequest, request: Request):
 async def auth_logout(request: Request):
     """로그아웃: 현재 토큰을 서버 블랙리스트에 등록하여 즉시 무효화."""
     token = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+    # empno 는 블랙리스트 등록 전에 뽑는다(등록 후에는 _verify_token 이 None 을 반환).
+    # 만료·손상 토큰으로도 로그아웃은 성공시켜야 하므로 _verify_auth 를 쓰지 않는다.
+    empno = _verify_token(token) if token else None
     if token:
         _blacklist_token(token)
+    if empno:
+        await asyncio.to_thread(
+            _record_audit_log_sync, "LOGOUT", "User", empno, empno,
+            {"newData": json.dumps({"ip": _get_client_ip(request)}, ensure_ascii=False)})
     return {"success": True}
 
 
@@ -316,7 +330,7 @@ async def auth_refresh_token(request: Request):
 
 
 @router.post("/dev-login")
-async def dev_login(req: DevLoginRequest):
+async def dev_login(req: DevLoginRequest, request: Request):
     """개발용 테스트 로그인 (SSO 인증 없이 임의 계정으로 토큰 발급).
 
     DEV_LOGIN_ENABLED=1 환경변수 + APP_ENV!=production 일 때만 허용.
@@ -334,6 +348,10 @@ async def dev_login(req: DevLoginRequest):
         "team": req.team, "role": req.role,
     }
     logger.info(f"[DEV-LOGIN] empno={req.empno}, name={req.name}, region={req.region}, role={req.role}")
+    await asyncio.to_thread(
+        _record_audit_log_sync, "LOGIN", "User", req.empno, req.empno,
+        {"newData": json.dumps({"method": "dev_login", "role": req.role,
+                                "ip": _get_client_ip(request)}, ensure_ascii=False)})
 
     return {
         "result": "ok",
