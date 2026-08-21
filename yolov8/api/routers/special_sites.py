@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 
 import hmac as _hmac_mod
 
-from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from core.auth import (
@@ -216,25 +216,37 @@ def _ingest_cors(extra: dict = None) -> dict:
             "Vary": "Origin", **(extra or {})}
 
 
-@router.options("/special-sites/sync-ingest")
-async def sync_ingest_preflight():
-    return Response(status_code=204, headers=_ingest_cors({
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "X-Sync-Secret, Content-Type",
-        "Access-Control-Max-Age": "3600",
-    }))
-
-
 @router.post("/special-sites/sync-ingest")
-async def sync_ingest(req: SpecialSiteImportReq, request: Request):
-    """Playground 발 특이국소 수신 — hdqt 범위(또는 전체) 교체."""
-    secret = request.headers.get("X-Sync-Secret", "")
+async def sync_ingest(request: Request):
+    """Playground 발 특이국소 수신 — hdqt 범위(또는 전체) 교체.
+
+    브라우저의 CORS 사전요청(preflight)을 피하기 위해 '단순 요청' 규격을 쓴다:
+    시크릿은 헤더가 아닌 body 의 secret 필드, Content-Type 은 text/plain 으로
+    들어온다 (커스텀 헤더/JSON 타입이면 preflight 가 발생하는데, ksa 전역
+    CORSMiddleware 가 그 preflight 를 라우트 도달 전에 400 으로 거절하기 때문).
+    따라서 pydantic 대신 raw body 를 직접 파싱한다.
+    """
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"detail": "잘못된 요청 형식"}, status_code=400,
+                            headers=_ingest_cors())
+    secret = str(data.get("secret") or "")
     if not (KSA_SYNC_SECRET and secret
             and _hmac_mod.compare_digest(secret, KSA_SYNC_SECRET)):
         return JSONResponse({"detail": "unauthorized"}, status_code=401,
                             headers=_ingest_cors())
     try:
-        result = await _do_import(req.items, (req.hdqt or "").strip(),
+        req = SpecialSiteImportReq(
+            items=data.get("items") or [],
+            hdqt=str(data.get("hdqt") or ""),
+            actor=str(data.get("actor") or ""),
+        )
+    except Exception as e:
+        return JSONResponse({"detail": f"항목 형식 오류: {e}"}, status_code=400,
+                            headers=_ingest_cors())
+    try:
+        result = await _do_import(req.items, req.hdqt.strip(),
                                   req.actor or "playground")
     except ValueError as e:
         return JSONResponse({"detail": str(e)}, status_code=400,
