@@ -524,6 +524,7 @@ class SpecialSiteImportItem(BaseModel):
 class SpecialSiteImportReq(BaseModel):
     items: list[SpecialSiteImportItem]
     hdqt: str = ""  # 본부 범위 동기화 ('' = 전체 교체, admin 전용)
+    actor: str = ""  # sync-ingest 경로에서 kca측 전송자 표기 (감사 로그용)
 
 
 class MappingOverrideReq(BaseModel):

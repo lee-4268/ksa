@@ -17,7 +17,10 @@ import re
 import sqlite3
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException, Request
+import hmac as _hmac_mod
+
+from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi.responses import JSONResponse
 
 from core.auth import (
     _verify_auth, _require_role, _get_user_role_sync, _caller_allowed_access_list,
@@ -196,51 +199,67 @@ async def bulk_register_special_sites(req: SpecialSiteBulkReq, request: Request)
     }
 
 
-# Playground 동기화 설정 (브라우저 릴레이용) — 시크릿은 systemd env 로 주입
+# ── Playground → ksa 특이국소 수신 (브라우저 릴레이) ──────────
+# kca-fe 특이국소 화면의 [ksa로 전송]이 사용자 브라우저에서 직접 POST 한다.
+# (서버 간 직통·ksa→kca-be 방향 CORS 는 모두 망 정책/내부 인증 게이트로 불가)
+# 인증: X-Sync-Secret — 양쪽 env KSA_SYNC_SECRET 동일값. kca 사용자가 ksa 에
+# 로그인돼 있지 않을 수 있어 토큰 대신 시크릿을 쓰고, 본부 범위·role 강제는
+# kca-be(sync-data, 세션 인증)가 서버측에서 이미 수행한 상태로 들어온다.
+# CORS 는 이 두 라우트에만 수동 개방 (에러 응답에도 헤더 필요 — 브라우저 판독용).
 KSA_SYNC_SECRET = os.environ.get("KSA_SYNC_SECRET", "")
-PLAYGROUND_SYNC_URL = os.environ.get(
-    "PLAYGROUND_SYNC_URL", "https://playground.idcube.sktelecom.com/kca-be")
+KSA_SYNC_ALLOWED_ORIGIN = os.environ.get(
+    "KSA_SYNC_ALLOWED_ORIGIN", "https://playground.idcube.sktelecom.com")
 
 
-@router.get("/special-sites/sync-config")
-async def get_sync_config(request: Request):
-    """브라우저 릴레이 동기화 설정 — admin/manager 인증 시에만 시크릿 전달.
+def _ingest_cors(extra: dict = None) -> dict:
+    return {"Access-Control-Allow-Origin": KSA_SYNC_ALLOWED_ORIGIN,
+            "Vary": "Origin", **(extra or {})}
 
-    시크릿을 프론트 번들에 박으면 공개 노출되므로, 버튼 클릭 시점에
-    인증된 관리자에게만 내려준다.
+
+@router.options("/special-sites/sync-ingest")
+async def sync_ingest_preflight():
+    return Response(status_code=204, headers=_ingest_cors({
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Access-Control-Allow-Headers": "X-Sync-Secret, Content-Type",
+        "Access-Control-Max-Age": "3600",
+    }))
+
+
+@router.post("/special-sites/sync-ingest")
+async def sync_ingest(req: SpecialSiteImportReq, request: Request):
+    """Playground 발 특이국소 수신 — hdqt 범위(또는 전체) 교체."""
+    secret = request.headers.get("X-Sync-Secret", "")
+    if not (KSA_SYNC_SECRET and secret
+            and _hmac_mod.compare_digest(secret, KSA_SYNC_SECRET)):
+        return JSONResponse({"detail": "unauthorized"}, status_code=401,
+                            headers=_ingest_cors())
+    try:
+        result = await _do_import(req.items, (req.hdqt or "").strip(),
+                                  req.actor or "playground")
+    except ValueError as e:
+        return JSONResponse({"detail": str(e)}, status_code=400,
+                            headers=_ingest_cors())
+    logger.info(f"특이국소 sync-ingest: 범위={result['scope']}, "
+                f"신규 {result['imported']}/기존 {result['deleted']} by {req.actor or 'playground'}")
+    return JSONResponse({"success": True, **result}, headers=_ingest_cors())
+
+
+async def _do_import(items, hdqt: str, actor: str) -> dict:
+    """검증 + (본부 범위/전체) 교체 실행 — import(토큰)·sync-ingest(시크릿) 공용.
+
+    items: SpecialSiteImportItem 목록. 오류는 ValueError 로 던진다.
+    허가번호는 ksa 전체 대상(targets∪staging)과 대조하여 매칭 건만 등록,
+    원 등록자/등록일시(playground 이력)는 보존.
     """
-    await _require_role(request, {"admin", "manager"})
-    if not KSA_SYNC_SECRET:
-        raise HTTPException(503, "동기화 시크릿(KSA_SYNC_SECRET) 미설정 — 관리자에게 문의하세요")
-    return {"url": PLAYGROUND_SYNC_URL, "secret": KSA_SYNC_SECRET}
+    if not items and not hdqt:
+        raise ValueError("가져올 데이터가 없습니다")
+    if len(items) > 10000:
+        raise ValueError("한 번에 최대 10,000건까지 가져올 수 있습니다")
 
-
-@router.post("/special-sites/import")
-async def import_special_sites(req: SpecialSiteImportReq, request: Request):
-    """Playground 특이국소 가져오기 (CSV 업로드/브라우저 릴레이 동기화 공용).
-
-    - hdqt 미지정: 전체 교체 — admin 전용
-    - hdqt 지정: 해당 본부 범위만 교체 — admin 또는 그 본부 manager
-    허가번호는 ksa 전체 대상(targets∪staging)과 대조하여 매칭 건만 등록.
-    원 등록자/등록일시(playground 이력)를 그대로 보존.
-    """
-    empno, allowed = await _require_manager_scope(request)
-    hdqt = (req.hdqt or "").strip()
-    if not hdqt and allowed is not None:
-        raise HTTPException(403, "전체 동기화는 admin 전용입니다. 본부를 선택하세요")
-    if hdqt and allowed is not None:
-        if not any(a == hdqt or a.startswith(hdqt) or hdqt.startswith(a) for a in allowed):
-            raise HTTPException(403, "본인 본부만 동기화할 수 있습니다")
-
-    if not req.items and not hdqt:
-        raise HTTPException(400, "가져올 데이터가 없습니다")
-    if len(req.items) > 10000:
-        raise HTTPException(400, "한 번에 최대 10,000건까지 가져올 수 있습니다")
-
-    invalid_type = [it.허가번호 for it in req.items if it.유형 not in VALID_SPECIAL_TYPES]
-    valid_items = [it for it in req.items if it.유형 in VALID_SPECIAL_TYPES]
+    invalid_type = [it.허가번호 for it in items if it.유형 not in VALID_SPECIAL_TYPES]
+    valid_items = [it for it in items if it.유형 in VALID_SPECIAL_TYPES]
     if not valid_items and not hdqt:
-        raise HTTPException(400, f"유효한 유형이 없습니다 (가능: {', '.join(VALID_SPECIAL_TYPES)})")
+        raise ValueError(f"유효한 유형이 없습니다 (가능: {', '.join(VALID_SPECIAL_TYPES)})")
 
     resolved = await asyncio.to_thread(
         _resolve_targets_sync, [it.허가번호 for it in valid_items])
@@ -261,9 +280,9 @@ async def import_special_sites(req: SpecialSiteImportReq, request: Request):
             continue
         seen.add(no)
         rows.append((no, it.유형, it.메모,
-                     it.등록자 or empno, it.등록일시 or now))
+                     it.등록자 or actor, it.등록일시 or now))
     if not rows and not hdqt:
-        raise HTTPException(400, "전체 수검 대상에서 일치하는 허가번호가 없습니다")
+        raise ValueError("전체 수검 대상에서 일치하는 허가번호가 없습니다")
 
     def _replace():
         conn = sqlite3.connect(_INSP_DB, timeout=60)
@@ -294,10 +313,9 @@ async def import_special_sites(req: SpecialSiteImportReq, request: Request):
 
     deleted = await asyncio.to_thread(_replace)
     logger.info(f"특이국소 import: 범위={hdqt or '전체'}, 신규 {len(rows)}건/기존 {deleted}건 교체 "
-                f"by {empno} (미발견 {len(resolved['not_found'])}, 유형오류 {len(invalid_type)}, "
+                f"by {actor} (미발견 {len(resolved['not_found'])}, 유형오류 {len(invalid_type)}, "
                 f"범위외 {len(denied)})")
     return {
-        "success": True,
         "imported": len(rows),
         "deleted": deleted,
         "scope": hdqt or "전체",
@@ -305,6 +323,28 @@ async def import_special_sites(req: SpecialSiteImportReq, request: Request):
         "not_found": resolved['not_found'],
         "invalid_type": invalid_type,
     }
+
+
+@router.post("/special-sites/import")
+async def import_special_sites(req: SpecialSiteImportReq, request: Request):
+    """Playground 특이국소 가져오기 (CSV 업로드 등 ksa 로그인 경로).
+
+    - hdqt 미지정: 전체 교체 — admin 전용
+    - hdqt 지정: 해당 본부 범위만 교체 — admin 또는 그 본부 manager
+    """
+    empno, allowed = await _require_manager_scope(request)
+    hdqt = (req.hdqt or "").strip()
+    if not hdqt and allowed is not None:
+        raise HTTPException(403, "전체 동기화는 admin 전용입니다. 본부를 선택하세요")
+    if hdqt and allowed is not None:
+        if not any(a == hdqt or a.startswith(hdqt) or hdqt.startswith(a) for a in allowed):
+            raise HTTPException(403, "본인 본부만 동기화할 수 있습니다")
+
+    try:
+        result = await _do_import(req.items, hdqt, empno)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"success": True, **result}
 
 
 @router.post("/special-sites/delete")

@@ -121,30 +121,6 @@ class InspectionService {
     return body;
   }
 
-  Future<Map<String, dynamic>> getSpecialSiteSyncConfig() async {
-    final resp = await http.get(
-      Uri.parse('$_baseUrl/special-sites/sync-config'),
-      headers: _headers,
-    ).timeout(_apiTimeout);
-    final body = json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
-    if (resp.statusCode != 200) throw Exception(body['detail'] ?? '동기화 설정 조회 실패');
-    return body;
-  }
-
-  /// Playground(kca-be)에서 특이국소 조회 — 브라우저(사내망) 릴레이 호출.
-  /// ksa 백엔드를 거치지 않고 브라우저가 직접 사내망 내부 경로로 호출한다.
-  Future<List<Map<String, dynamic>>> fetchPlaygroundSpecialSites(
-      String baseUrl, String secret, String division) async {
-    final uri = Uri.parse('$baseUrl/special-site/sync-export')
-        .replace(queryParameters: {if (division.isNotEmpty) 'division': division});
-    final resp = await http.get(uri, headers: {'X-Sync-Secret': secret})
-        .timeout(const Duration(seconds: 8));
-    if (resp.statusCode == 401) throw Exception('SYNC_UNAUTHORIZED');
-    if (resp.statusCode != 200) throw Exception('SYNC_HTTP_${resp.statusCode}');
-    final body = json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
-    return List<Map<String, dynamic>>.from(body['items'] ?? []);
-  }
-
   Future<int> deleteSpecialSites(List<String> licenses) async {
     final resp = await http.post(
       Uri.parse('$_baseUrl/special-sites/delete'),

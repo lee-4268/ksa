@@ -75,8 +75,8 @@ Authorization: Bearer {base64url(empno:expiry:hmac_sha256)}
 | GET | `/special-sites` | 특이국소 목록 (+대상 정보 join, 전체 로그인 사용자) |
 | POST | `/special-sites/resolve` | 허가번호 목록 → 전체 대상(targets∪staging) 매칭 미리보기 (admin/manager) |
 | POST | `/special-sites/bulk` | 일괄 등록/upsert — 유형: 지하철/터널/야간출입/기타 (admin/manager) |
-| POST | `/special-sites/import` | Playground 가져오기 — hdqt 지정 시 본부 범위 교체(admin/해당 manager), 미지정 전체 교체(admin) |
-| GET | `/special-sites/sync-config` | 브라우저 릴레이 동기화 설정(kca-be URL+시크릿) — admin/manager |
+| POST | `/special-sites/import` | Playground 가져오기(CSV 등, ksa 토큰) — hdqt 지정 시 본부 범위 교체(admin/해당 manager), 미지정 전체 교체(admin) |
+| POST | `/special-sites/sync-ingest` | kca-fe [ksa로 전송] 수신 — X-Sync-Secret 인증, playground 오리진만 CORS 개방 |
 | POST | `/special-sites/delete` | 일괄 삭제 (admin/manager) |
 
 ### 알림 (Phase 5)
