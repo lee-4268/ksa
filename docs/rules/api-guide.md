@@ -68,6 +68,7 @@ Authorization: Bearer {base64url(empno:expiry:hmac_sha256)}
 | POST | `/inspection/schedule/submission-bulk` | 다중 일정 접수번호 일괄 입력 (Phase 3) |
 | GET | `/inspection/dashboard?year=` | 역할별 대시보드 집계 + 행정처분 대상(부적합 시정기한 지남) + 시정기한 도래 (Phase 5) |
 | POST | `/inspection/schedule/co-located-check` | 일정 등록 전 동일국소(통시→공대→pnu) 미배정 대상 확인 |
+| POST | `/inspection/sync-export` | kca-fe [ksa에서 가져오기] 용 일정+건별결과 JSON — body.secret 인증, 읽기 전용, 단순 요청 CORS |
 
 ### 특이국소 관리
 | Method | Path | 설명 |

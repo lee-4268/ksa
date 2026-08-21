@@ -27,7 +27,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Optional
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, Request, Response, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from core.auth import (
@@ -3880,6 +3880,82 @@ async def inspection_schedule_co_located_check(request: Request, req: CoLocatedC
 
     result = await asyncio.to_thread(_check)
     return {"success": True, **result}
+
+
+@router.post("/inspection/sync-export")
+async def inspection_sync_export(request: Request):
+    """Playground(kca-fe) [ksa에서 가져오기] 용 — 일정 + 건별 결과 JSON.
+
+    특이국소 sync-ingest 와 동일한 브라우저 릴레이 규격:
+    시크릿은 body.secret(단순 요청 — preflight 없음), CORS 응답 헤더는 이 라우트만.
+    조회 전용(읽기)이라 ksa 데이터 변경 없음.
+    """
+    from routers.special_sites import KSA_SYNC_SECRET, _ingest_cors
+    from core.utils import _check_rate_limit
+    import hmac as _hm
+
+    try:
+        _check_rate_limit(request, "sync_export", 10, 60)
+    except HTTPException as e:
+        return JSONResponse({"detail": e.detail}, status_code=e.status_code,
+                            headers=_ingest_cors())
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"detail": "잘못된 요청 형식"}, status_code=400,
+                            headers=_ingest_cors())
+    secret = str(data.get("secret") or "")
+    if not (KSA_SYNC_SECRET and secret
+            and _hm.compare_digest(secret, KSA_SYNC_SECRET)):
+        return JSONResponse({"detail": "unauthorized"}, status_code=401,
+                            headers=_ingest_cors())
+    try:
+        year = int(data.get("year") or 0)
+    except (TypeError, ValueError):
+        year = 0
+    if not year:
+        return JSONResponse({"detail": "year를 지정하세요"}, status_code=400,
+                            headers=_ingest_cors())
+    division = str(data.get("division") or "").strip()
+
+    _SCHED_COLS = ('허가번호', '호출명칭', '분기', 'skt본부', 'access담당', '품질개선팀',
+                   '수검예정주차', '수검시작일', '수검종료일', '지역', '등록자', '등록일시',
+                   '검사관', '조', 'workflow_status')
+    _RESULT_COLS = ('허가번호', 'status', '검사일', '메모', '철탑형태', '입력자', '입력일시',
+                    '진행여부', '성능서류', '불합격내용', '불합격상세', '공용화대상',
+                    '간략불합격', '기타사항', '수검자', '시스템', '기지국구분', '전파진흥원',
+                    '검사관', '주차별')
+
+    def _read():
+        c = sqlite3.connect(_INSP_DB, timeout=60)
+        c.row_factory = sqlite3.Row
+        try:
+            wheres, params = ['s.year=?'], [year]
+            if division:
+                wheres.append("s.access담당 LIKE ?")
+                params.append(division + '%')
+            where_sql = ' AND '.join(wheres)
+            sched = c.execute(
+                f"SELECT {', '.join('s.' + col for col in _SCHED_COLS)} "
+                f"FROM inspection_schedules s WHERE {where_sql}",
+                params).fetchall()
+            results = c.execute(
+                f"SELECT {', '.join('r.' + col for col in _RESULT_COLS)} "
+                f"FROM inspection_results r "
+                f"JOIN inspection_schedules s ON s.pk = r.pk "
+                f"WHERE {where_sql}",
+                params).fetchall()
+            return [dict(r) for r in sched], [dict(r) for r in results]
+        finally:
+            c.close()
+
+    schedules, results = await asyncio.to_thread(_read)
+    logger.info(f"수검 sync-export: year={year}, 본부={division or '전체'}, "
+                f"일정 {len(schedules)}건, 결과 {len(results)}건")
+    return JSONResponse({
+        "success": True, "year": year, "division": division,
+        "schedules": schedules, "results": results,
+    }, headers=_ingest_cors())
 
 
 @router.delete("/inspection/schedule/{year}/{license_no}")
