@@ -150,6 +150,115 @@ class _SpecialSitesScreenState extends State<SpecialSitesScreen> {
     return iso.length >= 10 ? iso.substring(0, 10) : iso;
   }
 
+  // ── Playground 동기화 (브라우저 릴레이, 본부 단위 교체) ──────
+  Future<void> _openSyncModal() async {
+    final regions = _orgMap.keys.toList();
+    final choice = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Colors.white,
+        surfaceTintColor: Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Playground에서 동기화',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+        content: SizedBox(
+          width: 380,
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(
+              _isSuperAdmin
+                  ? '동기화할 본부를 선택하세요. 해당 본부의 ksa 특이국소가 Playground 내용으로 교체됩니다.'
+                  : '본인 본부($_myRegion)만 동기화할 수 있습니다.',
+              style: const TextStyle(fontSize: 12.5, height: 1.5, color: Color(0xFF6B7280)),
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                ...regions.map((r) {
+                  final enabled = _isSuperAdmin || r == _myRegion;
+                  return OutlinedButton(
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: enabled ? const Color(0xFF1565C0) : Colors.grey.shade400,
+                      side: BorderSide(
+                          color: enabled ? const Color(0xFF1565C0) : Colors.grey.shade300),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                    ),
+                    onPressed: enabled ? () => Navigator.pop(ctx, r) : null,
+                    child: Text(r, style: const TextStyle(fontSize: 13)),
+                  );
+                }),
+                if (_isSuperAdmin)
+                  ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF1F2937),
+                      foregroundColor: Colors.white,
+                      elevation: 0,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                    ),
+                    onPressed: () => Navigator.pop(ctx, '__ALL__'),
+                    child: const Text('전체', style: TextStyle(fontSize: 13)),
+                  ),
+              ],
+            ),
+          ]),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('취소', style: TextStyle(color: Color(0xFF9CA3AF)))),
+        ],
+      ),
+    );
+    if (choice == null || !mounted) return;
+    await _runSync(choice == '__ALL__' ? '' : choice);
+  }
+
+  Future<void> _runSync(String hdqt) async {
+    final scopeLabel = hdqt.isEmpty ? '전체' : hdqt;
+    final dialog = ProgressDialog(context);
+    dialog.show(message: '$scopeLabel 동기화 중...');
+    List<Map<String, dynamic>> items;
+    try {
+      final cfg = await _svc.getSpecialSiteSyncConfig();
+      items = await _svc.fetchPlaygroundSpecialSites(
+          '${cfg['url']}', '${cfg['secret']}', hdqt);
+    } catch (e) {
+      final msg = '$e';
+      if (msg.contains('SYNC_UNAUTHORIZED')) {
+        await dialog.error(message: '동기화 인증 실패 — 관리자 확인이 필요합니다');
+      } else if (msg.contains('KSA_SYNC_SECRET')) {
+        await dialog.error(message: '동기화 설정이 없습니다 — 관리자에게 문의하세요');
+      } else {
+        // 타임아웃/연결 실패 — 사내망 밖(모바일 등)이 대부분
+        await dialog.error(
+            message: 'Playground 연결 실패 — 사내망(사내 PC)에서만 동기화할 수 있습니다');
+      }
+      return;
+    }
+
+    try {
+      final payload = items
+          .map((r) => {
+                '허가번호': '${r['허가번호'] ?? ''}',
+                '유형': '${r['유형'] ?? ''}',
+                '메모': '${r['메모'] ?? ''}',
+                '등록자': '${r['등록자'] ?? ''}',
+                '등록일시': '${r['등록일시'] ?? ''}',
+              })
+          .toList();
+      final res = await _svc.importSpecialSites(payload, hdqt: hdqt);
+      await dialog.complete(
+          message: '$scopeLabel ${res['imported']}건 동기화 완료 (기존 ${res['deleted']}건 교체)');
+      _checked.clear();
+      await _load();
+    } catch (e) {
+      await dialog.error(message: '동기화 실패');
+    }
+  }
+
   // ── CSV 가져오기 (Playground 특이국소 내보내기 파일 → 전체 교체) ──
   Future<void> _importCsv() async {
     final picked = await FilePicker.platform.pickFiles(
@@ -443,9 +552,7 @@ class _SpecialSitesScreenState extends State<SpecialSitesScreen> {
                 const SizedBox(width: 6),
                 Expanded(
                   child: Text(
-                    _isSuperAdmin
-                        ? '특이국소 등록·수정은 Playground Web에서 합니다. 변경 후 CSV를 내려받아 [CSV 가져오기]로 반영하세요.'
-                        : '특이국소 등록·수정은 Playground Web에서 합니다.',
+                    '특이국소 등록·수정은 Playground Web에서 합니다. 변경 후 [Playground에서 동기화]로 반영하세요 (사내망 전용).',
                     style: const TextStyle(fontSize: 11.5, color: Color(0xFF0369A1)),
                   ),
                 ),
@@ -518,6 +625,18 @@ class _SpecialSitesScreenState extends State<SpecialSitesScreen> {
                       style: const TextStyle(
                           fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF0369A1))),
                 ),
+                if (_canManage)
+                  OutlinedButton.icon(
+                    icon: const Icon(Icons.sync, size: 16),
+                    label: const Text('Playground에서 동기화', style: TextStyle(fontSize: 13)),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: const Color(0xFF1565C0),
+                      side: const BorderSide(color: Color(0xFF1565C0)),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                    ),
+                    onPressed: _openSyncModal,
+                  ),
                 if (_isSuperAdmin)
                   OutlinedButton.icon(
                     icon: const Icon(Icons.upload_file_outlined, size: 16),

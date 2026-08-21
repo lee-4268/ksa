@@ -12,6 +12,7 @@ special_sites - 특이국소 관리 (지하철/터널/야간출입 등)
 
 import asyncio
 import logging
+import os
 import re
 import sqlite3
 from datetime import datetime, timezone
@@ -195,58 +196,112 @@ async def bulk_register_special_sites(req: SpecialSiteBulkReq, request: Request)
     }
 
 
+# Playground 동기화 설정 (브라우저 릴레이용) — 시크릿은 systemd env 로 주입
+KSA_SYNC_SECRET = os.environ.get("KSA_SYNC_SECRET", "")
+PLAYGROUND_SYNC_URL = os.environ.get(
+    "PLAYGROUND_SYNC_URL", "https://playground.idcube.sktelecom.com/kca-be")
+
+
+@router.get("/special-sites/sync-config")
+async def get_sync_config(request: Request):
+    """브라우저 릴레이 동기화 설정 — admin/manager 인증 시에만 시크릿 전달.
+
+    시크릿을 프론트 번들에 박으면 공개 노출되므로, 버튼 클릭 시점에
+    인증된 관리자에게만 내려준다.
+    """
+    await _require_role(request, {"admin", "manager"})
+    if not KSA_SYNC_SECRET:
+        raise HTTPException(503, "동기화 시크릿(KSA_SYNC_SECRET) 미설정 — 관리자에게 문의하세요")
+    return {"url": PLAYGROUND_SYNC_URL, "secret": KSA_SYNC_SECRET}
+
+
 @router.post("/special-sites/import")
 async def import_special_sites(req: SpecialSiteImportReq, request: Request):
-    """Playground(kca-fe) 특이국소 CSV 가져오기 — 기존 목록 전체 교체.
+    """Playground 특이국소 가져오기 (CSV 업로드/브라우저 릴레이 동기화 공용).
 
-    전체 교체 방식이므로 admin 전용 (manager 교체 시 타본부 데이터 유실 위험).
+    - hdqt 미지정: 전체 교체 — admin 전용
+    - hdqt 지정: 해당 본부 범위만 교체 — admin 또는 그 본부 manager
     허가번호는 ksa 전체 대상(targets∪staging)과 대조하여 매칭 건만 등록.
     원 등록자/등록일시(playground 이력)를 그대로 보존.
     """
-    empno = await _require_role(request, {"admin"})
-    if not req.items:
+    empno, allowed = await _require_manager_scope(request)
+    hdqt = (req.hdqt or "").strip()
+    if not hdqt and allowed is not None:
+        raise HTTPException(403, "전체 동기화는 admin 전용입니다. 본부를 선택하세요")
+    if hdqt and allowed is not None:
+        if not any(a == hdqt or a.startswith(hdqt) or hdqt.startswith(a) for a in allowed):
+            raise HTTPException(403, "본인 본부만 동기화할 수 있습니다")
+
+    if not req.items and not hdqt:
         raise HTTPException(400, "가져올 데이터가 없습니다")
     if len(req.items) > 10000:
         raise HTTPException(400, "한 번에 최대 10,000건까지 가져올 수 있습니다")
 
     invalid_type = [it.허가번호 for it in req.items if it.유형 not in VALID_SPECIAL_TYPES]
     valid_items = [it for it in req.items if it.유형 in VALID_SPECIAL_TYPES]
-    if not valid_items:
+    if not valid_items and not hdqt:
         raise HTTPException(400, f"유효한 유형이 없습니다 (가능: {', '.join(VALID_SPECIAL_TYPES)})")
 
     resolved = await asyncio.to_thread(
         _resolve_targets_sync, [it.허가번호 for it in valid_items])
-    matched_nos = {m['허가번호'] for m in resolved['matched']}
+    matched = {m['허가번호']: m for m in resolved['matched']}
 
     now = datetime.now(timezone.utc).isoformat()
     rows = []
+    denied: list = []
     seen: set = set()
     for it in valid_items:
         no = _norm_license(it.허가번호)
-        if no in matched_nos and no not in seen:
-            seen.add(no)
-            rows.append((no, it.유형, it.메모,
-                         it.등록자 or empno, it.등록일시 or now))
-    if not rows:
+        m = matched.get(no)
+        if not m or no in seen:
+            continue
+        # 본부 범위 동기화면 그 본부 대상만 반영 (서버측 재검증)
+        if hdqt and not (m.get('access담당') or '').startswith(hdqt):
+            denied.append(no)
+            continue
+        seen.add(no)
+        rows.append((no, it.유형, it.메모,
+                     it.등록자 or empno, it.등록일시 or now))
+    if not rows and not hdqt:
         raise HTTPException(400, "전체 수검 대상에서 일치하는 허가번호가 없습니다")
 
     def _replace():
         conn = sqlite3.connect(_INSP_DB, timeout=60)
         try:
-            conn.execute('DELETE FROM special_sites')
-            conn.executemany(
-                'INSERT INTO special_sites (허가번호, 유형, 메모, 등록자, 등록일시) '
-                'VALUES (?, ?, ?, ?, ?)', rows)
+            if hdqt:
+                # 본부 범위 교체 — 기존 행 중 해당 본부 소속만 삭제.
+                # (본부 판정은 targets∪staging 조회 기준, 미확인 행은 보존)
+                ex_nos = [r[0] for r in conn.execute(
+                    'SELECT 허가번호 FROM special_sites').fetchall()]
+                ex_map = {m['허가번호']: (m.get('access담당') or '')
+                          for m in _resolve_targets_sync(ex_nos)['matched']} if ex_nos else {}
+                del_nos = [no for no in ex_nos if ex_map.get(no, '').startswith(hdqt)]
+                if del_nos:
+                    ph = ','.join('?' * len(del_nos))
+                    conn.execute(f'DELETE FROM special_sites WHERE 허가번호 IN ({ph})', del_nos)
+                deleted = len(del_nos)
+            else:
+                deleted = conn.execute('SELECT COUNT(*) FROM special_sites').fetchone()[0]
+                conn.execute('DELETE FROM special_sites')
+            if rows:
+                conn.executemany(
+                    'INSERT INTO special_sites (허가번호, 유형, 메모, 등록자, 등록일시) '
+                    'VALUES (?, ?, ?, ?, ?)', rows)
             conn.commit()
+            return deleted
         finally:
             conn.close()
 
-    await asyncio.to_thread(_replace)
-    logger.info(f"특이국소 CSV import: {len(rows)}건 전체 교체 by {empno} "
-                f"(미발견 {len(resolved['not_found'])}, 유형오류 {len(invalid_type)})")
+    deleted = await asyncio.to_thread(_replace)
+    logger.info(f"특이국소 import: 범위={hdqt or '전체'}, 신규 {len(rows)}건/기존 {deleted}건 교체 "
+                f"by {empno} (미발견 {len(resolved['not_found'])}, 유형오류 {len(invalid_type)}, "
+                f"범위외 {len(denied)})")
     return {
         "success": True,
         "imported": len(rows),
+        "deleted": deleted,
+        "scope": hdqt or "전체",
+        "denied": denied,
         "not_found": resolved['not_found'],
         "invalid_type": invalid_type,
     }

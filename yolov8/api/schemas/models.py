@@ -523,6 +523,7 @@ class SpecialSiteImportItem(BaseModel):
 
 class SpecialSiteImportReq(BaseModel):
     items: list[SpecialSiteImportItem]
+    hdqt: str = ""  # 본부 범위 동기화 ('' = 전체 교체, admin 전용)
 
 
 class MappingOverrideReq(BaseModel):

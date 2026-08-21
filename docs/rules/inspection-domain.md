@@ -147,7 +147,10 @@ Row 4: [장비 Type별 불합격 현황 테이블] | [장비 Type별 불합격 �
 - **본부 격리**: admin = 전 본부 CRUD, manager = 본인 본부 대상만 (`_caller_allowed_access_list` — 일정 upsert와 동일 정책). resolve/bulk 는 타본부 건을 `denied`로 분리 반환, delete 는 타본부·미확인 건 거부. 화면에서도 manager 는 타본부 행 체크박스 비활성.
 - **전체 대상 조회**: targets+staging 통합 테이블은 없음 — 확정 시 staging에서 삭제되어 서로소이므로 `inspection_targets ∪ inspection_targets_staging` UNION이 KCA Import 전체. 등록 검증(resolve)은 이 UNION 기준, 동일 허가번호 다연도 시 최신 연도 채택.
 - **화면**: `special_sites_screen.dart` — 유형 칩 필터 + 본부/팀 필터 + 검색, 삭제는 admin/manager(본부 격리). CSV 다운로드 버튼 없음(마스터가 Playground이므로 불필요), 상단에 'Playground Web에서 등록' 안내 배너.
-- **데이터 유입 (2026-08-21 변경)**: 수동 등록(대상 추가) 제거 → **Playground(kca-fe) 특이국소 CSV를 가져오기(전체 교체)** 방식. `POST /special-sites/import` (admin 전용 — 전체 교체라 manager 허용 시 타본부 유실 위험). CSV 헤더: 유형,허가번호,호출명칭,본부,팀,메모,등록자,등록일시,… 중 유형/허가번호 필수, 원 등록자·등록일시 보존. 허가번호는 targets∪staging 대조 후 매칭 건만 등록(미발견 리포트). 프론트 파서는 RFC4180(따옴표 내 쉼표 지원)+BOM 처리. `/special-sites/bulk`(수동 일괄 등록) API는 유지되나 UI 미노출.
+- **데이터 유입 (2026-08-21 변경)**: 수동 등록(대상 추가) 제거 — Playground(kca-be)가 마스터. 유입 경로 2가지:
+  1. **브라우저 릴레이 동기화 (기본)**: [Playground에서 동기화] 버튼 → 본부 선택 모달(admin=전 본부+전체, manager=본인 본부만 활성) → 브라우저(사내망)가 kca-be `GET /special-site/sync-export?division=`(X-Sync-Secret 헤더, 해당 라우트만 CORS 개방)를 직접 호출 → `POST /special-sites/import`(hdqt 지정)로 **본부 범위 교체**. 서버 간 직통이 양방향 모두 망 정책상 불가라 브라우저(사내망 PC) 경유 — 사내망 밖이면 8초 타임아웃 후 안내. 시크릿은 양쪽 env `KSA_SYNC_SECRET` (ksa는 `GET /special-sites/sync-config`로 admin/manager 인증 시에만 전달, 프론트 번들에 미포함).
+  2. **CSV 가져오기 (fallback, admin 전용)**: kca-fe 내보내기 CSV 업로드 → 전체 교체. RFC4180 파서+BOM 처리.
+  - import 권한: hdqt(본부) 지정 시 admin 또는 그 본부 manager / 미지정(전체 교체)은 admin 전용. 본부 범위 교체는 해당 본부 소속(targets 대조) 행만 삭제 후 삽입, 범위 외 항목은 denied 리포트. `/special-sites/bulk`(수동 일괄 등록) API는 유지되나 UI 미노출.
 - **일정 화면 연동**: `inspection_schedule_screen.dart`가 `GET /special-sites`로 {허가번호→유형} 맵을 백그라운드 로드, 행 배경색 tint + 테이블 상단 범례 표시. 유형별 색은 `special_sites_screen.dart`의 `kSpecialSiteColors` 단일 소스 (백엔드 VALID_SPECIAL_TYPES와 함께 유지).
 
 ## 주소 → 품질개선팀 매핑
