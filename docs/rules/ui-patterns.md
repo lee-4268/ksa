@@ -125,6 +125,11 @@ DashboardScreen(
 - `didUpdateWidget`: 외부 값 변화 시 내부 `_selectedRegion` 갱신
 - shortName → map key 변환: `_shortNameToKey()` (강남→gangnam 등)
 
+## 전역 텍스트 선택
+
+- `main.dart`의 MaterialApp `builder`에서 앱 전체를 `SelectionArea`로 감쌈 — 웹에서 드래그 선택/복사 가능 (Flutter 웹 기본값은 선택 불가)
+- 개별 화면에서 `SelectableText`를 중복 사용할 필요 없음. 드래그 제스처 위젯(컬럼 리사이즈 등)은 제스처 아레나에서 우선권을 가지므로 공존
+
 ## 모바일(좁은 화면) 대응 규칙
 
 - 게시글 상세 메타줄(작성자·날짜·조회수)은 고정 `Row` + `|` 구분자 금지 → `Wrap(spacing: 20, runSpacing: 8)` 사용 (좁으면 다음 줄로 흐름)

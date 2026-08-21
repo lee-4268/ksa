@@ -66,6 +66,9 @@ class MyApp extends StatelessWidget {
         title: '무선국 수검 시스템',
         debugShowCheckedModeBanner: false,
         theme: AppTheme.buildTheme(),
+        // 전역 텍스트 드래그 선택/복사 허용 (Flutter 웹 기본값은 선택 불가)
+        builder: (context, child) =>
+            child == null ? const SizedBox.shrink() : SelectionArea(child: child),
         home: const AuthWrapper(),
       ),
     );
