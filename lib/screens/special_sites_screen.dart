@@ -1,14 +1,10 @@
 import 'dart:convert';
-import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../services/auth_service.dart';
-import '../services/excel_export_stub.dart'
-    if (dart.library.io) '../services/excel_export_mobile.dart'
-    if (dart.library.html) '../services/excel_export_web.dart' as platform_export;
 import '../services/inspection_service.dart';
 import '../widgets/progress_dialog.dart';
 
@@ -330,54 +326,6 @@ class _SpecialSitesScreenState extends State<SpecialSitesScreen> {
     }
   }
 
-  Future<void> _exportCsv() async {
-    final rows = _filtered;
-    if (rows.isEmpty) {
-      final d = ProgressDialog(context);
-      await d.error(message: '내려받을 데이터가 없습니다');
-      return;
-    }
-    String esc(dynamic v) {
-      final s = '${v ?? ''}';
-      if (s.contains(',') || s.contains('"') || s.contains('\n')) {
-        return '"${s.replaceAll('"', '""')}"';
-      }
-      return s;
-    }
-
-    final buf = StringBuffer();
-    buf.writeln('유형,허가번호,호출명칭,본부,팀,설치장소,메모,등록자,등록일');
-    for (final it in rows) {
-      buf.writeln([
-        esc(it['유형']),
-        esc(it['허가번호']),
-        esc(it['호출명칭']),
-        esc(it['access담당'] ?? it['skt본부']),
-        esc(it['품질개선팀']),
-        esc(it['설치장소']),
-        esc(it['메모']),
-        esc(it['등록자']),
-        esc(_fmtDate('${it['등록일시'] ?? ''}')),
-      ].join(','));
-    }
-    // UTF-8 BOM — Excel 한글 인코딩 인식용
-    final bytes = Uint8List.fromList([0xEF, 0xBB, 0xBF, ...utf8.encode(buf.toString())]);
-    final now = DateTime.now();
-    final stamp = '${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}';
-    try {
-      await platform_export.saveExcelFile(bytes, '특이국소_$stamp.csv');
-      if (mounted) {
-        final d = ProgressDialog(context);
-        await d.complete(message: '${rows.length}건 다운로드 완료');
-      }
-    } catch (e) {
-      if (mounted) {
-        final d = ProgressDialog(context);
-        await d.error(message: '다운로드 실패');
-      }
-    }
-  }
-
   Widget _filterDropdown(String label, String value, List<String> options,
       ValueChanged<String> onChanged) {
     return Container(
@@ -482,6 +430,27 @@ class _SpecialSitesScreenState extends State<SpecialSitesScreen> {
               Text('지하철·터널·야간출입 등 일정 계획 시 참고할 국소',
                   style: TextStyle(fontSize: 11, color: Colors.grey.shade500)),
             ]),
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF0F9FF),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: const Color(0xFFBAE6FD)),
+              ),
+              child: Row(children: [
+                const Icon(Icons.info_outline, size: 14, color: Color(0xFF0369A1)),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    _isSuperAdmin
+                        ? '특이국소 등록·수정은 Playground Web에서 합니다. 변경 후 CSV를 내려받아 [CSV 가져오기]로 반영하세요.'
+                        : '특이국소 등록·수정은 Playground Web에서 합니다.',
+                    style: const TextStyle(fontSize: 11.5, color: Color(0xFF0369A1)),
+                  ),
+                ),
+              ]),
+            ),
             const SizedBox(height: 12),
             Wrap(
               spacing: 8,
@@ -548,17 +517,6 @@ class _SpecialSitesScreenState extends State<SpecialSitesScreen> {
                   child: Text('${rows.length}건',
                       style: const TextStyle(
                           fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF0369A1))),
-                ),
-                OutlinedButton.icon(
-                  icon: const Icon(Icons.file_download, size: 16),
-                  label: const Text('CSV', style: TextStyle(fontSize: 13)),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: const Color(0xFF43A047),
-                    side: const BorderSide(color: Color(0xFF43A047)),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                  ),
-                  onPressed: _exportCsv,
                 ),
                 if (_isSuperAdmin)
                   OutlinedButton.icon(
