@@ -49,6 +49,12 @@ class _LoginScreenState extends State<LoginScreen> {
   void initState() {
     super.initState();
     _checkDevLogin();
+    // 삼성패스(지문 인증) 등은 DOM 주입 시 변경 이벤트가 발생하지 않아
+    // 감지 기반 동기화가 불가 → 로그인 화면이 떠 있는 동안 주기 폴링으로 반영
+    _autofillPollTimer = Timer.periodic(
+        const Duration(milliseconds: 500), (_) {
+      if (mounted) _syncDomAutofill();
+    });
   }
 
   void _checkDevLogin() async {
@@ -65,6 +71,7 @@ class _LoginScreenState extends State<LoginScreen> {
     for (final f in _digitFocusNodes) { f.dispose(); }
     _resendTimer?.cancel();
     _autofillSyncTimer?.cancel();
+    _autofillPollTimer?.cancel();
     super.dispose();
   }
 
@@ -133,6 +140,7 @@ class _LoginScreenState extends State<LoginScreen> {
   // 한쪽 필드가 변경되면 잠시 후 반대쪽을 DOM 값으로 보정해 즉시 보이게 하고,
   // 로그인 시점에도 최종 보정한다. (수동 입력 시 반대쪽 DOM이 비어 있어 no-op)
   Timer? _autofillSyncTimer;
+  Timer? _autofillPollTimer;
 
   void _scheduleAutofillSync() {
     _autofillSyncTimer?.cancel();
