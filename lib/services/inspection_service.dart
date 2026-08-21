@@ -109,18 +109,6 @@ class InspectionService {
     return body;
   }
 
-  Future<Map<String, dynamic>> importSpecialSites(List<Map<String, dynamic>> items,
-      {String hdqt = ''}) async {
-    final resp = await http.post(
-      Uri.parse('$_baseUrl/special-sites/import'),
-      headers: _headers,
-      body: json.encode({'items': items, 'hdqt': hdqt}),
-    ).timeout(_uploadTimeout);
-    final body = json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
-    if (resp.statusCode != 200) throw Exception(body['detail'] ?? '특이국소 가져오기 실패');
-    return body;
-  }
-
   Future<int> deleteSpecialSites(List<String> licenses) async {
     final resp = await http.post(
       Uri.parse('$_baseUrl/special-sites/delete'),

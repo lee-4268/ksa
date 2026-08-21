@@ -1,6 +1,3 @@
-import 'dart:convert';
-
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -150,149 +147,281 @@ class _SpecialSitesScreenState extends State<SpecialSitesScreen> {
     return iso.length >= 10 ? iso.substring(0, 10) : iso;
   }
 
-  // ── CSV 가져오기 (Playground 특이국소 내보내기 파일 → 전체 교체) ──
-  Future<void> _importCsv() async {
-    final picked = await FilePicker.platform.pickFiles(
-        type: FileType.custom, allowedExtensions: ['csv'], withData: true);
-    if (picked == null || picked.files.isEmpty) return;
-    final bytes = picked.files.first.bytes;
-    if (bytes == null || !mounted) return;
+  // ── 대상 추가 다이얼로그 ────────────────────────────────
+  Future<void> _openAddDialog() async {
+    String type = kSpecialSiteTypes.first;
+    final memoCtrl = TextEditingController();
+    final inputCtrl = TextEditingController();
+    List<Map<String, dynamic>> matched = [];
+    List<Map<String, dynamic>> denied = [];
+    List<String> notFound = [];
+    bool resolving = false;
+    bool resolved = false;
 
-    var text = utf8.decode(bytes, allowMalformed: true);
-    if (text.startsWith('﻿')) text = text.substring(1); // BOM 제거
-    final rows = _parseCsv(text);
-    if (rows.length < 2) {
-      final d = ProgressDialog(context);
-      await d.error(message: 'CSV에 데이터가 없습니다');
-      return;
-    }
-    final header = rows.first.map((h) => h.trim()).toList();
-    final iType = header.indexOf('유형');
-    final iNo = header.indexOf('허가번호');
-    final iMemo = header.indexOf('메모');
-    final iBy = header.indexOf('등록자');
-    final iAt = header.indexOf('등록일시');
-    if (iType < 0 || iNo < 0) {
-      final d = ProgressDialog(context);
-      await d.error(message: '유형/허가번호 컬럼을 찾을 수 없습니다');
-      return;
-    }
-    String cell(List<String> r, int i) => (i >= 0 && i < r.length) ? r[i].trim() : '';
-
-    final items = <Map<String, dynamic>>[];
-    final typeCount = <String, int>{};
-    for (final r in rows.skip(1)) {
-      final no = cell(r, iNo);
-      final t = cell(r, iType);
-      if (no.isEmpty || t.isEmpty) continue;
-      items.add({
-        '허가번호': no,
-        '유형': t,
-        '메모': cell(r, iMemo),
-        '등록자': cell(r, iBy),
-        '등록일시': cell(r, iAt),
-      });
-      typeCount[t] = (typeCount[t] ?? 0) + 1;
-    }
-    if (items.isEmpty || !mounted) {
-      if (mounted) {
-        final d = ProgressDialog(context);
-        await d.error(message: '가져올 행이 없습니다');
-      }
-      return;
-    }
-
-    final summary = typeCount.entries.map((e) => '${e.key} ${e.value}건').join(' · ');
-    final ok = await showDialog<bool>(
+    await showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: Colors.white,
-        surfaceTintColor: Colors.white,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('특이국소 CSV 가져오기',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
-        content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text('CSV ${items.length}건 ($summary)', style: const TextStyle(fontSize: 13.5)),
-          const SizedBox(height: 10),
-          Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: const Color(0xFFFFF7ED),
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: const Color(0xFFFED7AA)),
-            ),
-            child: const Text('기존 특이국소 목록은 CSV 내용으로 전체 교체됩니다.',
-                style: TextStyle(fontSize: 12.5, color: Color(0xFF92400E))),
-          ),
-        ]),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('취소')),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: _primary, foregroundColor: Colors.white, elevation: 0),
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('전체 교체'),
-          ),
-        ],
-      ),
-    );
-    if (ok != true || !mounted) return;
-
-    final dialog = ProgressDialog(context);
-    dialog.show(message: '${items.length}건 가져오는 중...');
-    try {
-      final res = await _svc.importSpecialSites(items);
-      final excluded = List.from(res['not_found'] ?? []).length +
-          List.from(res['invalid_type'] ?? []).length;
-      await dialog.complete(
-          message: '${res['imported']}건 가져오기 완료'
-              '${excluded > 0 ? ' (대상 미발견 등 제외 $excluded건)' : ''}');
-      _checked.clear();
-      await _load();
-    } catch (e) {
-      await dialog.error(message: '가져오기 실패');
-    }
-  }
-
-  /// RFC4180 CSV 파서 (따옴표 필드 내 쉼표/줄바꿈/이스케이프 지원)
-  List<List<String>> _parseCsv(String text) {
-    final rows = <List<String>>[];
-    final field = StringBuffer();
-    var row = <String>[];
-    bool inQuotes = false;
-    for (int i = 0; i < text.length; i++) {
-      final c = text[i];
-      if (inQuotes) {
-        if (c == '"') {
-          if (i + 1 < text.length && text[i + 1] == '"') {
-            field.write('"');
-            i++;
-          } else {
-            inQuotes = false;
+      barrierDismissible: false,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setDlg) {
+        Future<void> doResolve() async {
+          final licenses = inputCtrl.text
+              .split(RegExp(r'[,;\s]+'))
+              .map((s) => s.trim())
+              .where((s) => s.isNotEmpty)
+              .toSet()
+              .toList();
+          if (licenses.isEmpty) return;
+          setDlg(() => resolving = true);
+          try {
+            final res = await _svc.resolveSpecialSites(licenses);
+            setDlg(() {
+              matched = List<Map<String, dynamic>>.from(res['matched'] ?? []);
+              denied = List<Map<String, dynamic>>.from(res['denied'] ?? []);
+              notFound = List<String>.from(res['not_found'] ?? []);
+              resolved = true;
+            });
+          } catch (e) {
+            if (ctx.mounted) {
+              final d = ProgressDialog(ctx);
+              await d.error(message: '대상 조회 실패');
+            }
+          } finally {
+            setDlg(() => resolving = false);
           }
-        } else {
-          field.write(c);
         }
-      } else if (c == '"') {
-        inQuotes = true;
-      } else if (c == ',') {
-        row.add(field.toString());
-        field.clear();
-      } else if (c == '\r' || c == '\n') {
-        if (c == '\r' && i + 1 < text.length && text[i + 1] == '\n') i++;
-        row.add(field.toString());
-        field.clear();
-        if (row.length > 1 || row.first.trim().isNotEmpty) rows.add(row);
-        row = <String>[];
-      } else {
-        field.write(c);
-      }
-    }
-    row.add(field.toString());
-    if (row.length > 1 || row.first.trim().isNotEmpty) rows.add(row);
-    return rows;
-  }
 
+        Future<void> doRegister() async {
+          final dialog = ProgressDialog(ctx);
+          dialog.show(message: '${matched.length}건 등록 중...');
+          try {
+            final res = await _svc.bulkRegisterSpecialSites(
+              matched.map((m) => '${m['허가번호']}').toList(),
+              type,
+              memoCtrl.text.trim(),
+            );
+            await dialog.complete(message: '${res['registered']}건 등록 완료');
+            if (ctx.mounted) Navigator.pop(ctx);
+            await _load();
+          } catch (e) {
+            await dialog.error(message: '등록 실패');
+          }
+        }
+
+        return Dialog(
+          backgroundColor: Colors.white,
+          surfaceTintColor: Colors.white,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 560, maxHeight: 640),
+            child: Padding(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(children: [
+                    const Icon(Icons.add_location_alt_outlined, size: 18, color: _primary),
+                    const SizedBox(width: 8),
+                    const Text('특이국소 대상 추가',
+                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                    const Spacer(),
+                    IconButton(
+                      icon: const Icon(Icons.close, size: 18),
+                      onPressed: () => Navigator.pop(ctx),
+                    ),
+                  ]),
+                  const SizedBox(height: 12),
+                  Row(children: [
+                    // 유형 드롭다운
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        border: Border.all(color: Colors.grey.shade300),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: DropdownButtonHideUnderline(
+                        child: DropdownButton<String>(
+                          isDense: true,
+                          icon: const Icon(Icons.arrow_drop_down, color: _primary, size: 20),
+                          dropdownColor: Colors.white,
+                          borderRadius: BorderRadius.circular(12),
+                          style: const TextStyle(color: Colors.black87, fontSize: 13),
+                          value: type,
+                          items: kSpecialSiteTypes
+                              .map((t) => DropdownMenuItem(value: t, child: Text(t)))
+                              .toList(),
+                          onChanged: (v) => setDlg(() => type = v ?? type),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: TextField(
+                        controller: memoCtrl,
+                        decoration: InputDecoration(
+                          hintText: '메모 (선택)',
+                          hintStyle: const TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)),
+                          isDense: true,
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(8),
+                            borderSide: const BorderSide(color: _border),
+                          ),
+                          contentPadding:
+                              const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                        ),
+                        style: const TextStyle(fontSize: 13),
+                      ),
+                    ),
+                  ]),
+                  const SizedBox(height: 10),
+                  TextField(
+                    controller: inputCtrl,
+                    maxLines: 4,
+                    decoration: InputDecoration(
+                      hintText: '허가번호 복수 입력 (쉼표/공백/줄바꿈 구분)\n전체 수검 대상(확정+미확정)에서 조회됩니다',
+                      hintStyle: const TextStyle(fontSize: 12.5, color: Color(0xFF9CA3AF)),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide: const BorderSide(color: _border),
+                      ),
+                      contentPadding: const EdgeInsets.all(12),
+                    ),
+                    style: const TextStyle(fontSize: 13),
+                  ),
+                  const SizedBox(height: 10),
+                  Row(children: [
+                    OutlinedButton.icon(
+                      icon: resolving
+                          ? const SizedBox(
+                              width: 14, height: 14,
+                              child: CircularProgressIndicator(strokeWidth: 2))
+                          : const Icon(Icons.search, size: 16),
+                      label: const Text('대상 조회', style: TextStyle(fontSize: 13)),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: const Color(0xFF1565C0),
+                        side: const BorderSide(color: Color(0xFF1565C0)),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
+                      onPressed: resolving ? null : doResolve,
+                    ),
+                    const SizedBox(width: 8),
+                    if (resolved)
+                      Expanded(
+                        child: Text(
+                          '매칭 ${matched.length}건'
+                          '${denied.isNotEmpty ? ' · 타본부 ${denied.length}건' : ''}'
+                          '${notFound.isNotEmpty ? ' · 미발견 ${notFound.length}건' : ''}',
+                          style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                              color: (notFound.isEmpty && denied.isEmpty)
+                                  ? const Color(0xFF1A8754)
+                                  : const Color(0xFFB45309)),
+                        ),
+                      ),
+                  ]),
+                  if (resolved) ...[
+                    const SizedBox(height: 8),
+                    Flexible(
+                      child: Container(
+                        decoration: BoxDecoration(
+                          border: Border.all(color: _border),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: ListView(
+                          shrinkWrap: true,
+                          children: [
+                            ...matched.map((m) => Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 12, vertical: 6),
+                                  child: Row(children: [
+                                    SizedBox(
+                                        width: 130,
+                                        child: Text('${m['허가번호'] ?? ''}',
+                                            style: const TextStyle(fontSize: 12.5))),
+                                    Expanded(
+                                      child: Text(
+                                        '${m['호출명칭'] ?? ''} · ${m['access담당'] ?? ''} ${m['품질개선팀'] ?? ''}',
+                                        style: const TextStyle(
+                                            fontSize: 12.5, color: Color(0xFF6B7280)),
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                  ]),
+                                )),
+                            ...denied.map((m) => Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 12, vertical: 6),
+                                  child: Row(children: [
+                                    SizedBox(
+                                        width: 130,
+                                        child: Text('${m['허가번호'] ?? ''}',
+                                            style: const TextStyle(
+                                                fontSize: 12.5,
+                                                color: Color(0xFFB45309)))),
+                                    Expanded(
+                                      child: Text(
+                                        '타본부(${m['access담당'] ?? ''}) — 권한 없음',
+                                        style: const TextStyle(
+                                            fontSize: 12.5, color: Color(0xFFB45309)),
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                  ]),
+                                )),
+                            ...notFound.map((no) => Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 12, vertical: 6),
+                                  child: Row(children: [
+                                    SizedBox(
+                                        width: 130,
+                                        child: Text(no,
+                                            style: const TextStyle(
+                                                fontSize: 12.5,
+                                                color: Color(0xFFB91C1C)))),
+                                    const Text('전체 대상에 없음',
+                                        style: TextStyle(
+                                            fontSize: 12.5, color: Color(0xFFB91C1C))),
+                                  ]),
+                                )),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 14),
+                  Row(children: [
+                    const Spacer(),
+                    TextButton(
+                      onPressed: () => Navigator.pop(ctx),
+                      child: const Text('취소',
+                          style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
+                    ),
+                    const SizedBox(width: 8),
+                    ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: _primary,
+                        foregroundColor: Colors.white,
+                        elevation: 0,
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10)),
+                        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+                      ),
+                      onPressed: matched.isEmpty ? null : doRegister,
+                      child: Text('${matched.length}건 등록',
+                          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                    ),
+                  ]),
+                ],
+              ),
+            ),
+          ),
+        );
+      }),
+    );
+    memoCtrl.dispose();
+    inputCtrl.dispose();
+  }
 
   Future<void> _deleteChecked() async {
     if (_checked.isEmpty) return;
@@ -430,25 +559,6 @@ class _SpecialSitesScreenState extends State<SpecialSitesScreen> {
               Text('지하철·터널·야간출입 등 일정 계획 시 참고할 국소',
                   style: TextStyle(fontSize: 11, color: Colors.grey.shade500)),
             ]),
-            const SizedBox(height: 8),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-              decoration: BoxDecoration(
-                color: const Color(0xFFF0F9FF),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: const Color(0xFFBAE6FD)),
-              ),
-              child: Row(children: [
-                const Icon(Icons.info_outline, size: 14, color: Color(0xFF0369A1)),
-                const SizedBox(width: 6),
-                Expanded(
-                  child: Text(
-                    '특이국소 등록·수정은 Playground Web에서 합니다. Playground 특이국소 화면의 [ksa로 전송] 버튼으로 이곳에 반영됩니다.',
-                    style: const TextStyle(fontSize: 11.5, color: Color(0xFF0369A1)),
-                  ),
-                ),
-              ]),
-            ),
             const SizedBox(height: 12),
             Wrap(
               spacing: 8,
@@ -516,17 +626,17 @@ class _SpecialSitesScreenState extends State<SpecialSitesScreen> {
                       style: const TextStyle(
                           fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF0369A1))),
                 ),
-                if (_isSuperAdmin)
+                if (_canManage)
                   OutlinedButton.icon(
-                    icon: const Icon(Icons.upload_file_outlined, size: 16),
-                    label: const Text('CSV 가져오기', style: TextStyle(fontSize: 13)),
+                    icon: const Icon(Icons.add_circle_outline, size: 16),
+                    label: const Text('대상 추가', style: TextStyle(fontSize: 13)),
                     style: OutlinedButton.styleFrom(
                       foregroundColor: const Color(0xFF7B1FA2),
                       side: const BorderSide(color: Color(0xFF7B1FA2)),
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                     ),
-                    onPressed: _importCsv,
+                    onPressed: _openAddDialog,
                   ),
                 if (_canManage && _checked.isNotEmpty)
                   OutlinedButton.icon(

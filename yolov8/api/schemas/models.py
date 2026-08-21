@@ -513,20 +513,6 @@ class SpecialSiteBulkReq(BaseModel):
     메모: str = ""
 
 
-class SpecialSiteImportItem(BaseModel):
-    허가번호: str
-    유형: str
-    메모: str = ""
-    등록자: str = ""
-    등록일시: str = ""
-
-
-class SpecialSiteImportReq(BaseModel):
-    items: list[SpecialSiteImportItem]
-    hdqt: str = ""  # 본부 범위 동기화 ('' = 전체 교체, admin 전용)
-    actor: str = ""  # sync-ingest 경로에서 kca측 전송자 표기 (감사 로그용)
-
-
 class MappingOverrideReq(BaseModel):
     year: int
     허가번호: str

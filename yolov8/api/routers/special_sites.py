@@ -27,9 +27,7 @@ from core.auth import (
 )
 from core.config import _INSP_DB
 from core.utils import _check_rate_limit
-from schemas.models import (
-    SpecialSiteBulkReq, SpecialSiteLicensesReq, SpecialSiteImportReq,
-)
+from schemas.models import SpecialSiteBulkReq, SpecialSiteLicensesReq
 
 router = APIRouter(tags=["special-sites"])
 logger = logging.getLogger(__name__)
@@ -200,13 +198,14 @@ async def bulk_register_special_sites(req: SpecialSiteBulkReq, request: Request)
     }
 
 
-# ── Playground → ksa 특이국소 수신 (브라우저 릴레이) ──────────
-# kca-fe 특이국소 화면의 [ksa로 전송]이 사용자 브라우저에서 직접 POST 한다.
-# (서버 간 직통·ksa→kca-be 방향 CORS 는 모두 망 정책/내부 인증 게이트로 불가)
-# 인증: X-Sync-Secret — 양쪽 env KSA_SYNC_SECRET 동일값. kca 사용자가 ksa 에
-# 로그인돼 있지 않을 수 있어 토큰 대신 시크릿을 쓰고, 본부 범위·role 강제는
-# kca-be(sync-data, 세션 인증)가 서버측에서 이미 수행한 상태로 들어온다.
-# CORS 는 이 두 라우트에만 수동 개방 (에러 응답에도 헤더 필요 — 브라우저 판독용).
+# ── kca-fe 미러링용 특이국소 export (브라우저 릴레이) ─────────
+# 방향 통일(2026-08-21): ksa 가 특이국소 원본(master), kca 는 조회 전용 미러.
+# kca-fe [ksa에서 가져오기]가 사용자 브라우저에서 직접 이 API 를 호출한다.
+# (서버 간 직통·브라우저의 kca-be 방향 CORS 모두 망 정책/내부 인증 게이트로 불가)
+# 브라우저 CORS 사전요청(preflight)을 피하는 '단순 요청' 규격:
+# 시크릿은 body.secret, Content-Type 은 text/plain — ksa 전역 CORSMiddleware 의
+# preflight 처리와 충돌하지 않는다. CORS 헤더는 이 라우트에만 수동 부여.
+# (KSA_SYNC_SECRET/_ingest_cors 는 inspection.py 의 sync-export/sync-photo-urls 도 공용)
 KSA_SYNC_SECRET = os.environ.get("KSA_SYNC_SECRET", "")
 KSA_SYNC_ALLOWED_ORIGIN = os.environ.get(
     "KSA_SYNC_ALLOWED_ORIGIN", "https://playground.idcube.sktelecom.com")
@@ -217,18 +216,11 @@ def _ingest_cors(extra: dict = None) -> dict:
             "Vary": "Origin", **(extra or {})}
 
 
-@router.post("/special-sites/sync-ingest")
-async def sync_ingest(request: Request):
-    """Playground 발 특이국소 수신 — hdqt 범위(또는 전체) 교체.
-
-    브라우저의 CORS 사전요청(preflight)을 피하기 위해 '단순 요청' 규격을 쓴다:
-    시크릿은 헤더가 아닌 body 의 secret 필드, Content-Type 은 text/plain 으로
-    들어온다 (커스텀 헤더/JSON 타입이면 preflight 가 발생하는데, ksa 전역
-    CORSMiddleware 가 그 preflight 를 라우트 도달 전에 400 으로 거절하기 때문).
-    따라서 pydantic 대신 raw body 를 직접 파싱한다.
-    """
+@router.post("/special-sites/sync-export")
+async def special_sites_sync_export(request: Request):
+    """특이국소 전량 JSON — kca 미러링 원본. 읽기 전용 (ksa 데이터 변경 없음)."""
     try:
-        _check_rate_limit(request, "sync_ingest", 10, 60)  # 시크릿 무차별 대입 방지
+        _check_rate_limit(request, "ss_sync_export", 10, 60)
     except HTTPException as e:
         return JSONResponse({"detail": e.detail}, status_code=e.status_code,
                             headers=_ingest_cors())
@@ -242,127 +234,10 @@ async def sync_ingest(request: Request):
             and _hmac_mod.compare_digest(secret, KSA_SYNC_SECRET)):
         return JSONResponse({"detail": "unauthorized"}, status_code=401,
                             headers=_ingest_cors())
-    try:
-        req = SpecialSiteImportReq(
-            items=data.get("items") or [],
-            hdqt=str(data.get("hdqt") or ""),
-            actor=str(data.get("actor") or ""),
-        )
-    except Exception as e:
-        return JSONResponse({"detail": f"항목 형식 오류: {e}"}, status_code=400,
-                            headers=_ingest_cors())
-    try:
-        result = await _do_import(req.items, req.hdqt.strip(),
-                                  req.actor or "playground")
-    except ValueError as e:
-        return JSONResponse({"detail": str(e)}, status_code=400,
-                            headers=_ingest_cors())
-    logger.info(f"특이국소 sync-ingest: 범위={result['scope']}, "
-                f"신규 {result['imported']}/기존 {result['deleted']} by {req.actor or 'playground'}")
-    return JSONResponse({"success": True, **result}, headers=_ingest_cors())
-
-
-async def _do_import(items, hdqt: str, actor: str) -> dict:
-    """검증 + (본부 범위/전체) 교체 실행 — import(토큰)·sync-ingest(시크릿) 공용.
-
-    items: SpecialSiteImportItem 목록. 오류는 ValueError 로 던진다.
-    허가번호는 ksa 전체 대상(targets∪staging)과 대조하여 매칭 건만 등록,
-    원 등록자/등록일시(playground 이력)는 보존.
-    """
-    if not items and not hdqt:
-        raise ValueError("가져올 데이터가 없습니다")
-    if len(items) > 10000:
-        raise ValueError("한 번에 최대 10,000건까지 가져올 수 있습니다")
-
-    invalid_type = [it.허가번호 for it in items if it.유형 not in VALID_SPECIAL_TYPES]
-    valid_items = [it for it in items if it.유형 in VALID_SPECIAL_TYPES]
-    if not valid_items and not hdqt:
-        raise ValueError(f"유효한 유형이 없습니다 (가능: {', '.join(VALID_SPECIAL_TYPES)})")
-
-    resolved = await asyncio.to_thread(
-        _resolve_targets_sync, [it.허가번호 for it in valid_items])
-    matched = {m['허가번호']: m for m in resolved['matched']}
-
-    now = datetime.now(timezone.utc).isoformat()
-    rows = []
-    denied: list = []
-    seen: set = set()
-    for it in valid_items:
-        no = _norm_license(it.허가번호)
-        m = matched.get(no)
-        if not m or no in seen:
-            continue
-        # 본부 범위 동기화면 그 본부 대상만 반영 (서버측 재검증)
-        if hdqt and not (m.get('access담당') or '').startswith(hdqt):
-            denied.append(no)
-            continue
-        seen.add(no)
-        rows.append((no, it.유형, it.메모,
-                     it.등록자 or actor, it.등록일시 or now))
-    if not rows and not hdqt:
-        raise ValueError("전체 수검 대상에서 일치하는 허가번호가 없습니다")
-
-    def _replace():
-        conn = sqlite3.connect(_INSP_DB, timeout=60)
-        try:
-            if hdqt:
-                # 본부 범위 교체 — 기존 행 중 해당 본부 소속만 삭제.
-                # (본부 판정은 targets∪staging 조회 기준, 미확인 행은 보존)
-                ex_nos = [r[0] for r in conn.execute(
-                    'SELECT 허가번호 FROM special_sites').fetchall()]
-                ex_map = {m['허가번호']: (m.get('access담당') or '')
-                          for m in _resolve_targets_sync(ex_nos)['matched']} if ex_nos else {}
-                del_nos = [no for no in ex_nos if ex_map.get(no, '').startswith(hdqt)]
-                if del_nos:
-                    ph = ','.join('?' * len(del_nos))
-                    conn.execute(f'DELETE FROM special_sites WHERE 허가번호 IN ({ph})', del_nos)
-                deleted = len(del_nos)
-            else:
-                deleted = conn.execute('SELECT COUNT(*) FROM special_sites').fetchone()[0]
-                conn.execute('DELETE FROM special_sites')
-            if rows:
-                conn.executemany(
-                    'INSERT INTO special_sites (허가번호, 유형, 메모, 등록자, 등록일시) '
-                    'VALUES (?, ?, ?, ?, ?)', rows)
-            conn.commit()
-            return deleted
-        finally:
-            conn.close()
-
-    deleted = await asyncio.to_thread(_replace)
-    logger.info(f"특이국소 import: 범위={hdqt or '전체'}, 신규 {len(rows)}건/기존 {deleted}건 교체 "
-                f"by {actor} (미발견 {len(resolved['not_found'])}, 유형오류 {len(invalid_type)}, "
-                f"범위외 {len(denied)})")
-    return {
-        "imported": len(rows),
-        "deleted": deleted,
-        "scope": hdqt or "전체",
-        "denied": denied,
-        "not_found": resolved['not_found'],
-        "invalid_type": invalid_type,
-    }
-
-
-@router.post("/special-sites/import")
-async def import_special_sites(req: SpecialSiteImportReq, request: Request):
-    """Playground 특이국소 가져오기 (CSV 업로드 등 ksa 로그인 경로).
-
-    - hdqt 미지정: 전체 교체 — admin 전용
-    - hdqt 지정: 해당 본부 범위만 교체 — admin 또는 그 본부 manager
-    """
-    empno, allowed = await _require_manager_scope(request)
-    hdqt = (req.hdqt or "").strip()
-    if not hdqt and allowed is not None:
-        raise HTTPException(403, "전체 동기화는 admin 전용입니다. 본부를 선택하세요")
-    if hdqt and allowed is not None:
-        if not any(a == hdqt or a.startswith(hdqt) or hdqt.startswith(a) for a in allowed):
-            raise HTTPException(403, "본인 본부만 동기화할 수 있습니다")
-
-    try:
-        result = await _do_import(req.items, hdqt, empno)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    return {"success": True, **result}
+    items = await asyncio.to_thread(_list_special_sites_sync)
+    logger.info(f"특이국소 sync-export: {len(items)}건 (kca 미러링)")
+    return JSONResponse({"success": True, "items": items, "total": len(items)},
+                        headers=_ingest_cors())
 
 
 @router.post("/special-sites/delete")
