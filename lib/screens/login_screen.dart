@@ -1,4 +1,6 @@
 import 'dart:async';
+// ignore: avoid_web_libraries_in_flutter
+import 'dart:html' as html;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -124,8 +126,29 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
+  // ── 서드파티 자동완성(삼성패스 등) DOM 값 동기화 ─────────────
+  // Flutter 웹은 포커스된 필드의 변경만 컨트롤러로 동기화하므로,
+  // 자동완성이 반대쪽 DOM input에 채운 값이 화면에 반영되지 않는 경우가 있다.
+  // 로그인 시점에 비어 있는 컨트롤러를 DOM 값으로 보정한다.
+  void _syncDomAutofill() {
+    String? domValue(String autocomplete) {
+      final el = html.document.querySelector("input[autocomplete='$autocomplete']");
+      return el is html.InputElement ? el.value : null;
+    }
+
+    if (_usernameController.text.trim().isEmpty) {
+      final v = domValue('username') ?? '';
+      if (v.isNotEmpty) _usernameController.text = v;
+    }
+    if (_passwordController.text.isEmpty) {
+      final v = domValue('current-password') ?? '';
+      if (v.isNotEmpty) _passwordController.text = v;
+    }
+  }
+
   // ── 로그인 처리 ────────────────────────────────────────────
   Future<void> _handleLogin() async {
+    _syncDomAutofill();
     if (!_formKey.currentState!.validate()) return;
     final auth = context.read<AuthService>();
     final success = await auth.signIn(
