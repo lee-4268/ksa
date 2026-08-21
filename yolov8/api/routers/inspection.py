@@ -3958,6 +3958,76 @@ async def inspection_sync_export(request: Request):
     }, headers=_ingest_cors())
 
 
+@router.post("/inspection/sync-photo-urls")
+async def inspection_sync_photo_urls(request: Request):
+    """kca-fe 수검 관리 화면의 특이사항 사진 표시용 — presigned URL 발급.
+
+    사진 파일을 복사하지 않고 열람 시점에 단기(10분) URL 만 발급한다.
+    sync-export 와 동일한 시크릿/단순요청 CORS 규격. 읽기 전용.
+    """
+    from routers.special_sites import KSA_SYNC_SECRET, _ingest_cors
+    from core.utils import _check_rate_limit
+    import hmac as _hm
+    import json as _j
+
+    try:
+        _check_rate_limit(request, "sync_photo_urls", 30, 60)
+    except HTTPException as e:
+        return JSONResponse({"detail": e.detail}, status_code=e.status_code,
+                            headers=_ingest_cors())
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"detail": "잘못된 요청 형식"}, status_code=400,
+                            headers=_ingest_cors())
+    secret = str(data.get("secret") or "")
+    if not (KSA_SYNC_SECRET and secret
+            and _hm.compare_digest(secret, KSA_SYNC_SECRET)):
+        return JSONResponse({"detail": "unauthorized"}, status_code=401,
+                            headers=_ingest_cors())
+    try:
+        year = int(data.get("year") or 0)
+    except (TypeError, ValueError):
+        year = 0
+    licenses = [str(x).strip() for x in (data.get("licenses") or []) if str(x).strip()]
+    if not year or not licenses:
+        return JSONResponse({"detail": "year와 licenses를 지정하세요"}, status_code=400,
+                            headers=_ingest_cors())
+    if len(licenses) > 50:
+        return JSONResponse({"detail": "한 번에 최대 50건까지 조회 가능합니다"},
+                            status_code=400, headers=_ingest_cors())
+
+    def _read_keys():
+        c = sqlite3.connect(_INSP_DB, timeout=60)
+        c.row_factory = sqlite3.Row
+        try:
+            out = {}
+            for no in licenses:
+                row = c.execute(
+                    'SELECT 사진S3키 FROM inspection_results WHERE pk=?',
+                    (f"{year}#{no}",)).fetchone()
+                try:
+                    keys = _j.loads(row['사진S3키']) if row and row['사진S3키'] else []
+                except Exception:
+                    keys = []
+                out[no] = keys[:20]
+            return out
+        finally:
+            c.close()
+
+    keymap = await asyncio.to_thread(_read_keys)
+    s3 = get_s3_client()
+    photos = {
+        no: [s3.generate_presigned_url(
+                'get_object',
+                Params={'Bucket': S3_BUCKET_NAME, 'Key': k},
+                ExpiresIn=600)
+             for k in keys]
+        for no, keys in keymap.items()
+    }
+    return JSONResponse({"success": True, "photos": photos}, headers=_ingest_cors())
+
+
 @router.delete("/inspection/schedule/{year}/{license_no}")
 async def inspection_schedule_delete(year: int, license_no: str, request: Request):
     pk = f"{year}#{license_no}"
