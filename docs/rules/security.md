@@ -297,6 +297,18 @@ Semgrep 로컬 룰팩 + Bandit 으로 전 백엔드(`yolov8/api/`, `auth/`) SAST
 
 `ci_gate --mode zero` **exit 0 (PASS)** — **effective 취약 0건 + 미판결 unmatched 0건**. 억제 174건(false-positive 161 / accepted-risk 13), 모든 항목 판결 완료. 진성 조치 1건(인사DB 자격증명 하드코딩 → 체인 제거), 나머지 175건은 전수 검증 후 과탐/수용 판결. 억제는 전부 **2026-12-16 만료**로 재검토 강제.
 
+### 2026-08-21 특이국소 sync-ingest 신설 시 보안 설계 (신규 공개 엔드포인트)
+
+`POST /special-sites/sync-ingest` — kca-fe [ksa로 전송] 브라우저 릴레이 수신용. 공개 ALB 에 노출되는 무토큰 엔드포인트라 설계 근거를 기록:
+
+| 항목 | 설계 |
+|---|---|
+| 인증 | body.secret ↔ env `KSA_SYNC_SECRET` `compare_digest` 상수시간 비교. 쿠키·토큰 무관(무상태) → CSRF 성립 불가 (본문 비밀 토큰 방식) |
+| CORS | 단순 요청 규격(기본 Content-Type, 커스텀 헤더 없음) — 전역 CORSMiddleware 허용 목록 확장 없이 동작. 응답 읽기 권한은 이 라우트에서만 playground 오리진에 수동 부여 |
+| 시크릿 유통 | kca-be `sync-data`(세션 인증, admin/manager 한정) 응답으로만 전달 — 프론트 번들/페이지 소스에 상주 노출 없음 |
+| 무차별 대입 | `_check_rate_limit` 10회/60초 |
+| 피해 한정 | 시크릿 유출 시 영향 = special_sites 테이블 덮어쓰기뿐 (PII 없음, actor 로그 기록, 재전송으로 복구). 유출 대응 = 양쪽 env 시크릿 교체 |
+
 ### 2026-07-27 정보보호담당 인프라 보안진단 (외부 진단, 통합IT보안진단시스템)
 
 정보보호담당 웹 취약점 진단(26개 항목) 결과 회신 — 24개 양호, 지적 2건.

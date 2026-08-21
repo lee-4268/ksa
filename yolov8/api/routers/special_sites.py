@@ -26,6 +26,7 @@ from core.auth import (
     _verify_auth, _require_role, _get_user_role_sync, _caller_allowed_access_list,
 )
 from core.config import _INSP_DB
+from core.utils import _check_rate_limit
 from schemas.models import (
     SpecialSiteBulkReq, SpecialSiteLicensesReq, SpecialSiteImportReq,
 )
@@ -226,6 +227,11 @@ async def sync_ingest(request: Request):
     CORSMiddleware 가 그 preflight 를 라우트 도달 전에 400 으로 거절하기 때문).
     따라서 pydantic 대신 raw body 를 직접 파싱한다.
     """
+    try:
+        _check_rate_limit(request, "sync_ingest", 10, 60)  # 시크릿 무차별 대입 방지
+    except HTTPException as e:
+        return JSONResponse({"detail": e.detail}, status_code=e.status_code,
+                            headers=_ingest_cors())
     try:
         data = await request.json()
     except Exception:
