@@ -64,6 +64,7 @@ class _LoginScreenState extends State<LoginScreen> {
     for (final c in _digitControllers) { c.dispose(); }
     for (final f in _digitFocusNodes) { f.dispose(); }
     _resendTimer?.cancel();
+    _autofillSyncTimer?.cancel();
     super.dispose();
   }
 
@@ -129,7 +130,17 @@ class _LoginScreenState extends State<LoginScreen> {
   // ── 서드파티 자동완성(삼성패스 등) DOM 값 동기화 ─────────────
   // Flutter 웹은 포커스된 필드의 변경만 컨트롤러로 동기화하므로,
   // 자동완성이 반대쪽 DOM input에 채운 값이 화면에 반영되지 않는 경우가 있다.
-  // 로그인 시점에 비어 있는 컨트롤러를 DOM 값으로 보정한다.
+  // 한쪽 필드가 변경되면 잠시 후 반대쪽을 DOM 값으로 보정해 즉시 보이게 하고,
+  // 로그인 시점에도 최종 보정한다. (수동 입력 시 반대쪽 DOM이 비어 있어 no-op)
+  Timer? _autofillSyncTimer;
+
+  void _scheduleAutofillSync() {
+    _autofillSyncTimer?.cancel();
+    _autofillSyncTimer = Timer(const Duration(milliseconds: 150), () {
+      if (mounted) _syncDomAutofill();
+    });
+  }
+
   void _syncDomAutofill() {
     String? domValue(String autocomplete) {
       final el = html.document.querySelector("input[autocomplete='$autocomplete']");
@@ -532,6 +543,7 @@ class _LoginScreenState extends State<LoginScreen> {
             keyboardType: TextInputType.text,
             textInputAction: TextInputAction.next,
             autofillHints: const [AutofillHints.username],
+            onChanged: (_) => _scheduleAutofillSync(),
             style: const TextStyle(fontSize: 14, color: _textDark),
             decoration: _inputDecoration('아이디 입력'),
             validator: (v) => (v == null || v.isEmpty) ? '아이디를 입력하세요' : null,
@@ -547,6 +559,7 @@ class _LoginScreenState extends State<LoginScreen> {
             obscuringCharacter: '•',
             textInputAction: TextInputAction.done,
             autofillHints: const [AutofillHints.password],
+            onChanged: (_) => _scheduleAutofillSync(),
             onFieldSubmitted: (_) => _handleLogin(),
             style: const TextStyle(fontSize: 14, color: _textDark),
             decoration: _inputDecoration('비밀번호 입력').copyWith(
