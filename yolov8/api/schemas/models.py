@@ -513,6 +513,18 @@ class SpecialSiteBulkReq(BaseModel):
     메모: str = ""
 
 
+class SpecialSiteImportItem(BaseModel):
+    허가번호: str
+    유형: str
+    메모: str = ""
+    등록자: str = ""
+    등록일시: str = ""
+
+
+class SpecialSiteImportReq(BaseModel):
+    items: list[SpecialSiteImportItem]
+
+
 class MappingOverrideReq(BaseModel):
     year: int
     허가번호: str

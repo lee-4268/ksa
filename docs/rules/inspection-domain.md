@@ -146,7 +146,8 @@ Row 4: [장비 Type별 불합격 현황 테이블] | [장비 Type별 불합격 �
 - **권한**: 등록/수정/삭제/resolve = admin·manager 전용(403). 관리 화면 자체도 member 접근 시 '권한이 없습니다' ProgressDialog + 잠금 표시. 단 `GET /special-sites`(조회)는 전체 로그인 사용자 허용 — 일정 화면 행 배경색이 member에게도 보여야 하기 때문(일정 계획 차질 방지 목적).
 - **본부 격리**: admin = 전 본부 CRUD, manager = 본인 본부 대상만 (`_caller_allowed_access_list` — 일정 upsert와 동일 정책). resolve/bulk 는 타본부 건을 `denied`로 분리 반환, delete 는 타본부·미확인 건 거부. 화면에서도 manager 는 타본부 행 체크박스 비활성.
 - **전체 대상 조회**: targets+staging 통합 테이블은 없음 — 확정 시 staging에서 삭제되어 서로소이므로 `inspection_targets ∪ inspection_targets_staging` UNION이 KCA Import 전체. 등록 검증(resolve)은 이 UNION 기준, 동일 허가번호 다연도 시 최신 연도 채택.
-- **화면**: `special_sites_screen.dart` — 유형 칩 필터 + 검색, 대상 추가(허가번호 복수 입력 → resolve 미리보기 → 일괄 등록), 삭제는 admin/manager.
+- **화면**: `special_sites_screen.dart` — 유형 칩 필터 + 본부/팀 필터 + 검색, CSV 다운로드, 삭제는 admin/manager(본부 격리).
+- **데이터 유입 (2026-08-21 변경)**: 수동 등록(대상 추가) 제거 → **Playground(kca-fe) 특이국소 CSV를 가져오기(전체 교체)** 방식. `POST /special-sites/import` (admin 전용 — 전체 교체라 manager 허용 시 타본부 유실 위험). CSV 헤더: 유형,허가번호,호출명칭,본부,팀,메모,등록자,등록일시,… 중 유형/허가번호 필수, 원 등록자·등록일시 보존. 허가번호는 targets∪staging 대조 후 매칭 건만 등록(미발견 리포트). 프론트 파서는 RFC4180(따옴표 내 쉼표 지원)+BOM 처리. `/special-sites/bulk`(수동 일괄 등록) API는 유지되나 UI 미노출.
 - **일정 화면 연동**: `inspection_schedule_screen.dart`가 `GET /special-sites`로 {허가번호→유형} 맵을 백그라운드 로드, 행 배경색 tint + 테이블 상단 범례 표시. 유형별 색은 `special_sites_screen.dart`의 `kSpecialSiteColors` 단일 소스 (백엔드 VALID_SPECIAL_TYPES와 함께 유지).
 
 ## 주소 → 품질개선팀 매핑

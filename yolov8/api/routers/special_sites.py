@@ -22,7 +22,9 @@ from core.auth import (
     _verify_auth, _require_role, _get_user_role_sync, _caller_allowed_access_list,
 )
 from core.config import _INSP_DB
-from schemas.models import SpecialSiteBulkReq, SpecialSiteLicensesReq
+from schemas.models import (
+    SpecialSiteBulkReq, SpecialSiteLicensesReq, SpecialSiteImportReq,
+)
 
 router = APIRouter(tags=["special-sites"])
 logger = logging.getLogger(__name__)
@@ -190,6 +192,63 @@ async def bulk_register_special_sites(req: SpecialSiteBulkReq, request: Request)
         "registered": len(matched_nos),
         "denied": [m['허가번호'] for m in denied],
         "not_found": resolved['not_found'],
+    }
+
+
+@router.post("/special-sites/import")
+async def import_special_sites(req: SpecialSiteImportReq, request: Request):
+    """Playground(kca-fe) 특이국소 CSV 가져오기 — 기존 목록 전체 교체.
+
+    전체 교체 방식이므로 admin 전용 (manager 교체 시 타본부 데이터 유실 위험).
+    허가번호는 ksa 전체 대상(targets∪staging)과 대조하여 매칭 건만 등록.
+    원 등록자/등록일시(playground 이력)를 그대로 보존.
+    """
+    empno = await _require_role(request, {"admin"})
+    if not req.items:
+        raise HTTPException(400, "가져올 데이터가 없습니다")
+    if len(req.items) > 10000:
+        raise HTTPException(400, "한 번에 최대 10,000건까지 가져올 수 있습니다")
+
+    invalid_type = [it.허가번호 for it in req.items if it.유형 not in VALID_SPECIAL_TYPES]
+    valid_items = [it for it in req.items if it.유형 in VALID_SPECIAL_TYPES]
+    if not valid_items:
+        raise HTTPException(400, f"유효한 유형이 없습니다 (가능: {', '.join(VALID_SPECIAL_TYPES)})")
+
+    resolved = await asyncio.to_thread(
+        _resolve_targets_sync, [it.허가번호 for it in valid_items])
+    matched_nos = {m['허가번호'] for m in resolved['matched']}
+
+    now = datetime.now(timezone.utc).isoformat()
+    rows = []
+    seen: set = set()
+    for it in valid_items:
+        no = _norm_license(it.허가번호)
+        if no in matched_nos and no not in seen:
+            seen.add(no)
+            rows.append((no, it.유형, it.메모,
+                         it.등록자 or empno, it.등록일시 or now))
+    if not rows:
+        raise HTTPException(400, "전체 수검 대상에서 일치하는 허가번호가 없습니다")
+
+    def _replace():
+        conn = sqlite3.connect(_INSP_DB, timeout=60)
+        try:
+            conn.execute('DELETE FROM special_sites')
+            conn.executemany(
+                'INSERT INTO special_sites (허가번호, 유형, 메모, 등록자, 등록일시) '
+                'VALUES (?, ?, ?, ?, ?)', rows)
+            conn.commit()
+        finally:
+            conn.close()
+
+    await asyncio.to_thread(_replace)
+    logger.info(f"특이국소 CSV import: {len(rows)}건 전체 교체 by {empno} "
+                f"(미발견 {len(resolved['not_found'])}, 유형오류 {len(invalid_type)})")
+    return {
+        "success": True,
+        "imported": len(rows),
+        "not_found": resolved['not_found'],
+        "invalid_type": invalid_type,
     }
 
 
