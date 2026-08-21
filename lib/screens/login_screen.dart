@@ -86,19 +86,27 @@ class _LoginScreenState extends State<LoginScreen> {
   void _onDigitChanged(int index, String value) {
     if (_otpError != null) setState(() => _otpError = null);
 
-    // 붙여넣기: 6자리 한번에 입력 처리
+    // 붙여넣기/자동완성: 여러 자리가 한 번에 들어온 경우
     if (value.length > 1) {
       final digits = value.replaceAll(RegExp(r'\D'), '');
-      for (int i = 0; i < 6 && i < digits.length; i++) {
-        _digitControllers[i].text = digits[i];
+      if (digits.length >= 4) {
+        // OTP 전체 붙여넣기 — 첫 칸부터 분배
+        for (int i = 0; i < 6; i++) {
+          _digitControllers[i].text = i < digits.length ? digits[i] : '';
+        }
+        final next = (digits.length < 6 ? digits.length : 5);
+        _digitFocusNodes[next].requestFocus();
+        setState(() {});
+        if (digits.length >= 6) _handleVerifyOtp(); // 6자리 완성 시 자동 검증
+        return;
       }
-      final next = (digits.length < 6 ? digits.length : 5);
-      _digitFocusNodes[next].requestFocus();
-      setState(() {});
-      return;
+      // 값이 있는 칸에 재입력 — 마지막 입력 문자로 교체
+      _digitControllers[index].text = digits.isEmpty ? '' : digits[digits.length - 1];
+      _digitControllers[index].selection =
+          TextSelection.collapsed(offset: _digitControllers[index].text.length);
     }
 
-    if (value.isNotEmpty && index < 5) {
+    if (_digitControllers[index].text.isNotEmpty && index < 5) {
       _digitFocusNodes[index + 1].requestFocus();
     }
     setState(() {});
@@ -126,6 +134,8 @@ class _LoginScreenState extends State<LoginScreen> {
     );
     if (!mounted) return;
     if (success && auth.awaitingOtp) {
+      // 1차 인증 성공 — 브라우저 비밀번호 저장/업데이트 프롬프트 트리거
+      TextInput.finishAutofillContext();
       _startResendCooldown(30);
       return;
     }
@@ -386,7 +396,8 @@ class _LoginScreenState extends State<LoginScreen> {
           keyboardType: TextInputType.number,
           textInputAction: index < 5 ? TextInputAction.next : TextInputAction.done,
           inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-          maxLength: 1,
+          // maxLength 미지정 — 6자리 붙여넣기/OTP 자동완성이 onChanged로 통째 들어와야 분배 가능
+          autofillHints: index == 0 ? const [AutofillHints.oneTimeCode] : null,
           textAlign: TextAlign.center,
           style: TextStyle(
             fontSize: 20,
@@ -432,7 +443,9 @@ class _LoginScreenState extends State<LoginScreen> {
   Widget _buildLoginForm(AuthService auth) {
     return Form(
       key: _formKey,
-      child: Column(
+      // AutofillGroup: 브라우저/삼성패스가 아이디+비밀번호 필드를 한 세트로 인식
+      child: AutofillGroup(
+        child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -495,6 +508,7 @@ class _LoginScreenState extends State<LoginScreen> {
             controller: _usernameController,
             keyboardType: TextInputType.text,
             textInputAction: TextInputAction.next,
+            autofillHints: const [AutofillHints.username],
             style: const TextStyle(fontSize: 14, color: _textDark),
             decoration: _inputDecoration('아이디 입력'),
             validator: (v) => (v == null || v.isEmpty) ? '아이디를 입력하세요' : null,
@@ -509,6 +523,7 @@ class _LoginScreenState extends State<LoginScreen> {
             obscureText: _obscurePassword,
             obscuringCharacter: '•',
             textInputAction: TextInputAction.done,
+            autofillHints: const [AutofillHints.password],
             onFieldSubmitted: (_) => _handleLogin(),
             style: const TextStyle(fontSize: 14, color: _textDark),
             decoration: _inputDecoration('비밀번호 입력').copyWith(
@@ -602,6 +617,7 @@ class _LoginScreenState extends State<LoginScreen> {
             ),
           ],
         ],
+        ),
       ),
     );
   }

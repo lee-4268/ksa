@@ -13,6 +13,11 @@
 
 **사번 정규화 규칙**: 실사번은 대문자로 변환하되, `test_` 프리픽스 계정(예: `test_user`, `test_admin`)은 SSO가 대소문자를 구분하므로 원문 그대로 전달. 규칙은 백엔드 `core/auth.py`의 `_normalize_empno()`와 프론트 `auth_service.dart`의 `_normalizeEmpno()`에 동일하게 구현 — 로그인, 관리자 사용자 목록 dedup에서 함께 사용하므로 한쪽만 바꾸면 안 됨 (역할 부여 키가 어긋남).
 
+### 로그인 폼 자동완성 (2026-08)
+- 아이디/비밀번호 필드에 `AutofillGroup` + `AutofillHints.username/password` — 브라우저 비밀번호 관리자 자동완성 인식. 1차 인증 성공 시 `TextInput.finishAutofillContext()`로 저장 프롬프트 트리거
+- OTP 첫 칸에 `AutofillHints.oneTimeCode` — 키보드 OTP 제안. 6자리 붙여넣기 시 전 칸 분배 + 자동 검증 (기존 maxLength:1이 붙여넣기를 1자로 잘라 동작하지 않던 문제 수정)
+- 크롬+삼성패스: 크롬은 기본이 자체 비밀번호 관리자라, 삼성패스를 쓰려면 Android 크롬 설정 → 자동완성 서비스에서 삼성패스 선택 필요. SMS 완전 자동입력(WebOTP)은 SMS 본문에 도메인 서명(`@도메인 #코드`)이 필요해 인프라(발송 주체) 협조 사항
+
 ### 개발용 테스트 로그인
 ```
 POST /auth/dev-login (DEV_LOGIN_ENABLED=1 + APP_ENV=dev 둘 다 필요)
