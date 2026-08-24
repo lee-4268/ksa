@@ -91,6 +91,59 @@ async def inadequate_sync(request: Request, year: int = Query(...)):
     return await asyncio.to_thread(_sync)
 
 
+@router.post("/inadequate/sync-export")
+async def inadequate_sync_export(request: Request):
+    """부적합 전량 JSON — kca 미러링 원본. 읽기 전용 (ksa 데이터 변경 없음).
+
+    특이국소 sync-export 와 동일한 단순 요청 규격(시크릿은 body.secret,
+    Content-Type text/plain)으로 preflight 를 피한다. 상세는 security.md 참조.
+    """
+    import hmac as _hmac_mod
+    from fastapi.responses import JSONResponse
+    from core.utils import _check_rate_limit
+    from routers.special_sites import KSA_SYNC_SECRET, _ingest_cors
+
+    try:
+        _check_rate_limit(request, "inad_sync_export", 10, 60)
+    except HTTPException as e:
+        return JSONResponse({"detail": e.detail}, status_code=e.status_code,
+                            headers=_ingest_cors())
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"detail": "잘못된 요청 형식"}, status_code=400,
+                            headers=_ingest_cors())
+    secret = str(data.get("secret") or "")
+    if not (KSA_SYNC_SECRET and secret
+            and _hmac_mod.compare_digest(secret, KSA_SYNC_SECRET)):
+        return JSONResponse({"detail": "unauthorized"}, status_code=401,
+                            headers=_ingest_cors())
+    try:
+        year = int(data.get("year") or 0)
+    except (TypeError, ValueError):
+        year = 0
+    if not year:
+        return JSONResponse({"detail": "year 필요"}, status_code=400,
+                            headers=_ingest_cors())
+
+    def _export():
+        conn = sqlite3.connect(_INSP_DB, timeout=60)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT 허가번호, 통합시설코드, 호출명칭, 주소, skt본부, region, ons팀, "
+            "검사일자, 시정기한, 불합격내용, 불합격상세, status, 심의차수, "
+            "updated_by, updated_at FROM inadequate_management WHERE year=?",
+            (year,)).fetchall()
+        conn.close()
+        return [dict(r) for r in rows]
+
+    items = await asyncio.to_thread(_export)
+    logger.info(f"부적합 sync-export: year={year}, {len(items)}건 (kca 미러링)")
+    return JSONResponse({"success": True, "year": year,
+                         "items": items, "total": len(items)},
+                        headers=_ingest_cors())
+
+
 @router.get("/inadequate/list")
 async def inadequate_list(
     request: Request,

@@ -150,6 +150,8 @@ Row 4: [장비 Type별 불합격 현황 테이블] | [장비 Type별 불합격 �
 - **방향 통일 (2026-08-21 확정)**: 모든 도메인에서 **ksa = 등록·수정 원본(master), kca = 조회 미러 + [ksa에서 가져오기]**. 특이국소도 ksa 수동 등록(대상 추가 다이얼로그) 복원 — resolve 미리보기 → 일괄 등록, admin/manager 본부 격리. kca-fe의 등록/삭제 UI는 제거(숨김), CSV 가져오기·sync-ingest 등 kca→ksa 역방향 코드는 폐기.
 - **kca 미러링**: kca-fe [ksa에서 가져오기] → ksa `POST /special-sites/sync-export`(body.secret, 단순 요청 CORS, 읽기 전용, 전량 JSON) → kca-be `/special-site/ksa-sync`(세션)가 전체 교체. 완전 미러라 본부 선택/격리 불필요(누가 실행해도 동일 결과). 브라우저 릴레이인 이유: 서버 간 직통·kca-be 방향 브라우저 CORS 모두 망 정책/내부 인증 게이트로 불가.
 - **일정 화면 연동**: `inspection_schedule_screen.dart`가 `GET /special-sites`로 {허가번호→유형} 맵을 백그라운드 로드, 행 배경색 tint + 테이블 상단 범례 표시. 유형별 색은 `special_sites_screen.dart`의 `kSpecialSiteColors` 단일 소스 (백엔드 VALID_SPECIAL_TYPES와 함께 유지).
+- **부적합도 동일 방향 (2026-08-24)**: 부적합 등록·상태변경·심의차수는 ksa에서만. ksa `POST /inadequate/sync-export`(body {secret, year}) → kca-be `/inadequate/ksa-sync`(연도 단위 전체 교체, 60초 가드, ksa_sync_meta kind='inadequate') → kca-fe 부적합 화면은 조회 전용(편집/일괄처리/자체동기화 UI 제거, [ksa에서 가져오기] admin/manager + 30분 자동 동기화). kca 일정 화면의 관리 컬럼(건별 일정 등록/수정/삭제)도 제거.
+- **ksa 부적합 화면 컬럼 조정 (2026-08-24)**: `inadequate_management_screen.dart` 헤더 오른쪽 경계 드래그로 컬럼 폭 조정(더블클릭 초기화), 폭 합계 초과 시 가로 스크롤. 심의차수 기본 가중치 0.5→1.0 (헤더 잘림 해소).
 
 ## 주소 → 품질개선팀 매핑
 로직 전부 `yolov8/api/routers/inspection.py`. 진입점 `_hdqt_from_addr(addr, known_hdqt, learned_map)` → `(access담당, 품질개선팀)`.

@@ -83,6 +83,16 @@ Authorization: Bearer {base64url(empno:expiry:hmac_sha256)}
 | POST | `/special-sites/sync-export` | kca 미러링용 전량 JSON — body.secret 인증, 읽기 전용, playground 오리진만 CORS |
 | POST | `/special-sites/delete` | 일괄 삭제 (admin/manager) |
 
+### 부적합 관리 (`routers/inadequate.py`)
+| Method | Path | 설명 |
+|--------|------|------|
+| POST | `/inadequate/sync` | 실적(성능서류='부적합')에서 부적합 국소 동기화 (admin/manager) |
+| GET | `/inadequate/list` | 목록 조회 (연도/본부/팀/상태/검색/정렬/페이징) |
+| PUT | `/inadequate/update` | 상태·심의차수 변경 (admin/manager) |
+| GET | `/inadequate/stats` | 상태별 통계 |
+| GET | `/inadequate/export-xlsx` | Excel 내보내기 |
+| POST | `/inadequate/sync-export` | kca 미러링용 연도별 전량 JSON — body {secret, year}, 읽기 전용, 단순 요청 CORS. kca 부적합 화면은 조회 미러(등록·상태변경은 ksa에서만) |
+
 ### 알림 (Phase 5)
 | Method | Path | 설명 |
 |--------|------|------|

@@ -69,6 +69,10 @@ class _InadequateManagementScreenState extends State<InadequateManagementScreen>
   bool _sortAsc = true;
   int? _hoveredRowIndex;
 
+  // 컬럼 너비 드래그 조정 — 헤더 오른쪽 경계를 끌면 폭 변경, 더블클릭으로 초기화
+  final Map<int, double> _colWidthOverride = {};
+  List<double> _lastColWidths = [];
+
   String _searchField = 'callname'; 
   String _searchValues = ''; 
   final TextEditingController _searchCtrl = TextEditingController();
@@ -782,9 +786,9 @@ class _InadequateManagementScreenState extends State<InadequateManagementScreen>
       );
     }
 
-    // flex weights (11 columns, total = 15.0)
-    const colWeights = [0.8, 1.0, 1.5, 1.6, 2.4, 1.1, 1.1, 1.8, 2.2, 1.0, 0.5];
-    const totalWeight = 15.0;
+    // flex weights (11 columns, total = 15.5) — 심의차수는 헤더가 잘리지 않게 1.0
+    const colWeights = [0.8, 1.0, 1.5, 1.6, 2.4, 1.1, 1.1, 1.8, 2.2, 1.0, 1.0];
+    const totalWeight = 15.5;
     const checkboxW = 44.0;
 
     return Padding(
@@ -804,8 +808,10 @@ class _InadequateManagementScreenState extends State<InadequateManagementScreen>
           final flexW = tableW - (_isAdmin ? checkboxW : 0.0);
           final colWidths = List.generate(
             _columns.length,
-            (i) => (flexW * colWeights[i] / totalWeight).clamp(40.0, double.infinity),
+            (i) => _colWidthOverride[i] ??
+                (flexW * colWeights[i] / totalWeight).clamp(40.0, double.infinity),
           );
+          _lastColWidths = colWidths;
 
           int ci = 0;
           final cwMap = <int, TableColumnWidth>{};
@@ -814,7 +820,7 @@ class _InadequateManagementScreenState extends State<InadequateManagementScreen>
             cwMap[ci++] = FixedColumnWidth(colWidths[i]);
           }
 
-          return Table(
+          final table = Table(
             columnWidths: cwMap,
             defaultVerticalAlignment: TableCellVerticalAlignment.middle,
             border: const TableBorder(
@@ -825,6 +831,11 @@ class _InadequateManagementScreenState extends State<InadequateManagementScreen>
               ..._items.asMap().entries.map((e) => _buildFlexDataRow(e.key, e.value)),
             ],
           );
+
+          // 컬럼을 넓혀 합계가 화면을 넘으면 가로 스크롤로 본다.
+          final sumW = colWidths.fold(0.0, (a, b) => a + b) + (_isAdmin ? checkboxW : 0.0);
+          if (sumW <= tableW + 0.5) return table;
+          return SingleChildScrollView(scrollDirection: Axis.horizontal, child: table);
         }),
       ),
     );
@@ -854,32 +865,55 @@ class _InadequateManagementScreenState extends State<InadequateManagementScreen>
       ));
     }
 
-    for (final (label, field) in _columns) {
+    for (int i = 0; i < _columns.length; i++) {
+      final (label, field) = _columns[i];
       final isSort = _sortColumn == field;
-      cells.add(InkWell(
-        onTap: () => _onSort(field),
-        child: Container(
-          height: 48,
-          color: const Color(0xFFF3F4F6),
-          padding: const EdgeInsets.symmetric(horizontal: 12),
-          child: Row(children: [
-            Expanded(
-              child: Text(label,
-                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Color(0xFF374151)),
-                overflow: TextOverflow.ellipsis,
+      cells.add(Stack(children: [
+        InkWell(
+          onTap: () => _onSort(field),
+          child: Container(
+            height: 48,
+            color: const Color(0xFFF3F4F6),
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: Row(children: [
+              Expanded(
+                child: Text(label,
+                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Color(0xFF374151)),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              const SizedBox(width: 2),
+              Icon(
+                isSort
+                    ? (_sortAsc ? Icons.arrow_upward_rounded : Icons.arrow_downward_rounded)
+                    : Icons.unfold_more_rounded,
+                size: 13,
+                color: isSort ? primaryColor : const Color(0xFFD1D5DB),
+              ),
+            ]),
+          ),
+        ),
+        // 컬럼 경계 드래그 핸들 — 끌어서 폭 조정, 더블클릭으로 기본 폭 복원
+        Positioned(
+          right: 0, top: 0, bottom: 0, width: 8,
+          child: MouseRegion(
+            cursor: SystemMouseCursors.resizeColumn,
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onHorizontalDragUpdate: (d) => setState(() {
+                final cur = _colWidthOverride[i] ??
+                    (i < _lastColWidths.length ? _lastColWidths[i] : 100.0);
+                _colWidthOverride[i] = (cur + d.delta.dx).clamp(48.0, 640.0);
+              }),
+              onDoubleTap: () => setState(() => _colWidthOverride.remove(i)),
+              child: Container(
+                alignment: Alignment.centerRight,
+                child: Container(width: 1, color: const Color(0xFFE5E7EB)),
               ),
             ),
-            const SizedBox(width: 2),
-            Icon(
-              isSort
-                  ? (_sortAsc ? Icons.arrow_upward_rounded : Icons.arrow_downward_rounded)
-                  : Icons.unfold_more_rounded,
-              size: 13,
-              color: isSort ? primaryColor : const Color(0xFFD1D5DB),
-            ),
-          ]),
+          ),
         ),
-      ));
+      ]));
     }
 
     return TableRow(children: cells);
