@@ -70,6 +70,7 @@ Authorization: Bearer {base64url(empno:expiry:hmac_sha256)}
 | POST | `/inspection/schedule/co-located-check` | 일정 등록 전 동일국소(통시→공대→pnu) 미배정 대상 확인 |
 | POST | `/inspection/sync-export` | kca-fe [ksa에서 가져오기] 용 일정+건별결과 JSON — body.secret 인증, 읽기 전용, 단순 요청 CORS |
 | POST | `/inspection/sync-photo-urls` | kca-fe 특이사항 사진용 presigned URL(10분) 발급 — body.secret, 읽기 전용 |
+| POST | `/inspection/sync-import-file` | kca 수검대상 파일 릴레이용 — 최신 KCA Import 원본 엑셀 presigned URL(30분), body.secret, 읽기 전용 |
 
 ### 특이국소 관리
 | Method | Path | 설명 |

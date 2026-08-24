@@ -3958,6 +3958,75 @@ async def inspection_sync_export(request: Request):
     }, headers=_ingest_cors())
 
 
+@router.post("/inspection/sync-import-file")
+async def inspection_sync_import_file(request: Request):
+    """kca-fe [ksa 수검대상 가져오기] 용 — 최신 KCA Import 원본 엑셀의 단기 URL 발급.
+
+    연간 수검대상(74만 행)은 JSON 릴레이가 무거워, 원본 파일째 릴레이한다:
+    브라우저가 이 URL 로 파일을 받아 kca-be 의 기존 임포트(upload-raw→enqueue)에 전달.
+    sync-export 와 동일한 시크릿/단순요청 CORS 규격. 읽기 전용.
+    """
+    from routers.special_sites import KSA_SYNC_SECRET, _ingest_cors
+    from core.utils import _check_rate_limit
+    import hmac as _hm
+
+    try:
+        _check_rate_limit(request, "sync_import_file", 5, 60)
+    except HTTPException as e:
+        return JSONResponse({"detail": e.detail}, status_code=e.status_code,
+                            headers=_ingest_cors())
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"detail": "잘못된 요청 형식"}, status_code=400,
+                            headers=_ingest_cors())
+    secret = str(data.get("secret") or "")
+    if not (KSA_SYNC_SECRET and secret
+            and _hm.compare_digest(secret, KSA_SYNC_SECRET)):
+        return JSONResponse({"detail": "unauthorized"}, status_code=401,
+                            headers=_ingest_cors())
+    try:
+        year = int(data.get("year") or 0)
+    except (TypeError, ValueError):
+        year = 0
+
+    def _read_meta():
+        c = sqlite3.connect(_INSP_DB, timeout=60)
+        c.row_factory = sqlite3.Row
+        try:
+            if year:
+                row = c.execute(
+                    'SELECT * FROM inspection_meta WHERE year=?', (year,)).fetchone()
+            else:
+                row = c.execute(
+                    'SELECT * FROM inspection_meta ORDER BY year DESC LIMIT 1').fetchone()
+            return dict(row) if row else None
+        finally:
+            c.close()
+
+    meta = await asyncio.to_thread(_read_meta)
+    if not meta or not meta.get('s3_key'):
+        return JSONResponse({"detail": "보관된 Import 원본 파일이 없습니다"},
+                            status_code=404, headers=_ingest_cors())
+
+    s3 = get_s3_client()
+    # 수십 MB 다운로드 여유를 위해 30분 유효
+    url = s3.generate_presigned_url(
+        'get_object',
+        Params={'Bucket': S3_BUCKET_NAME, 'Key': meta['s3_key']},
+        ExpiresIn=1800)
+    logger.info(f"수검대상 sync-import-file: year={meta['year']}, "
+                f"file={meta.get('filename')} (kca 릴레이)")
+    return JSONResponse({
+        "success": True,
+        "year": meta['year'],
+        "filename": meta.get('filename') or f"kca_import_{meta['year']}.xlsx",
+        "imported_at": meta.get('imported_at') or '',
+        "total": (meta.get('total_skt') or 0) + (meta.get('total_sheet1') or 0),
+        "url": url,
+    }, headers=_ingest_cors())
+
+
 @router.post("/inspection/sync-photo-urls")
 async def inspection_sync_photo_urls(request: Request):
     """kca-fe 수검 관리 화면의 특이사항 사진 표시용 — presigned URL 발급.
