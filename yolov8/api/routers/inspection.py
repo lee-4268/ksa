@@ -3958,6 +3958,76 @@ async def inspection_sync_export(request: Request):
     }, headers=_ingest_cors())
 
 
+@router.post("/inspection/sync-export-targets")
+async def inspection_sync_export_targets(request: Request):
+    """kca 수검대상 미러링용 — 확정 targets 를 본부 단위 JSON 으로 export.
+
+    파일 릴레이(원본 엑셀)로는 ksa 화면의 [대상 추가] 수동 확정분이 전달되지
+    않으므로(파일에 없는 DB 상태), 확정 테이블 자체를 본부별로 나눠 미러링한다.
+    division='__ETC__' 는 9개 본부 어디에도 속하지 않는 잔여분(미배정 등).
+    sync-export 와 동일 규격. 읽기 전용.
+    """
+    from routers.special_sites import KSA_SYNC_SECRET, _ingest_cors
+    from core.utils import _check_rate_limit
+    import hmac as _hm
+
+    try:
+        _check_rate_limit(request, "sync_export_targets", 30, 60)  # 본부 루프 9+1회 허용
+    except HTTPException as e:
+        return JSONResponse({"detail": e.detail}, status_code=e.status_code,
+                            headers=_ingest_cors())
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"detail": "잘못된 요청 형식"}, status_code=400,
+                            headers=_ingest_cors())
+    secret = str(data.get("secret") or "")
+    if not (KSA_SYNC_SECRET and secret
+            and _hm.compare_digest(secret, KSA_SYNC_SECRET)):
+        return JSONResponse({"detail": "unauthorized"}, status_code=401,
+                            headers=_ingest_cors())
+    try:
+        year = int(data.get("year") or 0)
+    except (TypeError, ValueError):
+        year = 0
+    if not year:
+        return JSONResponse({"detail": "year를 지정하세요"}, status_code=400,
+                            headers=_ingest_cors())
+    division = str(data.get("division") or "").strip()
+
+    _DIVS = ('강남', '강북', '인천', '경기', '경남', '경북', '서부', '충청', '강원')
+    # kca inspection_targets 컬럼과 1:1 (kca 에 없는 위도/경도/검사종류 등은 제외)
+    _COLS = ('pnu_code', '허가번호', '호출명칭', '국종군', '부서', '분기', '연도주기',
+             '검사주기', '허가상태', '설치장소', '도로명주소', '장치수', '통시', '공대',
+             'kca검토결과', '시기조정', '기준연도', 'skt본부', 'access담당', '품질개선팀')
+
+    def _read():
+        c = sqlite3.connect(_INSP_DB, timeout=60)
+        c.row_factory = sqlite3.Row
+        try:
+            wheres, params = ['year=?'], [year]
+            if division == '__ETC__':
+                like = ' OR '.join("access담당 LIKE ?" for _ in _DIVS)
+                wheres.append(f"NOT (COALESCE(access담당,'') != '' AND ({like}))")
+                params.extend([d + '%' for d in _DIVS])
+            elif division:
+                wheres.append("access담당 LIKE ?")
+                params.append(division + '%')
+            rows = c.execute(
+                f"SELECT {', '.join(_COLS)} FROM inspection_targets "
+                f"WHERE {' AND '.join(wheres)}", params).fetchall()
+            return [dict(r) for r in rows]
+        finally:
+            c.close()
+
+    items = await asyncio.to_thread(_read)
+    logger.info(f"수검대상 sync-export-targets: year={year}, "
+                f"본부={division or '전체'}, {len(items)}건")
+    return JSONResponse({"success": True, "year": year, "division": division,
+                         "items": items, "total": len(items)},
+                        headers=_ingest_cors())
+
+
 @router.post("/inspection/sync-import-file")
 async def inspection_sync_import_file(request: Request):
     """kca-fe [ksa 수검대상 가져오기] 용 — 최신 KCA Import 원본 엑셀의 단기 URL 발급.
