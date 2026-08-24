@@ -4009,12 +4009,6 @@ async def inspection_sync_import_file(request: Request):
         return JSONResponse({"detail": "보관된 Import 원본 파일이 없습니다"},
                             status_code=404, headers=_ingest_cors())
 
-    s3 = get_s3_client()
-    # 수십 MB 다운로드 여유를 위해 30분 유효
-    url = s3.generate_presigned_url(
-        'get_object',
-        Params={'Bucket': S3_BUCKET_NAME, 'Key': meta['s3_key']},
-        ExpiresIn=1800)
     logger.info(f"수검대상 sync-import-file: year={meta['year']}, "
                 f"file={meta.get('filename')} (kca 릴레이)")
     return JSONResponse({
@@ -4023,8 +4017,86 @@ async def inspection_sync_import_file(request: Request):
         "filename": meta.get('filename') or f"kca_import_{meta['year']}.xlsx",
         "imported_at": meta.get('imported_at') or '',
         "total": (meta.get('total_skt') or 0) + (meta.get('total_sheet1') or 0),
-        "url": url,
     }, headers=_ingest_cors())
+
+
+@router.post("/inspection/sync-import-file-data")
+async def inspection_sync_import_file_data(request: Request):
+    """원본 엑셀 바이너리 — EC2 프록시 스트리밍.
+
+    S3 presigned URL 을 브라우저가 직접 fetch 하면 버킷 CORS 미설정으로 차단됨
+    (DS 파이프라인이 proxy-xlsx 로 전환한 것과 동일 사유). ksa 응답에는 우리가
+    CORS 헤더를 붙일 수 있으므로 서버 경유로 내려준다. 읽기 전용.
+    """
+    from routers.special_sites import KSA_SYNC_SECRET, _ingest_cors
+    from core.utils import _check_rate_limit
+    import hmac as _hm
+
+    try:
+        _check_rate_limit(request, "sync_import_file", 5, 60)  # 발급/다운로드 공용 카운터
+    except HTTPException as e:
+        return JSONResponse({"detail": e.detail}, status_code=e.status_code,
+                            headers=_ingest_cors())
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"detail": "잘못된 요청 형식"}, status_code=400,
+                            headers=_ingest_cors())
+    secret = str(data.get("secret") or "")
+    if not (KSA_SYNC_SECRET and secret
+            and _hm.compare_digest(secret, KSA_SYNC_SECRET)):
+        return JSONResponse({"detail": "unauthorized"}, status_code=401,
+                            headers=_ingest_cors())
+    try:
+        year = int(data.get("year") or 0)
+    except (TypeError, ValueError):
+        year = 0
+
+    def _read_meta():
+        c = sqlite3.connect(_INSP_DB, timeout=60)
+        c.row_factory = sqlite3.Row
+        try:
+            if year:
+                row = c.execute(
+                    'SELECT * FROM inspection_meta WHERE year=?', (year,)).fetchone()
+            else:
+                row = c.execute(
+                    'SELECT * FROM inspection_meta ORDER BY year DESC LIMIT 1').fetchone()
+            return dict(row) if row else None
+        finally:
+            c.close()
+
+    meta = await asyncio.to_thread(_read_meta)
+    if not meta or not meta.get('s3_key'):
+        return JSONResponse({"detail": "보관된 Import 원본 파일이 없습니다"},
+                            status_code=404, headers=_ingest_cors())
+
+    s3 = get_s3_client()
+    try:
+        obj = await asyncio.to_thread(
+            lambda: s3.get_object(Bucket=S3_BUCKET_NAME, Key=meta['s3_key']))
+    except Exception as e:
+        logger.error(f"sync-import-file-data S3 조회 실패: {e}")
+        return JSONResponse({"detail": "원본 파일 조회 실패"}, status_code=502,
+                            headers=_ingest_cors())
+
+    body = obj['Body']
+
+    def _iter():
+        while True:
+            chunk = body.read(1024 * 1024)
+            if not chunk:
+                break
+            yield chunk
+
+    logger.info(f"수검대상 파일 프록시 전송: year={meta['year']}, "
+                f"size={obj.get('ContentLength', 0)}")
+    return StreamingResponse(
+        _iter(),
+        media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        headers=_ingest_cors({
+            'Content-Length': str(obj.get('ContentLength', 0)),
+        }))
 
 
 @router.post("/inspection/sync-photo-urls")
