@@ -51,9 +51,13 @@ DS ZIP 업로드는 SKO 무선국(여기)에서만 하고, kca는 `ds-raw/` 원�
 
 - ksa: `POST /ds/sync-list`(본부·코드별 최신 ZIP 목록+크기), `POST /ds/sync-raw-zip`(ZIP 스트리밍).
   둘 다 body.secret(KSA_SYNC_SECRET) 인증·읽기 전용·단순 요청 CORS — 특이국소 sync-export 와 동일 규격.
-- kca-fe: ds/upload 화면 [SKO 무선국 DS 가져오기] (admin/manager) — 본부 선택 모달 → 순차
-  다운로드(바이트 진행률) → `SKT(코드)날짜.zip` File 로 감싸 기존 startUpload 완주 → 다음 본부.
-  실패 시 해당 본부에서 중단(이미 적재된 본부는 유지, 실패 본부부터 재실행).
+- kca-fe: ds/upload 화면 [SKO 무선국 DS 가져오기] (admin/manager, 본부 격리 — manager 는 본인
+  본부만 체크 가능) — 본부 선택 모달 → 순차 다운로드(바이트 진행률) → `SKT(코드)날짜.zip`
+  File 로 감싸 기존 startUpload 완주 → 다음 본부. 실패 시 해당 본부에서 중단(기적재 본부 유지).
+- **월중 부분 DS 변경은 미반영 (정책 확정 2026-08-24)**: `apply-partial-update`(변경개설 회신본)는
+  ds_detail.db 만 갱신하고 S3 원본 ZIP 은 그대로라 릴레이에 실리지 않는다. 월중 변경은 SKO
+  무선국에서만 보이고, kca 는 다음 달 KCA 월배치 원본으로 따라잡는 것으로 충분하다고 결정
+  (현장 안내용). 월중 정합이 필요해지면 부분 변경 이력 기반 델타 릴레이(sync-partial-updates)로 확장.
 
 ---
 
