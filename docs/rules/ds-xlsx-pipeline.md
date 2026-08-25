@@ -43,6 +43,18 @@ DS 업로드 후 xlsx 캐시 빌드 → 다운로드까지 전체 흐름 정리.
 {'강남': 'gangnam', '강북': 'gangbuk', '경기': 'gyeonggi', '인천': 'incheon'}
 ```
 
+## kca(플레이그라운드 웹) DS 파일 릴레이 (2026-08-24)
+
+DS ZIP 업로드는 SKO 무선국(여기)에서만 하고, kca는 `ds-raw/` 원본을 받아 자체 브라우저
+파싱 파이프라인(ds_upload.js → ingest-chunk)에 재투입한다. 행 미러(JSON)는 800만 행급이라
+불가 — 파일 릴레이만 가능.
+
+- ksa: `POST /ds/sync-list`(본부·코드별 최신 ZIP 목록+크기), `POST /ds/sync-raw-zip`(ZIP 스트리밍).
+  둘 다 body.secret(KSA_SYNC_SECRET) 인증·읽기 전용·단순 요청 CORS — 특이국소 sync-export 와 동일 규격.
+- kca-fe: ds/upload 화면 [SKO 무선국 DS 가져오기] (admin/manager) — 본부 선택 모달 → 순차
+  다운로드(바이트 진행률) → `SKT(코드)날짜.zip` File 로 감싸 기존 startUpload 완주 → 다음 본부.
+  실패 시 해당 본부에서 중단(이미 적재된 본부는 유지, 실패 본부부터 재실행).
+
 ---
 
 ## 수도권 특수 처리 상세

@@ -126,6 +126,8 @@ Authorization: Bearer {base64url(empno:expiry:hmac_sha256)}
 | GET | `/ds/city-hdqt-map` | 3714 | 시/군별 최다 access담당 집계 (6시간 캐시) |
 | GET | `/ds/proxy-xlsx` | 3771 | S3 xlsx → EC2 프록시 스트리밍 (CORS 우회) |
 | GET | `/ds/proxy-raw-zip` | 3817 | S3 ZIP → EC2 프록시 스트리밍 (CORS 우회) |
+| POST | `/ds/sync-list` | 3874 | kca DS 파일 릴레이용 — (본부, 지역코드)별 최신 DS ZIP 목록+크기, body.secret 인증 |
+| POST | `/ds/sync-raw-zip` | 3944 | kca DS 파일 릴레이용 — 본부 원본 ZIP 스트리밍 (proxy-raw-zip의 시크릿판, Content-Length expose) |
 | POST | `/ds/upload-init` | 3856 | 업로드 세션 시작 (기존 데이터 삭제 + 새 레코드 생성) |
 | POST | `/ds/upload-chunk` | 3978 | 청크 데이터 수신 → DynamoDB BatchWriteItem |
 | POST | `/ds/upload-finalize` | 3991 | 업로드 완료 처리 |

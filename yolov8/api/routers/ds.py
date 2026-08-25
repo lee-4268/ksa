@@ -3871,6 +3871,144 @@ async def ds_proxy_raw_zip(
     )
 
 
+# ── SKO 무선국 → 플레이그라운드 DS 파일 릴레이 (시크릿 인증, 읽기 전용) ──
+# DS ZIP 업로드는 여기(SKO 무선국)에서만 하고, 플레이그라운드 웹은 아래 두
+# 엔드포인트로 원본 ZIP을 받아 자체 브라우저 파싱 파이프라인에 재투입한다.
+# 인증·CORS 규격은 특이국소/수검대상 sync-export 와 동일 (body.secret 단순 요청).
+
+@router.post("/ds/sync-list")
+async def ds_sync_list(request: Request):
+    """본부(지역코드)별 최신 DS ZIP 목록 — kca 파일 릴레이 원본 조회."""
+    import hmac as _hmac_mod
+    from fastapi.responses import JSONResponse
+    from core.utils import _check_rate_limit
+    from routers.special_sites import KSA_SYNC_SECRET, _ingest_cors
+
+    try:
+        _check_rate_limit(request, "ds_sync_list", 10, 60)
+    except HTTPException as e:
+        return JSONResponse({"detail": e.detail}, status_code=e.status_code,
+                            headers=_ingest_cors())
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"detail": "잘못된 요청 형식"}, status_code=400,
+                            headers=_ingest_cors())
+    secret = str(data.get("secret") or "")
+    if not (KSA_SYNC_SECRET and secret
+            and _hmac_mod.compare_digest(secret, KSA_SYNC_SECRET)):
+        return JSONResponse({"detail": "unauthorized"}, status_code=401,
+                            headers=_ingest_cors())
+
+    def _list():
+        uploads_table = get_dynamodb_resource().Table(DYNAMODB_TABLES["ds_uploads"])
+        s3 = get_s3_client()
+        scan_kwargs = {"ProjectionExpression": "divisionId, importDate"}
+        items = []
+        while True:
+            resp = uploads_table.scan(**scan_kwargs)
+            items.extend(resp.get("Items", []))
+            if "LastEvaluatedKey" not in resp:
+                break
+            scan_kwargs["ExclusiveStartKey"] = resp["LastEvaluatedKey"]
+        # (본부, 지역코드)별 최신 기준일 1건 — 수도권처럼 한 본부에 코드가 여럿일 수 있다
+        latest: dict = {}
+        for it in items:
+            division_id = str(it.get("divisionId") or "")
+            sk = str(it.get("importDate") or "")
+            parts = sk.split("#")
+            if len(parts) < 2:
+                continue
+            dc, d = parts[0], parts[1]
+            k = f"{division_id}|{dc}"
+            if k not in latest or d > latest[k]["importDate"]:
+                latest[k] = {"divisionId": division_id, "divisionCode": dc, "importDate": d}
+        out = []
+        for v in latest.values():
+            zip_key = f"ds-raw/{v['divisionId']}/{v['divisionCode']}_{v['importDate']}.zip"
+            try:
+                head = s3.head_object(Bucket=S3_BUCKET_NAME, Key=zip_key)
+            except ClientError:
+                continue  # 원본 ZIP 미보관 건은 릴레이 불가 → 제외
+            v["size"] = int(head["ContentLength"])
+            v["divisionName"] = DS_REGION_CODE_MAP.get(
+                v["divisionCode"], {}).get("divisionName", v["divisionId"])
+            out.append(v)
+        out.sort(key=lambda x: (x["divisionId"], x["divisionCode"]))
+        return out
+
+    items = await asyncio.to_thread(_list)
+    logger.info(f"DS sync-list: {len(items)}건 (kca 파일 릴레이)")
+    return JSONResponse({"success": True, "items": items, "total": len(items)},
+                        headers=_ingest_cors())
+
+
+@router.post("/ds/sync-raw-zip")
+async def ds_sync_raw_zip(request: Request):
+    """본부 DS 원본 ZIP 스트리밍 — proxy-raw-zip 의 시크릿 인증판 (읽기 전용)."""
+    import hmac as _hmac_mod
+    from fastapi.responses import JSONResponse
+    from core.utils import _check_rate_limit
+    from routers.special_sites import KSA_SYNC_SECRET, _ingest_cors
+
+    try:
+        _check_rate_limit(request, "ds_sync_zip", 30, 60)
+    except HTTPException as e:
+        return JSONResponse({"detail": e.detail}, status_code=e.status_code,
+                            headers=_ingest_cors())
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"detail": "잘못된 요청 형식"}, status_code=400,
+                            headers=_ingest_cors())
+    secret = str(data.get("secret") or "")
+    if not (KSA_SYNC_SECRET and secret
+            and _hmac_mod.compare_digest(secret, KSA_SYNC_SECRET)):
+        return JSONResponse({"detail": "unauthorized"}, status_code=401,
+                            headers=_ingest_cors())
+
+    division_id = str(data.get("divisionId") or "")
+    division_code = str(data.get("divisionCode") or "")
+    import_date = str(data.get("importDate") or "")
+    if not (re.fullmatch(r"[\w가-힣\-]{1,40}", division_id)
+            and re.fullmatch(r"\d{1,4}", division_code)
+            and re.fullmatch(r"\d{8}", import_date)):
+        return JSONResponse({"detail": "잘못된 파라미터"}, status_code=400,
+                            headers=_ingest_cors())
+
+    s3_key = f"ds-raw/{division_id}/{division_code}_{import_date}.zip"
+    _validate_s3_key(s3_key, ALLOWED_S3_READ_PREFIXES)
+    s3 = get_s3_client()
+    try:
+        head = s3.head_object(Bucket=S3_BUCKET_NAME, Key=s3_key)
+    except ClientError:
+        return JSONResponse({"detail": "ZIP 파일 없음"}, status_code=404,
+                            headers=_ingest_cors())
+    content_length = head["ContentLength"]
+    logger.info(f"DS sync-raw-zip: {s3_key} ({content_length} bytes, kca 파일 릴레이)")
+
+    async def _stream():
+        obj = await asyncio.to_thread(
+            s3.get_object, Bucket=S3_BUCKET_NAME, Key=s3_key
+        )
+        body = obj["Body"]
+        try:
+            while True:
+                chunk = await asyncio.to_thread(body.read, 65536)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            body.close()
+
+    return StreamingResponse(
+        _stream(),
+        media_type="application/zip",
+        headers={**_ingest_cors({"Access-Control-Expose-Headers": "Content-Length"}),
+                 "Content-Length": str(content_length)},
+    )
+
+
 @router.post("/ds/upload-init")
 async def ds_upload_init(req: DsUploadInit, request: Request = None):
     """DS 업로드 세션 시작 - 기존 데이터 삭제 후 새 레코드 생성"""
