@@ -334,10 +334,14 @@ def _parse_ds_filename_in_zip(filename: str) -> Optional[dict]:
 
 
 def _classify_ds_file(filename: str) -> str:
-    """DS 파일 분류: base / numbered / spt / hundred / skipped
+    """DS 파일 분류: base / numbered / spt / hundred / ignored
     hundred: (100) 파일 → '일반사항' 시트를 '일반사항(검사전)'으로 변환
+    ignored: _ccm.xls / _s.xls — DS 구조와 무관한 별도 파일 (kca-fe 분류와 동일 기준,
+             포함 시 행수가 부풀려져 양 시스템 집계가 어긋난다 — 2026-08-24 정합)
     """
     lower = filename.lower()
+    if re.search(r"_ccm\.xls$", lower) or re.search(r"_s\.xls$", lower):
+        return "ignored"
     if "(100)" in filename:
         return "hundred"
     if "특수" in filename or "spt" in lower:
@@ -757,7 +761,7 @@ def _parse_zip_metadata_sync(zip_temp_path: str, progress_cb=None) -> tuple:
                      if name_map[n].lower().endswith(".xls")
                      and not os.path.basename(name_map[n]).startswith("~")]
 
-        classified: Dict[str, list] = {"base": [], "numbered": [], "spt": [], "hundred": []}
+        classified: Dict[str, list] = {"base": [], "numbered": [], "spt": [], "hundred": [], "ignored": []}
         for fname in xls_names:
             base_fname = os.path.basename(name_map[fname])
             if not base_fname:
@@ -1169,7 +1173,7 @@ def _process_zip_to_multiple_xlsx_sync(zip_temp_path: str, hdqts: list, progress
             name_map = {n: _fix_zip_filename(n) for n in all_names}
             xls_names = [n for n in all_names if name_map[n].lower().endswith(".xls") and not os.path.basename(name_map[n]).startswith("~")]
 
-            classified = {"base": [], "numbered": [], "spt": [], "hundred": []}
+            classified = {"base": [], "numbered": [], "spt": [], "hundred": [], "ignored": []}
             hundred_files = set()
             for fname in xls_names:
                 b_fname = os.path.basename(name_map[fname])
@@ -1465,7 +1469,7 @@ def _process_zip_to_xlsx_sync(zip_temp_path: str, progress_cb=None,
                      if name_map[n].lower().endswith(".xls")
                      and not os.path.basename(name_map[n]).startswith("~")]
 
-        classified: Dict[str, list] = {"base": [], "numbered": [], "spt": [], "hundred": []}
+        classified: Dict[str, list] = {"base": [], "numbered": [], "spt": [], "hundred": [], "ignored": []}
         hundred_files: set = set()
         for fname in xls_names:
             base_fname = os.path.basename(name_map[fname])
