@@ -276,7 +276,35 @@ class _LoginScreenState extends State<LoginScreen> {
               ),
           ],
         ),
-        const SizedBox(height: 32),
+        const SizedBox(height: 14),
+
+        // ── 안내: 재발송 카운트다운을 입력 제한시간으로 오해하는 사례 방지 ──
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+          decoration: BoxDecoration(
+            color: const Color(0xFFF0F9FF),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: const Color(0xFFBAE6FD)),
+          ),
+          child: const Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(Icons.info_outline, size: 14, color: Color(0xFF0369A1)),
+              SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  '인증번호는 5분 내에 입력하면 됩니다.\n문자가 오지 않으면 아래 [재발송] 버튼을 눌러주세요.',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Color(0xFF0369A1),
+                    height: 1.5,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 18),
 
         // ── 6자리 개별 박스 ────────────────────────────────
         Row(
@@ -340,36 +368,44 @@ class _LoginScreenState extends State<LoginScreen> {
         // ── 재발송 + 다시 로그인 ────────────────────────────
         Row(
           children: [
-            // 재발송 버튼
+            // 재발송 버튼 — 카운트다운은 '재발송 가능까지 대기시간'이지 입력
+            // 제한시간이 아님 (오해 방지: 라벨·툴팁·상단 안내 3중 표기)
             Expanded(
-              child: TextButton(
-                onPressed: (_resendCooldown > 0 || auth.isLoading)
-                    ? null
-                    : _handleResendOtp,
-                style: TextButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 12),
-                  foregroundColor: _resendCooldown > 0 ? _textMid : _primary,
-                ),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(
-                      Icons.refresh_rounded,
-                      size: 15,
-                      color: _resendCooldown > 0 ? _textMid : _primary,
-                    ),
-                    const SizedBox(width: 4),
-                    Text(
-                      _resendCooldown > 0
-                          ? '재발송 ${_resendCooldown}s'
-                          : '재발송',
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w500,
+              child: Tooltip(
+                message: _resendCooldown > 0
+                    ? '재발송 가능까지 남은 시간입니다 (인증번호 입력 제한시간이 아닙니다).\n인증번호는 5분 내에 입력하면 됩니다.'
+                    : '인증번호가 오지 않았다면 눌러서 다시 받으세요.',
+                triggerMode: TooltipTriggerMode.tap,
+                showDuration: const Duration(seconds: 4),
+                child: TextButton(
+                  onPressed: (_resendCooldown > 0 || auth.isLoading)
+                      ? null
+                      : _handleResendOtp,
+                  style: TextButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    foregroundColor: _resendCooldown > 0 ? _textMid : _primary,
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(
+                        Icons.refresh_rounded,
+                        size: 15,
                         color: _resendCooldown > 0 ? _textMid : _primary,
                       ),
-                    ),
-                  ],
+                      const SizedBox(width: 4),
+                      Text(
+                        _resendCooldown > 0
+                            ? '재발송 ($_resendCooldown초 후 가능)'
+                            : '재발송',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w500,
+                          color: _resendCooldown > 0 ? _textMid : _primary,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),
