@@ -317,7 +317,8 @@ final result = await showDialog<bool>(
       _MenuItem('전산 비교', Icons.compare_outlined, const Color(0xFF2563EB), description: 'ERP·DS 전산 데이터 비교'),
       if (auth.isAdmin)
         _MenuItem('부적합 관리', Icons.warning_amber_outlined, const Color(0xFFE53935), description: '부적합 현황 관리'),
-      _MenuItem('특이국소 관리', Icons.fmd_bad_outlined, const Color(0xFF8E24AA), description: '지하철·터널·야간출입 국소 관리'),
+      if (auth.isAdmin)
+        _MenuItem('특이국소 관리', Icons.fmd_bad_outlined, const Color(0xFF8E24AA), description: '지하철·터널·야간출입 국소 관리'),
       if (auth.isAdmin)
         _MenuItem('변경 신고', Icons.swap_horiz_outlined, const Color(0xFFE53935), description: '변경 신고 파일 비교 및 적용'),
       _MenuItem('커뮤니티', Icons.forum_outlined, const Color(0xFFE53935), description: '공지사항 및 요청사항'),

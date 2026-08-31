@@ -80,7 +80,19 @@ class AuthService extends ChangeNotifier {
   String? get userId => _userId;
   String? get userEmail => _userId;
   String? get userName => _userName;
-  String? get userDepartment => _userDepartment;
+  /// 체험 중이면 체험 본부, 아니면 실제 본부.
+  /// 화면들의 자동 필터가 이 값을 기준으로 본부를 고르므로(예 inspection_schedule
+  /// _screen.dart, inspection_my_list_screen.dart 의 replaceAll('Access담당','')),
+  /// 체험 본부를 여기서 갈아주면 화면 수정 없이 전부 따라온다.
+  /// 실제 region 값도 '경기Access담당' 형태라 접미사를 붙여 형식을 맞춘다.
+  String? get _effectiveDepartment => _previewDivision.isNotEmpty
+      ? '${_previewDivision}Access담당'
+      : _userDepartment;
+
+  String? get userDepartment => _effectiveDepartment;
+
+  /// 체험을 무시한 실제 소속 (표시·디버깅용)
+  String? get realUserDepartment => _userDepartment;
   String? get userTeam => _userTeam;
 
   // 본부명 → 본부 ID 매핑
@@ -117,7 +129,7 @@ class AuthService extends ChangeNotifier {
   String? get profileId => null;
   String? get currentTeamId => null;
   String? get currentTeamName => _userTeam;
-  String? get currentDivisionId => _getDivisionIdFromName(_userDepartment);
+  String? get currentDivisionId => _getDivisionIdFromName(_effectiveDepartment);
   String? get currentDivisionName => _userDepartment;
 
   /// notices.division 컬럼과 일치하는 짧은 본부명 반환
@@ -128,9 +140,10 @@ class AuthService extends ChangeNotifier {
   ];
 
   String? get currentDivisionShortName {
-    if (_userDepartment == null) return null;
+    final dept = _effectiveDepartment;
+    if (dept == null) return null;
     for (final name in _shortDivisionNames) {
-      if (_userDepartment!.startsWith(name)) return name;
+      if (dept.startsWith(name)) return name;
     }
     return null;
   }
@@ -138,7 +151,13 @@ class AuthService extends ChangeNotifier {
   /// 본부명으로부터 본부 ID 추출
   static String? _getDivisionIdFromName(String? departmentName) {
     if (departmentName == null) return null;
-    return _divisionNameToId[departmentName];
+    // region 실제 값은 '경기Access담당' 형태인데 _divisionNameToId 키는 '경기'/'경기본부'
+    // 뿐이라 그대로 조회하면 null 이 된다. 접미사를 떼고 한 번 더 시도한다.
+    final direct = _divisionNameToId[departmentName];
+    if (direct != null) return direct;
+    final stripped =
+        departmentName.replaceAll('Access담당', '').replaceAll('access담당', '').trim();
+    return _divisionNameToId[stripped];
   }
   bool get isPendingApproval => false;
   bool get isApproved => _isSignedIn;

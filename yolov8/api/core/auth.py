@@ -665,6 +665,15 @@ def _caller_allowed_access_list(empno: str) -> list[str]:
             return list(_DIVISION_TO_ACCESS_LIST[_pv_div])
         return [_pv_acc]
 
+    # 권한만 체험하고 본부는 '전체'로 둔 경우 — 본부로 좁히지 않는다.
+    # 이 분기가 없으면 admin 의 실제 본부(대개 미설정)로 격리를 계산해 빈 목록이
+    # 되고, 호출부가 `1=0` 을 붙여 화면에 아무것도 안 나온다(Map 이 텅 비는 증상).
+    # 권한과 본부를 독립적으로 고르게 하려면 본부 미선택 = 범위 유지여야 한다.
+    _pv = _PREVIEW.get() or {}
+    if (_pv.get("role") and not _pv.get("division")
+            and _pv.get("empno") == empno and _real_role_sync(empno) == "admin"):
+        return list(_ACCESS_TO_DIVISION.keys())
+
     # 커뮤니티 기반 region 조회
     info = _get_user_info_for_community(empno)
     region = info.get('org') or ''
