@@ -28,7 +28,7 @@ from typing import Dict, List, Optional, Union
 from urllib.parse import quote as _url_quote
 
 from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 
 from core.auth import _verify_auth, _get_user_role_sync
@@ -1612,3 +1612,83 @@ async def inspection_results_export_xlsx(request: Request, req: InspectionResult
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f"attachment; filename*=UTF-8''{_url_quote(filename)}"}
     )
+
+
+# ══════════════════════════════════════════════════════════════════════
+# kca(Playground) 미러링용 브라우저 릴레이 export
+# ══════════════════════════════════════════════════════════════════════
+
+# kca inspection_results_raw 컬럼과 1:1 (year 는 envelope, uploaded_* 는 수신측이 채움).
+# ksa 전용 컬럼(허가번호2·제조*·NAMS*·장비Type2 등)은 kca 에 없으므로 제외한다.
+_IRR_MIRROR_COLS = (
+    'region', 'skt본부', '주차별', '월', '허가번호', '통합시설코드', '호출명칭',
+    '주소', '기지국구분', '시스템', '검사년도', '검사종류', '검사일자', 'ons팀',
+    '수검자', '전파진흥원', '검사관', '진행여부', '합불여부', '성능서류',
+    '불합격내용', '불합격상세', '공용화대상', '기타사항', '간략불합격',
+    'five_g_path', '장비타입', '장비타입간소화',
+)
+
+_IRR_REGIONS = ('강남', '강북', '인천', '경기', '경남', '경북', '서부', '충청', '강원')
+
+
+@router.post("/inspection-results/sync-export")
+async def inspection_results_sync_export(request: Request):
+    """kca 실적(결과장) 미러링용 — inspection_results_raw 를 본부(region) 단위 JSON export.
+
+    실적은 연 7만행 규모라 한 번에 넘기면 브라우저 릴레이가 타임아웃된다.
+    sync-export-targets 와 동일하게 region 단위로 쪼개고, region='__ETC__' 는
+    9개 본부 어디에도 속하지 않는 잔여분(빈값·수도권·오타 등)을 담는다.
+    sync-export 와 동일 규격(body.secret, 단순 요청 — preflight 없음). 읽기 전용.
+    """
+    from routers.special_sites import KSA_SYNC_SECRET, _ingest_cors
+    from core.utils import _check_rate_limit
+    import hmac as _hm
+
+    try:
+        _check_rate_limit(request, "sync_export_results", 30, 60)  # region 루프 9+1회 허용
+    except HTTPException as e:
+        return JSONResponse({"detail": e.detail}, status_code=e.status_code,
+                            headers=_ingest_cors())
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"detail": "잘못된 요청 형식"}, status_code=400,
+                            headers=_ingest_cors())
+    secret = str(data.get("secret") or "")
+    if not (KSA_SYNC_SECRET and secret
+            and _hm.compare_digest(secret, KSA_SYNC_SECRET)):
+        return JSONResponse({"detail": "unauthorized"}, status_code=401,
+                            headers=_ingest_cors())
+    try:
+        year = int(data.get("year") or 0)
+    except (TypeError, ValueError):
+        year = 0
+    if not year:
+        return JSONResponse({"detail": "year를 지정하세요"}, status_code=400,
+                            headers=_ingest_cors())
+    region = str(data.get("region") or "").strip()
+
+    def _read():
+        c = sqlite3.connect(_INSP_DB, timeout=60)
+        c.row_factory = sqlite3.Row
+        try:
+            wheres, params = ['year=?'], [year]
+            if region == '__ETC__':
+                ph = ','.join('?' * len(_IRR_REGIONS))
+                wheres.append(f"COALESCE(region,'') NOT IN ({ph})")
+                params.extend(_IRR_REGIONS)
+            elif region:
+                wheres.append("region=?")
+                params.append(region)
+            rows = c.execute(
+                f"SELECT {', '.join(_IRR_MIRROR_COLS)} FROM inspection_results_raw "
+                f"WHERE {' AND '.join(wheres)}", params).fetchall()
+            return [dict(r) for r in rows]
+        finally:
+            c.close()
+
+    items = await asyncio.to_thread(_read)
+    logger.info(f"실적 sync-export: year={year}, region={region or '전체'}, {len(items)}건")
+    return JSONResponse({"success": True, "year": year, "region": region,
+                         "items": items, "total": len(items)},
+                        headers=_ingest_cors())

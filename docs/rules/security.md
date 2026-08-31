@@ -309,7 +309,7 @@ Semgrep 로컬 룰팩 + Bandit 으로 전 백엔드(`yolov8/api/`, `auth/`) SAST
 | 무차별 대입 | `_check_rate_limit` 10회/60초 |
 | 피해 한정 | 시크릿 유출 시 영향 = special_sites 테이블 덮어쓰기뿐 (PII 없음, actor 로그 기록, 재전송으로 복구). 유출 대응 = 양쪽 env 시크릿 교체 |
 
-> **2026-08-24 갱신**: 방향 통일 이후 시크릿이 여는 ksa 엔드포인트는 전부 **읽기 전용 export**(sync-export·sync-export-targets·sync-photo-urls·sync-import-file[-data], inadequate/sync-export)이며 ksa 데이터 쓰기 경로는 없음. 시크릿 전달 범위: 동기화용 `ksa-sync-config` 는 admin/manager 세션 유지, 특이사항 사진 열람용 `ksa-photo-config`(kca-be) 는 **로그인 사용자 전체** — member 도 수검 준비 시 사진을 봐야 하고, 미러 쓰기(kca-be `/ksa-sync*`)는 세션 role 로 별도 차단되므로 시크릿 보유가 쓰기 권한으로 이어지지 않는다. 유출 시 영향 = ksa 조회 데이터 노출(사용자가 화면에서 이미 보는 범위) + presigned 사진 URL(10분) 발급.
+> **2026-08-24 갱신**: 방향 통일 이후 시크릿이 여는 ksa 엔드포인트는 전부 **읽기 전용 export**(sync-export·sync-export-targets·sync-photo-urls·sync-import-file[-data], inspection-results/sync-export, inadequate/sync-export)이며 ksa 데이터 쓰기 경로는 없음. 시크릿 전달 범위: 동기화용 `ksa-sync-config` 는 admin/manager 세션 유지, 특이사항 사진 열람용 `ksa-photo-config`(kca-be) 는 **로그인 사용자 전체** — member 도 수검 준비 시 사진을 봐야 하고, 미러 쓰기(kca-be `/ksa-sync*`)는 세션 role 로 별도 차단되므로 시크릿 보유가 쓰기 권한으로 이어지지 않는다. 유출 시 영향 = ksa 조회 데이터 노출(사용자가 화면에서 이미 보는 범위) + presigned 사진 URL(10분) 발급.
 
 ### 2026-07-27 정보보호담당 인프라 보안진단 (외부 진단, 통합IT보안진단시스템)
 

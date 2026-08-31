@@ -106,6 +106,7 @@ Authorization: Bearer {base64url(empno:expiry:hmac_sha256)}
 | POST | `/inspection-results/upload` | 결과장 엑셀 업로드 |
 | GET | `/inspection-results/weeks` | 업로드된 주차 목록 (month/region 필터) |
 | POST | `/inspection-results/export-xlsx` | 결과장 엑셀 다운로드 |
+| POST | `/inspection-results/sync-export` | kca 실적 미러링용 — inspection_results_raw 본부(region) 단위 JSON (region='__ETC__'=잔여분). body {secret, year, region}, 읽기 전용, 단순 요청 CORS. 연 7만행이라 한 번에 못 넘겨 region 단위 10회로 쪼갠다 |
 | GET | `/inspection-results/dashboard` | 대시보드 집계 |
 | GET | `/inspection-results/analysis` | 불합격 분석 + 장비타입 크로스탭 |
 | GET | `/inspection-results/weekly-trend` | 주별 합격율 추이 |
