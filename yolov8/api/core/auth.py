@@ -650,6 +650,22 @@ def _user_region_to_access(region: str) -> str:
     return region.replace('Access담당', '').replace('본부', '').strip()
 
 
+def _caller_access_team(empno: str, region: str) -> str:
+    """호출자의 실효 access담당(본부). 본부 체험 중이면 체험 본부를 우선한다.
+
+    my-list·dashboard·대상추가 등 일부 엔드포인트는 _caller_allowed_access_list 를
+    거치지 않고 DynamoDB region 을 직접 읽어 본부를 도출한다. 그 지점들이 체험을
+    무시해 "권한은 바뀌는데 본부는 안 먹는" 증상이 났다(2026-08 무선국 Map).
+
+    주의: 다른 사용자의 region 정규화에는 쓰지 말 것. 체험은 caller 본인에게만
+    적용되므로 수신자 목록 같은 곳에 쓰면 남의 본부를 체험 본부로 오인한다.
+    """
+    pv = _preview_division_for(empno)
+    if pv:
+        return pv
+    return (region or "").replace("Access담당", "").replace("본부", "").strip()
+
+
 def _caller_allowed_access_list(empno: str) -> list[str]:
     """caller의 본부에서 접근 가능한 access담당 값 목록 반환.
 

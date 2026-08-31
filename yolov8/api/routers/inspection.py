@@ -33,6 +33,7 @@ from pydantic import BaseModel
 from core.auth import (
     _verify_auth, _get_user_role_sync, _get_user_info_for_community,
     _record_audit_log_sync, _caller_allowed_access_list, _check_division_access,
+    _caller_access_team,
     _list_all_users_sync, _dev_users,
 )
 from core.config import (
@@ -3459,7 +3460,9 @@ async def inspection_dashboard(request: Request, year: int):
             user_data = item.get("Item", {})
         except Exception as e:
             logger.error(f"dashboard 사용자 조회 실패: {e}")
-    access_team = (user_data.get("region", "") or "").replace("Access담당", "").strip()
+    # 본부 체험 반영 — DynamoDB region 을 그대로 쓰면 체험이 무시된다
+    access_team = await asyncio.to_thread(
+        _caller_access_team, empno, user_data.get("region", "") or "")
     품질팀 = user_data.get("team", "") or ""
 
     def _aggregate():
@@ -4599,7 +4602,9 @@ async def inspection_my_list_weeks(request: Request, year: int, team: str = ""):
             ExpressionAttributeNames={"#r": "region", "#ro": "role"},
         ))
         user_data = user_item.get("Item", {})
-    access_team = user_data.get("region", "").replace("Access담당", "").strip()
+    # 본부 체험 반영 — DynamoDB region 을 그대로 쓰면 체험이 무시된다
+    access_team = await asyncio.to_thread(
+        _caller_access_team, empno, user_data.get("region", "") or "")
     품질팀 = user_data.get("team", "")
     is_dev = _dev_users.get(empno) is not None
     user_role = await asyncio.to_thread(_get_user_role_sync, empno)
@@ -4675,7 +4680,9 @@ async def inspection_my_list(request: Request, year: int, week: str = "", team: 
             ExpressionAttributeNames={"#r": "region", "#ro": "role"},
         ))
         user_data = user_item.get("Item", {})
-    access_team = user_data.get("region", "").replace("Access담당", "").strip()
+    # 본부 체험 반영 — DynamoDB region 을 그대로 쓰면 체험이 무시된다
+    access_team = await asyncio.to_thread(
+        _caller_access_team, empno, user_data.get("region", "") or "")
     품질팀 = user_data.get("team", "")
     is_dev = _dev_users.get(empno) is not None
     user_role = await asyncio.to_thread(_get_user_role_sync, empno)
@@ -5522,7 +5529,10 @@ async def inspection_add_from_staging(request: Request, req: InspAddFromStagingR
             ProjectionExpression="#r",
             ExpressionAttributeNames={"#r": "region"},
         ))
-        manager_access = user_item.get("Item", {}).get("region", "").replace("Access담당", "").strip()
+        # 본부 체험 반영 — 체험 중이면 체험 본부로 대상 추가 범위를 판정한다
+        manager_access = await asyncio.to_thread(
+            _caller_access_team, empno,
+            user_item.get("Item", {}).get("region", "") or "")
         if not manager_access:
             raise HTTPException(403, "본부 정보가 설정되지 않았습니다")
 

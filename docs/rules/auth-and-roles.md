@@ -180,6 +180,12 @@ ksa 는 서버 세션이 없고 `lib/services/` 의 21개 파일이 각자 헤�
 - `_caller_allowed_access_list` — 체험 본부를 같은 divisionId 의 access담당 전체로 확장
   (실제 사용자와 동일 범위여야 체험이 의미가 있다)
 - `_verify_auth` 의 토큰 자동갱신이 **체험을 보존**한다 (안 하면 30분 뒤 체험이 풀린다)
+- `_caller_access_team(empno, region)` — my-list·dashboard·대상추가 는
+  `_caller_allowed_access_list` 를 거치지 않고 **DynamoDB region 을 직접 읽어** 본부를
+  도출한다(inspection.py 4곳). 그래서 "권한은 바뀌는데 본부는 안 먹는" 증상이 났다.
+  이 헬퍼가 체험 본부를 우선한다. **다른 사용자의 region 정규화에는 쓰지 말 것**
+  (수신자 목록 등 — 체험은 caller 본인에게만 적용된다. inspection.py 의 `_norm_region`
+  은 그래서 의도적으로 제외했다).
 - `auth_service.dart` — `userDepartment` / `currentDivisionId` / `currentDivisionShortName`
   세 게터가 모두 `_effectiveDepartment`(체험 중이면 `'{본부}Access담당'`)를 쓴다. 화면들의
   자동 필터가 `userDepartment` 를 기준으로 본부를 고르므로(`replaceAll('Access담당','')`)
