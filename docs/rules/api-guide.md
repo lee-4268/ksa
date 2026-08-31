@@ -35,6 +35,8 @@ Authorization: Bearer {base64url(empno:expiry:hmac_sha256)}
 |--------|------|------|
 | POST | `/auth/login` | SSO 로그인 → 토큰 발급 |
 | POST | `/auth/dev-login` | 개발용 테스트 로그인 (DEV_LOGIN_ENABLED=1 필요) |
+| POST | `/auth/preview` | 권한/본부 체험 토큰 발급 (실제 admin 만). body {role, division} — 둘 다 빈 값이면 해제. 상태를 토큰에 서명해 담으므로 모든 요청에 일관 적용 |
+| GET | `/auth/preview` | 현재 체험 상태 (새로고침 후 UI 복원용) |
 | GET | `/users/{empno}` | 사용자 정보 조회 |
 | GET | `/admin/users` | 전체 사용자 목록 |
 | PUT | `/admin/set-role` | 역할 변경 (admin 전용) |

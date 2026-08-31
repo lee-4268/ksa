@@ -31,7 +31,8 @@ from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import JSONResponse
 
 from core.auth import (
-    _verify_auth, _verify_token, _generate_token, _blacklist_token,
+    _verify_auth, _verify_token, _verify_token_full, _generate_token,
+    _blacklist_token, _real_role_sync, _sanitize_preview,
     _get_user_role_info, _ensure_user_in_roles_sync, _update_last_login,
     _get_user_phone_sync, _mask_phone, _normalize_empno,
     _pre_auth_store, _sms_rate_store, _dev_users, _record_audit_log_sync,
@@ -374,3 +375,62 @@ async def dev_login_status(request: Request):
     if IS_PROD:
         return {"enabled": False}
     return {"enabled": DEV_LOGIN_ENABLED}
+
+
+# ══════════════════════════════════════════════════════════════
+# 권한/본부 체험 (admin 전용)
+# ══════════════════════════════════════════════════════════════
+
+@router.post("/preview")
+async def auth_set_preview(request: Request):
+    """다른 권한·본부 계정의 화면을 체험할 토큰 발급. 실제 admin 만.
+
+    body {role, division} — 둘 다 빈 값이면 체험 해제(평범한 토큰).
+    체험 상태는 토큰에 서명돼 담기므로(core/auth.py 참조) 클라이언트는 받은
+    토큰으로 갈아끼우기만 하면 모든 요청에 일관되게 적용된다.
+    """
+    empno = await _verify_auth(request)
+    real = await asyncio.to_thread(_real_role_sync, empno)
+    if real != "admin":
+        raise HTTPException(403, "관리자만 사용할 수 있습니다")
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    role, division = _sanitize_preview(
+        str(body.get("role") or ""), str(body.get("division") or ""))
+
+    token = _generate_token(empno, role, division)
+    # 관리자가 다른 권한을 흉내내는 것은 추적 가능해야 한다.
+    await asyncio.to_thread(
+        _record_audit_log_sync, "UPDATE", "User", empno, empno,
+        {"newData": json.dumps(
+            {"preview_role": role or "(해제)", "preview_division": division or "(전체)",
+             "ip": _get_client_ip(request)}, ensure_ascii=False)})
+    logger.info(f"권한 체험 전환: empno={empno}, role={role or '해제'}, "
+                f"division={division or '전체'}")
+    return {
+        "result": "ok",
+        "token": token,
+        "expiresIn": AUTH_TOKEN_EXPIRY,
+        "preview": {"role": role, "division": division},
+        "effective_role": role or real,
+        "real_role": real,
+    }
+
+
+@router.get("/preview")
+async def auth_get_preview(request: Request):
+    """현재 토큰에 담긴 체험 상태. 새로고침 후 UI 복원용."""
+    empno = await _verify_auth(request)
+    auth_header = request.headers.get("Authorization", "")
+    token = auth_header[7:] if auth_header.startswith("Bearer ") else ""
+    _e, prole, pdiv = _verify_token_full(token)
+    real = await asyncio.to_thread(_real_role_sync, empno)
+    return {
+        "real_role": real,
+        "can_preview": real == "admin",
+        "preview": {"role": prole, "division": pdiv},
+        "effective_role": prole or real,
+    }

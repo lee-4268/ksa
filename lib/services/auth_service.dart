@@ -154,6 +154,105 @@ class AuthService extends ChangeNotifier {
   bool get canUpload => _userRoleStr == 'admin' || _userRoleStr == 'manager';
   bool get canDelete => _userRoleStr == 'admin' || _userRoleStr == 'manager';
 
+  // ── 권한/본부 체험 (admin 전용) ─────────────────────────────
+  // 서버가 체험 상태를 토큰에 서명해 담아준다(POST /auth/preview). 토큰만 갈아끼우면
+  // 21개 서비스가 각자 만드는 헤더와 무관하게 모든 요청에 일관되게 적용된다.
+  // 실제 role 이 admin 이 아니면 서버가 체험 값을 무시하므로 권한 상승은 불가능하다.
+  String _realRoleStr = 'member'; // 서버가 알려준 실제 role
+  String _previewRole = ''; // '' = 권한 체험 안 함
+  String _previewDivision = ''; // '' = 전체 본부
+
+  static const String _previewRoleKey = 'preview_role';
+  static const String _previewDivisionKey = 'preview_division';
+
+  /// 실제 role (체험과 무관)
+  String get realRoleStr => _realRoleStr;
+
+  /// 체험 중인 권한 ('' = 안 함)
+  String get previewRole => _previewRole;
+
+  /// 체험 중인 본부 access담당 ('' = 전체)
+  String get previewDivision => _previewDivision;
+
+  /// 체험 중인지 (권한이든 본부든)
+  bool get isPreviewing => _previewRole.isNotEmpty || _previewDivision.isNotEmpty;
+
+  /// 체험 기능을 쓸 수 있는지 (실제 admin 만)
+  bool get canPreview => _realRoleStr == 'admin';
+
+  /// 체험 본부 선택지 — 백엔드 _ACCESS_TO_DIVISION 키와 동일해야 한다.
+  static const List<String> previewDivisions = [
+    '강남', '강북', '경기', '인천', '강원', '충청', '경북', '경남', '서부',
+  ];
+
+  void _applyEffectiveRole() {
+    _userRoleStr = _previewRole.isNotEmpty ? _previewRole : _realRoleStr;
+  }
+
+  /// 권한·본부 체험 설정. 둘 다 빈 문자열이면 해제.
+  /// 성공 시 새 토큰으로 교체한다. 호출한 화면은 이후 화면을 다시 로드해야 한다
+  /// (서비스들이 화면 진입 시 setAuthToken 으로 토큰을 다시 읽는 구조).
+  Future<bool> setPreview({String role = '', String division = ''}) async {
+    if (_authToken == null) return false;
+    try {
+      final resp = await http.post(
+        Uri.parse('$_loginUrl/auth/preview'),
+        headers: authHeaders,
+        body: jsonEncode({'role': role, 'division': division}),
+      );
+      if (resp.statusCode != 200) {
+        debugPrint('체험 전환 실패: HTTP ${resp.statusCode} ${resp.body}');
+        return false;
+      }
+      final data = jsonDecode(resp.body) as Map<String, dynamic>;
+      _authToken = data['token'] as String? ?? _authToken;
+      _realRoleStr = data['real_role'] as String? ?? _realRoleStr;
+      final pv = (data['preview'] as Map<String, dynamic>?) ?? const {};
+      _previewRole = (pv['role'] as String?) ?? '';
+      _previewDivision = (pv['division'] as String?) ?? '';
+      _applyEffectiveRole();
+      notifyListeners();
+      await _savePreviewState();
+      _saveLoginState();
+      return true;
+    } catch (e) {
+      debugPrint('체험 전환 오류: $e');
+      return false;
+    }
+  }
+
+  /// 서버 기준으로 체험 상태를 다시 읽는다(새로고침 후 복원용).
+  Future<void> refreshPreviewState() async {
+    if (_authToken == null) return;
+    try {
+      final resp = await http.get(
+        Uri.parse('$_loginUrl/auth/preview'),
+        headers: authHeaders,
+      );
+      if (resp.statusCode != 200) return;
+      final data = jsonDecode(resp.body) as Map<String, dynamic>;
+      _realRoleStr = data['real_role'] as String? ?? _realRoleStr;
+      final pv = (data['preview'] as Map<String, dynamic>?) ?? const {};
+      _previewRole = (pv['role'] as String?) ?? '';
+      _previewDivision = (pv['division'] as String?) ?? '';
+      _applyEffectiveRole();
+      notifyListeners();
+      await _savePreviewState();
+    } catch (e) {
+      debugPrint('체험 상태 조회 오류: $e');
+    }
+  }
+
+  Future<void> _savePreviewState() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_previewRoleKey, _previewRole);
+      await prefs.setString(_previewDivisionKey, _previewDivision);
+    } catch (e) {
+      debugPrint('체험 상태 저장 오류: $e');
+    }
+  }
+
   /// 초기화 - 저장된 로그인 상태 복원
   Future<void> init() async {
     if (_isInitialized) return;
@@ -344,6 +443,7 @@ class AuthService extends ChangeNotifier {
           _userName = name;
           _userDepartment = region;
           _userTeam = team;
+          _realRoleStr = role;
           _userRoleStr = role;
           _isLoading = false;
           notifyListeners();
@@ -373,7 +473,9 @@ class AuthService extends ChangeNotifier {
       _userName = userInfo['name'] as String? ?? empno;
       _userDepartment = userInfo['region'] as String?;
       _userTeam = userInfo['team'] as String?;
-      _userRoleStr = userInfo['role'] as String? ?? 'member';
+      _realRoleStr = userInfo['role'] as String? ?? 'member';
+      // 체험 중이면 UI 역할을 덮지 않는다 — 서버도 체험 role 로 판정하므로 어긋나면 안 된다
+      _applyEffectiveRole();
       debugPrint('사용자 정보 업데이트: $_userName (본부: $_userDepartment, 팀: $_userTeam, 역할: $_userRoleStr)');
       notifyListeners();
       _saveLoginState();

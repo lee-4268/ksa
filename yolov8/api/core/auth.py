@@ -20,6 +20,7 @@ import uuid
 import sqlite3
 import asyncio
 import threading
+import contextvars
 import time as _time_mod
 import logging
 from datetime import datetime, timezone, timedelta
@@ -92,39 +93,99 @@ def _verify_password(plain: str, hashed: str) -> bool:
 # 토큰 생성/검증
 # ══════════════════════════════════════════════════════════════
 
-def _generate_token(empno: str) -> str:
-    """HMAC-SHA256 토큰 생성: base64url(empno:expiry:signature)"""
+# ── 권한/본부 체험(preview) ─────────────────────────────────────
+# admin 이 다른 역할·본부 계정의 화면을 그대로 체험할 수 있게 한다.
+# 상태를 토큰에 서명해 담는 이유: ksa 는 서버 세션이 없는 Flutter SPA 이고
+# 서비스마다 헤더를 따로 만들어(21개 파일) 커스텀 헤더 방식은 일부 화면만
+# 적용되는 사고가 나기 쉽다. 토큰은 모든 요청이 이미 들고 다니므로 누락이 없다.
+#
+# 안전장치
+#   - 서버가 항상 DynamoDB 의 실제 role 을 다시 확인한다. 실제 admin 이 아니면
+#     토큰에 무엇이 적혀 있어도 무시 → 권한 상승 불가(내려가기만 가능).
+#   - preview_role='admin' 은 무의미하므로 체험 해제로 취급한다.
+#   - 값은 화이트리스트(VALID_ROLES / _ACCESS_TO_DIVISION)로만 받는다.
+#   - 서명이 preview 부분까지 덮으므로 토큰 위조로 값을 바꿀 수 없다.
+_PREVIEW: contextvars.ContextVar[dict] = contextvars.ContextVar(
+    "_ksa_preview", default={})
+
+
+def _preview_allowed_divisions() -> set:
+    from .config import _ACCESS_TO_DIVISION
+    return set(_ACCESS_TO_DIVISION.keys())
+
+
+def _sanitize_preview(role: str, division: str) -> tuple[str, str]:
+    """체험 값 정규화. 허용되지 않는 값은 빈 문자열(체험 없음)."""
+    r = (role or "").strip()
+    d = (division or "").strip()
+    # admin 체험은 실제와 같아 의미가 없다 → 해제로 본다
+    if r not in VALID_ROLES or r == "admin":
+        r = ""
+    if d not in _preview_allowed_divisions():
+        d = ""
+    return r, d
+
+
+def _generate_token(empno: str, preview_role: str = "",
+                    preview_division: str = "") -> str:
+    """HMAC-SHA256 토큰 생성.
+
+    체험 없음: base64url(empno:expiry:sig)                  ← 기존 형식 그대로
+    체험 중  : base64url(empno:expiry:sig:prole:pdiv)
+    sig 는 체험 값까지 덮는다(위조 방지). 기존 3-파트 토큰은 그대로 유효하다.
+    """
     expiry = int(_time_mod.time()) + AUTH_TOKEN_EXPIRY
-    payload = f"{empno}:{expiry}"
-    sig = _hmac_mod.new(
-        AUTH_TOKEN_SECRET.encode(), payload.encode(), hashlib.sha256
-    ).hexdigest()
-    token_raw = f"{payload}:{sig}"
+    prole, pdiv = _sanitize_preview(preview_role, preview_division)
+    if prole or pdiv:
+        payload = f"{empno}:{expiry}:{prole}:{pdiv}"
+        sig = _hmac_mod.new(
+            AUTH_TOKEN_SECRET.encode(), payload.encode(), hashlib.sha256
+        ).hexdigest()
+        token_raw = f"{empno}:{expiry}:{sig}:{prole}:{pdiv}"
+    else:
+        payload = f"{empno}:{expiry}"
+        sig = _hmac_mod.new(
+            AUTH_TOKEN_SECRET.encode(), payload.encode(), hashlib.sha256
+        ).hexdigest()
+        token_raw = f"{payload}:{sig}"
     return base64.urlsafe_b64encode(token_raw.encode()).decode()
+
+
+def _verify_token_full(token: str) -> tuple:
+    """토큰 검증 → (empno|None, preview_role, preview_division)."""
+    try:
+        decoded = base64.urlsafe_b64decode(token.encode()).decode()
+        parts = decoded.split(":")
+        if len(parts) == 3:
+            empno, expiry_str, sig = parts
+            prole, pdiv = "", ""
+            signed = f"{empno}:{expiry_str}"
+        elif len(parts) == 5:
+            empno, expiry_str, sig, prole, pdiv = parts
+            signed = f"{empno}:{expiry_str}:{prole}:{pdiv}"
+        else:
+            return None, "", ""
+        expiry = int(expiry_str)
+        if _time_mod.time() > expiry:
+            return None, "", ""
+        expected = _hmac_mod.new(
+            AUTH_TOKEN_SECRET.encode(), signed.encode(), hashlib.sha256
+        ).hexdigest()
+        if not _hmac_mod.compare_digest(sig, expected):
+            return None, "", ""
+        # 블랙리스트 확인 (로그아웃된 토큰)
+        if sig in _token_blacklist:
+            return None, "", ""
+        # 서명이 맞아도 화이트리스트 밖 값은 버린다(정책 변경 후 발급된 옛 토큰 대비)
+        prole, pdiv = _sanitize_preview(prole, pdiv)
+        return empno, prole, pdiv
+    except Exception:
+        return None, "", ""
 
 
 def _verify_token(token: str) -> str | None:
     """토큰 검증 → empno 반환. 무효/만료/블랙리스트 시 None."""
-    try:
-        decoded = base64.urlsafe_b64decode(token.encode()).decode()
-        parts = decoded.split(":")
-        if len(parts) != 3:
-            return None
-        empno, expiry_str, sig = parts
-        expiry = int(expiry_str)
-        if _time_mod.time() > expiry:
-            return None
-        expected = _hmac_mod.new(
-            AUTH_TOKEN_SECRET.encode(), f"{empno}:{expiry_str}".encode(), hashlib.sha256
-        ).hexdigest()
-        if not _hmac_mod.compare_digest(sig, expected):
-            return None
-        # 블랙리스트 확인 (로그아웃된 토큰)
-        if sig in _token_blacklist:
-            return None
-        return empno
-    except Exception:
-        return None
+    return _verify_token_full(token)[0]
 
 
 def _blacklist_token(token: str) -> None:
@@ -132,8 +193,8 @@ def _blacklist_token(token: str) -> None:
     try:
         decoded = base64.urlsafe_b64decode(token.encode()).decode()
         parts = decoded.split(":")
-        if len(parts) == 3:
-            _, expiry_str, sig = parts
+        if len(parts) in (3, 5):   # 5 = 체험 토큰(empno:expiry:sig:prole:pdiv)
+            _, expiry_str, sig = parts[0], parts[1], parts[2]
             expiry = int(expiry_str)
             now = int(_time_mod.time())
             if expiry > now:  # 아직 유효한 토큰만 블랙리스트 등록
@@ -186,16 +247,20 @@ async def _verify_auth(request: Request) -> str:
     auth_header = request.headers.get("Authorization", "")
     if auth_header.startswith("Bearer "):
         token = auth_header[7:]
-        empno = _verify_token(token)
+        empno, prole, pdiv = _verify_token_full(token)
         if empno:
             _track_daily_visitor(empno)
-            # 토큰 잔여 수명 체크 → 절반 이하면 갱신
+            # 체험 상태를 이 요청 컨텍스트에 싣는다. asyncio.to_thread 는 컨텍스트를
+            # 복사하므로 _get_user_role_sync 등이 스레드에서 호출돼도 그대로 보인다.
+            _PREVIEW.set({"empno": empno, "role": prole, "division": pdiv}
+                         if (prole or pdiv) else {})
+            # 토큰 잔여 수명 체크 → 절반 이하면 갱신 (체험 상태 유지)
             try:
                 decoded = base64.urlsafe_b64decode(token.encode()).decode()
                 expiry = int(decoded.split(":")[1])
                 remaining = expiry - int(_time_mod.time())
                 if remaining < AUTH_TOKEN_EXPIRY // 2:
-                    request.state.refreshed_token = _generate_token(empno)
+                    request.state.refreshed_token = _generate_token(empno, prole, pdiv)
             except Exception:
                 pass
             return empno
@@ -209,8 +274,31 @@ async def _verify_auth(request: Request) -> str:
 # ══════════════════════════════════════════════════════════════
 
 def _get_user_role_sync(empno: str) -> str:
-    """kca-user-roles 테이블에서 role 조회. 없으면 'member' 반환.
-    dev 로그인 계정은 DynamoDB 대신 _dev_users 메모리에서 조회."""
+    """호출자의 실효 role. admin 이 체험 중이면 체험 role 을 반환한다.
+
+    체험은 caller 본인에게만 적용한다(다른 사용자의 role 을 조회하는 화면이
+    영향받지 않도록). 실제 role 이 admin 이 아니면 체험 값을 무시한다.
+    """
+    pv = _PREVIEW.get() or {}
+    if pv.get("role") and pv.get("empno") == empno:
+        if _real_role_sync(empno) == "admin":
+            return pv["role"]
+    return _real_role_sync(empno)
+
+
+def _preview_division_for(empno: str) -> str:
+    """이 호출자에게 적용할 체험 본부(access담당). 없으면 빈 문자열."""
+    pv = _PREVIEW.get() or {}
+    if pv.get("division") and pv.get("empno") == empno:
+        if _real_role_sync(empno) == "admin":
+            return pv["division"]
+    return ""
+
+
+def _real_role_sync(empno: str) -> str:
+    """kca-user-roles 테이블에서 실제 role 조회. 없으면 'member' 반환.
+    dev 로그인 계정은 DynamoDB 대신 _dev_users 메모리에서 조회.
+    체험(preview)을 적용하지 않은 원본 값 — 권한 판정의 기준이다."""
     # dev 로그인 계정 우선 확인
     dev = _dev_users.get(empno)
     if dev:
@@ -563,8 +651,20 @@ def _user_region_to_access(region: str) -> str:
 
 
 def _caller_allowed_access_list(empno: str) -> list[str]:
-    """caller의 본부에서 접근 가능한 access담당 값 목록 반환."""
+    """caller의 본부에서 접근 가능한 access담당 값 목록 반환.
+
+    admin 이 본부를 체험 중이면 그 본부 소속인 것처럼 계산한다(같은 divisionId 의
+    access담당 전체 — 실제 사용자와 동일한 범위여야 체험이 의미가 있다).
+    """
     from .config import _ACCESS_TO_DIVISION, _DIVISION_TO_ACCESS_LIST
+
+    _pv_acc = _preview_division_for(empno)
+    if _pv_acc:
+        _pv_div = _ACCESS_TO_DIVISION.get(_pv_acc, '')
+        if _pv_div and _pv_div in _DIVISION_TO_ACCESS_LIST:
+            return list(_DIVISION_TO_ACCESS_LIST[_pv_div])
+        return [_pv_acc]
+
     # 커뮤니티 기반 region 조회
     info = _get_user_info_for_community(empno)
     region = info.get('org') or ''

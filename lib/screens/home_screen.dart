@@ -1,3 +1,4 @@
+import '../widgets/preview_mode_button.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
@@ -461,6 +462,13 @@ final result = await showDialog<bool>(
                                   Text(items[_selectedIndex].title,
                                       style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: _textPrimary)),
                                   const Spacer(),
+                                  // 권한·본부 체험 (실제 admin 에게만 보인다).
+                                  // 전환 후 setState 로 화면을 다시 만들어 서비스들이
+                                  // 새 토큰을 다시 읽게 한다.
+                                  PreviewModeButton(
+                                    onChanged: () => setState(() {}),
+                                  ),
+                                  const SizedBox(width: 10),
                                   _buildUserChip(auth),
                                 ],
                               ),

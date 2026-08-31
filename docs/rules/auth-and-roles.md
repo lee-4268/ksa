@@ -34,6 +34,7 @@ POST /auth/dev-login (DEV_LOGIN_ENABLED=1 + APP_ENV=dev 둘 다 필요)
 ```
 base64url(empno:expiry_unix:hmac_sha256(AUTH_TOKEN_SECRET, empno:expiry_unix))
 ```
+- 권한/본부 체험 중에는 5-파트 형식이 된다 (아래 [권한/본부 체험](#권한본부-체험-admin-전용) 참조)
 - 유효기간: 2시간
 - 잔여 1시간 미만 → 응답 헤더에 새 토큰 자동 발급
 - Flutter 측에서 자동 갱신 처리
@@ -138,6 +139,52 @@ DS 조회/업로드 시 4개 본부가 같은 divisionId를 공유하며, xlsx�
 - `/users/{empno}`, `/inspection/my-list`, `/inspection/my-list/weeks`에서 fallback
 - 서버 재시작 시 초기화
 - **my-list 조회 시 is_dev=True이면 팀 무관 전체 조회** (실계정은 AND 조건)
+
+## 권한/본부 체험 (admin 전용)
+
+실제 admin 이 다른 권한·본부 계정의 화면을 그대로 확인하는 기능. 상단바의 🔧 버튼
+(`lib/widgets/preview_mode_button.dart`) → 권한 칩(Admin/Manager/Member) + 본부 드롭다운.
+
+### 왜 헤더가 아니라 토큰인가
+kca-fe 는 Flask 세션 + `X-Preview-Role` 헤더 + 프록시 주입이라 서버 한 곳에서 처리된다.
+ksa 는 서버 세션이 없고 `lib/services/` 의 21개 파일이 각자 헤더를 만들며 일부는 인라인으로
+작성한다 → 헤더 방식은 **일부 화면만 체험이 걸리는 사고**가 난다. 토큰은 모든 요청이 이미
+들고 다니므로 누락이 구조적으로 불가능하다.
+
+```
+체험 없음: base64url(empno:expiry:sig)                ← 기존 형식 그대로 (하위호환)
+체험 중  : base64url(empno:expiry:sig:prole:pdiv)
+           sig 가 체험 값까지 덮는다(위조 방지)
+```
+
+### 엔드포인트
+| Method | Path | 설명 |
+|--------|------|------|
+| POST | `/auth/preview` | 체험 토큰 발급. body {role, division}. 둘 다 빈 값이면 해제 |
+| GET | `/auth/preview` | 현재 체험 상태 (새로고침 후 UI 복원용) |
+
+### 안전장치
+- 서버가 **항상 DynamoDB 의 실제 role 을 다시 확인**(`_real_role_sync`)한다. 실제 admin 이
+  아니면 토큰에 무엇이 적혀 있어도 무시 → **권한 상승 불가, 내려가기만 가능**
+- 서명이 체험 값을 덮으므로 v1 토큰에 체험 값을 덧붙여도 서명 불일치로 거부
+- 체험은 `empno == caller` 일 때만 적용 → 사용자 목록 화면의 타인 role 은 실제 값
+- `preview_role='admin'` 은 실제와 같아 의미가 없으므로 **해제로 취급**
+- 값은 화이트리스트(`VALID_ROLES` / `_ACCESS_TO_DIVISION`)로만 받는다
+- 체험 전환은 감사 로그에 기록 (`preview_role`, `preview_division`, ip)
+
+### 구현 지점
+- `core/auth.py` — `_real_role_sync`(실제) / `_get_user_role_sync`(체험 적용) 분리.
+  기존 호출부 50여 곳이 수정 없이 체험을 따른다. `_PREVIEW` ContextVar 는
+  `asyncio.to_thread` 가 컨텍스트를 복사하므로 스레드 호출에도 전달된다.
+- `_caller_allowed_access_list` — 체험 본부를 같은 divisionId 의 access담당 전체로 확장
+  (실제 사용자와 동일 범위여야 체험이 의미가 있다)
+- `_verify_auth` 의 토큰 자동갱신이 **체험을 보존**한다 (안 하면 30분 뒤 체험이 풀린다)
+
+### ⚠️ 권한 Admin + 본부 선택은 조회에 반영되지 않는다
+대부분의 엔드포인트가 `if role != 'admin'` 으로 본부 격리 분기를 타므로, 권한을 admin 으로
+두면 본부 체험이 서버 조회에 걸리지 않는다. 실제 admin 이 전사 범위인 것과 같은 동작이다.
+본부 체험은 권한을 manager/member 로 함께 내렸을 때 의미가 있다(팝업 하단에 안내 표기).
+호출부 17곳을 고쳐 우회할 수 있으나 보안 분기를 건드리는 위험 대비 이득이 없어 하지 않았다.
 
 ## 감사 로그 (kca-audit-logs)
 
