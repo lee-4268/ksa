@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from core.auth import _verify_auth, _get_user_role_sync, _caller_allowed_access_list
 from core.config import _INSP_DB, _COMMUNITY_DB
@@ -651,3 +651,86 @@ async def change_request_generate_form(
         media_type="application/vnd.ms-excel",
         headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
     )
+
+
+# ══════════════════════════════════════════════════════════════════════
+# kca(Playground) 미러링용 브라우저 릴레이 export
+# ══════════════════════════════════════════════════════════════════════
+
+# kca change_report_requests 로 옮길 컬럼. status 어휘·타임스탬프 변환은 수신측에서
+# 한다(kca 는 '대기/신고완료/처리완료', ksa 는 REQUESTED/FILED/APPLIED/VERIFIED).
+_CR_MIRROR_COLS = ('허가번호', 'field', '장치번호', 'before_value', 'after_value',
+                   'memo', 'status', 'requested_by', 'requested_at',
+                   'filed_by', 'filed_at')
+
+
+@router.post("/change-request/sync-export")
+async def change_request_sync_export(request: Request):
+    """kca 변경개설 미러링용 — 취소되지 않은 요청 전량 JSON.
+
+    연도로 자르지 않고 전량을 보낸다. /change-request/direct 로 등록된 행은
+    schedule_pk 가 빈 문자열이어서 inspection_schedules JOIN 으로 연도를 거르면
+    조용히 누락되기 때문(목록 조회의 year 필터가 이미 그 한계를 갖고 있다).
+    대신 year 를 행별로 최선 도출해 함께 보낸다.
+      ① schedule_pk 앞부분(year#허가번호)
+      ② 없으면 허가번호로 inspection_schedules 최신 연도 조회
+      ③ 그래도 없으면 0 (수신측이 판단)
+    sync-export 와 동일 규격(body.secret, 단순 요청). 읽기 전용.
+    """
+    from routers.special_sites import KSA_SYNC_SECRET, _ingest_cors
+    from core.utils import _check_rate_limit
+    import hmac as _hm
+
+    try:
+        _check_rate_limit(request, "sync_export_cr", 10, 60)
+    except HTTPException as e:
+        return JSONResponse({"detail": e.detail}, status_code=e.status_code,
+                            headers=_ingest_cors())
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"detail": "잘못된 요청 형식"}, status_code=400,
+                            headers=_ingest_cors())
+    secret = str(data.get("secret") or "")
+    if not (KSA_SYNC_SECRET and secret
+            and _hm.compare_digest(secret, KSA_SYNC_SECRET)):
+        return JSONResponse({"detail": "unauthorized"}, status_code=401,
+                            headers=_ingest_cors())
+
+    def _read():
+        c = sqlite3.connect(_INSP_DB, timeout=60)
+        c.row_factory = sqlite3.Row
+        try:
+            rows = c.execute(
+                f"SELECT schedule_pk, {', '.join(_CR_MIRROR_COLS)} FROM change_request "
+                f"WHERE (cancelled IS NULL OR cancelled='0') "
+                f"ORDER BY requested_at").fetchall()
+            # 허가번호 → 최신 연도 (schedule_pk 가 빈 행의 폴백용)
+            year_by_license = {}
+            for r in c.execute(
+                    "SELECT 허가번호, MAX(year) AS y FROM inspection_schedules "
+                    "GROUP BY 허가번호").fetchall():
+                year_by_license[str(r['허가번호'])] = int(r['y'] or 0)
+
+            out = []
+            for r in rows:
+                d = {k: r[k] for k in _CR_MIRROR_COLS}
+                pk = str(r['schedule_pk'] or '')
+                year = 0
+                if '#' in pk:
+                    head = pk.split('#', 1)[0]
+                    if head.isdigit():
+                        year = int(head)
+                if not year:
+                    year = year_by_license.get(str(d.get('허가번호') or ''), 0)
+                d['year'] = year
+                out.append(d)
+            return out
+        finally:
+            c.close()
+
+    items = await asyncio.to_thread(_read)
+    no_year = sum(1 for x in items if not x.get('year'))
+    logger.info(f"변경개설 sync-export: {len(items)}건 (연도 미도출 {no_year}건)")
+    return JSONResponse({"success": True, "items": items, "total": len(items),
+                         "no_year": no_year}, headers=_ingest_cors())

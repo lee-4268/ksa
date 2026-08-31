@@ -62,6 +62,7 @@ Authorization: Bearer {base64url(empno:expiry:hmac_sha256)}
 | GET | `/change-request` | 변경개설 요청 목록 (혁신팀) |
 | PATCH | `/change-request/file` | 신고 완료 → RE_CHECK 전환 |
 | POST | `/change-request/generate-form` | 변경개설 신고서(A파일) xls 생성 |
+| POST | `/change-request/sync-export` | kca 미러링용 — 취소 제외 전량 JSON. body {secret}, 읽기 전용, 단순 요청 CORS. 연도로 자르지 않는다(direct 등록분은 schedule_pk 가 비어 inspection_schedules JOIN 시 누락) → year 를 행별 도출해 함께 보내고 도출 실패 건수를 no_year 로 반환. kca 변경개설 화면은 조회 미러(등록·신고완료는 ksa에서만) |
 | POST | `/ds/apply-partial-update` | 부분 DS 업로드 + 자동 재비교 |
 | POST | `/inspection/report/generate` | 검사내역서 xls 발급 (Phase 3, 상태 무관 허용) |
 | PATCH | `/inspection/schedule/{pk}/submission` | 단건 접수번호 입력 → SUBMITTED |
