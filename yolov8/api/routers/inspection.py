@@ -3927,7 +3927,10 @@ async def inspection_sync_export(request: Request):
     _RESULT_COLS = ('허가번호', 'status', '검사일', '메모', '철탑형태', '입력자', '입력일시',
                     '진행여부', '성능서류', '불합격내용', '불합격상세', '공용화대상',
                     '간략불합격', '기타사항', '수검자', '시스템', '기지국구분', '전파진흥원',
-                    '검사관', '주차별')
+                    '검사관', '주차별',
+                    # 재점검 필요 — 불합격·부적합으로 재점검이 필요하다고 마킹된 건.
+                    # workflow_status 의 RE_CHECK(변경개설 후속 단계)와 다른 축이다.
+                    'needs_recheck')
 
     def _read():
         c = sqlite3.connect(_INSP_DB, timeout=60)

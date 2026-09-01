@@ -71,7 +71,7 @@ Authorization: Bearer {base64url(empno:expiry:hmac_sha256)}
 | POST | `/inspection/schedule/submission-bulk` | 다중 일정 접수번호 일괄 입력 (Phase 3) |
 | GET | `/inspection/dashboard?year=` | 역할별 대시보드 집계 + 행정처분 대상(부적합 시정기한 지남) + 시정기한 도래 (Phase 5) |
 | POST | `/inspection/schedule/co-located-check` | 일정 등록 전 동일국소(통시→공대→pnu) 미배정 대상 확인 |
-| POST | `/inspection/sync-export` | kca-fe [ksa에서 가져오기] 용 일정+건별결과 JSON — body.secret 인증, 읽기 전용, 단순 요청 CORS |
+| POST | `/inspection/sync-export` | kca-fe [ksa에서 가져오기] 용 일정+건별결과 JSON — body.secret 인증, 읽기 전용, 단순 요청 CORS | (결과에 needs_recheck 포함 — 재점검 필요 플래그. workflow_status 의 RE_CHECK 와 다른 축)
 | POST | `/inspection/sync-photo-urls` | kca-fe 특이사항 사진용 presigned URL(10분) 발급 — body.secret, 읽기 전용 |
 | POST | `/inspection/sync-import-file` | kca 신규연도 파일 릴레이용 — 최신 KCA Import 원본 메타(연도/파일명/행수), body.secret |
 | POST | `/inspection/sync-import-file-data` | 위 원본 엑셀 바이너리를 EC2 프록시 스트리밍 (S3 직접 fetch는 버킷 CORS 차단) |
