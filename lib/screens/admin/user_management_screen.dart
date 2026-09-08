@@ -19,10 +19,12 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
   final TextEditingController _searchController = TextEditingController();
   String? _selectedDivisionId;
   String? _selectedTeamId;
+  UserRole? _selectedRole;
 
   // 데이터 (사용자에서 동적 추출)
   List<String> _uniqueDivisions = [];
   List<String> _uniqueTeams = [];
+  List<UserRole> _uniqueRoles = [];
   List<AppUserProfile> _filteredUsers = [];
 
   // 상태
@@ -87,10 +89,21 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
           .toSet()
           .toList()
         ..sort();
+      // 역할은 등급 순서(최고 관리자→일반 멤버)로 보여야 하므로 정렬하지 않고
+      // UserRole.values 선언 순서를 그대로 따른다.
+      final rolesInData = adminService.allUsers.map((u) => u.role).toSet();
+      final roles = UserRole.values.where(rolesInData.contains).toList();
 
       setState(() {
         _uniqueDivisions = divisions;
         _uniqueTeams = teams;
+        _uniqueRoles = roles;
+        // 이 화면에서 역할을 바꾼 뒤 새로고침하면(예: 마지막 관리자 강등)
+        // 필터 중인 역할이 목록에서 사라져 DropdownButton value 가 items 와
+        // 어긋난다. 그런 경우 선택을 해제한다.
+        if (_selectedRole != null && !roles.contains(_selectedRole)) {
+          _selectedRole = null;
+        }
         _applyFilters();
         _isLoading = false;
       });
@@ -115,6 +128,11 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
       // 팀 필터
       if (_selectedTeamId != null && _selectedTeamId!.isNotEmpty) {
         if (user.teamId != _selectedTeamId) return false;
+      }
+
+      // 역할 필터
+      if (_selectedRole != null && user.role != _selectedRole) {
+        return false;
       }
 
       // 이름 검색
@@ -177,6 +195,13 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
     _applyFilters();
   }
 
+  void _onRoleChanged(UserRole? role) {
+    setState(() {
+      _selectedRole = role;
+    });
+    _applyFilters();
+  }
+
   void _onSearchChanged(String query) {
     _applyFilters();
   }
@@ -186,6 +211,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
       _searchController.clear();
       _selectedDivisionId = null;
       _selectedTeamId = null;
+      _selectedRole = null;
     });
     _applyFilters();
   }
@@ -263,7 +289,8 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
   Widget _buildFilterSection() {
     final hasFilters = _searchController.text.isNotEmpty ||
         _selectedDivisionId != null ||
-        _selectedTeamId != null;
+        _selectedTeamId != null ||
+        _selectedRole != null;
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -304,105 +331,160 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
           ),
           const SizedBox(height: 10),
 
-          // 본부/팀 필터 (DS 대시보드 스타일)
+          // 본부/팀/역할 필터 (DS 대시보드 스타일)
           Row(
             children: [
               Icon(Icons.filter_list, size: 20, color: Colors.grey.shade600),
               const SizedBox(width: 8),
-              // 본부 드롭다운
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: Colors.grey.shade300),
-                ),
-                child: DropdownButtonHideUnderline(
-                  child: DropdownButton<String>(
-                    value: _selectedDivisionId ?? '',
-                    isDense: true,
-                    dropdownColor: Colors.white,
-                    borderRadius: BorderRadius.circular(12),
-                    icon: Icon(Icons.arrow_drop_down, size: 20, color: Colors.teal.shade400),
-                    style: const TextStyle(fontSize: 13, color: Colors.black87),
-                    items: [
-                      DropdownMenuItem(
-                        value: '',
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(Icons.select_all, size: 16, color: Colors.teal.shade400),
-                            const SizedBox(width: 8),
-                            const Text('전체 본부'),
+              // 드롭다운 3개 — 좁은 폭(모바일)에서 Row 가 넘치므로 Wrap 으로 감싼다
+              Expanded(
+                child: Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    // 본부 드롭다운
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: Colors.grey.shade300),
+                      ),
+                      child: DropdownButtonHideUnderline(
+                        child: DropdownButton<String>(
+                          value: _selectedDivisionId ?? '',
+                          isDense: true,
+                          dropdownColor: Colors.white,
+                          borderRadius: BorderRadius.circular(12),
+                          icon: Icon(Icons.arrow_drop_down, size: 20, color: Colors.teal.shade400),
+                          style: const TextStyle(fontSize: 13, color: Colors.black87),
+                          items: [
+                            DropdownMenuItem(
+                              value: '',
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(Icons.select_all, size: 16, color: Colors.teal.shade400),
+                                  const SizedBox(width: 8),
+                                  const Text('전체 본부'),
+                                ],
+                              ),
+                            ),
+                            ..._uniqueDivisions.map((div) => DropdownMenuItem(
+                                  value: div,
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(Icons.business, size: 16, color: Colors.grey.shade500),
+                                      const SizedBox(width: 8),
+                                      Text(div),
+                                    ],
+                                  ),
+                                )),
                           ],
+                          onChanged: (v) => _onDivisionChanged(
+                            v != null && v.isNotEmpty ? v : null,
+                          ),
                         ),
                       ),
-                      ..._uniqueDivisions.map((div) => DropdownMenuItem(
-                            value: div,
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(Icons.business, size: 16, color: Colors.grey.shade500),
-                                const SizedBox(width: 8),
-                                Text(div),
-                              ],
-                            ),
-                          )),
-                    ],
-                    onChanged: (v) => _onDivisionChanged(
-                      v != null && v.isNotEmpty ? v : null,
                     ),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 8),
-              // 팀 드롭다운
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: Colors.grey.shade300),
-                ),
-                child: DropdownButtonHideUnderline(
-                  child: DropdownButton<String>(
-                    value: _selectedTeamId ?? '',
-                    isDense: true,
-                    dropdownColor: Colors.white,
-                    borderRadius: BorderRadius.circular(12),
-                    icon: Icon(Icons.arrow_drop_down, size: 20, color: Colors.teal.shade400),
-                    style: const TextStyle(fontSize: 13, color: Colors.black87),
-                    items: [
-                      DropdownMenuItem(
-                        value: '',
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(Icons.select_all, size: 16, color: Colors.teal.shade400),
-                            const SizedBox(width: 8),
-                            const Text('전체 팀'),
+                    // 팀 드롭다운
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: Colors.grey.shade300),
+                      ),
+                      child: DropdownButtonHideUnderline(
+                        child: DropdownButton<String>(
+                          value: _selectedTeamId ?? '',
+                          isDense: true,
+                          dropdownColor: Colors.white,
+                          borderRadius: BorderRadius.circular(12),
+                          icon: Icon(Icons.arrow_drop_down, size: 20, color: Colors.teal.shade400),
+                          style: const TextStyle(fontSize: 13, color: Colors.black87),
+                          items: [
+                            DropdownMenuItem(
+                              value: '',
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(Icons.select_all, size: 16, color: Colors.teal.shade400),
+                                  const SizedBox(width: 8),
+                                  const Text('전체 팀'),
+                                ],
+                              ),
+                            ),
+                            ..._getTeamsForSelectedDivision().map((team) => DropdownMenuItem(
+                                  value: team,
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(Icons.groups, size: 16, color: Colors.grey.shade500),
+                                      const SizedBox(width: 8),
+                                      Text(team),
+                                    ],
+                                  ),
+                                )),
                           ],
+                          onChanged: (v) => _onTeamChanged(
+                            v != null && v.isNotEmpty ? v : null,
+                          ),
                         ),
                       ),
-                      ..._getTeamsForSelectedDivision().map((team) => DropdownMenuItem(
-                            value: team,
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(Icons.groups, size: 16, color: Colors.grey.shade500),
-                                const SizedBox(width: 8),
-                                Text(team),
-                              ],
-                            ),
-                          )),
-                    ],
-                    onChanged: (v) => _onTeamChanged(
-                      v != null && v.isNotEmpty ? v : null,
                     ),
-                  ),
+                    // 역할 드롭다운
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: Colors.grey.shade300),
+                      ),
+                      child: DropdownButtonHideUnderline(
+                        child: DropdownButton<String>(
+                          value: _selectedRole?.name ?? '',
+                          isDense: true,
+                          dropdownColor: Colors.white,
+                          borderRadius: BorderRadius.circular(12),
+                          icon: Icon(Icons.arrow_drop_down, size: 20, color: Colors.teal.shade400),
+                          style: const TextStyle(fontSize: 13, color: Colors.black87),
+                          items: [
+                            DropdownMenuItem(
+                              value: '',
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(Icons.select_all, size: 16, color: Colors.teal.shade400),
+                                  const SizedBox(width: 8),
+                                  const Text('전체 역할'),
+                                ],
+                              ),
+                            ),
+                            ..._uniqueRoles.map((role) => DropdownMenuItem(
+                                  value: role.name,
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(_getRoleIcon(role), size: 16, color: _getRoleColor(role)),
+                                      const SizedBox(width: 8),
+                                      Text(_getRoleName(role)),
+                                    ],
+                                  ),
+                                )),
+                          ],
+                          onChanged: (v) => _onRoleChanged(
+                            v != null && v.isNotEmpty
+                                ? UserRole.values.firstWhere((r) => r.name == v)
+                                : null,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
-              const Spacer(),
               // 필터 초기화
               if (hasFilters)
                 InkWell(
@@ -509,7 +591,8 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
   Widget _buildEmptyView() {
     final hasFilters = _searchController.text.isNotEmpty ||
         _selectedDivisionId != null ||
-        _selectedTeamId != null;
+        _selectedTeamId != null ||
+        _selectedRole != null;
 
     return Center(
       child: Column(
