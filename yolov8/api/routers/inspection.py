@@ -4862,10 +4862,16 @@ async def inspection_progress_by_result(request: Request, year: int):
             WHERE 합불여부 != ''
             GROUP BY year, REPLACE(허가번호,'-','')
         """
+        # 완료 판정: 결과 status 는 세분화 어휘('불합격(성능)', '부적합(설치장소)' 등)라
+        # 정확 일치(IN)로 걸면 합격 외 판정이 전부 미완료로 새어 나간다 → prefix 매칭.
+        # '검사대기'는 판정 전이므로 미완료 유지.
         rows = c.execute(f"""
             SELECT t.access담당,
                    COUNT(*) AS total,
-                   SUM(CASE WHEN COALESCE(r.status, irr.합불여부) IN ('합격','불합격','부적합') THEN 1 ELSE 0 END) AS completed
+                   SUM(CASE WHEN COALESCE(r.status, irr.합불여부) = '합격'
+                            OR COALESCE(r.status, irr.합불여부) LIKE '불합격%'
+                            OR COALESCE(r.status, irr.합불여부) LIKE '부적합%'
+                       THEN 1 ELSE 0 END) AS completed
             FROM inspection_targets t
             LEFT JOIN inspection_results r ON r.year = t.year AND r.허가번호 = t.허가번호
             LEFT JOIN ({irr_sub}) irr ON irr.year = t.year AND irr.허가번호 = REPLACE(t.허가번호,'-','')
