@@ -15,10 +15,12 @@ import io
 import logging
 import sqlite3
 from datetime import datetime, timezone
+from typing import List, Optional
 from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import BaseModel
 
 from core.auth import _verify_auth, _get_user_role_sync, _caller_allowed_access_list
 from core.config import _INSP_DB, _COMMUNITY_DB
@@ -127,7 +129,17 @@ def _wf_format_license_no(license_no: str) -> str:
 
 @router.post("/change-request/direct")
 async def change_request_direct(request: Request, req: ChangeRequestDirectReq):
-    """일정 미연결 허가번호에 대한 변경개설 요청 (admin/manager 전용)."""
+    """일정 미연결 허가번호에 대한 변경개설 요청 — 차단됨 (2026-09-09).
+
+    일정 미등록 건은 취소 시 사전점검 상태 복귀가 불가능해 오류가 난다.
+    화면에서도 사전 차단하지만, 우회 호출을 막기 위해 서버에서도 거부한다.
+    """
+    await _verify_auth(request)
+    raise HTTPException(
+        400,
+        "일정이 등록되지 않은 국소는 변경개설 요청을 올릴 수 없습니다. "
+        "[변경개설 신고 관리 > 신고서 생성] 탭에서 샘플 양식을 작성해 별도 처리해주세요.")
+    # ── 이하 기존 로직 (차단으로 미도달) ──
     empno = await _verify_auth(request)
     role = await asyncio.to_thread(_get_user_role_sync, empno)
     if role not in ("admin", "manager"):
@@ -463,6 +475,15 @@ async def change_request_file(request: Request, req: ChangeRequestFileReq):
     return {"success": True, "total": len(results), "succeeded": success, "results": results}
 
 
+class GenerateFormBody(BaseModel):
+    """혁신팀 필터 결과 통합 다운로드용 — 일정 pk 목록을 직접 지정.
+
+    본부 담당자가 팀·주차별로 각각 받아 병합하던 것을, 필터된 전체 묶음을
+    한 번에 하나의 xls 로 받도록 확장 (2026-09-09 민원)."""
+    schedule_pks: List[str] = []
+    sheet_label: str = ""
+
+
 @router.post("/change-request/generate-form")
 async def change_request_generate_form(
     request: Request,
@@ -471,14 +492,24 @@ async def change_request_generate_form(
     조: str = "",
     year: int = 0,
     schedule_pk: str = "",
+    body: Optional[GenerateFormBody] = None,
 ):
     """A파일(변경개설 신고서) 묶음 자동 생성 - xls 즉시 응답."""
     await _verify_auth(request)
+    pk_list = [p.strip() for p in (body.schedule_pks if body else []) if p.strip()]
+    if len(pk_list) > 5000:
+        raise HTTPException(400, "한 번에 최대 5,000건까지 생성할 수 있습니다")
 
     def _build():
         c = sqlite3.connect(_INSP_DB, timeout=60)
         c.row_factory = sqlite3.Row
-        if schedule_pk:
+        if pk_list:
+            ph_ = ','.join('?' * len(pk_list))
+            scheds = c.execute(
+                f'SELECT * FROM inspection_schedules WHERE pk IN ({ph_}) '
+                f'ORDER BY 품질개선팀, 수검예정주차, 허가번호', pk_list
+            ).fetchall()
+        elif schedule_pk:
             scheds = c.execute(
                 'SELECT * FROM inspection_schedules WHERE pk=?', (schedule_pk,)
             ).fetchall()
@@ -531,6 +562,9 @@ async def change_request_generate_form(
     주차 = (first.get('수검예정주차') or '').strip() or 수검예정주차
     조_v = (first.get('조') or '').strip() or 조
     sheet_name = f"{팀}_{주차}_{조_v}".strip('_') or '변경개설신고'
+    if body and body.sheet_label.strip():
+        # 통합 다운로드: 필터 요약(본부_주차범위 등)을 시트명으로
+        sheet_name = body.sheet_label.strip()
     if len(sheet_name) > 31:
         sheet_name = sheet_name[:31]
 

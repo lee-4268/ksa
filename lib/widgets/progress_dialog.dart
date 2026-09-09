@@ -80,14 +80,16 @@ class ProgressDialog {
     _safePop();
   }
 
-  /// 에러 표시 후 자동 닫기
-  Future<void> error({String message = '오류가 발생했습니다', int delayMs = 1500}) async {
+  /// 에러 표시 — 자동으로 닫지 않는다. 오류 메시지를 읽어야 하므로
+  /// 사용자가 [확인]을 누를 때까지 유지 (완료 다이얼로그와 달리 수동 닫기).
+  /// delayMs 는 하위호환용으로 남겨두며 사용하지 않는다.
+  Future<void> error({String message = '오류가 발생했습니다', int delayMs = 0}) async {
     if (_isShowing) {
       _safePop();
       _isShowing = false;
     }
 
-    showGeneralDialog(
+    await showGeneralDialog(
       context: _context,
       barrierDismissible: true,
       barrierColor: Colors.black38,
@@ -104,9 +106,6 @@ class ProgressDialog {
       },
       pageBuilder: (ctx, _, __) => _ErrorContent(message: message),
     );
-
-    await Future.delayed(Duration(milliseconds: delayMs));
-    _safePop();
   }
 
   /// 안전한 pop — 캐시된 NavigatorState 사용 (context dispose돼도 안전)
@@ -289,7 +288,8 @@ class _ErrorContentState extends State<_ErrorContent>
   Widget build(BuildContext context) {
     return Center(
       child: Container(
-        width: 160,
+        // 오류 메시지는 상세 사유가 길게 올 수 있어 완료(160)보다 넓게
+        width: 300,
         padding: const EdgeInsets.symmetric(vertical: 28, horizontal: 20),
         decoration: BoxDecoration(
           color: Colors.white,
@@ -325,6 +325,24 @@ class _ErrorContentState extends State<_ErrorContent>
                     fontWeight: FontWeight.w600,
                     color: Color(0xFF374151),
                     decoration: TextDecoration.none)),
+            const SizedBox(height: 18),
+            // 오류는 자동으로 닫지 않는다 — 메시지를 읽고 확인을 눌러야 닫힘
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                onPressed: () => Navigator.of(context).pop(),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFFE53935),
+                  foregroundColor: Colors.white,
+                  elevation: 0,
+                  padding: const EdgeInsets.symmetric(vertical: 10),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8)),
+                ),
+                child: const Text('확인',
+                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+              ),
+            ),
           ],
         ),
       ),

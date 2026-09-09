@@ -1953,6 +1953,9 @@ def _bf_run_sync(req: BackfillFromResultsReq, actor: str, actor_name: str) -> di
                 검사일 = _bf_inspect_date(r["검사일자"], year)
                 주차 = _bf_week(r["주차별"])
                 status = _bf_status(r["합불여부"], r["성능서류"], r["공용화대상"])
+                # 입력자/등록자는 실적의 수검자(현장 담당) — 실행자 이름으로 채우면
+                # 수만 건이 한 사람 명의가 되어 이력 가치가 없어진다.
+                기록자 = (str(r["수검자"] or "").strip() or actor_name)[:100]
                 # 재점검 기준은 결과 입력 라우터와 동일 (합격/빈값/검사대기 외 = 재점검)
                 needs_recheck = ('1' if status.strip() not in ('합격', '', '검사대기')
                                  else '0')
@@ -1971,7 +1974,7 @@ def _bf_run_sync(req: BackfillFromResultsReq, actor: str, actor_name: str) -> di
                         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
                         (pk, year, p, status, 검사일,
                          r["불합격상세"] or "",      # 특이사항 메모 ← 불합격 상세사유
-                         "", photos, uploaders, actor_name, now, pk, needs_recheck,
+                         "", photos, uploaders, 기록자, now, pk, needs_recheck,
                          r["진행여부"] or "", r["성능서류"] or "",
                          (r["불합격내용"] or "")[:200], r["불합격상세"] or "",
                          (r["공용화대상"] or "")[:100], (r["간략불합격"] or "")[:200],
@@ -2000,7 +2003,7 @@ def _bf_run_sync(req: BackfillFromResultsReq, actor: str, actor_name: str) -> di
                          (tgt.get("access담당") or 본부)[:50],
                          (tgt.get("품질개선팀") or 팀)[:50],
                          주차, "", "", "",
-                         actor_name, now, (r["검사관"] or "")[:100], "",
+                         기록자, now, (r["검사관"] or "")[:100], "",
                          WF_INSPECTED, now, actor))
                     # 상태 이력은 직접 기록 — _wf_record_log_sync 는 전환 알림을
                     # 발송하므로 수만 건 백필에 쓰면 알림 폭주가 난다.

@@ -2106,20 +2106,43 @@ class _ChangeRequestDialogState extends State<_ChangeRequestDialog> {
       }
     }
 
+    // 일정 미등록 건 차단 — direct 등록은 취소 시 상태 복귀가 불가능해 오류가 난다.
+    // 신고서 생성 탭의 샘플 양식으로 별도 처리하도록 안내하고 제출을 중단한다.
+    if (byLicense.isNotEmpty) {
+      final nos = byLicense.keys.join('\n· ');
+      await showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          title: const Row(children: [
+            Icon(Icons.info_outline, color: Color(0xFFD97706), size: 20),
+            SizedBox(width: 8),
+            Text('일정 미등록 국소 포함',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+          ]),
+          content: Text(
+            '아래 국소는 수검 일정이 등록되지 않아 여기서 변경개설신고를 '
+            '올릴 수 없습니다.\n\n· $nos\n\n'
+            '일정이 등록되지 않은 국소는 [변경개설 신고 관리 → 신고서 생성] '
+            '탭에서 샘플 양식을 작성해 별도 처리 부탁드립니다.\n'
+            '해당 국소를 제외한 뒤 다시 등록해주세요.',
+            style: const TextStyle(fontSize: 13, height: 1.6),
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx), child: const Text('확인')),
+          ],
+        ),
+      );
+      return;
+    }
+
     setState(() => _submitting = true);
     int total = 0;
     final failed = <String>[];
     for (final entry in byPk.entries) {
       try {
         final n = await widget.service.createChangeRequest(entry.key, entry.value);
-        total += n;
-      } catch (e) {
-        failed.add('${entry.key}: $e');
-      }
-    }
-    for (final entry in byLicense.entries) {
-      try {
-        final n = await widget.service.createChangeRequestDirect(entry.key, entry.value);
         total += n;
       } catch (e) {
         failed.add('${entry.key}: $e');

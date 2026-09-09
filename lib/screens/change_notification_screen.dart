@@ -46,6 +46,14 @@ class _ChangeNotificationScreenState extends State<ChangeNotificationScreen> {
   Map<String, Map<String, dynamic>> _scheduleMetaMap = {};
   bool _loadingRequests = false;
 
+  // 혁신팀 탭 드릴다운 필터 — 요청이 실존하는 본부→팀→주차만 옵션으로 노출.
+  // 주차는 범위(시작~끝) 선택 (몇 주치를 몰아서 받는 경우 대응).
+  String _fltHdqt = '';
+  String _fltTeam = '';
+  String _fltWeekFrom = '';
+  String _fltWeekTo = '';
+  bool _downloadingMerged = false;
+
   static const _apiBase = String.fromEnvironment(
     'API_BASE_URL',
     defaultValue: 'https://api-sko-kca.skons.net',
@@ -431,6 +439,33 @@ class _ChangeNotificationScreenState extends State<ChangeNotificationScreen> {
     return [qt, wk, tm].where((s) => s.isNotEmpty).join('_');
   }
 
+  /// 주차 문자열('9월 1주차') → 정렬/범위 비교용 키 (월*10+주). 못 읽으면 -1.
+  int _weekKey(String w) {
+    final m = RegExp(r'(\d{1,2})\s*월\s*(\d{1,2})\s*주').firstMatch(w);
+    if (m == null) return -1;
+    return int.parse(m.group(1)!) * 10 + int.parse(m.group(2)!);
+  }
+
+  String _hdqtOf(Map<String, dynamic> sched) =>
+      (sched['access담당'] ?? '').toString().replaceAll('Access담당', '').trim();
+
+  /// 드릴다운 필터 적용된 요청 목록
+  List<Map<String, dynamic>> get _filteredRequests {
+    final fromK = _fltWeekFrom.isEmpty ? -1 : _weekKey(_fltWeekFrom);
+    final toK = _fltWeekTo.isEmpty ? 999 : _weekKey(_fltWeekTo);
+    return _changeRequests.where((r) {
+      final sched = _scheduleMetaMap[(r['schedule_pk'] ?? '').toString()] ?? {};
+      if (_fltHdqt.isNotEmpty && _hdqtOf(sched) != _fltHdqt) return false;
+      if (_fltTeam.isNotEmpty &&
+          (sched['품질개선팀'] ?? '').toString().trim() != _fltTeam) return false;
+      if (_fltWeekFrom.isNotEmpty || _fltWeekTo.isNotEmpty) {
+        final wk = _weekKey((sched['수검예정주차'] ?? '').toString());
+        if (wk < 0 || wk < fromK || wk > toK) return false;
+      }
+      return true;
+    }).toList();
+  }
+
   Widget _buildRequestsView() {
     if (_loadingRequests) {
       return Padding(
@@ -455,11 +490,13 @@ class _ChangeNotificationScreenState extends State<ChangeNotificationScreen> {
       );
     }
 
+    final filtered = _filteredRequests;
+
     // 묶음(품질개선팀_주차_조) 단위로 그룹핑.
     // 각 change_request는 schedule_pk를 가지며, schedule 메타는 _scheduleMetaMap에서 가져옴.
     final bundles = <String, List<Map<String, dynamic>>>{};
     final bundleMeta = <String, Map<String, dynamic>>{};
-    for (final r in _changeRequests) {
+    for (final r in filtered) {
       final spk = (r['schedule_pk'] ?? '').toString();
       final sched = _scheduleMetaMap[spk] ?? {};
       final key = _bundleKey(sched);
@@ -470,8 +507,11 @@ class _ChangeNotificationScreenState extends State<ChangeNotificationScreen> {
     final keys = bundles.keys.toList()..sort();
     return Column(
       children: [
+        _buildRequestFilterBar(filtered),
+        const SizedBox(height: 10),
         Row(children: [
-          Text('묶음 ${bundles.length}개 / 수검 건 ${_changeRequests.map((r) => r['schedule_pk']).toSet().length}건 / 항목 ${_changeRequests.length}개',
+          Text('묶음 ${bundles.length}개 / 수검 건 ${filtered.map((r) => r['schedule_pk']).toSet().length}건 / 항목 ${filtered.length}개'
+              '${filtered.length != _changeRequests.length ? ' (전체 ${_changeRequests.length}개 중 필터됨)' : ''}',
               style: TextStyle(fontSize: 13, color: _textSecondary)),
           const Spacer(),
           IconButton(
@@ -481,9 +521,213 @@ class _ChangeNotificationScreenState extends State<ChangeNotificationScreen> {
           ),
         ]),
         const SizedBox(height: 8),
-        ...keys.map((k) => _buildBundleCard(k, bundles[k]!, bundleMeta[k]!)),
+        if (filtered.isEmpty)
+          Container(
+            padding: const EdgeInsets.all(30),
+            decoration: BoxDecoration(
+              color: _surface,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: _border),
+            ),
+            child: Text('필터 조건에 해당하는 변경 요청이 없습니다.',
+                style: TextStyle(fontSize: 13, color: _textSecondary)),
+          )
+        else
+          ...keys.map((k) => _buildBundleCard(k, bundles[k]!, bundleMeta[k]!)),
       ],
     );
+  }
+
+  /// 드릴다운 필터 바 — 본부 → 팀 → 주차(시작~끝). 각 단계 옵션은 상위 선택
+  /// 범위에 요청이 실존하는 값만 노출한다.
+  Widget _buildRequestFilterBar(List<Map<String, dynamic>> filtered) {
+    // 옵션 소스: 요청이 있는 일정 메타들
+    final schedsAll = _changeRequests
+        .map((r) => _scheduleMetaMap[(r['schedule_pk'] ?? '').toString()] ?? {})
+        .where((s) => s.isNotEmpty)
+        .toList();
+
+    final hdqts = schedsAll.map(_hdqtOf).where((h) => h.isNotEmpty).toSet().toList()
+      ..sort();
+
+    final teamScope = _fltHdqt.isEmpty
+        ? schedsAll
+        : schedsAll.where((s) => _hdqtOf(s) == _fltHdqt).toList();
+    final teams = teamScope
+        .map((s) => (s['품질개선팀'] ?? '').toString().trim())
+        .where((t) => t.isNotEmpty)
+        .toSet()
+        .toList()
+      ..sort();
+
+    final weekScope = _fltTeam.isEmpty
+        ? teamScope
+        : teamScope
+            .where((s) => (s['품질개선팀'] ?? '').toString().trim() == _fltTeam)
+            .toList();
+    final weeks = weekScope
+        .map((s) => (s['수검예정주차'] ?? '').toString().trim())
+        .where((w) => w.isNotEmpty && _weekKey(w) >= 0)
+        .toSet()
+        .toList()
+      ..sort((a, b) => _weekKey(a).compareTo(_weekKey(b)));
+
+    Widget dd(String label, String value, List<String> options,
+        ValueChanged<String> onChanged, {String allLabel = '전체'}) {
+      final items = ['', ...options];
+      final safe = items.contains(value) ? value : '';
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: _border),
+        ),
+        child: DropdownButtonHideUnderline(
+          child: DropdownButton<String>(
+            value: safe,
+            isDense: true,
+            style: TextStyle(fontSize: 12.5, color: _textPrimary),
+            items: items
+                .map((v) => DropdownMenuItem(
+                    value: v, child: Text(v.isEmpty ? '$label: $allLabel' : v)))
+                .toList(),
+            onChanged: (v) => onChanged(v ?? ''),
+          ),
+        ),
+      );
+    }
+
+    final hasFilter = _fltHdqt.isNotEmpty || _fltTeam.isNotEmpty ||
+        _fltWeekFrom.isNotEmpty || _fltWeekTo.isNotEmpty;
+
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: _surface,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: _border),
+      ),
+      child: Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          dd('본부', _fltHdqt, hdqts, (v) => setState(() {
+                _fltHdqt = v;
+                _fltTeam = '';
+                _fltWeekFrom = '';
+                _fltWeekTo = '';
+              })),
+          dd('팀', _fltTeam, teams, (v) => setState(() {
+                _fltTeam = v;
+                _fltWeekFrom = '';
+                _fltWeekTo = '';
+              })),
+          dd('주차 시작', _fltWeekFrom, weeks, (v) => setState(() {
+                _fltWeekFrom = v;
+                // 시작이 끝보다 뒤면 끝을 함께 이동
+                if (_fltWeekTo.isNotEmpty && v.isNotEmpty &&
+                    _weekKey(v) > _weekKey(_fltWeekTo)) {
+                  _fltWeekTo = v;
+                }
+              })),
+          const Text('~', style: TextStyle(fontSize: 13)),
+          dd('주차 끝', _fltWeekTo, weeks, (v) => setState(() {
+                _fltWeekTo = v;
+                if (_fltWeekFrom.isNotEmpty && v.isNotEmpty &&
+                    _weekKey(v) < _weekKey(_fltWeekFrom)) {
+                  _fltWeekFrom = v;
+                }
+              })),
+          if (hasFilter)
+            TextButton.icon(
+              onPressed: () => setState(() {
+                _fltHdqt = '';
+                _fltTeam = '';
+                _fltWeekFrom = '';
+                _fltWeekTo = '';
+              }),
+              icon: const Icon(Icons.filter_alt_off_outlined, size: 15),
+              label: const Text('초기화', style: TextStyle(fontSize: 12.5)),
+            ),
+          ElevatedButton.icon(
+            onPressed: (filtered.isEmpty || _downloadingMerged)
+                ? null
+                : () => _downloadMergedForm(filtered),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF1A8754),
+              foregroundColor: Colors.white,
+              elevation: 0,
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            icon: _downloadingMerged
+                ? const SizedBox(width: 14, height: 14,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, color: Colors.white))
+                : const Icon(Icons.file_download_outlined, size: 16),
+            label: Text(
+              '필터 결과 통합 신고서 (${filtered.map((r) => r['schedule_pk']).toSet().length}국소)',
+              style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 필터된 요청 전체를 하나의 xls 신고서로 다운로드 (팀별 개별 다운로드 → 병합 불편 해소)
+  Future<void> _downloadMergedForm(List<Map<String, dynamic>> filtered) async {
+    final pks = filtered
+        .map((r) => (r['schedule_pk'] ?? '').toString())
+        .where((p) => p.isNotEmpty)
+        .toSet()
+        .toList();
+    if (pks.isEmpty) return;
+    setState(() => _downloadingMerged = true);
+    try {
+      _inspectionSvc.setAuthToken(context.read<AuthService>().authToken);
+      final parts = <String>[
+        if (_fltHdqt.isNotEmpty) _fltHdqt,
+        if (_fltTeam.isNotEmpty) _fltTeam,
+        if (_fltWeekFrom.isNotEmpty || _fltWeekTo.isNotEmpty)
+          '${_fltWeekFrom.isEmpty ? weeksFirstLabel() : _fltWeekFrom}~${_fltWeekTo.isEmpty ? weeksLastLabel() : _fltWeekTo}',
+      ];
+      final label = parts.isEmpty ? '변경개설신고_전체' : parts.join('_');
+      final bytes = await _inspectionSvc.generateChangeFormByPks(pks, label);
+      final blob = html.Blob([bytes], 'application/vnd.ms-excel');
+      final url = html.Url.createObjectUrlFromBlob(blob);
+      html.AnchorElement(href: url)
+        ..download = '$label.xls'
+        ..click();
+      html.Url.revokeObjectUrl(url);
+    } catch (e) {
+      if (mounted) await ProgressDialog(context).error(message: '통합 신고서 생성 실패: $e');
+    } finally {
+      if (mounted) setState(() => _downloadingMerged = false);
+    }
+  }
+
+  // 라벨용 — 필터 범위 한쪽만 지정된 경우 실존 주차의 처음/끝을 표기
+  String weeksFirstLabel() {
+    final ws = _filteredRequests
+        .map((r) => (_scheduleMetaMap[(r['schedule_pk'] ?? '').toString()]
+                ?['수검예정주차'] ?? '').toString())
+        .where((w) => _weekKey(w) >= 0)
+        .toList()
+      ..sort((a, b) => _weekKey(a).compareTo(_weekKey(b)));
+    return ws.isEmpty ? '' : ws.first;
+  }
+
+  String weeksLastLabel() {
+    final ws = _filteredRequests
+        .map((r) => (_scheduleMetaMap[(r['schedule_pk'] ?? '').toString()]
+                ?['수검예정주차'] ?? '').toString())
+        .where((w) => _weekKey(w) >= 0)
+        .toList()
+      ..sort((a, b) => _weekKey(a).compareTo(_weekKey(b)));
+    return ws.isEmpty ? '' : ws.last;
   }
 
   Widget _buildBundleCard(String bundleKey, List<Map<String, dynamic>> items, Map<String, dynamic> meta) {

@@ -570,6 +570,20 @@ class InspectionService {
     return resp.bodyBytes;
   }
 
+  /// 필터 결과 통합 신고서 — 일정 pk 목록 전체를 하나의 xls 로 (혁신팀 탭)
+  Future<Uint8List> generateChangeFormByPks(
+      List<String> schedulePks, String sheetLabel) async {
+    final resp = await http.post(
+      Uri.parse('$_baseUrl/change-request/generate-form'),
+      headers: _headers,
+      body: json.encode({'schedule_pks': schedulePks, 'sheet_label': sheetLabel}),
+    ).timeout(_apiTimeout);
+    if (resp.statusCode != 200) {
+      throw Exception('신고서 생성 실패: ${resp.statusCode}');
+    }
+    return resp.bodyBytes;
+  }
+
   /// 부분 DS 파일 파싱 → 변경 전/후 diff 반환 (DB 미적용)
   Future<Map<String, dynamic>> previewPartialDsUpdate(Uint8List bytes, String filename) async {
     final uri = Uri.parse('$_baseUrl/ds/preview-partial-update');
