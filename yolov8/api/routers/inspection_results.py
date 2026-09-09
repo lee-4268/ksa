@@ -1826,7 +1826,7 @@ def _bf_run_sync(req: BackfillFromResultsReq, actor: str, actor_name: str) -> di
     conn.row_factory = sqlite3.Row
     try:
         # 1) 결과장 스캔 — 허가번호당 검사일이 가장 늦은 행(동일하면 id 큰 행) 채택
-        sql = ("SELECT id, REPLACE(허가번호,'-','') AS p, region, 검사일자 "
+        sql = ("SELECT id, REPLACE(허가번호,'-','') AS p, region, ons팀, 검사일자 "
                "FROM inspection_results_raw WHERE year=? AND 허가번호 <> ''")
         params: list = [year]
         if req.region:
@@ -1834,6 +1834,7 @@ def _bf_run_sync(req: BackfillFromResultsReq, actor: str, actor_name: str) -> di
             params.append(req.region)
         best: dict = {}
         raw_regions: dict = {}
+        raw_teams: dict = {}
         for r in conn.execute(sql, params):
             stats["raw_rows"] += 1
             p = (r["p"] or "").strip()
@@ -1843,6 +1844,7 @@ def _bf_run_sync(req: BackfillFromResultsReq, actor: str, actor_name: str) -> di
             if p not in best or key > best[p]:
                 best[p] = key
                 raw_regions[p] = _bf_norm_hdqt(r["region"])
+                raw_teams[p] = str(r["ons팀"] or "").strip()
         best_ids = {p: k[1] for p, k in best.items()}
         stats["permits"] = len(best_ids)
         if not best_ids:
@@ -1917,6 +1919,15 @@ def _bf_run_sync(req: BackfillFromResultsReq, actor: str, actor_name: str) -> di
                     continue
                 d = dict(row)
                 d['kca검토결과'] = '대상 추가'
+                # 스테이징의 본부/팀 공백 폴백 — 비워 둔 채 올리면 매트릭스에
+                # '미배정'으로 잡힌다 (2026-09-09, 2,390건 실측). 실적의
+                # region/ons팀을 표준 어휘 검증 후 채운다.
+                if not str(d.get('access담당') or '').strip():
+                    d['access담당'] = raw_regions.get(pno) or ''
+                if not str(d.get('품질개선팀') or '').strip():
+                    _rt = raw_teams.get(pno) or ''
+                    if _rt in INSP_TEAM_TO_HDQT:
+                        d['품질개선팀'] = _rt
                 conn.execute(
                     f'INSERT INTO inspection_targets ({_T_COLS}) VALUES ({ph})',
                     tuple(d.get(c) for c in _t_cols))
