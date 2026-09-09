@@ -572,27 +572,41 @@ class _ChangeNotificationScreenState extends State<ChangeNotificationScreen> {
         .toList()
       ..sort((a, b) => _weekKey(a).compareTo(_weekKey(b)));
 
+    // 부적합 관리 화면의 _buildModernDropdown 과 동일한 룩 (40px, F9FAFB, radius 8)
     Widget dd(String label, String value, List<String> options,
-        ValueChanged<String> onChanged, {String allLabel = '전체'}) {
+        ValueChanged<String> onChanged,
+        {double width = 130, bool enabled = true}) {
       final items = ['', ...options];
       final safe = items.contains(value) ? value : '';
-      return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: _border),
-        ),
-        child: DropdownButtonHideUnderline(
-          child: DropdownButton<String>(
-            value: safe,
-            isDense: true,
-            style: TextStyle(fontSize: 12.5, color: _textPrimary),
-            items: items
-                .map((v) => DropdownMenuItem(
-                    value: v, child: Text(v.isEmpty ? '$label: $allLabel' : v)))
-                .toList(),
-            onChanged: (v) => onChanged(v ?? ''),
+      return SizedBox(
+        width: width,
+        height: 40,
+        child: Opacity(
+          opacity: enabled ? 1.0 : 0.5,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            decoration: BoxDecoration(
+              color: const Color(0xFFF9FAFB),
+              border: Border.all(color: const Color(0xFFE5E7EB)),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: DropdownButtonHideUnderline(
+              child: DropdownButton<String>(
+                isExpanded: true,
+                icon: const Icon(Icons.unfold_more,
+                    color: Color(0xFF9CA3AF), size: 16),
+                dropdownColor: Colors.white,
+                style: const TextStyle(color: Color(0xFF111827),
+                    fontSize: 13, fontWeight: FontWeight.w500),
+                value: safe,
+                borderRadius: BorderRadius.circular(10),
+                items: items
+                    .map((v) => DropdownMenuItem(
+                        value: v, child: Text(v.isEmpty ? label : v)))
+                    .toList(),
+                onChanged: enabled ? (v) => onChanged(v ?? '') : null,
+              ),
+            ),
           ),
         ),
       );
@@ -613,17 +627,18 @@ class _ChangeNotificationScreenState extends State<ChangeNotificationScreen> {
         runSpacing: 8,
         crossAxisAlignment: WrapCrossAlignment.center,
         children: [
+          const Icon(Icons.filter_list, size: 18, color: Color(0xFF6B7280)),
           dd('본부', _fltHdqt, hdqts, (v) => setState(() {
                 _fltHdqt = v;
                 _fltTeam = '';
                 _fltWeekFrom = '';
                 _fltWeekTo = '';
-              })),
+              }), width: 120),
           dd('팀', _fltTeam, teams, (v) => setState(() {
                 _fltTeam = v;
                 _fltWeekFrom = '';
                 _fltWeekTo = '';
-              })),
+              }), width: 150, enabled: _fltHdqt.isNotEmpty),
           dd('주차 시작', _fltWeekFrom, weeks, (v) => setState(() {
                 _fltWeekFrom = v;
                 // 시작이 끝보다 뒤면 끝을 함께 이동
