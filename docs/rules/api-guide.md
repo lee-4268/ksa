@@ -110,6 +110,7 @@ Authorization: Bearer {base64url(empno:expiry:hmac_sha256)}
 | GET | `/inspection-results/weeks` | 업로드된 주차 목록 (month/region 필터) |
 | POST | `/inspection-results/export-xlsx` | 결과장 엑셀 다운로드 |
 | POST | `/inspection-results/sync-export` | kca 실적 미러링용 — inspection_results_raw 본부(region) 단위 JSON (region='__ETC__'=잔여분). body {secret, year, region}, 읽기 전용, 단순 요청 CORS. 연 7만행이라 한 번에 못 넘겨 region 단위 10회로 쪼갠다 |
+| POST | `/inspection-results/backfill` | 결과장(실적) → 수검 일정·결과 이력 복원 (admin/manager, 관리자 패널 카드). dry_run 미리보기 기본, 기존 입력분 보존(overwrite 옵션), 대상 없는 건 스테이징에서 회수, 본부/팀은 대상값 우선 + 표준 9본부 정규화 폴백, 불합격상세→특이사항 메모, 일정은 INSPECTED로 복원(상태 이력 직접 기록 — 알림 미발송). 복원분은 kca에 [SKO 무선국에서 가져오기]로 전파 |
 | GET | `/inspection-results/dashboard` | 대시보드 집계 |
 | GET | `/inspection-results/analysis` | 불합격 분석 + 장비타입 크로스탭 |
 | GET | `/inspection-results/weekly-trend` | 주별 합격율 추이 |

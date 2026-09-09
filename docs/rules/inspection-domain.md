@@ -152,6 +152,7 @@ Row 4: [장비 Type별 불합격 현황 테이블] | [장비 Type별 불합격 �
 - **일정 화면 연동**: `inspection_schedule_screen.dart`가 `GET /special-sites`로 {허가번호→유형} 맵을 백그라운드 로드, 행 배경색 tint + 테이블 상단 범례 표시. 유형별 색은 `special_sites_screen.dart`의 `kSpecialSiteColors` 단일 소스 (백엔드 VALID_SPECIAL_TYPES와 함께 유지).
 - **부적합도 동일 방향 (2026-08-24)**: 부적합 등록·상태변경·심의차수는 ksa에서만. ksa `POST /inadequate/sync-export`(body {secret, year}) → kca-be `/inadequate/ksa-sync`(연도 단위 전체 교체, 60초 가드, ksa_sync_meta kind='inadequate') → kca-fe 부적합 화면은 조회 전용(편집/일괄처리/자체동기화 UI 제거, [ksa에서 가져오기] admin/manager + 30분 자동 동기화). kca 일정 화면의 관리 컬럼(건별 일정 등록/수정/삭제)도 제거.
 - **ksa 부적합 화면 컬럼 조정 (2026-08-24)**: `inadequate_management_screen.dart` 헤더 오른쪽 경계 드래그로 컬럼 폭 조정(더블클릭 초기화), 폭 합계 초과 시 가로 스크롤. 심의차수 기본 가중치 0.5→1.0 (헤더 잘림 해소).
+- **실적 백필도 ksa에서 (2026-09-09)**: 결과장→일정·결과 이력 복원은 `POST /inspection-results/backfill`(관리자 패널 카드)로 **ksa에서 실행** — 복원분은 기존 미러로 kca에 전파. kca에 먼저 만들었던 동일 기능(`/inspection-schedule/backfill-from-raw` + 관리자 카드)은 방향 위반(플레이그라운드 자체 쓰기)이라 실행 전에 제거함. 변환 규칙: 허가번호 하이픈 제거, 검사일 엑셀 시리얼/기간→YYYYMMDD, '1월1주'→'1월 1주차', 합불/성능서류/공용화대상→status 어휘, 불합격상세→특이사항 메모, 본부/팀은 대상값 우선 + `_ONS_REGION_MAP`·`INSP_TEAM_TO_HDQT` 표준화 폴백('0'/'강남Access' 등 비표준 값 저장 금지), 일정 workflow_status=INSPECTED(상태 이력 직접 기록, 전환 알림 미발송).
 
 ## 주소 → 품질개선팀 매핑
 로직 전부 `yolov8/api/routers/inspection.py`. 진입점 `_hdqt_from_addr(addr, known_hdqt, learned_map)` → `(access담당, 품질개선팀)`.

@@ -22,8 +22,9 @@ import io
 import itertools
 import logging
 import os
+import re
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Union
 from urllib.parse import quote as _url_quote
 
@@ -1692,3 +1693,361 @@ async def inspection_results_sync_export(request: Request):
     return JSONResponse({"success": True, "year": year, "region": region,
                          "items": items, "total": len(items)},
                         headers=_ingest_cors())
+
+
+# ── 실적(RAW) → 수검 일정·결과 복원 (백필) ─────────────────────
+#   상용화 이후 경북·인천 외 본부는 일정/결과를 시스템에 입력하지 않아 일정
+#   메뉴가 비어 있다. 수검 실적은 결과장(inspection_results_raw)에 전량 쌓이므로
+#   그것을 원본으로 inspection_results(수검 결과) + inspection_schedules(수검 일정)
+#   이력을 복원한다. 여기(SKO 무선국)가 데이터 원본이므로 복원도 여기서 하고,
+#   플레이그라운드는 기존 [SKO 무선국에서 가져오기] 미러로 전파받는다.
+#
+#   결과장 ↔ 일정/결과 표기 차이 변환:
+#     - 허가번호: 하이픈 표기 제거 후 조인
+#     - 검사일자: 엑셀 시리얼/기간('03/03~03/06')/'#N/A' → 'YYYYMMDD' (시작일)
+#     - 주차별 '1월1주' → 수검예정주차 '1월 1주차'
+#     - 합불여부·성능서류·공용화대상 → 결과 status 어휘
+#       (성능서류='부적합'은 합불여부가 합격이어도 부적합 건)
+#     - 불합격상세 → 결과 특이사항 메모
+#     - 본부/팀: 대상(inspection_targets) 값 우선, 폴백은 결과장 region/ons팀을
+#       표준 9본부('강남'~'강원')·표준 품질개선팀으로 정규화 ('0'/'강남Access' 등
+#       비표준 값은 버린다 — 화면 필터·미러 격리가 본부 어휘에 의존)
+
+_BF_EXCEL_EPOCH = datetime(1899, 12, 30)   # 엑셀 시리얼 1 = 1899-12-31
+_BF_WEEK_RE = re.compile(r"(\d{1,2})\s*월\s*(\d{1,2})\s*주")
+_BF_YMD_RE = re.compile(r"(\d{4})[-./](\d{1,2})[-./](\d{1,2})")
+_BF_MD_RE = re.compile(r"(\d{1,2})[/.-](\d{1,2})")
+_BF_HDQTS = ('강남', '강북', '인천', '경기', '경남', '경북', '서부', '충청', '강원')
+
+
+def _bf_norm_hdqt(v) -> str:
+    """결과장 region/본부 표기 → 표준 9본부명. 판정 불가('0'/수도권/잡값)는 ''."""
+    s = str(v or "").strip()
+    if not s:
+        return ""
+    mapped = _ONS_REGION_MAP.get(s, s)
+    if mapped in _BF_HDQTS:
+        return mapped
+    for h in _BF_HDQTS:
+        if s.startswith(h):
+            return h
+    return ""
+
+
+def _bf_week(v) -> str:
+    m = _BF_WEEK_RE.search(str(v or ""))
+    return f"{int(m.group(1))}월 {int(m.group(2))}주차" if m else ""
+
+
+def _bf_inspect_date(v, year: int) -> str:
+    """결과장 검사일자 → 'YYYYMMDD'. 읽지 못하면 ''(검사일 미상)."""
+    s = str(v or "").strip()
+    if not s or s.upper().startswith("#N/A"):
+        return ""
+    if s.isdigit():
+        n = int(s)
+        if len(s) == 8 and 19000101 <= n <= 21001231:
+            return s
+        if 20000 <= n <= 60000:
+            return (_BF_EXCEL_EPOCH + timedelta(days=n)).strftime("%Y%m%d")
+        return ""
+    m = _BF_YMD_RE.search(s)
+    if m:
+        return f"{int(m.group(1)):04d}{int(m.group(2)):02d}{int(m.group(3)):02d}"
+    if not _BF_WEEK_RE.search(s):
+        m = _BF_MD_RE.search(s)
+        if m:
+            mm, dd = int(m.group(1)), int(m.group(2))
+            if 1 <= mm <= 12 and 1 <= dd <= 31:
+                return f"{year:04d}{mm:02d}{dd:02d}"
+    return ""
+
+
+def _bf_status(합불여부, 성능서류, 공용화대상) -> str:
+    """결과장 합불/성능서류/공용화대상 → 결과 status 어휘 (결과 화면과 동일)."""
+    hb = str(합불여부 or "").strip()
+    ps = str(성능서류 or "").strip()
+    gy = str(공용화대상 or "").strip()
+    if ps == "부적합":
+        if "설치장소" in gy:
+            return "부적합(설치장소)"
+        if "공용화" in gy or "환경" in gy:
+            return "부적합(공용화)"
+        return "부적합(All)"
+    if hb == "불합격":
+        has_doc, has_perf = ("서류" in ps), ("성능" in ps)
+        if has_doc and has_perf:
+            return "불합격(All)"
+        if has_perf:
+            return "불합격(성능)"
+        if has_doc:
+            return "불합격(서류)"
+        return "불합격(All)"
+    if hb == "합격":
+        return "합격"
+    return "검사대기"
+
+
+def _bf_quarter(ymd: str, week: str) -> str:
+    mm = 0
+    if len(ymd) == 8 and ymd.isdigit():
+        mm = int(ymd[4:6])
+    else:
+        m = _BF_WEEK_RE.search(week or "")
+        if m:
+            mm = int(m.group(1))
+    return f"{(mm - 1) // 3 + 1}분기" if 1 <= mm <= 12 else ""
+
+
+class BackfillFromResultsReq(BaseModel):
+    year: int
+    region: Optional[str] = None      # 결과장 region(표준 본부명) 한 곳만. None=전체
+    dry_run: bool = True              # 기본은 미리보기(쓰기 없음)
+    overwrite: bool = False           # 이미 결과/일정이 있는 허가번호도 교체
+    with_schedules: bool = True       # 일정(inspection_schedules)까지 복원
+    add_missing_targets: bool = True  # 대상에 없는 건 스테이징에서 끌어와 등록
+
+
+def _bf_run_sync(req: BackfillFromResultsReq, actor: str, actor_name: str) -> dict:
+    from routers.inspection import INSP_TEAM_TO_HDQT, WF_INSPECTED
+
+    year = req.year
+    stats = {
+        "year": year, "region": req.region or "전체", "dry_run": req.dry_run,
+        "raw_rows": 0, "permits": 0,
+        "targets_matched": 0, "targets_missing": 0,
+        "targets_from_staging": 0, "targets_unresolved": 0,
+        "results_written": 0, "results_skipped": 0,
+        "schedules_written": 0, "schedules_skipped": 0,
+        "by_region": {},
+    }
+
+    conn = sqlite3.connect(_INSP_DB, timeout=120)
+    conn.row_factory = sqlite3.Row
+    try:
+        # 1) 결과장 스캔 — 허가번호당 검사일이 가장 늦은 행(동일하면 id 큰 행) 채택
+        sql = ("SELECT id, REPLACE(허가번호,'-','') AS p, region, 검사일자 "
+               "FROM inspection_results_raw WHERE year=? AND 허가번호 <> ''")
+        params: list = [year]
+        if req.region:
+            sql += " AND region=?"
+            params.append(req.region)
+        best: dict = {}
+        raw_regions: dict = {}
+        for r in conn.execute(sql, params):
+            stats["raw_rows"] += 1
+            p = (r["p"] or "").strip()
+            if not p:
+                continue
+            key = (_bf_inspect_date(r["검사일자"], year), int(r["id"]))
+            if p not in best or key > best[p]:
+                best[p] = key
+                raw_regions[p] = _bf_norm_hdqt(r["region"])
+        best_ids = {p: k[1] for p, k in best.items()}
+        stats["permits"] = len(best_ids)
+        if not best_ids:
+            return stats
+
+        # 2) 대상/기존 결과·일정 대조
+        targets: dict = {}
+        for r in conn.execute(
+                'SELECT 허가번호, 호출명칭, 분기, skt본부, access담당, 품질개선팀 '
+                'FROM inspection_targets WHERE year=?', (year,)):
+            pno = r["허가번호"]
+            if pno in best_ids and pno not in targets:
+                targets[pno] = dict(r)
+        has_result = {r[0] for r in conn.execute(
+            'SELECT 허가번호 FROM inspection_results WHERE year=?', (year,))}
+        has_sched = {r[0] for r in conn.execute(
+            'SELECT 허가번호 FROM inspection_schedules WHERE year=?', (year,))}
+
+        missing = [p for p in best_ids if p not in targets]
+        stats["targets_matched"] = len(best_ids) - len(missing)
+        stats["targets_missing"] = len(missing)
+
+        staged_ok: set = set()
+        for i in range(0, len(missing), 500):
+            batch = missing[i:i + 500]
+            ph = ",".join("?" * len(batch))
+            staged_ok.update(r[0] for r in conn.execute(
+                f'SELECT DISTINCT 허가번호 FROM inspection_targets_staging '
+                f'WHERE year=? AND 허가번호 IN ({ph})', [year] + batch))
+        stats["targets_from_staging"] = len(staged_ok)
+        stats["targets_unresolved"] = len(missing) - len(staged_ok)
+
+        for p in best_ids:
+            rg = raw_regions.get(p) or "(미지정)"
+            b = stats["by_region"].setdefault(
+                rg, {"permits": 0, "대상없음": 0, "스테이징회수": 0})
+            b["permits"] += 1
+            if p in targets:
+                continue
+            b["대상없음"] += 1
+            if p in staged_ok:
+                b["스테이징회수"] += 1
+
+        if req.dry_run:
+            writable = [p for p in best_ids
+                        if p in targets
+                        or (req.add_missing_targets and p in staged_ok)]
+            stats["results_written"] = sum(
+                1 for p in writable if req.overwrite or p not in has_result)
+            stats["results_skipped"] = len(writable) - stats["results_written"]
+            if req.with_schedules:
+                stats["schedules_written"] = sum(
+                    1 for p in writable if req.overwrite or p not in has_sched)
+                stats["schedules_skipped"] = (
+                    len(writable) - stats["schedules_written"])
+            return stats
+
+        now = datetime.now(timezone.utc).isoformat()
+
+        # 3) 대상에 없는 허가번호 → 스테이징에서 회수 (add-from-staging과 동일 경로)
+        if req.add_missing_targets and staged_ok:
+            _T_COLS = ('year,sheet,pnu_code,허가번호,호출명칭,국종군,부서,분기,연도주기,'
+                       '검사주기,허가상태,설치장소,도로명주소,장치수,통시,공대,kca검토결과,'
+                       '시기조정,기준연도,skt본부,access담당,품질개선팀,검사종류')
+            _t_cols = _T_COLS.split(',')
+            ph = ','.join('?' * len(_t_cols))
+            for pno in sorted(staged_ok):
+                row = conn.execute(
+                    'SELECT * FROM inspection_targets_staging '
+                    'WHERE year=? AND 허가번호=? LIMIT 1', (year, pno)).fetchone()
+                if not row:
+                    continue
+                d = dict(row)
+                d['kca검토결과'] = '대상 추가'
+                conn.execute(
+                    f'INSERT INTO inspection_targets ({_T_COLS}) VALUES ({ph})',
+                    tuple(d.get(c) for c in _t_cols))
+                conn.execute(
+                    'DELETE FROM inspection_targets_staging WHERE year=? AND 허가번호=?',
+                    (year, pno))
+                targets[pno] = {
+                    '허가번호': pno, '호출명칭': d.get('호출명칭') or '',
+                    '분기': d.get('분기') or '', 'skt본부': d.get('skt본부') or '',
+                    'access담당': d.get('access담당') or '',
+                    '품질개선팀': d.get('품질개선팀') or '',
+                }
+            conn.commit()
+
+        # 4) 결과장 원문을 읽어 결과·일정 적재
+        write_permits = [p for p in best_ids if p in targets]
+        res_set = {p for p in write_permits if req.overwrite or p not in has_result}
+        sch_set = ({p for p in write_permits if req.overwrite or p not in has_sched}
+                   if req.with_schedules else set())
+        stats["results_skipped"] = len(write_permits) - len(res_set)
+        stats["schedules_skipped"] = (
+            len(write_permits) - len(sch_set) if req.with_schedules else 0)
+
+        ids = [best_ids[p] for p in write_permits]
+        for i in range(0, len(ids), 500):
+            batch = ids[i:i + 500]
+            ph = ",".join("?" * len(batch))
+            for r in conn.execute(
+                    f'SELECT * FROM inspection_results_raw WHERE id IN ({ph})',
+                    batch).fetchall():
+                p = (r["허가번호"] or "").replace("-", "").strip()
+                tgt = targets.get(p) or {}
+                pk = f"{year}#{p}"
+                검사일 = _bf_inspect_date(r["검사일자"], year)
+                주차 = _bf_week(r["주차별"])
+                status = _bf_status(r["합불여부"], r["성능서류"], r["공용화대상"])
+                # 재점검 기준은 결과 입력 라우터와 동일 (합격/빈값/검사대기 외 = 재점검)
+                needs_recheck = ('1' if status.strip() not in ('합격', '', '검사대기')
+                                 else '0')
+                if p in res_set:
+                    existing = conn.execute(
+                        'SELECT 사진S3키, 사진업로더 FROM inspection_results WHERE pk=?',
+                        (pk,)).fetchone()
+                    photos = existing['사진S3키'] if existing else '[]'
+                    uploaders = (existing['사진업로더'] or '{}') if existing else '{}'
+                    conn.execute('''INSERT OR REPLACE INTO inspection_results
+                        (pk, year, 허가번호, status, 검사일, 메모, 철탑형태,
+                         사진S3키, 사진업로더, 입력자, 입력일시, schedule_pk, needs_recheck,
+                         진행여부, 성능서류, 불합격내용, 불합격상세, 공용화대상,
+                         간략불합격, 기타사항, 수검자, 시스템, 기지국구분,
+                         전파진흥원, 검사관, 주차별)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+                        (pk, year, p, status, 검사일,
+                         r["불합격상세"] or "",      # 특이사항 메모 ← 불합격 상세사유
+                         "", photos, uploaders, actor_name, now, pk, needs_recheck,
+                         r["진행여부"] or "", r["성능서류"] or "",
+                         (r["불합격내용"] or "")[:200], r["불합격상세"] or "",
+                         (r["공용화대상"] or "")[:100], (r["간략불합격"] or "")[:200],
+                         r["기타사항"] or "", (r["수검자"] or "")[:100],
+                         (r["시스템"] or "")[:100], (r["기지국구분"] or "")[:100],
+                         (r["전파진흥원"] or "")[:100], (r["검사관"] or "")[:100],
+                         (r["주차별"] or "")[:50]))
+                    stats["results_written"] += 1
+                if p in sch_set:
+                    # 본부/팀: 대상 값 우선, 폴백은 결과장 정규화 (표준 어휘만 저장)
+                    본부 = raw_regions.get(p) or ""
+                    raw_team = str(r["ons팀"] or "").strip()
+                    팀 = raw_team if raw_team in INSP_TEAM_TO_HDQT else ""
+                    if 팀 and not 본부:
+                        본부 = INSP_TEAM_TO_HDQT[팀]
+                    conn.execute('''INSERT OR REPLACE INTO inspection_schedules
+                        (pk, year, 허가번호, 호출명칭, 분기, skt본부, access담당,
+                         품질개선팀, 수검예정주차, 수검시작일, 수검종료일, 지역,
+                         등록자, 등록일시, 검사관, 조,
+                         workflow_status, status_updated_at, status_updated_by)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+                        (pk, year, p,
+                         (tgt.get("호출명칭") or r["호출명칭"] or "")[:200],
+                         (tgt.get("분기") or _bf_quarter(검사일, r["주차별"] or ""))[:20],
+                         (tgt.get("skt본부") or _bf_norm_hdqt(r["skt본부"]))[:50],
+                         (tgt.get("access담당") or 본부)[:50],
+                         (tgt.get("품질개선팀") or 팀)[:50],
+                         주차, "", "", "",
+                         actor_name, now, (r["검사관"] or "")[:100], "",
+                         WF_INSPECTED, now, actor))
+                    # 상태 이력은 직접 기록 — _wf_record_log_sync 는 전환 알림을
+                    # 발송하므로 수만 건 백필에 쓰면 알림 폭주가 난다.
+                    conn.execute(
+                        'INSERT INTO inspection_status_log(schedule_pk, from_status, '
+                        'to_status, changed_by, changed_at, memo) VALUES (?,?,?,?,?,?)',
+                        (pk, None, WF_INSPECTED, actor, now, "실적(결과장) 백필 복원"))
+                    stats["schedules_written"] += 1
+            conn.commit()
+        conn.commit()
+    finally:
+        conn.close()
+    return stats
+
+
+@router.post("/inspection-results/backfill")
+async def inspection_results_backfill(request: Request, req: BackfillFromResultsReq):
+    """결과장(실적)을 원본으로 수검 일정·결과 이력 복원 (admin/manager).
+
+    dry_run=True(기본)면 쓰기 없이 본부별 반영 건수만 집계해 반환.
+    기본은 기존 결과·일정이 있는 허가번호를 건너뛴다(기존 입력분 보존).
+    overwrite=True면 키 단위 교체(사진은 보존). 재실행 안전.
+    """
+    empno = await _verify_auth(request)
+    role = await asyncio.to_thread(_get_user_role_sync, empno)
+    if role not in {"admin", "manager"}:
+        raise HTTPException(403, "관리자/매니저만 가능")
+
+    try:
+        from routers.inspection import _get_user_info_for_community
+        info = await asyncio.to_thread(_get_user_info_for_community, empno)
+        actor_name = info.get("name", empno) or empno
+    except Exception:
+        actor_name = empno
+
+    stats = await asyncio.to_thread(_bf_run_sync, req, empno, actor_name)
+
+    try:
+        from routers.inspection import _record_audit_log_sync
+        await asyncio.to_thread(
+            _record_audit_log_sync, "inspection_backfill_from_results",
+            "inspection_results_raw",
+            f"year={req.year},region={req.region or '전체'},dry_run={req.dry_run},"
+            f"overwrite={req.overwrite},결과={stats['results_written']},"
+            f"일정={stats['schedules_written']}", empno)
+    except Exception as e:
+        logger.warning(f"백필 감사로그 기록 실패 (무시): {e}")
+
+    logger.info(f"실적 백필: {stats}")
+    return {"success": True, **stats}

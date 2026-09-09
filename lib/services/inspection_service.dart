@@ -120,6 +120,33 @@ class InspectionService {
     return (body['deleted'] as num?)?.toInt() ?? 0;
   }
 
+  // ── 실적(결과장) → 일정·결과 백필 ───────────────────────────
+
+  Future<Map<String, dynamic>> backfillFromResults({
+    required int year,
+    String region = '',
+    bool dryRun = true,
+    bool overwrite = false,
+    bool withSchedules = true,
+    bool addMissingTargets = true,
+  }) async {
+    final resp = await http.post(
+      Uri.parse('$_baseUrl/inspection-results/backfill'),
+      headers: _headers,
+      body: json.encode({
+        'year': year,
+        if (region.isNotEmpty) 'region': region,
+        'dry_run': dryRun,
+        'overwrite': overwrite,
+        'with_schedules': withSchedules,
+        'add_missing_targets': addMissingTargets,
+      }),
+    ).timeout(const Duration(minutes: 5));
+    final body = json.decode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+    if (resp.statusCode != 200) throw Exception(body['detail'] ?? '실적 백필 실패');
+    return body;
+  }
+
   // ── Staging (필터링 후 확정) ─────────────────────────────
 
   Future<List<Map<String, dynamic>>> getStagingColumnValues(int year, String col) async {

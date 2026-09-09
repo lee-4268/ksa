@@ -864,6 +864,10 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
           if (authService.isAdmin)
             _buildKcaImportCard(),
 
+          // 실적(결과장) → 일정·결과 이력 복원 (관리자 이상)
+          if (authService.isAdmin)
+            _buildResultsBackfillCard(),
+
           // DS Detail 재빌드 (관리자 이상)
           if (authService.isAdmin)
             _buildDsDetailCard(),
@@ -878,6 +882,227 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
         ],
       ),
     );
+  }
+
+  // ── 실적(결과장) → 일정·결과 이력 복원 ─────────────────────────
+  //   상용화 이후 미입력 본부의 일정/결과를 결과장(실적)에서 복원한다.
+  //   여기(SKO 무선국)가 원본 — 플레이그라운드는 [SKO 무선국에서 가져오기]로 전파.
+  Widget _buildResultsBackfillCard() {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFE5E7EB)),
+      ),
+      child: Row(children: [
+        Container(
+          width: 44, height: 44,
+          decoration: BoxDecoration(
+            color: const Color(0xFF0D47A1).withValues(alpha: 0.08),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: const Icon(Icons.history_rounded, color: Color(0xFF0D47A1), size: 20),
+        ),
+        const SizedBox(width: 14),
+        const Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('실적 → 일정·결과 이력 복원',
+                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+            SizedBox(height: 2),
+            Text('결과장 실적으로 미입력 본부의 수검 일정·결과 복원 (미리보기 후 적용)',
+                style: TextStyle(color: Color(0xFF6B7280), fontSize: 12)),
+          ]),
+        ),
+        ElevatedButton(
+          onPressed: _showResultsBackfillDialog,
+          style: ElevatedButton.styleFrom(
+            backgroundColor: const Color(0xFF0D47A1),
+            foregroundColor: Colors.white,
+            elevation: 0,
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          ),
+          child: const Text('실행', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+        ),
+      ]),
+    );
+  }
+
+  Future<void> _showResultsBackfillDialog() async {
+    final yearCtrl = TextEditingController(text: DateTime.now().year.toString());
+    String region = '';
+    bool withSchedules = true;
+    bool addMissing = true;
+    bool overwrite = false;
+    bool busy = false;
+    Map<String, dynamic>? preview;
+
+    const regions = ['', '강남', '강북', '인천', '경기', '경남', '경북', '서부', '충청', '강원'];
+
+    await showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setD) {
+        Widget statRow(String label, dynamic v, {Color? color}) => Padding(
+          padding: const EdgeInsets.symmetric(vertical: 1),
+          child: Row(children: [
+            SizedBox(width: 150, child: Text(label,
+                style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)))),
+            Text('$v', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
+                color: color ?? const Color(0xFF111827))),
+          ]),
+        );
+
+        Future<void> run(bool dryRun) async {
+          final year = int.tryParse(yearCtrl.text.trim());
+          if (year == null || year < 2020 || year > 2100) {
+            ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('연도를 확인해주세요')));
+            return;
+          }
+          setD(() => busy = true);
+          try {
+            final res = await _inspSvc.backfillFromResults(
+              year: year, region: region, dryRun: dryRun,
+              overwrite: overwrite, withSchedules: withSchedules,
+              addMissingTargets: addMissing,
+            );
+            setD(() { preview = res; busy = false; });
+            if (!dryRun && mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(
+                  '복원 완료 — 결과 ${res['results_written']}건 / 일정 ${res['schedules_written']}건')));
+            }
+          } catch (e) {
+            setD(() => busy = false);
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('실패: $e')));
+            }
+          }
+        }
+
+        final p = preview;
+        return AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          title: const Text('실적 → 일정·결과 이력 복원',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+          content: SizedBox(
+            width: 420,
+            child: SingleChildScrollView(
+              child: Column(mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start, children: [
+                const Text('결과장(실적)을 원본으로 수검 일정·결과 이력을 복원합니다.\n'
+                    '기본은 기존 입력분을 건너뛰며(보존), 복원분은 플레이그라운드에\n'
+                    '[SKO 무선국에서 가져오기]로 전파됩니다.',
+                    style: TextStyle(fontSize: 12, color: Color(0xFF6B7280), height: 1.5)),
+                const SizedBox(height: 14),
+                Row(children: [
+                  SizedBox(
+                    width: 90,
+                    child: TextField(
+                      controller: yearCtrl,
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(
+                          labelText: '연도', isDense: true, border: OutlineInputBorder()),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: DropdownButtonFormField<String>(
+                      initialValue: region,
+                      decoration: const InputDecoration(
+                          labelText: '본부', isDense: true, border: OutlineInputBorder()),
+                      items: regions.map((r) => DropdownMenuItem(
+                          value: r, child: Text(r.isEmpty ? '전체' : r))).toList(),
+                      onChanged: busy ? null : (v) => setD(() {
+                        region = v ?? '';
+                        preview = null;
+                      }),
+                    ),
+                  ),
+                ]),
+                CheckboxListTile(
+                  dense: true, contentPadding: EdgeInsets.zero,
+                  controlAffinity: ListTileControlAffinity.leading,
+                  value: withSchedules,
+                  onChanged: busy ? null : (v) => setD(() {
+                    withSchedules = v ?? true; preview = null;
+                  }),
+                  title: const Text('일정(inspection_schedules)까지 복원',
+                      style: TextStyle(fontSize: 13)),
+                ),
+                CheckboxListTile(
+                  dense: true, contentPadding: EdgeInsets.zero,
+                  controlAffinity: ListTileControlAffinity.leading,
+                  value: addMissing,
+                  onChanged: busy ? null : (v) => setD(() {
+                    addMissing = v ?? true; preview = null;
+                  }),
+                  title: const Text('대상에 없는 건 스테이징에서 대상 추가',
+                      style: TextStyle(fontSize: 13)),
+                ),
+                CheckboxListTile(
+                  dense: true, contentPadding: EdgeInsets.zero,
+                  controlAffinity: ListTileControlAffinity.leading,
+                  value: overwrite,
+                  onChanged: busy ? null : (v) => setD(() {
+                    overwrite = v ?? false; preview = null;
+                  }),
+                  title: const Text('기존 결과·일정도 덮어쓰기 (사진은 보존)',
+                      style: TextStyle(fontSize: 13, color: Color(0xFFB91C1C))),
+                ),
+                if (busy) const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 12),
+                  child: Center(child: SizedBox(width: 22, height: 22,
+                      child: CircularProgressIndicator(strokeWidth: 2))),
+                ),
+                if (p != null && !busy) ...[
+                  const Divider(height: 20),
+                  Text(p['dry_run'] == true ? '미리보기 (쓰기 없음)' : '적용 결과',
+                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700,
+                          color: Color(0xFF0D47A1))),
+                  const SizedBox(height: 6),
+                  statRow('실적 행 / 허가번호', '${p['raw_rows']} / ${p['permits']}'),
+                  statRow('대상 매칭 / 없음', '${p['targets_matched']} / ${p['targets_missing']}'),
+                  statRow('스테이징 회수 가능', p['targets_from_staging']),
+                  statRow('대상 확보 불가(제외)', p['targets_unresolved'],
+                      color: (p['targets_unresolved'] ?? 0) > 0
+                          ? const Color(0xFFB91C1C) : null),
+                  statRow('결과 복원 / 건너뜀',
+                      '${p['results_written']} / ${p['results_skipped']}'),
+                  statRow('일정 복원 / 건너뜀',
+                      '${p['schedules_written']} / ${p['schedules_skipped']}'),
+                ],
+              ]),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: busy ? null : () => Navigator.pop(ctx),
+              child: const Text('닫기'),
+            ),
+            OutlinedButton(
+              onPressed: busy ? null : () => run(true),
+              child: const Text('미리보기'),
+            ),
+            ElevatedButton(
+              // 적용은 미리보기를 먼저 본 뒤에만 활성화 (실수 방지)
+              onPressed: (busy || p == null || p['dry_run'] != true)
+                  ? null
+                  : () => run(false),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF0D47A1),
+                foregroundColor: Colors.white,
+              ),
+              child: const Text('적용'),
+            ),
+          ],
+        );
+      }),
+    );
+    yearCtrl.dispose();
   }
 
   Widget _buildKcaImportCard() {
