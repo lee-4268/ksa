@@ -3951,12 +3951,28 @@ async def inspection_sync_export(request: Request):
                 f"SELECT {', '.join('s.' + col for col in _SCHED_COLS)} "
                 f"FROM inspection_schedules s WHERE {where_sql}",
                 params).fetchall()
+            # 결과는 일정 JOIN 이 아니라 '대상' 기준으로 본부를 판정한다.
+            # 일정이 삭제/미생성인 결과(경북 75건 등)가 JOIN 에서 빠져 kca 진도율이
+            # 어긋났다 (2026-09-09). EXISTS 라 대상 중복 행에도 결과가 중복되지 않는다.
+            r_wheres, r_params = ['r.year=?'], [year]
+            if division == '__ETC__':
+                _DIVS2 = ('강남', '강북', '인천', '경기', '경남', '경북', '서부', '충청', '강원')
+                like2 = ' OR '.join('t.access담당 LIKE ?' for _ in _DIVS2)
+                r_wheres.append(
+                    "NOT EXISTS (SELECT 1 FROM inspection_targets t "
+                    "WHERE t.year=r.year AND t.허가번호=r.허가번호 "
+                    f"AND COALESCE(t.access담당,'') != '' AND ({like2}))")
+                r_params.extend([d + '%' for d in _DIVS2])
+            elif division:
+                r_wheres.append(
+                    "EXISTS (SELECT 1 FROM inspection_targets t "
+                    "WHERE t.year=r.year AND t.허가번호=r.허가번호 "
+                    "AND t.access담당 LIKE ?)")
+                r_params.append(division + '%')
             results = c.execute(
                 f"SELECT {', '.join('r.' + col for col in _RESULT_COLS)} "
-                f"FROM inspection_results r "
-                f"JOIN inspection_schedules s ON s.pk = r.pk "
-                f"WHERE {where_sql}",
-                params).fetchall()
+                f"FROM inspection_results r WHERE {' AND '.join(r_wheres)}",
+                r_params).fetchall()
             return [dict(r) for r in sched], [dict(r) for r in results]
         finally:
             c.close()
