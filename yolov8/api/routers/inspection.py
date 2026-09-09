@@ -3898,7 +3898,7 @@ async def inspection_sync_export(request: Request):
     import hmac as _hm
 
     try:
-        _check_rate_limit(request, "sync_export", 10, 60)
+        _check_rate_limit(request, "sync_export", 30, 60)  # 본부 루프 9+1회 허용
     except HTTPException as e:
         return JSONResponse({"detail": e.detail}, status_code=e.status_code,
                             headers=_ingest_cors())
@@ -3937,7 +3937,13 @@ async def inspection_sync_export(request: Request):
         c.row_factory = sqlite3.Row
         try:
             wheres, params = ['s.year=?'], [year]
-            if division:
+            if division == '__ETC__':
+                # 9개 본부 어디에도 속하지 않는 잔여분 (백필 등으로 본부가 빈 일정)
+                _DIVS_ = ('강남', '강북', '인천', '경기', '경남', '경북', '서부', '충청', '강원')
+                like = ' OR '.join("s.access담당 LIKE ?" for _ in _DIVS_)
+                wheres.append(f"NOT (COALESCE(s.access담당,'') != '' AND ({like}))")
+                params.extend([d + '%' for d in _DIVS_])
+            elif division:
                 wheres.append("s.access담당 LIKE ?")
                 params.append(division + '%')
             where_sql = ' AND '.join(wheres)
