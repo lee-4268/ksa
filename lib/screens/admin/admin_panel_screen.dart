@@ -915,13 +915,12 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
                 style: TextStyle(color: Color(0xFF6B7280), fontSize: 12)),
           ]),
         ),
-        ElevatedButton(
+        // DS Detail 재빌드 카드의 실행 버튼과 동일한 TextButton 스타일
+        TextButton(
           onPressed: _showResultsBackfillDialog,
-          style: ElevatedButton.styleFrom(
-            backgroundColor: const Color(0xFF0D47A1),
-            foregroundColor: Colors.white,
-            elevation: 0,
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          style: TextButton.styleFrom(
+            foregroundColor: const Color(0xFF0D47A1),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
           ),
           child: const Text('실행', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
@@ -958,11 +957,12 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
         Future<void> run(bool dryRun) async {
           final year = int.tryParse(yearCtrl.text.trim());
           if (year == null || year < 2020 || year > 2100) {
-            ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('연도를 확인해주세요')));
+            await ProgressDialog(context).error(message: '연도를 확인해주세요');
             return;
           }
           setD(() => busy = true);
+          final pd = ProgressDialog(context);
+          if (!dryRun) pd.show(message: '이력 복원 중...\n(수만 건이면 수십 초)');
           try {
             final res = await _inspSvc.backfillFromResults(
               year: year, region: region, dryRun: dryRun,
@@ -971,14 +971,13 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
             );
             setD(() { preview = res; busy = false; });
             if (!dryRun && mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(
-                  '복원 완료 — 결과 ${res['results_written']}건 / 일정 ${res['schedules_written']}건')));
+              await pd.complete(message:
+                  '복원 완료\n결과 ${res['results_written']}건 / 일정 ${res['schedules_written']}건');
             }
           } catch (e) {
             setD(() => busy = false);
             if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('실패: $e')));
+              await pd.error(message: '복원 실패\n$e');
             }
           }
         }
@@ -1012,8 +1011,15 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
                   Expanded(
                     child: DropdownButtonFormField<String>(
                       initialValue: region,
+                      // 테마 틴트(분홍) 배경 방지 — 다른 화면 드롭다운과 동일하게 흰 배경
+                      dropdownColor: Colors.white,
+                      style: const TextStyle(fontSize: 13, color: Color(0xFF111827)),
                       decoration: const InputDecoration(
-                          labelText: '본부', isDense: true, border: OutlineInputBorder()),
+                          labelText: '본부',
+                          isDense: true,
+                          filled: true,
+                          fillColor: Colors.white,
+                          border: OutlineInputBorder()),
                       items: regions.map((r) => DropdownMenuItem(
                           value: r, child: Text(r.isEmpty ? '전체' : r))).toList(),
                       onChanged: busy ? null : (v) => setD(() {
