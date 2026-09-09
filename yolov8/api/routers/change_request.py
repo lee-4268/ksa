@@ -282,7 +282,7 @@ async def change_request_cancel_bulk(request: Request):
             affected_pks: set = set()
             for tid in target_ids:
                 row = c.execute(
-                    'SELECT id, schedule_pk, status, requested_by, cancelled '
+                    'SELECT id, schedule_pk, 허가번호, status, requested_by, cancelled '
                     'FROM change_request WHERE id=?', (tid,)
                 ).fetchone()
                 if not row:

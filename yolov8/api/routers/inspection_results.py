@@ -1953,9 +1953,9 @@ def _bf_run_sync(req: BackfillFromResultsReq, actor: str, actor_name: str) -> di
                 검사일 = _bf_inspect_date(r["검사일자"], year)
                 주차 = _bf_week(r["주차별"])
                 status = _bf_status(r["합불여부"], r["성능서류"], r["공용화대상"])
-                # 입력자/등록자는 실적의 수검자(현장 담당) — 실행자 이름으로 채우면
-                # 수만 건이 한 사람 명의가 되어 이력 가치가 없어진다.
-                기록자 = (str(r["수검자"] or "").strip() or actor_name)[:100]
+                # 입력자/등록자 ← 실적(raw)의 uploaded_by (결과장 업로더).
+                # 수검자는 결과 테이블의 수검자 컬럼에 별도로 들어간다 (아래 INSERT).
+                기록자 = (str(r["uploaded_by"] or "").strip() or actor_name)[:100]
                 # 재점검 기준은 결과 입력 라우터와 동일 (합격/빈값/검사대기 외 = 재점검)
                 needs_recheck = ('1' if status.strip() not in ('합격', '', '검사대기')
                                  else '0')
