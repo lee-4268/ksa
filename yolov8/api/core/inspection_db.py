@@ -257,6 +257,15 @@ def _init_inspection_db():
         conn.execute("ALTER TABLE inspection_results_raw ADD COLUMN 장비타입간소화 TEXT DEFAULT ''")
     except Exception:
         pass
+    # V12 결과장 신설 2열 — V열 '부적합'(판정 전용), Y열 '부적합내용'(사유 분류)
+    try:
+        conn.execute("ALTER TABLE inspection_results_raw ADD COLUMN 부적합 TEXT DEFAULT ''")
+    except Exception:
+        pass
+    try:
+        conn.execute("ALTER TABLE inspection_results_raw ADD COLUMN 부적합내용 TEXT DEFAULT ''")
+    except Exception:
+        pass
     conn.execute('CREATE INDEX IF NOT EXISTS idx_irr_year ON inspection_results_raw(year)')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_irr_region ON inspection_results_raw(region)')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_irr_hn ON inspection_results_raw(허가번호)')

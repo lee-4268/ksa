@@ -40,8 +40,11 @@ async def inadequate_sync(request: Request, year: int = Query(...)):
     def _sync():
         conn = sqlite3.connect(_INSP_DB, timeout=60)
         conn.row_factory = sqlite3.Row
+        # V12 결과장부터 부적합 판정은 V열('부적합') 전용 열 기준.
+        # (기존 성능서류 기준은 불합격 유형 열이라 대상이 어긋나 있었다.
+        #  V열 마킹은 결과장 작성자가 다음 업로드부터 채우기로 함 — 초기엔 건수가 적을 수 있다.)
         rows = conn.execute(
-            "SELECT * FROM inspection_results_raw WHERE year=? AND 성능서류='부적합'",
+            "SELECT * FROM inspection_results_raw WHERE year=? AND 부적합='부적합'",
             (year,)
         ).fetchall()
         count = 0
@@ -75,13 +78,20 @@ async def inadequate_sync(request: Request, year: int = Query(...)):
                         시정기한 = dt.replace(year=dt.year + year_add, month=month).strftime('%Y-%m-%d')
                 except Exception:
                     pass
+            # 불합격상세 자리에 Y열(부적합내용 — 사유 분류값)을 담는다.
+            # kca 미러(/inadequate/sync-export)도 이 컬럼을 그대로 내보내므로
+            # kca 는 코드 변경 없이 수신한다. Y가 비면 기존 X열(불합격상세사유) 유지.
+            try:
+                _사유 = (r['부적합내용'] or '').strip()
+            except (IndexError, KeyError):
+                _사유 = ''
             conn.execute('''INSERT OR IGNORE INTO inadequate_management
                 (year, 허가번호, 통합시설코드, 호출명칭, 주소, skt본부, region, ons팀,
                  검사일자, 시정기한, 불합격내용, 불합격상세)
                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?)''',
                 (year, r['허가번호'], r['통합시설코드'], r['호출명칭'], r['주소'],
                  r['skt본부'], r['region'], r['ons팀'],
-                 검사일자, 시정기한, r['불합격내용'] or '', r['불합격상세'] or ''))
+                 검사일자, 시정기한, r['불합격내용'] or '', _사유 or (r['불합격상세'] or '')))
             count += 1
         conn.commit()
         total = conn.execute("SELECT COUNT(*) FROM inadequate_management WHERE year=?", (year,)).fetchone()[0]
