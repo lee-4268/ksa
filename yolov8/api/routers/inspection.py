@@ -2456,7 +2456,17 @@ def _build_insp_where(year, sheet, filters, search, addr, schedule_yn="", schedu
             " OR ".join(sub_conditions) + "))"
         )
         params.append(year)
-    return " AND ".join(where), params
+    base_where = " AND ".join(where)
+    # 허가번호당 1행으로 정규화.
+    #   원본 엑셀의 SKT(정기검사)/Sheet1(시기조정) 두 시트가 sheet 컬럼으로 구분돼
+    #   각각 행을 갖는다. 같은 국소가 두 시트에 다 있으면 2행이 되어(2026 충청
+    #   2,461건·서부 11건) 목록에 두 줄로 보이고 건수·진도율 분모가 부풀었다.
+    #   필터를 먼저 적용한 뒤 dedup 하므로 sheet 필터는 그대로 살아난다 —
+    #   sheet='sheet1' 이면 시기조정 행끼리 dedup 되어 그 목록이 온전하다.
+    #   MIN(id): SKT 시트가 먼저 적재되므로 sheet='all' 일 때 정기검사 행이 남는다.
+    dedup = (f" AND id IN (SELECT MIN(id) FROM inspection_targets"
+             f" WHERE {base_where} GROUP BY 허가번호)")
+    return base_where + dedup, params + params
 
 @router.post("/inspection/data")
 async def inspection_data(request: Request, req: InspectionDataReq):
@@ -2770,9 +2780,13 @@ async def inspection_export_all_xlsx(request: Request, req: InspectionExportAllR
               '설치장소','도로명주소','장치수','통시','공대','kca검토결과','시기조정',
               '기준연도','skt본부','access담당','품질개선팀']
         ws1.append(h1)
+        # 허가번호당 1행 (SKT/Sheet1 두 시트에 다 있는 국소가 두 줄로 나가는 것 방지 —
+        # _build_insp_where 의 dedup 과 동일 정책)
         rows = c.execute(
-            f'SELECT * FROM inspection_targets WHERE year=?{access_filter} ORDER BY id',
-            access_params).fetchall()
+            f'SELECT * FROM inspection_targets WHERE year=?{access_filter}'
+            f' AND id IN (SELECT MIN(id) FROM inspection_targets'
+            f' WHERE year=?{access_filter} GROUP BY 허가번호) ORDER BY id',
+            access_params + access_params).fetchall()
         for row in rows:
             d = dict(row)
             ws1.append([d.get(h, '') for h in h1])
@@ -4889,11 +4903,11 @@ async def inspection_progress_by_result(request: Request, year: int):
         # '검사대기'는 판정 전이므로 미완료 유지.
         rows = c.execute(f"""
             SELECT t.access담당,
-                   COUNT(*) AS total,
-                   SUM(CASE WHEN COALESCE(r.status, irr.합불여부) = '합격'
+                   COUNT(DISTINCT t.허가번호) AS total,
+                   COUNT(DISTINCT CASE WHEN COALESCE(r.status, irr.합불여부) = '합격'
                             OR COALESCE(r.status, irr.합불여부) LIKE '불합격%'
                             OR COALESCE(r.status, irr.합불여부) LIKE '부적합%'
-                       THEN 1 ELSE 0 END) AS completed
+                       THEN t.허가번호 END) AS completed
             FROM inspection_targets t
             LEFT JOIN inspection_results r ON r.year = t.year AND r.허가번호 = t.허가번호
             LEFT JOIN ({irr_sub}) irr ON irr.year = t.year AND irr.허가번호 = REPLACE(t.허가번호,'-','')
