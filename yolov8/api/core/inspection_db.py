@@ -266,6 +266,15 @@ def _init_inspection_db():
         conn.execute("ALTER TABLE inspection_results_raw ADD COLUMN 부적합내용 TEXT DEFAULT ''")
     except Exception:
         pass
+    # 부적합 세부유형 미상건을 공용화로 수렴 (2026-09-09 운영 결정).
+    #   결과장에 유형 근거가 없는 건을 '부적합(All)'로 두면 화면 칩에도 없는
+    #   어휘가 남고 유형별 집계에서 따로 새므로, 공용화로 본다. _bf_status 의
+    #   신규 판정 규칙과 짝을 맞추는 1회성 정리 — 변환 후엔 매칭 행이 없어 무해.
+    try:
+        conn.execute("UPDATE inspection_results SET status='부적합(공용화)' "
+                     "WHERE status='부적합(All)'")
+    except Exception:
+        pass
     conn.execute('CREATE INDEX IF NOT EXISTS idx_irr_year ON inspection_results_raw(year)')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_irr_region ON inspection_results_raw(region)')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_irr_hn ON inspection_results_raw(허가번호)')

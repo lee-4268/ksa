@@ -1820,16 +1820,19 @@ def _bf_inspect_date(v, year: int) -> str:
 
 
 def _bf_status(합불여부, 성능서류, 공용화대상) -> str:
-    """결과장 합불/성능서류/공용화대상 → 결과 status 어휘 (결과 화면과 동일)."""
+    """결과장 합불/성능서류/공용화대상 → 결과 status 어휘 (결과 화면과 동일).
+
+    공용화대상이 ''·'X'·'#N/A'처럼 유형을 못 가리는 값이면 공용화로 본다
+    (결과장에 근거가 없고, 부적합의 대다수가 공용화 건이라 운영 합의된 기본값
+    — 2026-09-09 결정). '부적합(All)'은 더 쓰지 않는다.
+    """
     hb = str(합불여부 or "").strip()
     ps = str(성능서류 or "").strip()
     gy = str(공용화대상 or "").strip()
     if ps == "부적합":
         if "설치장소" in gy:
             return "부적합(설치장소)"
-        if "공용화" in gy or "환경" in gy:
-            return "부적합(공용화)"
-        return "부적합(All)"
+        return "부적합(공용화)"
     if hb == "불합격":
         has_doc, has_perf = ("서류" in ps), ("성능" in ps)
         if has_doc and has_perf:
