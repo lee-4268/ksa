@@ -78,9 +78,11 @@ async def inadequate_sync(request: Request, year: int = Query(...)):
                         시정기한 = dt.replace(year=dt.year + year_add, month=month).strftime('%Y-%m-%d')
                 except Exception:
                     pass
-            # 불합격상세 자리에 Y열(부적합내용 — 사유 분류값)을 담는다.
+            # 불합격상세 자리에 Y열(부적합내용 — 짧은 사유 분류값)을 담는다.
             # kca 미러(/inadequate/sync-export)도 이 컬럼을 그대로 내보내므로
-            # kca 는 코드 변경 없이 수신한다. Y가 비면 기존 X열(불합격상세사유) 유지.
+            # kca 는 코드 변경 없이 수신한다. X(불합격상세사유)는 여러 줄 서술이라
+            # 여기 폴백으로 섞지 않는다 — 목록 표시·유형별 집계가 깨진다.
+            # X 원문은 raw.불합격상세에 그대로 남아 결과 화면 특이사항에서 조회 가능.
             try:
                 _사유 = (r['부적합내용'] or '').strip()
             except (IndexError, KeyError):
@@ -91,7 +93,7 @@ async def inadequate_sync(request: Request, year: int = Query(...)):
                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?)''',
                 (year, r['허가번호'], r['통합시설코드'], r['호출명칭'], r['주소'],
                  r['skt본부'], r['region'], r['ons팀'],
-                 검사일자, 시정기한, r['불합격내용'] or '', _사유 or (r['불합격상세'] or '')))
+                 검사일자, 시정기한, r['불합격내용'] or '', _사유))
             count += 1
         conn.commit()
         total = conn.execute("SELECT COUNT(*) FROM inadequate_management WHERE year=?", (year,)).fetchone()[0]
