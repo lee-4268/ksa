@@ -400,6 +400,12 @@ _IRR_HEADER_MAP = {
     "간략 불합격 내역": "간략불합격",
     "5G Path 확인 방법": "five_g_path",
     "허가번호 장비 Type": "장비타입",
+    # 결과장 AM열. 헤더가 '장비Type\n간소화'(2줄)라 첫 줄만 취하면 AJ열 단독
+    # '장비Type'과 구별되지 않는다. 개행 제거 형태(headers_full)로 매칭한다.
+    # 이 열을 읽지 않으면 시트에 이미 적힌 간소화 값을 버리고 매번 AD열에서
+    # 파생시키게 되는데, AD열은 비어 있는 행이 많아(V12 기준 41%) 추론이 실패한다.
+    "장비타입간소화": "장비타입간소화",
+    "장비Type간소화": "장비타입간소화",
 }
 
 _ONS_REGION_MAP = {
@@ -493,6 +499,11 @@ def _parse_irr_xlsx_sync(file_bytes: bytes, year_hint: int, uploaded_by: str):
             raise ValueError("헤더를 찾을 수 없습니다")
         headers = [str(h).strip().split('\n')[0].strip() if h else "" for h in header_row]
 
+    # 첫 줄 매칭 실패 시 폴백용 — 개행·공백을 모두 제거한 전체 헤더.
+    #   '장비Type\n간소화' → '장비Type간소화'
+    # 첫 줄만 보면 AM열이 AJ열 단독 '장비Type'과 구별되지 않는다.
+    headers_full = ["".join(str(h).split()) if h else "" for h in header_row]
+
     col_map = {}
     ons_idx = -1
     year_idx = -1
@@ -509,13 +520,16 @@ def _parse_irr_xlsx_sync(file_bytes: bytes, year_hint: int, uploaded_by: str):
             continue
         h_clean = h.replace("Ʈ", "T").replace("Ʈ", "T")
         h_nospace = h_clean.replace(" ", "")
+        h_full = (headers_full[i] if i < len(headers_full) else "").replace("Ʈ", "T")
         matched = False
         for excel_h, db_col in _IRR_HEADER_MAP.items():
             if db_col is None:
                 continue
             excel_h_clean = excel_h.replace("Ʈ", "T").replace("Ʈ", "T")
             excel_h_nospace = excel_h_clean.replace(" ", "")
-            if h == excel_h or h_clean == excel_h_clean or h_nospace == excel_h_nospace:
+            if (h == excel_h or h_clean == excel_h_clean
+                    or h_nospace == excel_h_nospace
+                    or (h_full and h_full == excel_h_nospace)):
                 if db_col == "_ons본부":
                     ons_idx = i
                 elif db_col == "검사년도":
@@ -659,11 +673,16 @@ def _parse_irr_xlsx_sync(file_bytes: bytes, year_hint: int, uploaded_by: str):
         rec["주차별"] = week
 
         raw_eqp = rec.get("장비타입", "").strip()
-        simplified = ""
+        # 결과장 AM열에 이미 간소화 값이 적혀 있으면 그것을 그대로 쓴다(작성자가
+        # 판단한 값이 파생 추론보다 정확하다). '#N/A' 같은 엑셀 오류값은 걸러낸다.
+        sheet_simplified = rec.get("장비타입간소화", "").strip()
+        if sheet_simplified.upper().startswith("#N/A") or sheet_simplified in ("0", "-"):
+            sheet_simplified = ""
+        simplified = sheet_simplified
         eqp_from_cert = ""
         eqp_from_permit = ""
 
-        if raw_eqp:
+        if not simplified and raw_eqp:
             simplified = _EQP_TYPE_SIMPLIFY.get(raw_eqp, "")
             if not simplified:
                 for k, v in _EQP_TYPE_SIMPLIFY.items():
