@@ -2001,15 +2001,34 @@ def _remap_divisions_sync(year: int, learned_map: dict, dry_run: bool = False) -
             old_team = r['품질개선팀'] or ''
             old_skt = r['skt본부'] or ''
 
-            addr = (r['도로명주소'] or '').strip() or (r['설치장소'] or '').strip()
-            new_access = old_access
+            # 주소 추론은 원본 조직정보가 없을 때만 쓰는 폴백이다.
+            #   예전엔 주소만 있으면 access담당·품질개선팀을 조건 없이 덮어썼는데,
+            #   지하철품질개선팀처럼 노선을 따라 서울 전역을 맡는 팀이나 성수팀처럼
+            #   인접 구를 맡는 팀은 '국소 주소'와 '관할 본부'가 다르다. 그래서 주소로
+            #   덮는 순간 필연적으로 틀린다 — 2026년 결과장 대조 실측으로 강북 833건이
+            #   강남·경기·인천으로 잘못 이동해 있었다(원본 파일·결과장 모두 강북).
+            #   본부·팀을 한 세트로 바꿔 테이블 내부 정합성은 유지되는 탓에 오랫동안
+            #   드러나지 않았다. 임포트(_proc_sheet)의 _orig_access_is_valid 가드와
+            #   같은 원칙을 여기에도 적용한다.
+            _base = re.sub(r'Access담당$|Access$', '', old_access).strip()
+            _access_valid = _base in _ACCESS_TO_SKT_HDQT
+            _team_valid = old_team in INSP_TEAM_TO_HDQT
+
+            new_access = _base if _access_valid else old_access
             new_team = old_team
-            if addr:
-                inferred_access, inferred_team = _hdqt_from_addr(addr, learned_map=learned_map)
-                if inferred_access:
-                    new_access = inferred_access
-                if inferred_team:
-                    new_team = inferred_team
+            if not (_access_valid and _team_valid):
+                addr = (r['도로명주소'] or '').strip() or (r['설치장소'] or '').strip()
+                if addr:
+                    inferred_access, inferred_team = _hdqt_from_addr(
+                        addr, known_hdqt=new_access, learned_map=learned_map)
+                    if not _access_valid and inferred_access:
+                        new_access = inferred_access
+                    if not _team_valid and inferred_team:
+                        # access담당이 살아있는데 팀만 비어 있으면, 주소로 뽑은 팀이
+                        # 그 본부 소속일 때만 채운다. 아니면 본부-팀이 어긋난다.
+                        if (not _access_valid
+                                or INSP_TEAM_TO_HDQT.get(inferred_team) == new_access):
+                            new_team = inferred_team
 
             new_skt = _normalize_skt_hdqt(old_skt, access=new_access)
 
