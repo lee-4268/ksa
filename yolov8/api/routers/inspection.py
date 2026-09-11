@@ -2090,6 +2090,140 @@ async def inspection_remap_divisions(request: Request, year: int, dry_run: bool 
     }
 
 
+def _results_division_truth(conn, year: int) -> tuple:
+    """결과장(inspection_results_raw)에서 허가번호별 확정 본부·팀을 뽑는다.
+
+    결과장은 본부(region)와 팀(ons팀)이 서로 정합한 원천 데이터다
+    (2026년 실측: 78,339행 중 팀-본부 불일치 0건). 그래서 조직정보가
+    틀어졌을 때 되돌릴 기준으로 쓸 수 있다. 다만 한 허가번호가 서로 다른
+    본부로 두 번 올라온 건은 어느 쪽이 맞는지 알 수 없으므로 버린다.
+    """
+    truth: dict = {}
+    conflict: set = set()
+    rows = conn.execute(
+        "SELECT REPLACE(허가번호,'-','') p, region r, ons팀 t "
+        "FROM inspection_results_raw WHERE year=? AND region<>'' "
+        "GROUP BY 1, 2, 3",
+        (year,)
+    ).fetchall()
+    for row in rows:
+        permit = (row['p'] or '').strip()
+        region = (row['r'] or '').strip()
+        if not permit or region not in _ACCESS_TO_SKT_HDQT:
+            continue
+        team = (row['t'] or '').strip()
+        # 팀은 그 팀의 소속 본부가 region 과 같을 때만 믿는다. 결과장에도
+        # 팀 칸에 날짜가 들어간 입력 오류가 소수 있다.
+        if INSP_TEAM_TO_HDQT.get(team) != region:
+            team = ''
+        prev = truth.get(permit)
+        if prev is None:
+            truth[permit] = (region, team)
+        elif prev[0] != region:
+            conflict.add(permit)
+        elif team and not prev[1]:
+            truth[permit] = (region, team)
+    for permit in conflict:
+        truth.pop(permit, None)
+    return truth, conflict
+
+
+def _reconcile_divisions_sync(year: int, dry_run: bool = True) -> dict:
+    """동기: 결과장 기준으로 수검대상·일정의 본부/팀을 되돌린다."""
+    conn = sqlite3.connect(_INSP_DB, timeout=120)
+    conn.row_factory = sqlite3.Row
+    try:
+        truth, conflict = _results_division_truth(conn, year)
+
+        rows = conn.execute(
+            'SELECT id, 허가번호, access담당, 품질개선팀, skt본부 '
+            'FROM inspection_targets WHERE year=?',
+            (year,)
+        ).fetchall()
+
+        matched = 0
+        changed = []
+        for r in rows:
+            permit = (r['허가번호'] or '').strip()
+            t = truth.get(permit)
+            if not t:
+                continue
+            matched += 1
+            region, team = t
+            old_access = r['access담당'] or ''
+            old_team = r['품질개선팀'] or ''
+            old_skt = r['skt본부'] or ''
+            if old_access == region and (not team or old_team == team):
+                continue
+            new_team = team or old_team
+            # 본부만 되돌리고 팀을 못 구하면, 기존 팀이 새 본부 소속이 아닐 때
+            # 비워둔다. 틀린 팀을 남기면 팀 단위 집계가 계속 어긋난다.
+            if not team and INSP_TEAM_TO_HDQT.get(new_team) != region:
+                new_team = ''
+            changed.append({
+                'id': r['id'],
+                '허가번호': permit,
+                'before_access': old_access,
+                'after_access': region,
+                'before_team': old_team,
+                'after_team': new_team,
+                'before_skt': old_skt,
+                'after_skt': _normalize_skt_hdqt('', access=region),
+            })
+
+        if not dry_run and changed:
+            for c in changed:
+                conn.execute(
+                    'UPDATE inspection_targets SET access담당=?, 품질개선팀=?, skt본부=? '
+                    'WHERE id=?',
+                    (c['after_access'], c['after_team'], c['after_skt'], c['id'])
+                )
+                conn.execute(
+                    'UPDATE inspection_schedules SET access담당=?, 품질개선팀=?, skt본부=? '
+                    'WHERE year=? AND 허가번호=?',
+                    (c['after_access'], c['after_team'], c['after_skt'],
+                     year, c['허가번호'])
+                )
+            conn.commit()
+
+        moves: dict = {}
+        for c in changed:
+            k = f"{c['before_access']} -> {c['after_access']}"
+            moves[k] = moves.get(k, 0) + 1
+        return {
+            'total_targets': len(rows),
+            'result_permits': len(truth),
+            'conflict_permits': len(conflict),
+            'matched': matched,
+            'changed_count': len(changed),
+            'moves': dict(sorted(moves.items(), key=lambda kv: -kv[1])),
+            'samples': changed[:20],
+        }
+    finally:
+        conn.close()
+
+
+@router.post("/inspection/reconcile-divisions")
+async def inspection_reconcile_divisions(request: Request, year: int,
+                                         dry_run: bool = True):
+    """결과장 기준으로 수검대상/일정의 본부·팀을 교정 (최고관리자 전용).
+
+    과거 remap-divisions 가 주소 추론으로 원본 본부를 덮어쓴 탓에 틀어진
+    조직정보를 되돌리기 위한 일회성 교정이다.
+    """
+    empno = await _verify_auth(request)
+    role = await asyncio.to_thread(_get_user_role_sync, empno)
+    if role != "admin":
+        raise HTTPException(403, "최고관리자만 가능")
+    if not os.path.exists(_INSP_DB):
+        raise HTTPException(400, "DB 없음")
+
+    result = await asyncio.to_thread(_reconcile_divisions_sync, year, dry_run)
+    logger.info(f"reconcile-divisions: year={year} dry_run={dry_run} "
+                f"changed={result['changed_count']}")
+    return {'success': True, 'dry_run': dry_run, 'year': year, **result}
+
+
 class PreCheckStatusReq(BaseModel):
     license_nos: list[str]
     status: str = "PRE_CHECKED"
