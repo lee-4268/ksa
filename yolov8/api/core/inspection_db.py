@@ -30,6 +30,19 @@ def _init_inspection_db():
     for col in ('위도 REAL', '경도 REAL', "검사종류 TEXT DEFAULT ''", "pre_check_status TEXT DEFAULT ''"):
         try: conn.execute(f'ALTER TABLE inspection_targets ADD COLUMN {col}')
         except Exception: pass
+    # 사전대조: 일정 등록보다 앞서는 단계라 상태의 주인이 targets 다.
+    #   '' → REQUESTED → IN_PROGRESS → (CHANGE_REQUESTED → CHANGE_FILED) → PRE_CHECKED
+    #   PRE_CHECKED 인 대상만 일정 등록이 가능하다.
+    #   schedules.workflow_status 는 일정 등록 이후(REGISTERED~) 만 담당한다.
+    for col in ("pre_check_requested_by TEXT DEFAULT ''",
+                "pre_check_requested_at TEXT DEFAULT ''",
+                "pre_check_done_by TEXT DEFAULT ''",
+                "pre_check_done_at TEXT DEFAULT ''",
+                "pre_check_result TEXT DEFAULT ''"):
+        try: conn.execute(f'ALTER TABLE inspection_targets ADD COLUMN {col}')
+        except Exception: pass
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_it_precheck '
+                 'ON inspection_targets(year, pre_check_status)')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_it_year ON inspection_targets(year)')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_it_허가번호 ON inspection_targets(허가번호)')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_it_분기 ON inspection_targets(분기)')
@@ -114,6 +127,19 @@ def _init_inspection_db():
         memo TEXT
     )''')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_isl_pk ON inspection_status_log(schedule_pk)')
+    # 사전대조 전환 이력. 일정이 없는 단계라 schedule_pk 대신 year+허가번호로 건다.
+    conn.execute('''CREATE TABLE IF NOT EXISTS pre_check_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        year INTEGER NOT NULL,
+        허가번호 TEXT NOT NULL,
+        from_status TEXT,
+        to_status TEXT NOT NULL,
+        changed_by TEXT,
+        changed_at TEXT NOT NULL,
+        memo TEXT
+    )''')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_pcl_target '
+                 'ON pre_check_log(year, 허가번호)')
     conn.execute('''CREATE TABLE IF NOT EXISTS change_request (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         schedule_pk TEXT NOT NULL,
@@ -133,6 +159,16 @@ def _init_inspection_db():
     conn.execute('CREATE INDEX IF NOT EXISTS idx_cr_pk ON change_request(schedule_pk)')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_cr_status ON change_request(status)')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_cr_license ON change_request(허가번호)')
+    # 사전대조 단계의 변경신고는 일정이 아직 없다. schedule_pk 는 NOT NULL 이라
+    #   '' 로 넣고 year 로 대상을 특정한다(year+허가번호 = targets 의 키).
+    #   기존 일정 기반 요청은 schedule_pk 가 그대로 채워져 구분된다.
+    for _col, _dflt in [('year', '0')]:
+        try:
+            conn.execute(f"ALTER TABLE change_request ADD COLUMN {_col} INTEGER DEFAULT {_dflt}")
+        except Exception:
+            pass
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_cr_year_license '
+                 'ON change_request(year, 허가번호)')
     # 변경 요청 soft delete (REQUESTED 상태에서만 취소 가능)
     for _col, _dflt in [
         ('cancelled', "'0'"), ('cancelled_at', "''"), ('cancelled_by', "''"),

@@ -64,6 +64,7 @@ from routers import (
     community as community_router,
     document as document_router,
     change_request as change_request_router,
+    pre_check as pre_check_router,
     inadequate as inadequate_router,
     route_basket as route_basket_router,
     admin as admin_router,
@@ -171,6 +172,7 @@ app.include_router(inspection_results_router.router)
 app.include_router(community_router.router)
 app.include_router(document_router.router)
 app.include_router(change_request_router.router)
+app.include_router(pre_check_router.router)
 app.include_router(inadequate_router.router)
 app.include_router(route_basket_router.router)
 app.include_router(admin_router.router)

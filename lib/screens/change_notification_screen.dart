@@ -10,7 +10,12 @@ import '../widgets/progress_dialog.dart';
 import '../widgets/app_loader.dart';
 
 class ChangeNotificationScreen extends StatefulWidget {
-  const ChangeNotificationScreen({super.key});
+  /// 사전대조 화면의 탭으로 끼워 넣을 때 true. 자체 제목을 숨기고, member(품개팀)도
+  /// 본인 요청의 진행 상태를 볼 수 있게 요청 목록만 읽기 전용으로 연다.
+  /// 단독 메뉴로 띄울 때는 기존대로 admin/manager 전용이다.
+  final bool embedded;
+
+  const ChangeNotificationScreen({super.key, this.embedded = false});
 
   @override
   State<ChangeNotificationScreen> createState() =>
@@ -266,10 +271,37 @@ class _ChangeNotificationScreenState extends State<ChangeNotificationScreen> {
     );
   }
 
+  /// 요청 목록을 볼 수는 있으나 신고서 생성·신고 완료는 못 하는 상태.
+  /// 품개팀이 본인이 올린 요청이 어디까지 갔는지 확인하는 용도다.
+  bool get _readOnly => widget.embedded && !_isAdmin;
+  bool _isAdmin = false;
+
   @override
   Widget build(BuildContext context) {
     // 변경개설신고는 admin/manager만 접근 가능 (member 차단)
     final isAdmin = context.watch<AuthService>().isAdmin;
+    _isAdmin = isAdmin;
+    if (!isAdmin && widget.embedded) {
+      // 탭으로 들어온 품개팀: 요청 목록만 읽기 전용으로 보여준다.
+      if (_mode != 'requests') {
+        _mode = 'requests';
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _loadRequests();
+        });
+      }
+      return Scaffold(
+        backgroundColor: _bg,
+        body: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(24),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 900),
+              child: _buildRequestsView(),
+            ),
+          ),
+        ),
+      );
+    }
     if (!isAdmin) {
       return Scaffold(
         backgroundColor: _bg,
@@ -310,12 +342,14 @@ class _ChangeNotificationScreenState extends State<ChangeNotificationScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                const Text('변경개설신고 관리',
-                    style: TextStyle(
-                        fontSize: 22,
-                        fontWeight: FontWeight.w700,
-                        color: _textPrimary)),
-                const SizedBox(height: 12),
+                if (!widget.embedded) ...[
+                  const Text('변경개설신고 관리',
+                      style: TextStyle(
+                          fontSize: 22,
+                          fontWeight: FontWeight.w700,
+                          color: _textPrimary)),
+                  const SizedBox(height: 12),
+                ],
                 _buildModeSwitcher(),
                 const SizedBox(height: 16),
                 if (_mode == 'requests') _buildRequestsView()
@@ -788,7 +822,9 @@ class _ChangeNotificationScreenState extends State<ChangeNotificationScreen> {
           // 국소별 항목 리스트
           ...byPk.entries.map((e) => _buildScheduleSection(e.key, e.value)),
           const SizedBox(height: 12),
-          Row(children: [
+          // 읽기 전용(탭으로 들어온 품개팀)에는 액션을 아예 그리지 않는다.
+          //   비활성 버튼만 남기면 '왜 눌리지 않는지' 물어보게 된다.
+          if (!_readOnly) Row(children: [
             // 묶음 내 REQUESTED 1건 이상이면 묶음 전체 취소 가능 (위험 액션은 좌측)
             if (anyRequested)
               OutlinedButton.icon(

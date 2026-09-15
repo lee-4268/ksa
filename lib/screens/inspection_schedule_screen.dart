@@ -1113,7 +1113,14 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
   Widget _buildStatusBadge(String? status, {String? schedulePk}) {
     final s = (status ?? 'REGISTERED').isEmpty ? 'REGISTERED' : status!;
     final (label, color) = switch (s) {
-      'PRE_CHECKED' => ('사전점검완료', const Color(0xFF00897B)),
+      // 사전대조(일정 등록 전) 상태 — inspection_targets.pre_check_status.
+      //   완료(PRE_CHECKED)만 일정 등록 대상이고 나머지는 진행 중 표시다.
+      'PRE_CHECKED' => ('사전대조완료', const Color(0xFF00897B)),
+      'REQUESTED' => ('대조요청됨', const Color(0xFF4A90D9)),
+      'IN_PROGRESS' => ('대조중', const Color(0xFFF59E0B)),
+      'REVIEWED' => ('이상없음(확인대기)', const Color(0xFF7C3AED)),
+      'CHANGE_REQUESTED' => ('변경신고요청', const Color(0xFFE17055)),
+      'CHANGE_FILED' => ('신고완료', const Color(0xFF0891B2)),
       'REGISTERED' => ('등록됨', const Color(0xFF6E7780)),
       'PRE_CHECK' => ('사전점검중', const Color(0xFF6B47DC)),
       'PRE_CHECK_DONE' => ('점검완료', const Color(0xFF1A8754)),
@@ -2250,7 +2257,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
                 displayMap: const {
                   '미배정': '미배정',
                   'REGISTERED': '등록됨',
-                  'PRE_CHECKED': '사전점검완료',
+                  'PRE_CHECKED': '사전대조완료',
                   'PRE_CHECK': '사전점검중',
                   'PRE_CHECK_DONE': '점검완료',
                   'CHANGE_FILING': '변경개설중',
@@ -2655,7 +2662,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     }
     if (_statusFilters.isNotEmpty) {
       const statusLabels = {
-        '미배정': '미배정', 'REGISTERED': '등록됨', 'PRE_CHECKED': '사전점검완료',
+        '미배정': '미배정', 'REGISTERED': '등록됨', 'PRE_CHECKED': '사전대조완료',
         'PRE_CHECK': '사전점검중', 'PRE_CHECK_DONE': '점검완료',
         'CHANGE_FILING': '변경개설중', 'RE_CHECK': '재점검대기',
         'REPORT_ISSUED': '내역서발급', 'SUBMITTED': '접수완료', 'INSPECTED': '수검완료',
@@ -2854,7 +2861,10 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
         return _statusFilters.any((f) {
           if (f == '미배정') return !_isScheduled(no);
           if (f == 'PRE_CHECKED') {
-            return !_isScheduled(no) && (_targetPreCheckMap[no] ?? '').isNotEmpty;
+            // 사전대조가 단계를 갖게 되면서 '값이 있음 = 완료'가 아니다.
+            //   일정 등록 가능한 건은 최종 완료뿐이다(서버 필터와 같은 조건).
+            return !_isScheduled(no) &&
+                (_targetPreCheckMap[no] ?? '') == 'PRE_CHECKED';
           }
           if (!_isScheduled(no)) return false;
           return (_scheduleStatusMap[no] ?? 'REGISTERED') == f;

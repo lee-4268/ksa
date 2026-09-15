@@ -7,6 +7,7 @@ import '../services/auth_service.dart';
 import '../services/ds_data_service.dart';
 import '../services/erp_ds_compare_service.dart';
 import '../services/inspection_service.dart';
+import '../services/pre_check_service.dart';
 import '../services/excel_export_stub.dart'
     if (dart.library.io) '../services/excel_export_mobile.dart'
     if (dart.library.html) '../services/excel_export_web.dart' as platform_export;
@@ -25,6 +26,13 @@ class ErpDsCompareScreen extends StatefulWidget {
   final Map<String, Map<String, String>>? initialSchedMap;
   final void Function(List<String> licenseNos)? onScheduleNavigate;
 
+  /// 사전대조 화면의 탭으로 열렸을 때의 연도. 값이 있으면 비교 결과를
+  /// 사전대조 상태로 회신할 수 있다(이상 없음 보고 / 변경신고 요청).
+  final int? preCheckYear;
+
+  /// 사전대조 상태가 바뀌어 대상 목록을 새로 읽어야 할 때.
+  final VoidCallback? onPreCheckChanged;
+
   const ErpDsCompareScreen({
     super.key,
     this.initialLicenseNos,
@@ -33,6 +41,8 @@ class ErpDsCompareScreen extends StatefulWidget {
     this.initialSchedulePks,
     this.initialSchedMap,
     this.onScheduleNavigate,
+    this.preCheckYear,
+    this.onPreCheckChanged,
   });
 
   @override
@@ -80,6 +90,7 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
   final _service = ErpDsCompareService();
   final _dsService = DsDataService();
   final _inspectionService = InspectionService();
+  final _preCheckService = PreCheckService();
   final _inputCtrl = TextEditingController();
 
   Map<String, Map<String, String>>? _schedMap;
@@ -130,6 +141,7 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
       _service.setAuthToken(auth.authToken);
       _dsService.setAuthToken(auth.authToken);
       _inspectionService.setAuthToken(auth.authToken);
+      _preCheckService.setAuthToken(auth.authToken);
 
       // 일정화면에서 넘어온 경우 허가번호 자동 입력
       if (widget.initialLicenseNos != null && widget.initialLicenseNos!.isNotEmpty) {
@@ -1399,12 +1411,21 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
   Widget _buildPreCheckReplyCard(ErpDsCompareResult r) {
     final s = r.summary;
     final p = _computePrac1Summary(r.items);
-    final mismatch = (s['tower_mismatch'] ?? 0) + (s['serial_mismatch'] ?? 0) + (p['prac1_mismatch'] ?? 0);
-    final dsMissing = (s['tower_ds_missing'] ?? 0) + (s['serial_ds_missing'] ?? 0) + (p['prac1_ds_missing'] ?? 0);
-    final check = (s['tower_check'] ?? 0) + (s['serial_check'] ?? 0);
+    // 형식검정번호도 비교 축이므로 회신 판정에 포함한다. 빠뜨리면 형검만
+    //   불일치인 건이 '이상 없음'으로 회신돼 버린다.
+    final mismatch = (s['tower_mismatch'] ?? 0) + (s['serial_mismatch'] ?? 0)
+        + (s['form_mismatch'] ?? 0) + (p['prac1_mismatch'] ?? 0);
+    final dsMissing = (s['tower_ds_missing'] ?? 0) + (s['serial_ds_missing'] ?? 0)
+        + (s['form_ds_missing'] ?? 0) + (p['prac1_ds_missing'] ?? 0);
+    final check = (s['tower_check'] ?? 0) + (s['serial_check'] ?? 0)
+        + (s['form_check'] ?? 0);
     final blocked = mismatch > 0 || dsMissing > 0;
     final hasPks = widget.initialSchedulePks?.isNotEmpty ?? false;
     final pkCount = widget.initialSchedulePks?.length ?? 0;
+    // 사전대조에서는 확인필요 건도 변경신고 대상으로 올릴 수 있어야 한다
+    //   ('All 일치 외 나머지'). 일정 경로는 기존대로 불일치/DS누락만.
+    final canRequestChange =
+        blocked || (widget.preCheckYear != null && check > 0);
 
     return _buildCard(
       Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -1433,7 +1454,7 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
         const SizedBox(height: 12),
 
         // ── 불일치 섹션 (schedulePks와 무관하게 표시)
-        if (blocked) ...[
+        if (canRequestChange) ...[
           Container(
             padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(
@@ -1446,8 +1467,11 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  '불일치 $mismatch건 / DS누락 $dsMissing건이 있습니다.\n'
-                  '변경 필요한 항목을 명시하여 변경개설 요청을 작성해주세요.',
+                  blocked
+                      ? '불일치 $mismatch건 / DS누락 $dsMissing건이 있습니다.\n'
+                        '변경 필요한 항목을 명시하여 변경개설 요청을 작성해주세요.'
+                      : '확인필요 $check건이 있습니다.\n'
+                        '외부 확인 결과 값이 틀렸다면 변경개설 요청을 작성해주세요.',
                   style: const TextStyle(fontSize: 12, color: _primaryColor),
                 ),
               ),
@@ -1470,26 +1494,36 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
           if (hasPks) const SizedBox(height: 12),
         ],
 
-        // ── 사전점검 회신 섹션 (일정 연결된 경우만)
-        if (hasPks && !blocked) ...[
+        // ── 회신 섹션. 일정이 연결된 건은 일정 워크플로우로, 사전대조에서 열린
+        //     건은 대상 상태(REVIEWED)로 회신한다. 둘 다 아니면 회신 자체가 없다.
+        if ((hasPks || widget.preCheckYear != null) && !blocked) ...[
           Text(
             check > 0
                 ? '확인필요 $check건은 ACTA/시설현황 등 외부 사이트에서 직접 확인 후 회신해주세요.'
                 : '모든 항목이 일치합니다. 회신 가능 상태입니다.',
             style: const TextStyle(fontSize: 12, color: _textSecondary),
           ),
+          if (!hasPks && widget.preCheckYear != null)
+            const Padding(
+              padding: EdgeInsets.only(top: 4),
+              child: Text(
+                '보고 후 본부담당자가 확인하면 사전대조 완료 처리됩니다.',
+                style: TextStyle(fontSize: 11, color: _textSecondary),
+              ),
+            ),
           const SizedBox(height: 12),
           Row(mainAxisAlignment: MainAxisAlignment.end, children: [
             ElevatedButton.icon(
               icon: const Icon(Icons.check_circle_outline, size: 16),
-              label: const Text('이상 없음 회신'),
+              label: Text(hasPks ? '이상 없음 회신' : '이상 없음 보고'),
               style: ElevatedButton.styleFrom(
                 backgroundColor: const Color(0xFF6B47DC),
                 foregroundColor: Colors.white,
                 padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
               ),
-              onPressed: () => _submitPreCheckReply(r),
+              onPressed: () =>
+                  hasPks ? _submitPreCheckReply(r) : _submitPreCheckReview(r),
             ),
           ]),
         ] else if (hasPks && blocked) ...[
@@ -1501,6 +1535,69 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
         ],
       ]),
     );
+  }
+
+  /// 사전대조 경로의 '이상 없음 보고'. 최종 완료가 아니라 본부 확인 대기
+  /// 상태(REVIEWED)로 올린다 — 완료는 본부담당자만 친다.
+  Future<void> _submitPreCheckReview(ErpDsCompareResult r) async {
+    final year = widget.preCheckYear;
+    if (year == null) return;
+    final nos = r.items.map((e) => e.zpwino).toList();
+    if (nos.isEmpty) return;
+
+    final s = r.summary;
+    final check = (s['tower_check'] ?? 0) +
+        (s['serial_check'] ?? 0) +
+        (s['form_check'] ?? 0);
+    if (check > 0) {
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          title: const Text('확인필요 포함 보고', style: TextStyle(fontSize: 16)),
+          content: Text(
+            '확인필요 $check건이 포함되어 있습니다.\n'
+            'ACTA/시설현황에서 외부 확인을 마친 것으로 간주합니다.',
+            style: const TextStyle(fontSize: 13, height: 1.6),
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('취소')),
+            TextButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('보고 진행')),
+          ],
+        ),
+      );
+      if (ok != true) return;
+    }
+
+    if (!mounted) return;
+    final d = ProgressDialog(context);
+    try {
+      final res = await _preCheckService.review(
+        year: year,
+        licenseNos: nos,
+        // 서버는 mismatch/ds_missing/check 키를 본다. 세 축을 합쳐 보낸다.
+        summary: {
+          'mismatch': (s['tower_mismatch'] ?? 0) +
+              (s['serial_mismatch'] ?? 0) +
+              (s['form_mismatch'] ?? 0),
+          'ds_missing': (s['tower_ds_missing'] ?? 0) +
+              (s['serial_ds_missing'] ?? 0) +
+              (s['form_ds_missing'] ?? 0),
+          'check': check,
+        },
+        acknowledged: check > 0,
+      );
+      if (!mounted) return;
+      await d.complete(message: '이상 없음 보고 완료\n${res.describe()}');
+      widget.onPreCheckChanged?.call();
+    } catch (e) {
+      if (!mounted) return;
+      await d.error(message: '보고 실패\n$e');
+    }
   }
 
   Future<void> _submitPreCheckReply(ErpDsCompareResult r) async {
@@ -1593,13 +1690,16 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
       return;
     }
 
-    // 불일치/DS누락 행만 추려서 후보 제공
+    // 불일치/DS누락 행을 후보로 제공한다. 사전대조에서는 '일치 외 전부'가
+    //   대상이라 확인필요도 넣는다 — 외부 확인 결과 값이 틀린 경우가 여기 섞인다.
+    //   일정 경로에서 확인필요까지 넣으면 후보가 크게 부풀어 그대로 둔다.
+    final wantCheck = widget.preCheckYear != null;
+    bool isTarget(String v) =>
+        v == '불일치' || v == 'DS누락' || (wantCheck && v == '확인필요');
     final candidates = r.items.where((it) =>
-      it.towerMatch == '불일치' || it.towerMatch == 'DS누락' ||
-      it.serialMatch == '불일치' || it.serialMatch == 'DS누락' ||
-      // 형식검정번호도 변경개설 사유다. ERP 채움률이 낮아 '확인필요'가 많지만
-      //   여기 조건은 불일치/DS누락뿐이라 후보가 부풀지 않는다.
-      it.formMatch == '불일치' || it.formMatch == 'DS누락'
+      isTarget(it.towerMatch) || isTarget(it.serialMatch) ||
+      // 형식검정번호도 변경개설 사유다.
+      isTarget(it.formMatch)
     ).toList();
 
     await showDialog(
@@ -1609,6 +1709,8 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
         candidates: candidates,
         schedulePks: pks,
         service: _inspectionService,
+        preCheckYear: widget.preCheckYear,
+        preCheckService: _preCheckService,
       ),
     );
   }
@@ -2002,10 +2104,18 @@ class _ChangeRequestDialog extends StatefulWidget {
   final List<CompareItem> candidates;
   final List<String> schedulePks;
   final InspectionService service;
+
+  /// 사전대조 화면에서 열렸을 때의 연도. 값이 있으면 일정이 없는 국소도
+  /// 사전대조 경로(/pre-check/change-request)로 요청을 올릴 수 있다.
+  final int? preCheckYear;
+  final PreCheckService? preCheckService;
+
   const _ChangeRequestDialog({
     required this.candidates,
     required this.schedulePks,
     required this.service,
+    this.preCheckYear,
+    this.preCheckService,
   });
   @override
   State<_ChangeRequestDialog> createState() => _ChangeRequestDialogState();
@@ -2015,9 +2125,11 @@ class _ChangeRequestDialog extends StatefulWidget {
 class _FieldRow {
   String field;
   String deviceNo;
-  String beforeValue;
+  String beforeValue;   // DS 현재값 — 신고로 바뀔 대상
+  String erpValue;      // ERP 값 — 둘이 다르면 어느 쪽이 맞는지 골라야 한다
   String afterValue;
-  _FieldRow({this.field = '일련번호', this.deviceNo = '', this.beforeValue = '', this.afterValue = ''});
+  _FieldRow({this.field = '일련번호', this.deviceNo = '', this.beforeValue = '',
+      this.erpValue = '', this.afterValue = ''});
 }
 
 // 허가번호 단위 카드 (여러 행 포함)
@@ -2066,7 +2178,8 @@ class _ChangeRequestDialogState extends State<_ChangeRequestDialog> {
     }
     setState(() => _entries.add(_ChangeRequestEntry(
       licenseNo: it.zpwino,
-      rows: [_FieldRow(field: field, beforeValue: before)],
+      rows: [_FieldRow(field: field, beforeValue: before,
+          erpValue: _erpValueFor(it, field))],
     )));
   }
 
@@ -2082,13 +2195,26 @@ class _ChangeRequestDialogState extends State<_ChangeRequestDialog> {
     }
   }
 
+  /// ERP 쪽 값. 설치장소는 ERP/DS 를 따로 들고 있지 않아 비워 둔다
+  /// (주소는 수검대상·ERP·DS 가 한 값에서 온다).
+  String _erpValueFor(CompareItem item, String field) {
+    switch (field) {
+      case '일련번호': return item.erpSerial;
+      case '형식검정번호': return item.erpFormNo;
+      case '설치형태': return item.erpZpirty3;
+      default: return '';
+    }
+  }
+
   void _addRow(int ei) {
     final licenseNo = _entries[ei].licenseNo;
     final item = widget.candidates.firstWhere(
       (c) => c.zpwino == licenseNo,
       orElse: () => widget.candidates.first,
     );
-    setState(() => _entries[ei].rows.add(_FieldRow(beforeValue: _dsValueFor(item, '일련번호'))));
+    setState(() => _entries[ei].rows.add(_FieldRow(
+        beforeValue: _dsValueFor(item, '일련번호'),
+        erpValue: _erpValueFor(item, '일련번호'))));
   }
 
   void _removeRow(int ei, int ri) {
@@ -2138,6 +2264,44 @@ class _ChangeRequestDialogState extends State<_ChangeRequestDialog> {
       }
     }
 
+    int total = 0;
+    final failed = <String>[];
+
+    // 사전대조 경로: 일정이 아직 없는 게 정상이다. 대상(year+허가번호) 단위로
+    //   요청을 올리고 사전대조 상태를 CHANGE_REQUESTED 로 넘긴다.
+    final pcYear = widget.preCheckYear;
+    final pcSvc = widget.preCheckService;
+    if (byLicense.isNotEmpty && pcYear != null && pcSvc != null) {
+      setState(() => _submitting = true);
+      final items = <Map<String, dynamic>>[];
+      for (final e in byLicense.entries) {
+        for (final row in e.value) {
+          items.add({'허가번호': e.key, ...row});
+        }
+      }
+      try {
+        final res = await pcSvc.changeRequest(year: pcYear, items: items);
+        // 일정이 있는 건이 섞여 있으면 기존 경로로도 마저 보낸다.
+        for (final entry in byPk.entries) {
+          try {
+            total += await widget.service.createChangeRequest(entry.key, entry.value);
+          } catch (e) {
+            failed.add('${entry.key}: $e');
+          }
+        }
+        if (!mounted) return;
+        final d = ProgressDialog(context);
+        Navigator.pop(context);
+        await d.complete(
+            message: '변경신고 요청 완료\n${res.count + total}건 · ${res.describe()}');
+      } catch (e) {
+        if (!mounted) return;
+        setState(() => _submitting = false);
+        await ProgressDialog(context).error(message: '변경신고 요청 실패\n$e');
+      }
+      return;
+    }
+
     // 일정 미등록 건 차단 — direct 등록은 취소 시 상태 복귀가 불가능해 오류가 난다.
     // 신고서 생성 탭의 샘플 양식으로 별도 처리하도록 안내하고 제출을 중단한다.
     if (byLicense.isNotEmpty) {
@@ -2170,8 +2334,6 @@ class _ChangeRequestDialogState extends State<_ChangeRequestDialog> {
     }
 
     setState(() => _submitting = true);
-    int total = 0;
-    final failed = <String>[];
     for (final entry in byPk.entries) {
       try {
         final n = await widget.service.createChangeRequest(entry.key, entry.value);
@@ -2445,6 +2607,7 @@ class _ChangeRequestDialogState extends State<_ChangeRequestDialog> {
             setState(() {
               r.field = v;
               r.beforeValue = _dsValueFor(item, v);
+              r.erpValue = _erpValueFor(item, v);
               if (!_deviceFields.contains(v)) r.deviceNo = '';
             });
           },
@@ -2489,12 +2652,57 @@ class _ChangeRequestDialogState extends State<_ChangeRequestDialog> {
           )
         else
           Expanded(child: TextFormField(
+            // 칩으로 값을 채우면 컨트롤러가 없어 화면이 안 바뀐다. 키에 값을
+            //   넣어 다시 만들게 한다.
+            key: ValueKey('after_${ei}_${ri}_${r.afterValue}'),
             initialValue: r.afterValue,
             decoration: _inputDeco('변경 후 값'),
             style: const TextStyle(fontSize: 13),
             onChanged: (v) => r.afterValue = v,
           )),
       ]),
+      _buildValuePicker(r),
     ]);
+  }
+
+  /// ERP·DS 양쪽에 값이 있고 서로 다를 때만 뜬다. 어느 쪽이 맞는지 한 번에
+  /// 고르게 하고, 둘 다 아니면 그냥 '변경 후 값'에 직접 쓰면 된다.
+  Widget _buildValuePicker(_FieldRow r) {
+    final ds = r.beforeValue.trim();
+    final erp = r.erpValue.trim();
+    if (ds.isEmpty || erp.isEmpty || ds == erp) return const SizedBox.shrink();
+
+    Widget chip(String label, String value) {
+      final picked = r.afterValue.trim() == value;
+      return Padding(
+        padding: const EdgeInsets.only(right: 6),
+        child: ActionChip(
+          label: Text('$label: $value',
+              style: TextStyle(
+                  fontSize: 11,
+                  color: picked ? Colors.white : _orangeDark,
+                  fontWeight: picked ? FontWeight.w700 : FontWeight.w500)),
+          backgroundColor: picked ? _orange : const Color(0xFFFFF7ED),
+          side: BorderSide(color: picked ? _orange : const Color(0xFFFED7AA)),
+          visualDensity: VisualDensity.compact,
+          onPressed: _submitting ? null : () => setState(() => r.afterValue = value),
+        ),
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 6),
+      child: Row(children: [
+        const Text('올바른 값:',
+            style: TextStyle(fontSize: 11, color: Color(0xFF6B7280))),
+        const SizedBox(width: 6),
+        Expanded(
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(children: [chip('ERP', erp), chip('DS', ds)]),
+          ),
+        ),
+      ]),
+    );
   }
 }

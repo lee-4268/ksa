@@ -2585,7 +2585,10 @@ def _build_insp_where(year, sheet, filters, search, addr, schedule_yn="", schedu
                 or_parts.append("REPLACE(허가번호,'-','') NOT IN (SELECT REPLACE(허가번호,'-','') FROM inspection_schedules WHERE year=?)")
                 or_params.append(year)
             elif st == 'PRE_CHECKED':
-                or_parts.append("(pre_check_status IS NOT NULL AND pre_check_status != '' AND REPLACE(허가번호,'-','') NOT IN (SELECT REPLACE(허가번호,'-','') FROM inspection_schedules WHERE year=?))")
+                # 사전대조가 여러 단계를 갖게 되면서 pre_check_status 가 비어있지
+                #   않다고 완료가 아니다(REQUESTED/IN_PROGRESS/… 도 값이 있다).
+                #   일정 등록 가능 여부는 최종 완료인 PRE_CHECKED 만 본다.
+                or_parts.append("(pre_check_status='PRE_CHECKED' AND REPLACE(허가번호,'-','') NOT IN (SELECT REPLACE(허가번호,'-','') FROM inspection_schedules WHERE year=?))")
                 or_params.append(year)
             else:
                 sched_statuses.append(st)

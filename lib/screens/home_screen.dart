@@ -14,10 +14,9 @@ import 'ds_dashboard_screen.dart';
 import 'ds_merge_screen.dart';
 import 'callname_screen.dart';
 import 'certificate_screen.dart';
-import 'erp_ds_compare_screen.dart';
 import 'inadequate_management_screen.dart';
 import 'special_sites_screen.dart';
-import 'change_notification_screen.dart';
+import 'pre_check_screen.dart';
 import 'inspection_schedule_screen.dart';
 import 'inspection_my_list_screen.dart';
 import 'inspection_results_screen.dart';
@@ -314,13 +313,13 @@ final result = await showDialog<bool>(
         _MenuItem('설치 확인서', Icons.description_outlined, const Color(0xFF06B6D4), description: '설치 확인서 조회 및 관리'),
       ],
       _MenuItem('Opark DB 사진', Icons.image_search_outlined, const Color(0xFF06B6D4), description: '시설물 점검 사진 검색'),
-      _MenuItem('전산 비교', Icons.compare_outlined, const Color(0xFF2563EB), description: 'ERP·DS 전산 데이터 비교'),
+      // 사전 대조는 품개팀(member)이 본인 배정 국소를 보는 곳이라 권한으로 막지 않는다.
+      //   조작 범위는 화면·서버가 팀 단위로 좁힌다.
+      _MenuItem('사전 대조', Icons.fact_check_outlined, const Color(0xFF1565C0), description: '대상 배정 → 전산 비교 → 변경 신고'),
       if (auth.isAdmin)
         _MenuItem('부적합 관리', Icons.warning_amber_outlined, const Color(0xFFE53935), description: '부적합 현황 관리'),
       if (auth.isAdmin)
         _MenuItem('특이국소 관리', Icons.fmd_bad_outlined, const Color(0xFF8E24AA), description: '지하철·터널·야간출입 국소 관리'),
-      if (auth.isAdmin)
-        _MenuItem('변경 신고', Icons.swap_horiz_outlined, const Color(0xFFE53935), description: '변경 신고 파일 비교 및 적용'),
       _MenuItem('커뮤니티', Icons.forum_outlined, const Color(0xFFE53935), description: '공지사항 및 요청사항'),
       _MenuItem('시스템 안내', Icons.menu_book_outlined, const Color(0xFF6366F1), description: '시스템 소개 및 사용 안내'),
       if (auth.isSuperAdmin)
@@ -332,7 +331,9 @@ final result = await showDialog<bool>(
   static const _menuGroups = [
     _MenuGroup('수검 관리', Icons.map_outlined, Color(0xFF3B82F6), ['무선국 실적', '무선국 일정', '무선국 Map']),
     _MenuGroup('전산파일', Icons.storage_outlined, Color(0xFF8B5CF6), ['DS 전산파일', 'DS 병합']),
-    _MenuGroup('서류 관리', Icons.folder_outlined, Color(0xFFEF4444), ['통시코드 매칭', '설치 확인서', 'Opark DB 사진', '전산 비교', '부적합 관리', '특이국소 관리', '변경 신고']),
+    // '전산 비교'와 '변경 신고'는 단독 메뉴에서 빠지고 사전 대조의 탭이 됐다.
+    //   업무 순서(대상 배정 → 비교 → 신고)가 곧 탭 순서다.
+    _MenuGroup('서류 관리', Icons.folder_outlined, Color(0xFFEF4444), ['사전 대조', '통시코드 매칭', '설치 확인서', 'Opark DB 사진', '부적합 관리', '특이국소 관리']),
   ];
 
   Widget _buildPage(int index, AuthService auth) {
@@ -360,7 +361,9 @@ final result = await showDialog<bool>(
           initialLicenseNos: schedNos,
           initialStatusFilter: statusFilter,
           onCompareNavigate: (nos, div, multi, {schedulePks, schedMap}) {
-            final compareIdx = items.indexWhere((m) => m.title == '전산 비교');
+            // 전산 비교는 사전 대조의 탭으로 흡수됐다. 일정에서 넘어오면
+            //   사전 대조를 열되 비교 탭이 선택된 채로 시작한다.
+            final compareIdx = items.indexWhere((m) => m.title == '사전 대조');
             if (compareIdx >= 0) {
               setState(() {
                 _pendingCompare = (nos: nos, div: div, multi: multi, schedulePks: schedulePks, schedMap: schedMap);
@@ -377,15 +380,17 @@ final result = await showDialog<bool>(
       case '설치 확인서': return const CertificateScreen();
       case 'Opark DB 사진': return const SislPhotoSearchScreen();
       case '특이국소 관리': return const SpecialSitesScreen();
-      case '전산 비교': {
+      case '부적합 관리': return const InadequateManagementScreen();
+      case '사전 대조': {
         final data = _pendingCompare;
         _pendingCompare = null;
-        return ErpDsCompareScreen(
-          initialLicenseNos: data?.nos,
-          initialAccessDivision: data?.div,
-          initialMultiDivision: data?.multi ?? false,
-          initialSchedulePks: data?.schedulePks,
-          initialSchedMap: data?.schedMap,
+        return PreCheckScreen(
+          // 일정에서 넘어온 경우에만 값이 있다. 없으면 대상 목록 탭으로 시작.
+          initialCompareLicenseNos: data?.nos,
+          initialCompareDivision: data?.div,
+          initialCompareMultiDivision: data?.multi ?? false,
+          initialCompareSchedulePks: data?.schedulePks,
+          initialCompareSchedMap: data?.schedMap,
           onScheduleNavigate: (nos) {
             final schedIdx = items.indexWhere((m) => m.title == '무선국 일정');
             if (schedIdx >= 0) {
@@ -397,8 +402,6 @@ final result = await showDialog<bool>(
           },
         );
       }
-      case '부적합 관리': return const InadequateManagementScreen();
-      case '변경 신고': return const ChangeNotificationScreen();
       case '커뮤니티': return CommunityScreen();
       case '시스템 안내': return const SystemGuideScreen();
       case '관리자': return const AdminPanelScreen();
