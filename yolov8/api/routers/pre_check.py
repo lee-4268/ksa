@@ -195,6 +195,13 @@ class PcTargetsReq(BaseModel):
     memo: str = ""
 
 
+class PcRequestReq(BaseModel):
+    year: int
+    license_nos: list[str]
+    batch: str            # 묶음 이름 — 사전대조 화면이 이 단위로 목록을 묶는다
+    memo: str = ""
+
+
 class PcCompleteReq(BaseModel):
     year: int
     license_nos: list[str]
@@ -221,13 +228,14 @@ class PcChangeReq(BaseModel):
 @router.get("/pre-check/targets")
 async def pre_check_targets(
     request: Request, year: int, status: str = "", team: str = "",
-    q: str = "", limit: int = 500, offset: int = 0,
+    batch: str = "", q: str = "", limit: int = 500, offset: int = 0,
 ):
-    """사전대조 대상 목록.
+    """사전대조 대상 목록 — 요청된 건만.
 
-    본부는 서버가 강제로 좁히고(본인 본부), 팀은 화면의 필터로만 좁힌다 —
-    품개팀원도 본부 전체를 봐야 한다는 요구. 대신 각 행에 editable 을 실어
-    타 팀 건은 화면에서 선택이 막히고, 실제 차단은 전이 API 가 한다.
+    수검대상 전체가 아니라 본부담당자가 요청한(=묶음에 담긴) 대상만 나온다.
+    본부는 서버가 강제로 좁히고(본인 본부), 팀과 묶음은 화면의 필터로 좁힌다.
+    각 행에 editable 을 실어 타 팀 건은 화면에서 선택이 막히고, 실제 차단은
+    전이 API 가 한다.
     """
     scope = await _scope_of(request)
 
@@ -235,7 +243,9 @@ async def pre_check_targets(
         c = sqlite3.connect(_INSP_DB, timeout=30)
         c.row_factory = sqlite3.Row
         try:
-            wheres = ["t.year=?"]
+            # 요청되지 않은 대상은 사전대조의 일이 아니다.
+            wheres = ["t.year=?",
+                      "t.pre_check_status IS NOT NULL", "t.pre_check_status!=''"]
             params: list = [year]
             if scope.allowed_access is not None:
                 if not scope.allowed_access:
@@ -243,15 +253,15 @@ async def pre_check_targets(
                 ph = ",".join("?" * len(scope.allowed_access))
                 wheres.append(f"t.access담당 IN ({ph})")
                 params.extend(scope.allowed_access)
-            if status:
-                if status == PC_NONE or status == "NONE":
-                    wheres.append("(t.pre_check_status IS NULL OR t.pre_check_status='')")
-                else:
-                    wheres.append("t.pre_check_status=?")
-                    params.append(status)
+            if status and status != "NONE":
+                wheres.append("t.pre_check_status=?")
+                params.append(status)
             if team:
                 wheres.append("t.품질개선팀=?")
                 params.append(team)
+            if batch:
+                wheres.append("t.pre_check_batch=?")
+                params.append(batch)
             if q:
                 wheres.append("(t.허가번호 LIKE ? OR t.호출명칭 LIKE ?)")
                 params.extend([f"%{q}%", f"%{q}%"])
@@ -264,12 +274,14 @@ async def pre_check_targets(
                 "SELECT t.허가번호, t.호출명칭, t.설치장소, t.도로명주소, t.분기, "
                 "t.skt본부, t.access담당, t.품질개선팀, t.통시, t.공대, "
                 "t.pre_check_status, t.pre_check_requested_at, t.pre_check_done_at, "
-                "t.pre_check_result, "
+                "t.pre_check_result, t.pre_check_batch, "
                 "(SELECT COUNT(*) FROM inspection_schedules s "
                 " WHERE s.year=t.year AND REPLACE(s.허가번호,'-','')"
                 "       =REPLACE(t.허가번호,'-','')) AS has_schedule "
                 f"FROM inspection_targets t WHERE {where} "
-                "ORDER BY t.품질개선팀, t.허가번호 LIMIT ? OFFSET ?",
+                # 묶음 → 팀 → 허가번호. 화면이 묶음 단위로 끊어 보여준다.
+                "ORDER BY t.pre_check_requested_at DESC, t.pre_check_batch, "
+                "t.품질개선팀, t.허가번호 LIMIT ? OFFSET ?",
                 (*params, limit, offset)).fetchall()
             return rows, total
         finally:
@@ -292,6 +304,7 @@ async def pre_check_targets(
             "통시": r["통시"] or "",
             "공대": r["공대"] or "",
             "pre_check_status": r["pre_check_status"] or PC_NONE,
+            "batch": r["pre_check_batch"] or "",
             "requested_at": r["pre_check_requested_at"] or "",
             "done_at": r["pre_check_done_at"] or "",
             "has_schedule": bool(r["has_schedule"]),
@@ -302,41 +315,61 @@ async def pre_check_targets(
 
 
 @router.get("/pre-check/summary")
-async def pre_check_summary(request: Request, year: int):
-    """상태별 건수 + 팀 목록(필터 드롭다운용). 본부 범위는 서버가 좁힌다."""
+async def pre_check_summary(request: Request, year: int, batch: str = ""):
+    """상태별 건수 + 묶음·팀 목록(필터 드롭다운용).
+
+    요청된 대상만 센다(목록과 같은 범위). 묶음 목록은 필터와 무관하게 전체를
+    주고, 상태·팀 건수는 선택한 묶음 기준으로 준다 — 묶음을 고르면 그 안의
+    진행 상황이 보여야 한다.
+    """
     scope = await _scope_of(request)
 
     def _q():
         c = sqlite3.connect(_INSP_DB, timeout=30)
         c.row_factory = sqlite3.Row
         try:
-            wheres = ["year=?"]
+            wheres = ["year=?", "pre_check_status IS NOT NULL",
+                      "pre_check_status!=''"]
             params: list = [year]
             if scope.allowed_access is not None:
                 if not scope.allowed_access:
-                    return {}, []
+                    return {}, [], []
                 ph = ",".join("?" * len(scope.allowed_access))
                 wheres.append(f"access담당 IN ({ph})")
                 params.extend(scope.allowed_access)
+            # 묶음 목록은 묶음 필터를 걸기 전 기준.
+            base_where = " AND ".join(wheres)
+            base_params = list(params)
+            bt_rows = c.execute(
+                "SELECT COALESCE(NULLIF(pre_check_batch,''),'(묶음없음)') AS bt, "
+                "COUNT(*) AS cnt, MAX(pre_check_requested_at) AS at "
+                f"FROM inspection_targets WHERE {base_where} "
+                "GROUP BY bt ORDER BY at DESC", base_params).fetchall()
+
+            if batch:
+                wheres.append("pre_check_batch=?")
+                params.append(batch)
             where = " AND ".join(wheres)
             st_rows = c.execute(
-                "SELECT COALESCE(NULLIF(pre_check_status,''),'NONE') AS st, "
-                f"COUNT(*) AS cnt FROM inspection_targets WHERE {where} GROUP BY st",
+                "SELECT pre_check_status AS st, COUNT(*) AS cnt "
+                f"FROM inspection_targets WHERE {where} GROUP BY st",
                 params).fetchall()
             tm_rows = c.execute(
                 "SELECT 품질개선팀 AS tm, COUNT(*) AS cnt FROM inspection_targets "
                 f"WHERE {where} AND 품질개선팀 IS NOT NULL AND 품질개선팀!='' "
                 "GROUP BY tm ORDER BY tm", params).fetchall()
             return ({r["st"]: r["cnt"] for r in st_rows},
-                    [{"team": r["tm"], "count": r["cnt"]} for r in tm_rows])
+                    [{"team": r["tm"], "count": r["cnt"]} for r in tm_rows],
+                    [{"batch": r["bt"], "count": r["cnt"],
+                      "requested_at": r["at"] or ""} for r in bt_rows])
         finally:
             c.close()
 
-    counts, teams = await asyncio.to_thread(_q)
-    base = {s or "NONE": 0 for s in PC_ALL}
+    counts, teams, batches = await asyncio.to_thread(_q)
+    base = {s: 0 for s in PC_ALL if s}
     base.update(counts)
     return {"success": True, "counts": base, "teams": teams,
-            "role": scope.role, "my_team": scope.team}
+            "batches": batches, "role": scope.role, "my_team": scope.team}
 
 
 @router.get("/pre-check/log")
@@ -362,21 +395,33 @@ async def pre_check_log(request: Request, year: int, 허가번호: str):
 
 # ── 전이 ──────────────────────────────────────────────────────
 @router.post("/pre-check/request")
-async def pre_check_request(request: Request, req: PcTargetsReq):
-    """본부담당자가 사전대조 대상을 선정해 요청한다 (admin/manager)."""
+async def pre_check_request(request: Request, req: PcRequestReq):
+    """본부담당자가 무선국 일정 화면에서 대상을 골라 사전대조를 요청한다.
+
+    묶음 이름(batch)이 필수다. 사전대조 화면은 요청된 대상만, 그것도 묶음
+    단위로 보여준다 — 수검대상 전체를 늘어놓으면 품개팀이 뭘 해야 하는지
+    알 수 없다.
+    """
     scope = await _scope_of(request)
     if scope.role not in ("admin", "manager"):
         raise HTTPException(403, "사전대조 요청은 본부담당자만 가능합니다")
     if not req.license_nos:
         raise HTTPException(400, "대상이 비어있습니다")
+    batch = (req.batch or "").strip()
+    if not batch:
+        raise HTTPException(400, "묶음 이름을 입력해주세요")
+    if len(batch) > 60:
+        raise HTTPException(400, "묶음 이름은 60자 이내로 입력해주세요")
 
     now = datetime.now(timezone.utc).isoformat()
     res = await asyncio.to_thread(
         _transition_sync, scope, req.year, req.license_nos, PC_REQUESTED,
-        req.memo or "사전대조 요청",
-        {"pre_check_requested_by": scope.empno, "pre_check_requested_at": now})
-    logger.info(f"[pre-check] request year={req.year} by={scope.empno} {res}")
-    return {"success": True, **res}
+        req.memo or f"사전대조 요청 [{batch}]",
+        {"pre_check_requested_by": scope.empno, "pre_check_requested_at": now,
+         "pre_check_batch": batch})
+    logger.info(f"[pre-check] request year={req.year} batch='{batch}' "
+                f"by={scope.empno} {res}")
+    return {"success": True, "batch": batch, **res}
 
 
 @router.post("/pre-check/start")

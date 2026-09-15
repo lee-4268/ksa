@@ -69,8 +69,11 @@ class _PreCheckScreenState extends State<PreCheckScreen>
   Map<String, int> _counts = {};
   List<({String team, int count})> _teams = [];
 
+  List<({String batch, int count})> _batches = [];
+
   String _fltStatus = '';
   String _fltTeam = '';
+  String _fltBatch = '';
   String _search = '';
   final _searchCtrl = TextEditingController();
 
@@ -130,9 +133,10 @@ class _PreCheckScreenState extends State<PreCheckScreen>
         year: _year,
         status: _fltStatus,
         team: _fltTeam,
+        batch: _fltBatch,
         q: _search,
       );
-      final sum = await _service.summary(_year);
+      final sum = await _service.summary(_year, batch: _fltBatch);
       if (!mounted) return;
       setState(() {
         _items = list.items;
@@ -141,6 +145,7 @@ class _PreCheckScreenState extends State<PreCheckScreen>
         _myTeam = list.myTeam;
         _counts = sum.counts;
         _teams = sum.teams;
+        _batches = sum.batches;
         // 목록에서 사라진 선택은 버린다(필터 변경·상태 전이 후 유령 선택 방지).
         final visible = _items.map((e) => e.licenseNo).toSet();
         _selected.removeWhere((e) => !visible.contains(e));
@@ -174,11 +179,6 @@ class _PreCheckScreenState extends State<PreCheckScreen>
       await dialog.error(message: '$label 실패\n$e');
     }
   }
-
-  Future<void> _requestSelected() => _runAction(
-      '사전대조 요청',
-      () => _service.request(
-          year: _year, licenseNos: _selected.toList()));
 
   Future<void> _completeSelected() => _runAction(
       '사전대조 완료',
@@ -325,6 +325,36 @@ class _PreCheckScreenState extends State<PreCheckScreen>
         ]),
         const SizedBox(height: 10),
         Row(children: [
+          // 묶음 필터. 본부담당자가 일정 화면에서 요청할 때 붙인 이름이다.
+          SizedBox(
+            width: 220,
+            child: DropdownButtonFormField<String>(
+              initialValue: _fltBatch.isEmpty ? '' : _fltBatch,
+              isDense: true,
+              decoration: const InputDecoration(
+                labelText: '요청 묶음',
+                border: OutlineInputBorder(),
+                contentPadding:
+                    EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+              ),
+              items: [
+                const DropdownMenuItem(value: '', child: Text('전체')),
+                for (final b in _batches)
+                  DropdownMenuItem(
+                      value: b.batch,
+                      child: Text('${b.batch} (${b.count})',
+                          overflow: TextOverflow.ellipsis)),
+              ],
+              onChanged: (v) {
+                setState(() {
+                  _fltBatch = v ?? '';
+                  _selected.clear();
+                });
+                _reload();
+              },
+            ),
+          ),
+          const SizedBox(width: 10),
           // 팀 필터. 본부는 서버가 강제로 좁히므로 선택지가 없다 —
           //   품개팀원도 본인 본부 전체가 보이고, 팀만 좁혀 보는 구조.
           SizedBox(
@@ -427,8 +457,6 @@ class _PreCheckScreenState extends State<PreCheckScreen>
     final n = sel.length;
     // 버튼은 '선택한 것들이 실제로 그 전이를 할 수 있는가'로 켠다. 상태가 섞여
     //   있으면 서버가 일부를 '상태불가'로 떨구고, 그 결과를 그대로 보여준다.
-    final canRequest =
-        _isManager && sel.any((e) => e.status == PreCheckStatus.none);
     final canComplete = _isManager &&
         sel.any((e) =>
             e.status == PreCheckStatus.reviewed ||
@@ -452,53 +480,94 @@ class _PreCheckScreenState extends State<PreCheckScreen>
               style: const TextStyle(fontSize: 11, color: _textSecondary)),
         ],
         const Spacer(),
-        if (_isManager) ...[
-          OutlinedButton.icon(
-            icon: const Icon(Icons.undo, size: 14, color: _danger),
-            label: const Text('되돌리기', style: TextStyle(color: _danger)),
-            style: OutlinedButton.styleFrom(
-                side: const BorderSide(color: _danger)),
-            onPressed: n == 0 ? null : _revertSelected,
-          ),
-          const SizedBox(width: 8),
-          OutlinedButton.icon(
-            icon: const Icon(Icons.assignment_outlined, size: 14),
-            label: const Text('사전대조 요청'),
-            onPressed: canRequest ? _requestSelected : null,
-          ),
-          const SizedBox(width: 8),
-          OutlinedButton.icon(
-            icon: const Icon(Icons.outgoing_mail, size: 14),
-            label: const Text('신고 완료'),
-            onPressed: canFile ? _fileSelected : null,
+        // 버튼 모양·크기는 일정 화면의 일괄 액션과 같게 맞춘다
+        //   (radius 10 / 14x8 패딩 / 아이콘 16 / 'N건 …' 라벨).
+        if (canCompare) ...[
+          _actionButton(
+            icon: Icons.compare_arrows,
+            label: '$n건 전산 비교',
+            color: _themeColor,
+            onPressed: _goCompare,
           ),
           const SizedBox(width: 8),
         ],
-        ElevatedButton.icon(
-          icon: const Icon(Icons.compare_arrows, size: 14),
-          label: const Text('전산 비교'),
-          style: ElevatedButton.styleFrom(
-              backgroundColor: _themeColor, foregroundColor: Colors.white),
-          onPressed: canCompare ? _goCompare : null,
-        ),
         if (_isManager) ...[
-          const SizedBox(width: 8),
-          ElevatedButton.icon(
-            icon: const Icon(Icons.verified_outlined, size: 14),
-            label: const Text('사전대조 완료'),
-            style: ElevatedButton.styleFrom(
-                backgroundColor: _greenColor, foregroundColor: Colors.white),
-            onPressed: canComplete ? _completeSelected : null,
-          ),
+          if (canFile) ...[
+            _actionButton(
+              icon: Icons.outgoing_mail,
+              label: '신고 완료',
+              color: const Color(0xFF0984E3),
+              onPressed: _fileSelected,
+            ),
+            const SizedBox(width: 8),
+          ],
+          if (canComplete) ...[
+            _actionButton(
+              icon: Icons.verified_outlined,
+              label: '사전대조 완료',
+              color: _greenColor,
+              onPressed: _completeSelected,
+            ),
+            const SizedBox(width: 8),
+          ],
+          if (n > 0)
+            _actionButton(
+              icon: Icons.undo,
+              label: '되돌리기',
+              color: _danger,
+              onPressed: _revertSelected,
+            ),
         ],
       ]),
     );
   }
 
+  Widget _actionButton({
+    required IconData icon,
+    required String label,
+    required Color color,
+    required VoidCallback onPressed,
+  }) {
+    return ElevatedButton.icon(
+      icon: Icon(icon, size: 16),
+      label: Text(label),
+      style: ElevatedButton.styleFrom(
+        backgroundColor: color,
+        foregroundColor: Colors.white,
+        shape: const RoundedRectangleBorder(
+            borderRadius: BorderRadius.all(Radius.circular(10))),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      ),
+      onPressed: onPressed,
+    );
+  }
+
   Widget _buildList() {
     if (_items.isEmpty) {
-      return const Center(
-        child: Text('대상이 없습니다', style: TextStyle(color: _textSecondary)),
+      // 사전대조 목록은 '요청된 것'만 담는다. 비어 있다는 건 아직 요청이
+      //   없다는 뜻이므로, 어디서 요청하는지 알려준다.
+      final filtered = _fltBatch.isNotEmpty ||
+          _fltTeam.isNotEmpty ||
+          _fltStatus.isNotEmpty ||
+          _search.isNotEmpty;
+      return Center(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          const Icon(Icons.inbox_outlined, size: 32, color: Color(0xFF9CA3AF)),
+          const SizedBox(height: 10),
+          Text(filtered ? '조건에 맞는 대상이 없습니다' : '요청된 사전대조 대상이 없습니다',
+              style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: _textPrimary)),
+          const SizedBox(height: 4),
+          Text(
+              filtered
+                  ? '필터를 바꿔보세요.'
+                  : '무선국 일정 화면에서 본부담당자가 대상을 선택해\n'
+                      '[사전대조 요청]을 하면 여기에 묶음으로 나타납니다.',
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 12, color: _textSecondary)),
+        ]),
       );
     }
     final editable = _items.where((e) => e.editable).toList();
@@ -538,14 +607,71 @@ class _PreCheckScreenState extends State<PreCheckScreen>
         ]),
       ),
       Expanded(
-        child: ListView.separated(
+        child: ListView.builder(
+          // 묶음이 바뀌는 자리에 헤더를 끼운다. 서버가 묶음 순으로 정렬해 주므로
+          //   앞 행과 비교하는 것만으로 충분하다.
           itemCount: _items.length,
-          separatorBuilder: (_, _) =>
-              const Divider(height: 1, color: _border),
-          itemBuilder: (_, i) => _buildRow(_items[i]),
+          itemBuilder: (_, i) {
+            final t = _items[i];
+            final prev = i == 0 ? null : _items[i - 1];
+            final newBatch = prev == null || prev.batch != t.batch;
+            return Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (newBatch) _buildBatchHeader(t.batch),
+                _buildRow(t),
+                const Divider(height: 1, color: _border),
+              ],
+            );
+          },
         ),
       ),
     ]);
+  }
+
+  /// 묶음 구분 헤더. 그 묶음에 속한 행만 한 번에 고를 수 있게 한다.
+  Widget _buildBatchHeader(String batch) {
+    final inBatch =
+        _items.where((e) => e.batch == batch && e.editable).toList();
+    final allChecked = inBatch.isNotEmpty &&
+        inBatch.every((e) => _selected.contains(e.licenseNo));
+    final total = _items.where((e) => e.batch == batch).length;
+    return Container(
+      width: double.infinity,
+      color: const Color(0xFFEFF6FF),
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+      child: Row(children: [
+        Container(
+          width: 3, height: 14,
+          decoration: BoxDecoration(
+              color: _themeColor, borderRadius: BorderRadius.circular(2)),
+        ),
+        const SizedBox(width: 8),
+        Text(batch.isEmpty ? '(묶음없음)' : batch,
+            style: const TextStyle(
+                fontSize: 13, fontWeight: FontWeight.w700, color: _textPrimary)),
+        const SizedBox(width: 8),
+        Text('$total건',
+            style: const TextStyle(fontSize: 11, color: _textSecondary)),
+        const Spacer(),
+        if (inBatch.isNotEmpty)
+          TextButton(
+            style: TextButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap),
+            onPressed: () => setState(() {
+              if (allChecked) {
+                _selected.removeAll(inBatch.map((e) => e.licenseNo));
+              } else {
+                _selected.addAll(inBatch.map((e) => e.licenseNo));
+              }
+            }),
+            child: Text(allChecked ? '묶음 해제' : '묶음 선택',
+                style: const TextStyle(fontSize: 11, color: _themeColor)),
+          ),
+      ]),
+    );
   }
 
   Widget _buildRow(PreCheckTarget t) {

@@ -34,15 +34,20 @@ def _init_inspection_db():
     #   '' → REQUESTED → IN_PROGRESS → (CHANGE_REQUESTED → CHANGE_FILED) → PRE_CHECKED
     #   PRE_CHECKED 인 대상만 일정 등록이 가능하다.
     #   schedules.workflow_status 는 일정 등록 이후(REGISTERED~) 만 담당한다.
+    #   pre_check_batch: 본부담당자가 요청할 때 붙이는 묶음 이름. 사전대조 화면은
+    #   이 묶음 단위로 목록을 보여준다(요청되지 않은 대상은 아예 안 보인다).
     for col in ("pre_check_requested_by TEXT DEFAULT ''",
                 "pre_check_requested_at TEXT DEFAULT ''",
                 "pre_check_done_by TEXT DEFAULT ''",
                 "pre_check_done_at TEXT DEFAULT ''",
-                "pre_check_result TEXT DEFAULT ''"):
+                "pre_check_result TEXT DEFAULT ''",
+                "pre_check_batch TEXT DEFAULT ''"):
         try: conn.execute(f'ALTER TABLE inspection_targets ADD COLUMN {col}')
         except Exception: pass
     conn.execute('CREATE INDEX IF NOT EXISTS idx_it_precheck '
                  'ON inspection_targets(year, pre_check_status)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_it_pcbatch '
+                 'ON inspection_targets(year, pre_check_batch)')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_it_year ON inspection_targets(year)')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_it_허가번호 ON inspection_targets(허가번호)')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_it_분기 ON inspection_targets(분기)')

@@ -6,6 +6,7 @@ import 'package:flutter/rendering.dart';
 import 'package:provider/provider.dart';
 import '../services/auth_service.dart';
 import '../services/inspection_service.dart';
+import '../services/pre_check_service.dart';
 import '../widgets/app_loader.dart';
 import '../widgets/progress_dialog.dart';
 import 'inspection_result_screen.dart';
@@ -68,6 +69,7 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
   static const Color _orange = Color(0xFFFF9800);
 
   late final InspectionService _svc;
+  late final PreCheckService _preCheckSvc;
   late final TabController _tabCtrl;
   final _searchCtrl = TextEditingController();
   final _horizontalScrollCtrl = ScrollController();
@@ -245,6 +247,8 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     super.initState();
     _tabCtrl = TabController(length: 2, vsync: this);
     _svc = InspectionService()..setAuthToken(context.read<AuthService>().authToken);
+    _preCheckSvc = PreCheckService()
+      ..setAuthToken(context.read<AuthService>().authToken);
     _cacheAuthValues();
     _applyDefaultFilter();
     if (widget.initialLicenseNos != null && widget.initialLicenseNos!.isNotEmpty) {
@@ -987,7 +991,26 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
     );
     const btnPad = EdgeInsets.symmetric(horizontal: 14, vertical: 8);
 
+    // 사전대조를 아직 안 건 대상만 요청 대상이다. 이미 요청·진행 중인 건을
+    //   다시 담으면 묶음이 바뀌어 품개팀 화면에서 사라져 보인다.
+    final preCheckCandidates = unscheduledSelected.where((item) {
+      final no = '${item['허가번호'] ?? ''}';
+      return (_targetPreCheckMap[no] ?? '').isEmpty;
+    }).toList();
+
     return [
+      if (preCheckCandidates.isNotEmpty) ...[
+        ElevatedButton.icon(
+          icon: const Icon(Icons.fact_check_outlined, size: 16),
+          label: Text('${preCheckCandidates.length}건 사전대조 요청'),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: const Color(0xFF1565C0), foregroundColor: Colors.white,
+            shape: btnShape, padding: btnPad,
+          ),
+          onPressed: () => _requestPreCheckTargets(preCheckCandidates),
+        ),
+        const SizedBox(width: 8),
+      ],
       if (unscheduledSelected.isNotEmpty)
         ElevatedButton.icon(
           icon: const Icon(Icons.event_available, size: 16),
@@ -1061,6 +1084,77 @@ class _InspectionScheduleScreenState extends State<InspectionScheduleScreen>
       headline: '접수번호 일괄 입력',
       note: '선택한 ${pks.length}건 모두에 같은 접수번호가 적용됩니다.',
     );
+  }
+
+  /// 일정 등록 전 대상을 골라 품개팀에 사전대조를 요청한다 (본부담당자).
+  /// 묶음 이름을 받아 사전대조 화면이 그 단위로 목록을 묶게 한다.
+  Future<void> _requestPreCheckTargets(List<Map<String, dynamic>> items) async {
+    final nos = items
+        .map((it) => '${it['허가번호'] ?? ''}')
+        .where((n) => n.isNotEmpty)
+        .toList();
+    if (nos.isEmpty) {
+      await _showError('사전대조 요청 대상이 없습니다.');
+      return;
+    }
+    // 기본값은 오늘 날짜 — 그대로 둬도 묶음이 구분된다.
+    final now = DateTime.now();
+    final ctrl = TextEditingController(
+        text: '${now.year}-${now.month.toString().padLeft(2, '0')}'
+            '-${now.day.toString().padLeft(2, '0')} 사전대조');
+
+    final batch = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        title: const Text('사전대조 요청', style: TextStyle(fontSize: 16)),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          Text('선택한 ${nos.length}건을 품질개선팀에 사전대조 요청합니다.\n'
+              '묶음 이름으로 사전 대조 화면에서 구분됩니다.',
+              style: const TextStyle(fontSize: 13)),
+          const SizedBox(height: 12),
+          TextField(
+            controller: ctrl,
+            autofocus: true,
+            maxLength: 60,
+            decoration: const InputDecoration(
+              labelText: '묶음 이름',
+              hintText: '예) 2026 3분기 1차',
+              border: OutlineInputBorder(),
+              isDense: true,
+            ),
+            style: const TextStyle(fontSize: 13),
+          ),
+        ]),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx), child: const Text('취소')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF1565C0),
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10))),
+            onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
+            child: const Text('요청'),
+          ),
+        ],
+      ),
+    );
+    if (batch == null || batch.isEmpty) return;
+
+    try {
+      final res = await _withLoading(
+        '사전대조 요청 중... (${nos.length}건)',
+        () => _preCheckSvc.request(
+            year: _year, licenseNos: nos, batch: batch),
+      );
+      await _showSuccess('사전대조 요청 완료 [$batch]\n${res.describe()}');
+      setState(() => _selectedLicenseNos.clear());
+      await _loadScheduledNos();
+    } catch (e) {
+      await _showError('사전대조 요청 실패: $e');
+    }
   }
 
   Future<void> _requestPreCheck(List<Map<String, dynamic>> items) async {

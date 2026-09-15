@@ -30,11 +30,12 @@ class PreCheckService {
     return body as Map<String, dynamic>;
   }
 
-  /// 대상 목록. 본부 범위는 서버가 강제로 좁히므로 여기서 보내지 않는다.
+  /// 대상 목록 — 요청된 건만. 본부 범위는 서버가 강제로 좁힌다.
   Future<PreCheckList> targets({
     required int year,
     String status = '',
     String team = '',
+    String batch = '',
     String q = '',
     int limit = 500,
     int offset = 0,
@@ -44,6 +45,7 @@ class PreCheckService {
         'year': '$year',
         if (status.isNotEmpty) 'status': status,
         if (team.isNotEmpty) 'team': team,
+        if (batch.isNotEmpty) 'batch': batch,
         if (q.isNotEmpty) 'q': q,
         'limit': '$limit',
         'offset': '$offset',
@@ -53,10 +55,13 @@ class PreCheckService {
     return PreCheckList.fromJson(_decode(resp, '대상 조회 실패'));
   }
 
-  /// 상태별 건수 + 팀 목록(필터 드롭다운용).
-  Future<PreCheckSummary> summary(int year) async {
-    final uri = Uri.parse('$_baseUrl/pre-check/summary')
-        .replace(queryParameters: {'year': '$year'});
+  /// 상태별 건수 + 묶음·팀 목록(필터 드롭다운용).
+  Future<PreCheckSummary> summary(int year, {String batch = ''}) async {
+    final uri = Uri.parse('$_baseUrl/pre-check/summary').replace(
+        queryParameters: {
+          'year': '$year',
+          if (batch.isNotEmpty) 'batch': batch,
+        });
     final resp = await http.get(uri, headers: _headers).timeout(_apiTimeout);
     return PreCheckSummary.fromJson(_decode(resp, '집계 조회 실패'));
   }
@@ -70,11 +75,20 @@ class PreCheckService {
     return PreCheckActionResult.fromJson(_decode(resp, fallback));
   }
 
-  /// 본부담당자 — 사전대조 대상 선정.
-  Future<PreCheckActionResult> request(
-          {required int year, required List<String> licenseNos, String memo = ''}) =>
-      _post('/pre-check/request',
-          {'year': year, 'license_nos': licenseNos, 'memo': memo}, '요청 실패');
+  /// 본부담당자 — 무선국 일정 화면에서 대상을 골라 사전대조를 요청한다.
+  /// 묶음 이름이 필수다(사전대조 화면이 이 단위로 목록을 묶는다).
+  Future<PreCheckActionResult> request({
+    required int year,
+    required List<String> licenseNos,
+    required String batch,
+    String memo = '',
+  }) =>
+      _post('/pre-check/request', {
+        'year': year,
+        'license_nos': licenseNos,
+        'batch': batch,
+        'memo': memo,
+      }, '요청 실패');
 
   /// 품개팀 — 전산비교 착수.
   Future<PreCheckActionResult> start(
@@ -125,7 +139,8 @@ class PreCheckService {
 
 /// 사전대조 상태값 — 서버 pre_check.py 의 PC_* 와 1:1.
 class PreCheckStatus {
-  static const none = 'NONE'; // 서버는 빈 문자열, 조회 파라미터는 NONE
+  /// 미요청. 사전대조 목록에는 나오지 않는다(요청된 건만 조회되므로).
+  static const none = 'NONE';
   static const requested = 'REQUESTED';
   static const inProgress = 'IN_PROGRESS';
   static const reviewed = 'REVIEWED';
@@ -133,10 +148,9 @@ class PreCheckStatus {
   static const changeFiled = 'CHANGE_FILED';
   static const done = 'PRE_CHECKED';
 
-  /// 화면 표시 순서 = 실제 진행 순서.
+  /// 화면 표시 순서 = 실제 진행 순서. 미요청은 목록에 없으므로 뺀다.
   static const ordered = [
-    none, requested, inProgress, reviewed,
-    changeRequested, changeFiled, done,
+    requested, inProgress, reviewed, changeRequested, changeFiled, done,
   ];
 
   static String label(String s) => switch (s) {
@@ -165,6 +179,7 @@ class PreCheckTarget {
   final String tongsi;
   final String gongdae;
   final String status;
+  final String batch;
   final String requestedAt;
   final String doneAt;
   final bool hasSchedule;
@@ -185,6 +200,7 @@ class PreCheckTarget {
     required this.tongsi,
     required this.gongdae,
     required this.status,
+    required this.batch,
     required this.requestedAt,
     required this.doneAt,
     required this.hasSchedule,
@@ -203,6 +219,7 @@ class PreCheckTarget {
         tongsi: j['통시'] ?? '',
         gongdae: j['공대'] ?? '',
         status: PreCheckStatus.normalize(j['pre_check_status'] ?? ''),
+        batch: j['batch'] ?? '',
         requestedAt: j['requested_at'] ?? '',
         doneAt: j['done_at'] ?? '',
         hasSchedule: j['has_schedule'] == true,
@@ -235,12 +252,16 @@ class PreCheckList {
 class PreCheckSummary {
   final Map<String, int> counts;
   final List<({String team, int count})> teams;
+
+  /// 요청 묶음. 최근 요청 순. 묶음 필터와 무관하게 전체가 온다.
+  final List<({String batch, int count})> batches;
   final String role;
   final String myTeam;
 
   PreCheckSummary(
       {required this.counts,
       required this.teams,
+      required this.batches,
       required this.role,
       required this.myTeam});
 
@@ -250,6 +271,12 @@ class PreCheckSummary {
         teams: ((j['teams'] as List?) ?? const [])
             .map((e) => (
                   team: (e['team'] ?? '').toString(),
+                  count: (e['count'] as num?)?.toInt() ?? 0
+                ))
+            .toList(),
+        batches: ((j['batches'] as List?) ?? const [])
+            .map((e) => (
+                  batch: (e['batch'] ?? '').toString(),
                   count: (e['count'] as num?)?.toInt() ?? 0
                 ))
             .toList(),
