@@ -1268,6 +1268,7 @@ class InspectionService {
     String region = '',
     String team = '',
     String status = '',
+    String kind = '',          // '주소' | '공용화' | '미분류' — 부적합내용 기반 파생값
     String searchField = '',   // 'license' | 'callname' | 'address'
     String searchValues = '',  // 콤마 구분 복수값
     int page = 1,
@@ -1281,6 +1282,7 @@ class InspectionService {
       if (region.isNotEmpty) 'region': region,
       if (team.isNotEmpty) 'team': team,
       if (status.isNotEmpty) 'status': status,
+      if (kind.isNotEmpty) 'kind': kind,
       if (searchField.isNotEmpty && searchValues.isNotEmpty) 'search_field': searchField,
       if (searchField.isNotEmpty && searchValues.isNotEmpty) 'search_values': searchValues,
       'page': '$page',

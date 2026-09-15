@@ -82,6 +82,21 @@ class _InadequateManagementScreenState extends State<InadequateManagementScreen>
   static const _regionOptions = ['', '강남', '강북', '경기', '인천', '강원', '충청', '경북', '경남', '서부'];
   static const _statusOptions = ['', '미완료', '완료', '대상제외'];
 
+  // 부적합 유형 — 결과장 부적합내용에서 서버가 판정하는 파생값이라 저장 컬럼이 없다.
+  //   kca-be 도 같은 규칙을 쓴다(apps/routers/inadequate.py).
+  static const _kindOptions = ['', '주소', '공용화', '미분류'];
+  String _selectedKind = '';
+  Map<String, int> _kindCounts = const {};
+
+  String _kindLabel(String k) {
+    if (_kindCounts.isEmpty) return k.isEmpty ? '전체 유형' : k;
+    if (k.isEmpty) {
+      final t = _kindCounts.values.fold<int>(0, (a, b) => a + b);
+      return '전체 유형 ($t)';
+    }
+    return '$k (${_kindCounts[k] ?? 0})';
+  }
+
   List<String> get _teamOptions {
     if (_selectedRegion.isEmpty) return [];
     return _orgMap[_selectedRegion] ?? [];
@@ -95,6 +110,8 @@ class _InadequateManagementScreenState extends State<InadequateManagementScreen>
     ('주소', '주소'),
     ('검사일자', '검사일자'),
     ('시정기한', '시정기한'),
+    // 서버가 부적합내용에서 판정한 파생값. 저장 컬럼이 아니라 정렬 대상이 아니다.
+    ('유형', '부적합유형'),
     ('불합격내용', '불합격내용'),
     ('불합격상세', '불합격상세'),
     ('상태', 'status'),
@@ -146,6 +163,7 @@ class _InadequateManagementScreenState extends State<InadequateManagementScreen>
           region: _selectedRegion,
           team: _selectedTeam,
           status: _selectedStatus,
+          kind: _selectedKind,
           searchField: _searchValues.isNotEmpty ? _searchField : '',
           searchValues: _searchValues,
           page: _page,
@@ -164,6 +182,12 @@ class _InadequateManagementScreenState extends State<InadequateManagementScreen>
           _excludedCount = stats['대상제외'] as int? ?? 0;
           _items = List<Map<String, dynamic>>.from(listData['items'] ?? []);
           _totalItems = listData['total'] as int? ?? 0;
+          // 유형별 건수는 서버가 필터와 무관한 전체 기준으로 내려준다 —
+          // 드롭다운 라벨에 붙여 고르기 전에 규모를 알 수 있게 한다.
+          final kc = listData['kind_counts'];
+          if (kc is Map) {
+            _kindCounts = kc.map((k, v) => MapEntry('$k', (v as num?)?.toInt() ?? 0));
+          }
           _loading = false;
         });
       }
@@ -528,6 +552,18 @@ class _InadequateManagementScreenState extends State<InadequateManagementScreen>
                 _loadData();
               },
             ),
+            const SizedBox(width: 8),
+            _buildModernDropdown(
+              width: 140,
+              value: _selectedKind,
+              items: _kindOptions,
+              itemLabels: {for (final k in _kindOptions) k: _kindLabel(k)},
+              hint: _kindLabel(''),
+              onChanged: (v) {
+                setState(() { _selectedKind = v ?? ''; _page = 1; });
+                _loadData();
+              },
+            ),
           ],
         ),
         // 검색 영역 및 조회 건수
@@ -645,6 +681,18 @@ class _InadequateManagementScreenState extends State<InadequateManagementScreen>
           hint: '상태 전체',
           onChanged: (v) {
             setState(() { _selectedStatus = v ?? ''; _page = 1; });
+            _loadData();
+          },
+        ),
+        const SizedBox(height: 8),
+        _buildModernDropdown(
+          width: double.infinity,
+          value: _selectedKind,
+          items: _kindOptions,
+          itemLabels: {for (final k in _kindOptions) k: _kindLabel(k)},
+          hint: _kindLabel(''),
+          onChanged: (v) {
+            setState(() { _selectedKind = v ?? ''; _page = 1; });
             _loadData();
           },
         ),
@@ -786,9 +834,11 @@ class _InadequateManagementScreenState extends State<InadequateManagementScreen>
       );
     }
 
-    // flex weights (11 columns, total = 15.5) — 심의차수는 헤더가 잘리지 않게 1.0
-    const colWeights = [0.8, 1.0, 1.5, 1.6, 2.4, 1.1, 1.1, 1.8, 2.2, 1.0, 1.0];
-    const totalWeight = 15.5;
+    // flex weights — _columns 와 개수·순서가 정확히 맞아야 한다(인덱스로 참조).
+    //   본부 팀 허가번호 호출명칭 주소 검사일자 시정기한 유형 불합격내용 불합격상세 상태 심의차수
+    //   심의차수는 헤더가 잘리지 않게 1.0, 유형은 배지 한 칸이라 0.9.
+    const colWeights = [0.8, 1.0, 1.5, 1.6, 2.4, 1.1, 1.1, 0.9, 1.8, 2.2, 1.0, 1.0];
+    const totalWeight = 16.4;
     const checkboxW = 44.0;
 
     return Padding(
@@ -979,6 +1029,7 @@ class _InadequateManagementScreenState extends State<InadequateManagementScreen>
       cell(Text(_str(item, '주소'), overflow: TextOverflow.ellipsis, style: tsAddr)),
       cell(Text(_str(item, '검사일자'), style: ts)),
       cell(_buildDeadlineCell(item)),
+      cell(_buildKindChip(_str(item, '부적합유형'))),
       cell(Text(_str(item, '불합격내용'), overflow: TextOverflow.ellipsis, style: ts)),
       cell(Text(_str(item, '불합격상세'), overflow: TextOverflow.ellipsis, style: tsGray)),
       cell(_buildStatusChip(_str(item, 'status'))),
@@ -1001,6 +1052,30 @@ class _InadequateManagementScreenState extends State<InadequateManagementScreen>
         fontWeight: overdue ? FontWeight.bold : null,
         fontSize: 13,
       ),
+    );
+  }
+
+  /// 부적합 유형 배지. 미분류는 대부분 부적합내용이 공란인 건이라 회색으로 눌러 표시한다.
+  Widget _buildKindChip(String kind) {
+    Color bg, fg;
+    switch (kind) {
+      case '주소':
+        bg = const Color(0xFFFEF3C7);
+        fg = const Color(0xFFB45309);
+        break;
+      case '공용화':
+        bg = const Color(0xFFDBEAFE);
+        fg = const Color(0xFF1D4ED8);
+        break;
+      default:
+        bg = const Color(0xFFF3F4F6);
+        fg = const Color(0xFF6B7280);
+    }
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(6)),
+      child: Text(kind.isEmpty ? '미분류' : kind,
+          style: TextStyle(color: fg, fontSize: 12, fontWeight: FontWeight.w600)),
     );
   }
 
