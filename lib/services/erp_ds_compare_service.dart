@@ -109,10 +109,12 @@ class CompareItem {
   final String erpMaxSeqno;
   final String dsTowerType;
   final String dsSerial;
+  final String erpFormNo;
   final String dsFormNo;
   final String dsAntennaKiMax;
   final String towerMatch;
   final String serialMatch;
+  final String formMatch;
   final String antennaMatch;
   final String tongsi;
   final String gongdae;
@@ -133,10 +135,12 @@ class CompareItem {
     required this.erpMaxSeqno,
     required this.dsTowerType,
     required this.dsSerial,
+    required this.erpFormNo,
     required this.dsFormNo,
     required this.dsAntennaKiMax,
     required this.towerMatch,
     required this.serialMatch,
+    required this.formMatch,
     required this.antennaMatch,
     required this.tongsi,
     required this.gongdae,
@@ -159,10 +163,12 @@ class CompareItem {
       erpMaxSeqno: json['erp_max_seqno'] ?? '',
       dsTowerType: json['ds_tower_type'] ?? '',
       dsSerial: json['ds_serial'] ?? '',
+      erpFormNo: json['erp_form_no'] ?? '',
       dsFormNo: json['ds_form_no'] ?? '',
       dsAntennaKiMax: json['ds_antenna_ki_max'] ?? '',
       towerMatch: json['tower_match'] ?? '',
       serialMatch: json['serial_match'] ?? '',
+      formMatch: json['form_match'] ?? '',
       antennaMatch: json['antenna_match'] ?? '',
       tongsi: json['통시'] ?? '',
       gongdae: json['공대'] ?? '',

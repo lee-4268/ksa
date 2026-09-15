@@ -226,7 +226,9 @@ def _cert_batch_lookup_cached(zpwino_list: list) -> dict:
     if not zpwino_list:
         return {}
     _cert_cache_load()
-    cols = ["zpwino", "zpwina", "zpwiadr", "zpcode", "zpkcode", "area_hdofc_nm", "ons_team_nm", "zpirty3", "eqp_ser_no", "max_seqno", "zpprac1"]
+    # toap_nmbr: 전산비교 형식검정번호 축. erp_multi(zpwino 기준)가 못 잡는
+    #   zpwina 매칭 건은 여기서만 값이 오므로 반드시 포함한다.
+    cols = ["zpwino", "zpwina", "zpwiadr", "zpcode", "zpkcode", "area_hdofc_nm", "ons_team_nm", "zpirty3", "eqp_ser_no", "max_seqno", "zpprac1", "toap_nmbr"]
     col_str = ', '.join(cols)
     results = {}
     BATCH = 900

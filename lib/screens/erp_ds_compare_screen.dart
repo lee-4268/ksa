@@ -101,19 +101,21 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
     '허가번호', '호출명칭', '본부', '통시', '공대',
     'ERP 설치대', 'DS 설치대', '설치대 비교',
     'ERP 일련번호', 'DS 일련번호', '일련번호 비교',
+    'ERP 형식검정번호', 'DS 형식검정번호', '형식검정번호 비교',
     'ERP활용구분', 'DS활용구분', '활용구분비교',
   ];
   static const List<double> _colFlex = [
     13, 16, 8, 9, 9,
     14, 14, 11,
     18, 18, 13,
+    18, 18, 13,
     12, 12, 11,
   ];
 
   // 그룹 경계: 이 인덱스 컬럼 오른쪽에 진한 구분선 그림
-  static const Set<int> _groupBoundaryRight = {7, 10};
+  static const Set<int> _groupBoundaryRight = {7, 10, 13};
   // 비교 배지 컬럼: 창 크기에 따라 FittedBox로 자동 축소
-  static const Set<int> _chipCols = {7, 10, 13};
+  static const Set<int> _chipCols = {7, 10, 13, 16};
 
   // 사용자가 드래그로 조정한 컬럼 너비. null이면 가용폭에 비례 분배.
   List<double>? _colWidths;
@@ -762,6 +764,8 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
             const SizedBox(height: 8),
             _buildSummaryRow('일련번호', r.summary, prefix: 'serial'),
             const SizedBox(height: 8),
+            _buildSummaryRow('형식검정번호', r.summary, prefix: 'form'),
+            const SizedBox(height: 8),
             _buildSummaryRow('활용구분', _computePrac1Summary(r.items), prefix: 'prac1'),
           ]),
         ),
@@ -923,6 +927,7 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
         '허가번호', '호출명칭', '본부', '통시', '공대',
         'ERP 설치대', 'DS 설치대', '설치대 비교',
         'ERP 일련번호', 'DS 일련번호', '일련번호 비교',
+        'ERP 형식검정번호', 'DS 형식검정번호', '형식검정번호 비교',
         'ERP활용구분', 'DS활용구분', '활용구분비교',
       ];
       for (var i = 0; i < headers.length; i++) {
@@ -945,6 +950,7 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
           _tongsi(item), _gongdae(item),
           item.erpZpirty3, item.dsTowerType, item.towerMatch,
           item.erpSerial, item.dsSerial, item.serialMatch,
+          item.erpFormNo, item.dsFormNo, item.formMatch,
           _erpPrac1(item), item.dsPrac1, _prac1Match(item),
         ];
         for (var colIdx = 0; colIdx < values.length; colIdx++) {
@@ -956,7 +962,7 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
       }
 
       // 컬럼 너비 설정
-      final widths = [15.0, 15.0, 10.0, 15.0, 15.0, 20.0, 20.0, 10.0, 8.0, 8.0, 10.0, 20.0, 20.0, 10.0];
+      final widths = [15.0, 15.0, 10.0, 15.0, 15.0, 20.0, 20.0, 10.0, 8.0, 8.0, 10.0, 28.0, 28.0, 14.0, 20.0, 20.0, 10.0];
       for (var i = 0; i < widths.length; i++) {
         sheet.setColumnWidth(i, widths[i]);
       }
@@ -1213,17 +1219,33 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
               textAlign: TextAlign.center)),
       // 10 일련번호 비교
       _buildMatchChip(item.serialMatch),
-      // 11 ERP활용구분
+      // 11 ERP 형식검정번호
+      Tooltip(
+          message: item.erpFormNo,
+          child: Text(item.erpFormNo,
+              style: _cellStyle,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center)),
+      // 12 DS 형식검정번호
+      Tooltip(
+          message: item.dsFormNo,
+          child: Text(item.dsFormNo,
+              style: _cellStyle,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center)),
+      // 13 형식검정번호 비교
+      _buildMatchChip(item.formMatch),
+      // 14 ERP활용구분
       Text(_erpPrac1(item),
           style: _cellStyle,
           overflow: TextOverflow.ellipsis,
           textAlign: TextAlign.center),
-      // 12 DS활용구분
+      // 15 DS활용구분
       Text(item.dsPrac1,
           style: _cellStyle,
           overflow: TextOverflow.ellipsis,
           textAlign: TextAlign.center),
-      // 13 활용구분비교
+      // 16 활용구분비교
       _buildMatchChip(_prac1Match(item)),
     ];
 
@@ -1342,7 +1364,8 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
     if (_result == null) return [];
     if (_filter == '전체') return _result!.items;
     return _result!.items.where((it) {
-      return it.towerMatch == _filter || it.serialMatch == _filter || _prac1Match(it) == _filter;
+      return it.towerMatch == _filter || it.serialMatch == _filter
+          || it.formMatch == _filter || _prac1Match(it) == _filter;
     }).toList();
   }
 
@@ -1573,7 +1596,10 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
     // 불일치/DS누락 행만 추려서 후보 제공
     final candidates = r.items.where((it) =>
       it.towerMatch == '불일치' || it.towerMatch == 'DS누락' ||
-      it.serialMatch == '불일치' || it.serialMatch == 'DS누락'
+      it.serialMatch == '불일치' || it.serialMatch == 'DS누락' ||
+      // 형식검정번호도 변경개설 사유다. ERP 채움률이 낮아 '확인필요'가 많지만
+      //   여기 조건은 불일치/DS누락뿐이라 후보가 부풀지 않는다.
+      it.formMatch == '불일치' || it.formMatch == 'DS누락'
     ).toList();
 
     await showDialog(
@@ -1604,8 +1630,9 @@ class _ErpDsCompareScreenState extends State<ErpDsCompareScreen> {
         border: Border.all(color: _border),
       ),
       child: Row(children: [
+        // '형식검정번호'(6자)가 들어오면서 70 으로는 잘린다.
         SizedBox(
-            width: 70,
+            width: 86,
             child: Text(label,
                 style: const TextStyle(
                     fontWeight: FontWeight.w600, fontSize: 13, color: _textPrimary))),
@@ -2031,6 +2058,11 @@ class _ChangeRequestDialogState extends State<_ChangeRequestDialog> {
     if (it.towerMatch == '불일치' || it.towerMatch == 'DS누락') {
       field = '설치형태';
       before = it.dsTowerType;
+    } else if ((it.formMatch == '불일치' || it.formMatch == 'DS누락')
+        && it.serialMatch != '불일치' && it.serialMatch != 'DS누락') {
+      // 일련번호가 멀쩡한데 형식검정번호만 어긋난 건은 형식검정번호로 연다.
+      field = '형식검정번호';
+      before = it.dsFormNo;
     }
     setState(() => _entries.add(_ChangeRequestEntry(
       licenseNo: it.zpwino,

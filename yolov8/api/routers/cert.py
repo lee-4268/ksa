@@ -277,6 +277,16 @@ def _parse_serial_strings(s: str) -> list:
     return [x.strip().lower() for x in s.split(",") if x.strip()]
 
 
+def _normalize_form_no(val: str) -> str:
+    """형식검정번호 비교용 정규화 — 공백 제거 + 소문자.
+
+    kca-be erp_ds_compare._normalize 와 같은 규칙이다. 하이픈은 남긴다:
+    'MSIP-CRM-STC-...' 처럼 구분자가 번호 체계의 일부라 지우면 서로 다른
+    번호가 붙어버린다. 한쪽만 규칙을 바꾸면 두 시스템의 판정이 갈린다.
+    """
+    return ''.join((val or '').split()).lower()
+
+
 def _compare_values(erp_val: str, ds_val: str, normalize_fn=None) -> str:
     erp_empty = not erp_val
     ds_empty = not ds_val
@@ -489,19 +499,26 @@ def _erp_ds_compare_sync(
                 _batch = _erp_norms[i:i+_B]
                 _ph = ','.join('?' * len(_batch))
                 for _r in _cc.execute(
-                    f"SELECT REPLACE(TRIM(zpwino),'-','') AS wn, zpcode, zpkcode, eqp_ser_no, zpirty3 "
+                    f"SELECT REPLACE(TRIM(zpwino),'-','') AS wn, zpcode, zpkcode, eqp_ser_no, zpirty3, toap_nmbr "
                     f"FROM cert WHERE REPLACE(TRIM(zpwino),'-','') IN ({_ph})",
                     _batch
                 ):
                     z = _r['wn'] or ''
                     if z not in erp_multi:
-                        erp_multi[z] = {"통시들": [], "일련번호들": [], "공대": _r['zpkcode'] or '', "zpirty3": _r['zpirty3'] or ''}
+                        erp_multi[z] = {"통시들": [], "일련번호들": [], "형식검정번호들": [],
+                                        "공대": _r['zpkcode'] or '', "zpirty3": _r['zpirty3'] or ''}
                     tc = str(_r['zpcode'] or '').strip()
                     sn = str(_r['eqp_ser_no'] or '').strip()
                     if tc and tc not in erp_multi[z]["통시들"]:
                         erp_multi[z]["통시들"].append(tc)
                     if sn and sn not in erp_multi[z]["일련번호들"]:
                         erp_multi[z]["일련번호들"].append(sn)
+                    # 형식검정번호는 cronjob 이 이미 콤마로 합쳐 내려주기도 한다.
+                    #   행마다 다른 값이 올 수 있어 풀어서 중복만 제거한다.
+                    for fn in str(_r['toap_nmbr'] or '').split(','):
+                        fn = fn.strip()
+                        if fn and fn not in erp_multi[z]["형식검정번호들"]:
+                            erp_multi[z]["형식검정번호들"].append(fn)
             _cc.close()
         except Exception as _ce:
             logger.warning(f"erp_multi 조회 실패: {_ce}")
@@ -614,6 +631,8 @@ def _erp_ds_compare_sync(
         "tower_partial": 0, "tower_ds_missing": 0,
         "serial_match": 0, "serial_mismatch": 0, "serial_check": 0,
         "serial_partial": 0, "serial_ds_missing": 0,
+        "form_match": 0, "form_mismatch": 0, "form_check": 0,
+        "form_partial": 0, "form_ds_missing": 0,
     }
 
     for z in zpwino_list:
@@ -629,13 +648,26 @@ def _erp_ds_compare_sync(
                 erp_serials = [sn]
         erp_serial = ", ".join(erp_serials)
 
+        # 형식검정번호: ERP 는 cert.toap_nmbr, DS 는 장치 시트. erp_multi 는 zpwino
+        #   기준이라 zpwina 로만 잡힌 건은 비어 있으므로 erp_data 로 폴백한다.
+        erp_form_nos = list(multi.get("형식검정번호들") or [])
+        if not erp_form_nos and erp:
+            for fn in str(erp.get("toap_nmbr", "") or "").split(","):
+                fn = fn.strip()
+                if fn and fn not in erp_form_nos:
+                    erp_form_nos.append(fn)
+        erp_form_no = ", ".join(erp_form_nos)
+
         ds_tower = ds_antenna.get(z_clean, "") or ds_antenna.get(z, "")
         ds_serials = ds_device.get(z_clean, []) or ds_device.get(z, [])
         ds_serial_str = ", ".join(ds_serials) if ds_serials else ""
+        ds_form_nos = ds_form_no.get(z_clean, []) or ds_form_no.get(z, [])
+        ds_form_no_str = ", ".join(ds_form_nos)
         insp = insp_info.get(z_clean) or insp_info.get(z, {})
 
         tower_result = _compare_values(erp_zpirty3, ds_tower, _normalize_tower)
         serial_result = _compare_values(erp_serial, ds_serial_str)
+        form_result = _compare_values(erp_form_no, ds_form_no_str, _normalize_form_no)
 
         summary_key_map = {
             "일치": "match", "부분일치": "partial", "불일치": "mismatch",
@@ -643,6 +675,7 @@ def _erp_ds_compare_sync(
         }
         summary[f"tower_{summary_key_map.get(tower_result, 'check')}"] += 1
         summary[f"serial_{summary_key_map.get(serial_result, 'check')}"] += 1
+        summary[f"form_{summary_key_map.get(form_result, 'check')}"] += 1
 
         best_address = (insp.get("도로명주소") or insp.get("설치장소")
                         or (erp.get("zpwiadr", "") if erp else ""))
@@ -682,9 +715,11 @@ def _erp_ds_compare_sync(
             "erp_serial": erp_serial,
             "ds_tower_type": ds_tower,
             "ds_serial": ds_serial_str,
-            "ds_form_no": ", ".join(ds_form_no.get(z_clean, []) or ds_form_no.get(z, [])),
+            "erp_form_no": erp_form_no,
+            "ds_form_no": ds_form_no_str,
             "tower_match": tower_result,
             "serial_match": serial_result,
+            "form_match": form_result,
             "통시": insp.get("통시", "") or ", ".join(multi.get("통시들", [])) or (erp.get("zpcode", "") if erp else ""),
             "공대": insp.get("공대", "") or multi.get("공대", "") or (erp.get("zpkcode", "") if erp else ""),
             "erp_prac1": erp_prac,
