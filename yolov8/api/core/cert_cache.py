@@ -78,7 +78,8 @@ def _cert_cache_load():
             zpwino TEXT, zpwina TEXT, zpwiadr TEXT,
             zpcode TEXT, zpkcode TEXT, zpcname TEXT, area_hdofc_nm TEXT, ons_team_nm TEXT, zpirty3 TEXT,
             eqp_ser_no TEXT, zpprac1 TEXT, eqp_type TEXT, max_seqno TEXT,
-            zpannu1 TEXT, swing_list TEXT
+            zpannu1 TEXT, swing_list TEXT,
+            toap_nmbr TEXT
         )""")
         conn.execute("DELETE FROM cert")
 
@@ -94,13 +95,14 @@ def _cert_cache_load():
                 row.get("zpprac1", ""), row.get("eqp_type", ""),
                 row.get("max_seqno", ""),
                 row.get("zpannu1", ""), row.get("swing_list", ""),
+                row.get("toap_nmbr", ""),
             ))
             if len(batch) >= 5000:
-                conn.executemany("INSERT INTO cert VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", batch)
+                conn.executemany("INSERT INTO cert VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", batch)
                 total += len(batch)
                 batch.clear()
         if batch:
-            conn.executemany("INSERT INTO cert VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", batch)
+            conn.executemany("INSERT INTO cert VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", batch)
             total += len(batch)
 
         conn.execute("CREATE INDEX IF NOT EXISTS idx_zpwino ON cert(zpwino)")

@@ -163,7 +163,11 @@ CALLNAME_MAX_SESSIONS = 3
 CALLNAME_USE_COLS = [
     "zpwina", "zpwino", "zpwiadr", "zpcode", "zpkcode", "zpcname",
     "area_hdofc_nm", "ons_team_nm", "zpirty3", "eqp_ser_no",
-    "zpprac1", "eqp_type", "max_seqno", "zpannu1", "swing_list"
+    "zpprac1", "eqp_type", "max_seqno", "zpannu1", "swing_list",
+    # 형식검정번호 — 전산비교의 세 번째 축(설치대·일련번호에 이어). cronjob 이
+    #   moira.fmt_ispn_no 우선, 없으면 remote_station_1d.toap_nmbr 로 채워 내려준다.
+    #   CSV 에 컬럼이 없는 예전 파일이면 빈 값이 되고 비교는 'DS누락'으로 빠진다.
+    "toap_nmbr",
 ]
 
 # ── DS 지역 코드 매핑 ─────────────────────────────────────────

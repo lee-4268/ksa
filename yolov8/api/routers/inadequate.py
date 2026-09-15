@@ -14,6 +14,7 @@ inadequate - 부적합 관리 엔드포인트
 import asyncio
 import io
 import logging
+import re
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
@@ -27,6 +28,45 @@ from schemas.models import InadequateUpdateReq
 
 router = APIRouter(tags=["inadequate"])
 logger = logging.getLogger(__name__)
+
+
+# ── 부적합 유형 분류 ──────────────────────────────────────────
+# 근거는 불합격상세 컬럼이다. 여기에는 결과장 Y열(부적합내용)이 들어간다
+# (inadequate_sync 주석 참조). 불합격내용·원문 불합격상세는 대부분 비어 있어
+# 쓸 수 없다 — 2026 실측 58건 중 불합격내용 45건, X열 원문 48건이 공란.
+#
+# 전량(1,702건) 실측 결과: 공용화 1,355 / 주소 194 / 미분류 153.
+#   미분류 153 중 149 가 공란이라 실제 누락은 4건이다.
+#     '서류 : 프레임, 현재 : 간이폴 및 비기준 설치대' x3 — 설치대 건이라 두 유형 중
+#        어디에도 속하지 않는다. 주소로 넣으면 안 되므로 미분류로 둔다.
+#     '황지동 산69 --> 통동 산69' x1 — 산번지. 아래 '산\d' 패턴으로 잡는다.
+#
+# kca-be 에도 같은 규칙이 있다(apps/routers/inadequate.py). 한쪽만 고치면
+# 두 화면의 집계가 어긋나므로 반드시 같이 바꿀 것.
+_INAD_SHARE_KEYS = ("공용", "개별", "환경")
+_INAD_ADDR_KEYS = ("설치장소", "주소")
+# 지번 표기 세 갈래:
+#   '안현동 204'  — 행정구역 접미사 + 숫자
+#   '산 90-48'    — 산번지('황지동 산69' 처럼 접미사와 숫자 사이에 끼기도 한다)
+#   '803-16'      — 본번-부번
+_RE_INAD_JIBUN = re.compile(
+    r"[가-힣]+(?:동|리|로|길|읍|면|가)\s*\d|산\s*\d|\d+\s*-\s*\d")
+
+
+def _inad_kind(detail: str) -> str:
+    """부적합내용 → '공용화' | '주소' | '미분류'.
+
+    공용화 키워드를 먼저 본다. '환경 -> 개별'처럼 두 축이 겹쳐 보이는 값이
+    있는데 이는 공용화 구분 변경이지 주소 건이 아니다.
+    """
+    s = (detail or "").strip()
+    if not s:
+        return "미분류"
+    if any(k in s for k in _INAD_SHARE_KEYS):
+        return "공용화"
+    if any(k in s for k in _INAD_ADDR_KEYS) or _RE_INAD_JIBUN.search(s):
+        return "주소"
+    return "미분류"
 
 
 @router.post("/inadequate/sync")
@@ -163,6 +203,7 @@ async def inadequate_list(
     region: str = Query(""),
     team: str = Query(""),
     status: str = Query(""),
+    kind: str = Query("", description="부적합 유형: 주소 | 공용화 | 미분류"),
     search_field: str = Query(""),
     search_values: str = Query(""),
     sort_by: str = Query(""),
@@ -170,7 +211,13 @@ async def inadequate_list(
     page: int = Query(1),
     pageSize: int = Query(100),
 ):
-    """부적합 관리 목록 조회."""
+    """부적합 관리 목록 조회.
+
+    유형(주소/공용화)은 저장하지 않고 불합격상세에서 매번 계산한다. 규칙을 고쳐도
+    재동기화가 필요 없고, 원천이 바뀌면 자동으로 따라간다.
+    kind 필터는 SQL 로 못 거르므로(파생값) 전량을 읽어 파이썬에서 거른 뒤 페이징한다.
+    2026년 대상이 58건이라 비용이 없다.
+    """
     await _verify_auth(request)
 
     def _list():
@@ -203,9 +250,6 @@ async def inadequate_list(
                     clauses = ' OR '.join(['주소 LIKE ?' for _ in tokens])
                     where += f" AND ({clauses})"
                     params.extend([f'%{t}%' for t in tokens])
-        total = conn.execute(
-            f"SELECT COUNT(*) FROM inadequate_management WHERE {where}", params
-        ).fetchone()[0]
         offset = (page - 1) * pageSize
         _ALLOWED_SORT = {
             'region', 'ons팀', '허가번호', '호출명칭', '주소',
@@ -216,11 +260,24 @@ async def inadequate_list(
         null_last = f'CASE WHEN "{sort_col}" IS NULL OR "{sort_col}" = \'\' THEN 1 ELSE 0 END'
         rows = conn.execute(
             f"SELECT * FROM inadequate_management WHERE {where} "
-            f"ORDER BY {null_last}, \"{sort_col}\" {dir_kw} LIMIT ? OFFSET ?",
-            params + [pageSize, offset],
+            f"ORDER BY {null_last}, \"{sort_col}\" {dir_kw}",
+            params,
         ).fetchall()
         conn.close()
-        return {"items": [dict(r) for r in rows], "total": total}
+
+        items = []
+        counts = {"주소": 0, "공용화": 0, "미분류": 0}
+        for r in rows:
+            d = dict(r)
+            d["부적합유형"] = _inad_kind(d.get("불합격상세"))
+            counts[d["부적합유형"]] += 1
+            items.append(d)
+        if kind:
+            items = [d for d in items if d["부적합유형"] == kind]
+        # 유형별 건수는 필터와 무관하게 전체 기준으로 돌려준다 — 드롭다운에
+        # '주소(12)'처럼 붙여 고르기 전에 규모를 알 수 있게 한다.
+        return {"items": items[offset:offset + pageSize],
+                "total": len(items), "kind_counts": counts}
 
     return await asyncio.to_thread(_list)
 
