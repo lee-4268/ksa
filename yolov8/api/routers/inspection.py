@@ -3082,7 +3082,7 @@ async def inspection_detail(request: Request, year: int, 허가번호: str):
             import sqlite3 as _sq
             c = _sq.connect(_cert_db_path); c.row_factory = _sq.Row
             rows = c.execute(
-                "SELECT eqp_ser_no, zpcname FROM cert WHERE zpwino=? AND zpcname!=''",
+                "SELECT eqp_ser_no, zpcname, zpcode FROM cert WHERE zpwino=? AND zpcname!=''",
                 (허가번호,)
             ).fetchall()
             r2 = c.execute(
@@ -3091,7 +3091,40 @@ async def inspection_detail(request: Request, year: int, 허가번호: str):
             ).fetchone()
             prac1 = (r2['zpprac1'] if r2 else '') or ''
             c.close()
-            return [{"eqp_ser_no": r["eqp_ser_no"], "zpcname": r["zpcname"]} for r in rows], prac1
+            out = [{"eqp_ser_no": r["eqp_ser_no"], "zpcname": r["zpcname"],
+                    "_zpcode": (r["zpcode"] or '').strip()} for r in rows]
+
+            # cert 가 비워둔 일련번호만 kca 보충분으로 채운다(MiBOS/RRU 등).
+            #   cert 에 값이 있으면 그쪽이 원장이므로 절대 덮지 않는다.
+            #   매칭은 통시 단위 — 한 허가번호에 시설이 여럿 달리고 각자 일련번호를
+            #   가지므로 허가번호로만 맞추면 다른 시설 값이 섞인다.
+            need = [x for x in out if not (x["eqp_ser_no"] or '').strip()]
+            if need:
+                try:
+                    s = _sq.connect(_INSP_DB, timeout=10); s.row_factory = _sq.Row
+                    try:
+                        sup = {
+                            (r["통시"] or ''): (r["eqp_ser_no"] or '')
+                            for r in s.execute(
+                                "SELECT 통시, eqp_ser_no FROM serial_supplement "
+                                "WHERE 허가번호=?", (허가번호.replace('-', ''),))
+                        }
+                    finally:
+                        s.close()
+                    if sup:
+                        # 통시가 맞는 값을 우선. 보충분에 통시가 비어 온 예전 데이터는
+                        # 그 허가번호에 값이 하나뿐일 때만 폴백으로 쓴다.
+                        only = next(iter(sup.values())) if len(sup) == 1 else ''
+                        for x in need:
+                            v = sup.get(x["_zpcode"]) or (only if not x["_zpcode"] else '')
+                            if v:
+                                x["eqp_ser_no"] = v
+                except Exception as e:
+                    logger.warning(f"일련번호 보충 조회 실패(무시): {e}")
+
+            for x in out:
+                x.pop("_zpcode", None)
+            return out, prac1
         callname_list, zpprac1_val = await asyncio.to_thread(_read_zpcname)
     if target is not None:
         target['zpprac1'] = zpprac1_val
@@ -4151,6 +4184,76 @@ async def inspection_sync_export(request: Request):
         "success": True, "year": year, "division": division,
         "schedules": schedules, "results": results,
     }, headers=_ingest_cors())
+
+
+@router.post("/inspection/serial-import")
+async def inspection_serial_import(request: Request):
+    """kca 에서 받은 (허가번호, 통시) 일련번호 보충분 적재 — 브라우저 릴레이.
+
+    ksa 의 cert 캐시는 사람이 올린 엑셀 스냅샷(2026-05-13)에서 만들어진다. MiBOS/RRU
+    일련번호 채움은 Playground cronjob 에 2026-07 에 들어왔으므로 ksa 에는 그 값이
+    구조적으로 존재하지 않고, 국소 상세의 '일련번호 및 통합시설명칭'이 MiBOS 국소에서
+    비어 보인다. Playground→KSA S3 통로는 VPC 엔드포인트 정책이 막고 있어 못 쓴다
+    (2026-09-15 실측: Put/Get/List 전부 AccessDenied).
+
+    sync-export 와 동일한 릴레이 규격: 시크릿은 body.secret(단순 요청 — preflight 없음),
+    CORS 응답 헤더는 이 라우트만. 여기는 쓰기이므로 upsert 로 멱등하게 둔다.
+    """
+    from routers.special_sites import KSA_SYNC_SECRET, _ingest_cors
+    from core.utils import _check_rate_limit
+    import hmac as _hm
+    from datetime import datetime as _dt, timezone as _tz
+
+    try:
+        _check_rate_limit(request, "serial_import", 30, 60)  # 페이지 루프 7회 + 여유
+    except HTTPException as e:
+        return JSONResponse({"detail": e.detail}, status_code=e.status_code,
+                            headers=_ingest_cors())
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"detail": "잘못된 요청 형식"}, status_code=400,
+                            headers=_ingest_cors())
+    secret = str(data.get("secret") or "")
+    if not (KSA_SYNC_SECRET and secret
+            and _hm.compare_digest(secret, KSA_SYNC_SECRET)):
+        return JSONResponse({"detail": "unauthorized"}, status_code=401,
+                            headers=_ingest_cors())
+
+    items = data.get("items")
+    if not isinstance(items, list):
+        return JSONResponse({"detail": "items 가 없습니다"}, status_code=400,
+                            headers=_ingest_cors())
+
+    rows = []
+    now = _dt.now(_tz.utc).isoformat()
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        pno = str(it.get("p") or "").replace("-", "").strip()
+        ser = str(it.get("s") or "").strip()
+        if not pno or not ser:
+            continue
+        rows.append((pno, str(it.get("c") or "").strip(), ser, now))
+
+    def _write():
+        c = sqlite3.connect(_INSP_DB, timeout=60)
+        try:
+            c.executemany(
+                "INSERT INTO serial_supplement(허가번호, 통시, eqp_ser_no, updated_at) "
+                "VALUES(?,?,?,?) ON CONFLICT(허가번호, 통시) DO UPDATE SET "
+                "eqp_ser_no=excluded.eqp_ser_no, updated_at=excluded.updated_at",
+                rows)
+            c.commit()
+            return c.execute("SELECT COUNT(*) FROM serial_supplement").fetchone()[0]
+        finally:
+            c.close()
+
+    total = await asyncio.to_thread(_write) if rows else 0
+    logger.info(f"일련번호 보충 적재: 수신 {len(items)}건 → 반영 {len(rows)}건 / 누적 {total}건")
+    return JSONResponse({"success": True, "received": len(items),
+                         "applied": len(rows), "total": total},
+                        headers=_ingest_cors())
 
 
 @router.post("/inspection/sync-export-targets")

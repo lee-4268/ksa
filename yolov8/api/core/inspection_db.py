@@ -332,6 +332,19 @@ def _init_inspection_db():
         menu_name TEXT,
         accessed_at TEXT
     )''')
+    # kca 에서 브라우저 릴레이로 받은 (허가번호, 통시) 일련번호 보충분.
+    #   cert 캐시는 사람이 올린 엑셀 스냅샷에서 24시간마다 통째로 재생성되므로
+    #   거기 써넣으면 날아간다. 영속 DB 인 여기에 따로 둔다.
+    #   MiBOS/RRU 일련번호는 cronjob(Playground)에서만 채워지는데 ksa 가 읽는
+    #   엑셀 스냅샷은 그 기능 도입(2026-07) 이전 것이라 구조적으로 비어 있다.
+    conn.execute('''CREATE TABLE IF NOT EXISTS serial_supplement (
+        허가번호 TEXT NOT NULL,
+        통시 TEXT NOT NULL DEFAULT '',
+        eqp_ser_no TEXT,
+        updated_at TEXT,
+        PRIMARY KEY (허가번호, 통시)
+    )''')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_ss_hn ON serial_supplement(허가번호)')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_mul_menu ON menu_usage_log(menu_name)')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_mul_user ON menu_usage_log(user_id)')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_mul_date ON menu_usage_log(accessed_at)')
