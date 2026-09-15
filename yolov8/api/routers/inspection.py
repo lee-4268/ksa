@@ -4212,6 +4212,7 @@ async def inspection_serial_import(request: Request):
     from routers.special_sites import KSA_SYNC_SECRET, _ingest_cors
     from core.utils import _check_rate_limit
     import hmac as _hm
+    import re as _re
     from datetime import datetime as _dt, timezone as _tz
 
     try:
@@ -4235,16 +4236,27 @@ async def inspection_serial_import(request: Request):
         return JSONResponse({"detail": "items 가 없습니다"}, status_code=400,
                             headers=_ingest_cors())
 
+    # 값 검증. 이 시크릿은 ksa-photo-config 를 통해 kca 로그인 사용자 전체에게
+    #   전달된다(사진 열람용). 원래는 시크릿이 읽기 전용 export 만 열었는데 이
+    #   엔드포인트로 쓰기가 하나 생겼으므로, 형태가 어긋난 값은 받지 않는다.
+    #   바코드/일련번호는 영숫자·하이픈이고 콤마로 나열된다.
+    _RE_SER = _re.compile(r"^[A-Za-z0-9\-]{1,40}$")
     rows = []
     now = _dt.now(_tz.utc).isoformat()
     for it in items:
         if not isinstance(it, dict):
             continue
         pno = str(it.get("p") or "").replace("-", "").strip()
-        ser = str(it.get("s") or "").strip()
-        if not pno or not ser:
+        if not pno.isdigit() or len(pno) > 20:
             continue
-        rows.append((pno, str(it.get("c") or "").strip(), ser, now))
+        vals = [v.strip() for v in str(it.get("s") or "").split(",")]
+        vals = [v for v in vals if v and _RE_SER.match(v)]
+        if not pno or not vals:
+            continue
+        code = str(it.get("c") or "").strip()
+        if len(code) > 30:
+            continue
+        rows.append((pno, code, ",".join(vals[:20]), now))
 
     def _write():
         c = sqlite3.connect(_INSP_DB, timeout=60)
