@@ -216,6 +216,27 @@ class _PreCheckScreenState extends State<PreCheckScreen>
   /// 선택한 국소를 들고 전산비교 탭으로 넘어간다. 착수 표시도 같이.
   Future<void> _goCompare(List<String> nos) async {
     if (nos.isEmpty) return;
+    final picked =
+        _items.where((e) => nos.contains(e.licenseNo)).toList();
+
+    // 본부는 고른 국소의 access담당 중 최다값으로 정한다. 일정 화면의
+    //   _navigateToCompare 와 같은 규칙 — 두 진입점의 결과가 같아야 한다.
+    //   한 종류가 아니면 multiDivision 으로 알려 비교 화면이 안내하게 한다.
+    //   비교 화면의 _accessToAuthId 는 '강남'/'강남본부' 로만 키가 잡혀 있다.
+    //   본부 교정 전에 적재된 행은 '강남Access담당' 형태가 남아 있어 그대로
+    //   넘기면 매칭에 실패하고 내 본부로 폴백한다 — 접미사를 떼고 넘긴다.
+    final counter = <String, int>{};
+    for (final t in picked) {
+      final v = t.accessTeam
+          .replaceAll('Access담당', '')
+          .replaceAll('Access', '')
+          .trim();
+      if (v.isNotEmpty) counter[v] = (counter[v] ?? 0) + 1;
+    }
+    final dominant = counter.isEmpty
+        ? null
+        : counter.entries.reduce((a, b) => a.value >= b.value ? a : b).key;
+
     // 착수 표시는 실패해도 비교 자체를 막지 않는다 — 상태는 보조 정보다.
     try {
       await _service.start(year: _year, licenseNos: nos);
@@ -225,10 +246,10 @@ class _PreCheckScreenState extends State<PreCheckScreen>
     if (!mounted) return;
     setState(() {
       _compareTargets = nos;
-      // 목록에서 직접 고른 건 일정과 무관하다. 일정 화면에서 넘어왔던 컨텍스트가
-      //   남아 있으면 엉뚱한 일정에 회신이 붙으므로 반드시 지운다.
-      _compareDivision = null;
-      _compareMultiDivision = false;
+      _compareDivision = dominant;
+      _compareMultiDivision = counter.keys.length > 1;
+      // 목록에서 직접 고른 건 일정과 무관하다. 일정 화면에서 넘어왔던 일정
+      //   컨텍스트가 남아 있으면 엉뚱한 일정에 회신이 붙으므로 반드시 지운다.
       _compareSchedulePks = null;
       _compareSchedMap = null;
     });
