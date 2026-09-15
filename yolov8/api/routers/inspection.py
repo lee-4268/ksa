@@ -1766,6 +1766,16 @@ async def inspection_staging_confirm(request: Request, req: InspStagingConfirmRe
                 logger.warning("[auto-remap] learned_map 비어있음 — 재매핑 생략")
         except Exception as e:
             logger.error(f"[auto-remap] 오류: {e}")
+        # 결과장 기준 본부/팀 교정. 원본 엑셀의 Access담당이 결과장과 다른 국소가
+        #   있어(2026 실측 246건) 재업로드마다 그쪽 값으로 되돌아간다. 결과장이
+        #   원장이므로 확정 직후 매번 맞춰준다. 결과장이 아직 없는 신규 연도에는
+        #   대조할 게 없어 자동으로 0건이 된다.
+        try:
+            rec = await asyncio.to_thread(_reconcile_divisions_sync, req.year, False)
+            logger.info(f"[reconcile] {req.year}년 결과장 기준 {rec['changed_count']}건 교정 "
+                        f"(대조 {rec['matched']}건)")
+        except Exception as e:
+            logger.error(f"[reconcile] 오류: {e}")
         # 수동 보정값 재적용 (auto-remap 이후에도 보정값 유지)
         try:
             def _reapply():
